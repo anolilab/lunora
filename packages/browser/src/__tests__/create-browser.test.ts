@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { stubDohFetch } from "../../__tests__/_helpers/stub-doh";
 import { createBrowser } from "../create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
 
@@ -94,6 +95,17 @@ const fakeLaunch = (config: { gotoThrows?: boolean } = {}): BrowserLaunchLike & 
 };
 
 describe("createBrowser", () => {
+    // `resolveDns` defaults ON, so every navigation would otherwise issue a REAL
+    // Cloudflare DoH request from the suite. Answer it with a public IP by default;
+    // the rebinding describe below re-stubs `fetch` per test for its own answers.
+    beforeEach(() => {
+        stubDohFetch();
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("throws when no binding is supplied", () => {
         expect.assertions(1);
 
@@ -322,26 +334,29 @@ describe("createBrowser", () => {
             vi.unstubAllGlobals();
         });
 
-        type DohAnswer = { data: string; type: number };
-        type FetchStub = (input: string) => Promise<Response>;
+        it("runs BY DEFAULT — a rebinding host is refused with no resolveDns option set", async () => {
+            expect.assertions(2);
 
-        /** Stub global `fetch` to answer Cloudflare DoH JSON by the requested record `type`. */
-        const stubDohFetch = (answersByType: Record<number, DohAnswer[]>): ReturnType<typeof vi.fn<FetchStub>> => {
-            const fetchMock = vi.fn<FetchStub>(async (input) => {
-                const type = Number(new URL(input).searchParams.get("type"));
+            stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
 
-                return {
-                    json: async () => {
-                        return { Answer: answersByType[type] ?? [] };
-                    },
-                    ok: true,
-                } as unknown as Response;
-            });
+            await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/resolves to a private\/internal address/);
+            expect(launch.browsers).toHaveLength(0);
+        });
 
-            vi.stubGlobal("fetch", fetchMock);
+        it("can be turned off explicitly with resolveDns: false", async () => {
+            expect.assertions(2);
 
-            return fetchMock;
-        };
+            const fetchMock = stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: false });
+
+            await browser.content("https://rebind.example.com");
+
+            expect(launch.browsers).toHaveLength(1);
+            expect(fetchMock).not.toHaveBeenCalled();
+        });
 
         it("rejects a public host that resolves to a private IP, before launching", async () => {
             expect.assertions(3);

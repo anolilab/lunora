@@ -87,7 +87,7 @@ import type { IndexKeyEntry, KeyRange } from "./read-write-set";
 import { buildIndexRange, indexKeysForRow } from "./read-write-set";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
-import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
+import { applyOnDelete, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
 import type {
     BroadcastDelta,
@@ -2978,7 +2978,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         groupedCounter: relationGroupedCounter,
                         fetcher: relationFetcher,
                         parents: docs,
-                        relationBaseWhere: args.relationBaseWhere,
+                        ...relationHooks(args),
                         schema,
                         tableName,
                         with: args.with,
@@ -2998,7 +2998,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     fetcher: relationFetcher,
                     groupedCounter: relationGroupedCounter,
                     parents: page,
-                    relationBaseWhere: args.relationBaseWhere,
+                    ...relationHooks(args),
                     schema,
                     tableName,
                     with: args.with,

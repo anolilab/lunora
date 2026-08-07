@@ -409,11 +409,22 @@ describe("createWorker — scheduled admin endpoints", () => {
         expect(calls).toEqual([{ body: "", method: "GET", pathname: "/ws" }]);
     });
 
-    it("ws accepts the admin token via the ?token query parameter (browsers can't set headers)", async () => {
-        expect.assertions(1);
+    it("ws accepts a ?token= upgrade only when master-token-in-URL is explicitly opted back in", async () => {
+        expect.assertions(2);
 
         const { calls, namespace } = recordingScheduler();
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+        // Enforcement is the default (browsers can't set headers, so the studio
+        // sends a minted sub-token here); the raw master token in a URL is refused.
+        const enforced = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
+        const refused = await enforced.fetch(
+            new Request(`https://app.example/_lunora/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
+            {},
+            fakeContext,
+        );
+
+        expect(refused.status).toBe(403);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, requireEphemeralWsToken: false, schedulerDO: namespace, shardDO: noopNamespace });
 
         await worker.fetch(
             new Request(`https://app.example/_lunora/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),

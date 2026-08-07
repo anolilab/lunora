@@ -1,5 +1,5 @@
 import type { Notification, Receipt } from "@visulima/notification";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNotify } from "../src/notify";
 import { routingPushProvider } from "../src/providers";
@@ -720,5 +720,106 @@ describe("web Push SSRF-posture warning (unset allowedPushOrigins)", () => {
         } finally {
             warn.mockRestore();
         }
+    });
+});
+
+describe("web-push send-time DNS-rebinding guard", () => {
+    /** Stub Cloudflare DoH so `resolvePrivateAddress` sees `answers` for the A query. */
+    const stubDoh = (answers: { data: string; type: number }[]) =>
+        vi.stubGlobal("fetch", async (input: string) => {
+            const type = Number(new URL(input).searchParams.get("type"));
+
+            return {
+                json: async () => {
+                    return { Answer: type === 1 ? answers : [] };
+                },
+                ok: true,
+            } as unknown as Response;
+        });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    // A public hostname resolving to an internal address passes the register-time
+    // STRING classifier; only the resolved-address re-check at send time stops the
+    // worker POSTing the payload into the private network.
+    it("refuses to POST a payload to an endpoint whose host resolves private", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- link-local fixture asserting the guard classifies it; no connection is made
+        stubDoh([{ data: "169.254.169.254", type: 1 }]);
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+
+        await expect(
+            router.send({
+                body: "b",
+                to: JSON.stringify({ endpoint: "https://169-254-169-254.sslip.io/p/1", keys: { auth: "a", p256dh: "p" } }),
+            }),
+        ).rejects.toThrow(/resolves to a private\/internal address/);
+
+        // The payload never reached the transport.
+        expect(inner.sends).toHaveLength(0);
+    });
+
+    it("checks EVERY target of a multi-recipient `to`, not just the first", async () => {
+        expect.hasAssertions();
+
+        // `notify.send()` hands a caller-shaped message straight to the engine, so a
+        // multi-recipient push `to` reaches this router and the provider POSTs all of
+        // them. Guarding only `to[0]` lets every later entry past the one place the
+        // rebinding check is enforced.
+        vi.stubGlobal("fetch", async (input: string) => {
+            const { searchParams } = new URL(input);
+            const isRebind = searchParams.get("name") === "169-254-169-254.sslip.io";
+            const type = Number(searchParams.get("type"));
+
+            return {
+                json: async () => {
+                    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- fixtures asserting the guard classifies them; no connection is made
+                    return { Answer: type === 1 ? [{ data: isRebind ? "169.254.169.254" : "93.184.216.34", type: 1 }] : [] };
+                },
+                ok: true,
+            } as unknown as Response;
+        });
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+        const sub = (host: string) => JSON.stringify({ endpoint: `https://${host}/p`, keys: { auth: "a", p256dh: "p" } });
+
+        await expect(
+            // A public first target hides a rebinding second one.
+            router.send({ body: "b", to: [sub("push.example"), sub("169-254-169-254.sslip.io")] }),
+        ).rejects.toThrow(/resolves to a private\/internal address/);
+
+        expect(inner.sends).toHaveLength(0);
+    });
+
+    it("delivers when the host resolves public, and skips the check entirely under allowedPushOrigins", async () => {
+        expect.hasAssertions();
+
+        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- public IP fixture so the guard passes
+        stubDoh([{ data: "93.184.216.34", type: 1 }]);
+
+        const inner = mockPushProvider();
+        const target = JSON.stringify({ endpoint: "https://push.example/ok", keys: { auth: "a", p256dh: "p" } });
+
+        await routingPushProvider({ webPush: inner.provider }).send({ body: "b", to: target });
+
+        expect(inner.sends).toHaveLength(1);
+
+        // With an exact-origin allowlist configured, no DoH round-trip happens at
+        // all — the allowlist is the stronger guard and may name an internal host.
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+        await routingPushProvider({ allowedPushOrigins: ["https://internal.push"], webPush: inner.provider }).send({
+            body: "b",
+            to: JSON.stringify({ endpoint: "https://internal.push/x", keys: { auth: "a", p256dh: "p" } }),
+        });
+
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(inner.sends).toHaveLength(2);
     });
 });

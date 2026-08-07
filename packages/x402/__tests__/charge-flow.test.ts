@@ -110,6 +110,24 @@ describe("createChargeMiddleware", () => {
         vi.restoreAllMocks();
     });
 
+    it("settles before the handler BY DEFAULT — a verify-passing but unsettleable payment runs nothing", async () => {
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
+        vi.spyOn(X402HTTPResourceServer.prototype, "processSettlement").mockResolvedValue(failureSettlement as never);
+
+        // No options at all — `verifyPayment` checks the signed intent, not
+        // solvency, so settle-after would run the handler's side effects for free.
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handler = vi.fn<() => Response>(() => new Response("side effects"));
+
+        const response = await middleware.handle(new Request("https://api.example/report"), handler);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(response.status).toBe(402);
+
+        vi.restoreAllMocks();
+    });
+
     it("settle-first: on success, reports the receipt via the injected waitUntil before running the handler", async () => {
         vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
         vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue(paymentVerifiedResult as never);
@@ -157,7 +175,8 @@ describe("createChargeMiddleware", () => {
         // Reach the payment-verified branch without a real payment: stub the
         // resource server's init + request processing so the handler runs, then
         // make cancellation itself reject. The caller must still see the handler's
-        // error, not the cancellation failure.
+        // error, not the cancellation failure. Cancellation only exists on the
+        // opt-in settle-AFTER path, so this one asks for it explicitly.
         vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
         const cancel = vi.fn<() => Promise<never>>(() => Promise.reject(new Error("cancel exploded")));
 
@@ -167,7 +186,7 @@ describe("createChargeMiddleware", () => {
         } as never);
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-        const middleware = await createChargeMiddleware(chargeConfig);
+        const middleware = await createChargeMiddleware(chargeConfig, undefined, { settleBeforeHandler: false });
         const handlerError = new Error("handler boom");
 
         await expect(

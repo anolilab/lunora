@@ -201,6 +201,7 @@ export interface ResolveWithOptions {
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
     schema: { readonly tables: Record<string, TableDefinitionLike> };
     tableName: string;
     with: WithInput;
@@ -224,11 +225,56 @@ export interface QueryArgs {
     limit?: number;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
     restrictsCounts?: boolean;
     select?: ReadonlyArray<string>;
     where?: WhereInput;
     with?: WithInput;
 }
+
+/**
+ * Args for a **cross-shard relation read** — the reverse cross-backend hop where a
+ * `.global()` (D1) parent loads a shard-local child whose rows span every shard.
+ *
+ * This is {@link QueryArgs} minus what cannot survive the hop and plus what
+ * replaces it. The hop crosses a JSON boundary (the fan-out envelope), so the two
+ * RLS carriers must travel as DATA:
+ *
+ * - `baseWhere` is folded into `where` by the caller before it is sent.
+ * - `relationBaseWhere` is a FUNCTION, so it is projected into
+ * {@link CrossShardReadArgs.relationPolicies} — a table → filter map the serving
+ * shard rebuilds a `relationBaseWhere` from for the nested `with` hops.
+ *
+ * Dropping either is not a lossy convenience but an RLS bypass: the serving shard
+ * reads through its RAW ctx-db, so an unfiltered `where` returns every child row
+ * for the FK regardless of the child's read policy.
+ */
+export interface CrossShardReadArgs {
+    orderBy?: OrderByInput[];
+    /** Serialized projection of `relationBaseWhere`, keyed by table; applied to nested `with` hops on the serving shard. */
+    relationPolicies?: Record<string, WhereInput>;
+    /** The child filter with the caller's `baseWhere` (the read policy) ALREADY folded in. */
+    where?: WhereInput;
+    with?: WithInput;
+}
+
+/**
+ * Per-target-table column mask applied to `with`-hydrated CHILD rows, the
+ * column-level twin of `relationBaseWhere`.
+ *
+ * Masking is a middleware ABOVE `ctx.db`, so it only ever sees the rows of the
+ * table named in the call — a `with` hop is hydrated below it by the relation
+ * loader and would come back in the clear. Threading this hook down the same
+ * path `relationBaseWhere` takes lets the loader rewrite each hop's rows with
+ * the policy for THAT table. Returns the rows unchanged for a table with no
+ * mask policy.
+ *
+ * Unlike `relationBaseWhere`, this hook cannot be projected into data for the
+ * cross-shard fan-out (a mask strategy may be a closure over the request), so a
+ * nested `with` crossing that hop is refused rather than served unmasked — see
+ * `toCrossShardArgs` in `@lunora/sql-store`.
+ */
+export type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
 
 export interface QueryPage {
     continueCursor: null | string;

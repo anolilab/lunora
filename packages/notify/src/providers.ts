@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Notification, NotificationProviders, Provider, PushPayload } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
 import { circuitBreakerMiddleware, retryMiddleware } from "@visulima/notification/middleware";
@@ -6,31 +7,116 @@ import { fcmProvider } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
 import { webPushProvider } from "@visulima/notification/providers/web-push";
 
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+import type { SsrfResolution } from "../../../shared/ssrf-resolve";
+import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+
 /**
- * A single push target is a web-push subscription when it JSON-parses to an object
- * carrying an `endpoint` + `keys`; anything else (an opaque FCM registration
- * token) routes to FCM. Matches the `to` shapes the two providers accept.
+ * The web-push `endpoint` of a routed target, or `undefined` when the target is
+ * an opaque FCM registration token instead.
+ *
+ * This is BOTH the routing predicate and the endpoint accessor, deliberately: the
+ * two used to be separate functions that each JSON-parsed the target and each
+ * encoded its own idea of "what a web-push target looks like" — and they had
+ * already drifted (one demanded `keys` for the string form but not the object
+ * form). One parse, one shape, one place to change it.
  */
-const isWebPushTarget = (target: unknown): boolean => {
-    if (typeof target !== "string") {
-        return typeof target === "object" && target !== null && "endpoint" in target;
+const webPushEndpoint = (target: unknown): string | undefined => {
+    let parsed: unknown = target;
+
+    if (typeof target === "string") {
+        // An FCM token is an opaque string, never JSON — skip the parse entirely.
+        if (!target.startsWith("{")) {
+            return undefined;
+        }
+
+        try {
+            parsed = JSON.parse(target);
+        } catch {
+            return undefined;
+        }
     }
 
-    if (!target.startsWith("{")) {
-        return false;
+    const endpoint = (parsed as { endpoint?: unknown } | null | undefined)?.endpoint;
+
+    return typeof endpoint === "string" ? endpoint : undefined;
+};
+
+/**
+ * Per-isolate memo of the send-time rebinding verdict, keyed by hostname. A
+ * `broadcast` fans out to every device, and real deployments share a handful of
+ * push-service origins across all of them — one DoH round-trip per host per
+ * isolate instead of one per device.
+ *
+ * Only a CONCLUSIVE verdict is stored. A failed DoH lookup is deliberately not
+ * cached: it is a fallback to the register-time string guard, not a finding, and
+ * memoizing it would let one transient resolver blip disable the re-check for
+ * that host for the isolate's life.
+ *
+ * Bounded via the shared FIFO evictor — the key is a registration-time,
+ * caller-influenced hostname, so an unbounded map would grow with distinct
+ * attacker-supplied hosts.
+ *
+ * ponytail: no TTL. An isolate lives minutes, so a host that rebinds mid-isolate
+ * keeps a stale verdict for that long; add an expiry if isolates ever get long
+ * enough for that to matter.
+ */
+const rebindVerdicts = new Map<string, Promise<SsrfResolution>>();
+
+/** How many distinct push-service hosts one isolate remembers a verdict for. */
+const REBIND_VERDICT_CAPACITY = 256;
+
+/**
+ * Send-time SSRF re-check for a stored web-push endpoint — the second half of the
+ * boundary `assertPushEndpoint` opens at register time.
+ *
+ * Register-time validation is a STRING classifier: a public hostname that resolves
+ * to a private/internal IP passes it, and even a host that resolved public then can
+ * be re-pointed afterwards. Since every send `fetch`-POSTs the caller-supplied
+ * endpoint (and `broadcast` does it once per device), the resolved address has to be
+ * re-checked here, where the request actually goes out.
+ *
+ * Skipped when `allowedPushOrigins` is configured: that exact-origin allowlist is
+ * the stronger guard and may legitimately name an internal push service.
+ */
+const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?: string[]): Promise<void> => {
+    if (allowedPushOrigins !== undefined && allowedPushOrigins.length > 0) {
+        return;
     }
+
+    let hostname: string;
 
     try {
-        const parsed = JSON.parse(target) as { endpoint?: unknown; keys?: unknown };
-
-        return typeof parsed.endpoint === "string" && typeof parsed.keys === "object";
+        ({ hostname } = new URL(endpoint));
     } catch {
-        return false;
+        return;
+    }
+
+    const cached = rebindVerdicts.get(hostname);
+    const pending = cached ?? resolveHostSsrf(hostname);
+    const resolution = await pending;
+
+    // Cache only what was actually learned (see the memo's docblock).
+    if (cached === undefined && resolution.kind !== "unknown") {
+        evictOldestEntry(rebindVerdicts, REBIND_VERDICT_CAPACITY);
+        rebindVerdicts.set(hostname, pending);
+    }
+
+    if (resolution.kind === "private") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" resolves to a private/internal address (${resolution.address}); refusing to send (DNS-rebinding guard)`,
+        );
     }
 };
 
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
+    /**
+     * The definition's exact-origin allowlist, when configured. Its presence
+     * disables the send-time rebinding re-check (see {@link assertPushTargetResolvable}).
+     */
+    allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
     webPush?: Provider<unknown, PushPayload>;
 }
@@ -43,15 +129,14 @@ export interface RoutingPushOptions {
  * uniformly.
  */
 export const routingPushProvider = (options: RoutingPushOptions): Provider<unknown, PushPayload> => {
-    const pick = (target: unknown): Provider<unknown, PushPayload> => {
-        const wantsWebPush = isWebPushTarget(target);
-        const provider = wantsWebPush ? options.webPush : options.fcm;
+    const pick = (endpoint: string | undefined): Provider<unknown, PushPayload> => {
+        const provider = endpoint === undefined ? options.fcm : options.webPush;
 
         if (provider === undefined) {
             throw new Error(
-                wantsWebPush
-                    ? "@lunora/notify: received a web-push target but no `webPush` channel is configured"
-                    : "@lunora/notify: received an FCM token target but no `fcm` channel is configured",
+                endpoint === undefined
+                    ? "@lunora/notify: received an FCM token target but no `fcm` channel is configured"
+                    : "@lunora/notify: received a web-push target but no `webPush` channel is configured",
             );
         }
 
@@ -66,18 +151,35 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             await options.fcm?.initialize();
         },
         isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
-        send: (payload) => {
-            // A multi-recipient `to` can mix kinds; our facade sends one target per
-            // call, so route on the first (single) target here.
-            const target = Array.isArray(payload.to) ? payload.to[0] : payload.to;
+        send: async (payload) => {
+            // ROUTING is on the first target — the endpoint IS the decision, present
+            // means web push, absent means FCM — because `ctx.push`'s own fan-out
+            // (`deliver`) sends exactly one target per call.
+            //
+            // The SSRF re-check, though, must cover EVERY target: `notify.send()`
+            // hands a caller-shaped message straight to the engine, so a
+            // multi-recipient push `to` does reach this router, and the provider
+            // POSTs all of them. Guarding only `to[0]` would let every later entry
+            // walk past the rebinding check — the one place it is enforced.
+            const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
+            const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
-            return pick(target).send(payload);
+            for (const endpoint of endpoints) {
+                if (endpoint !== undefined) {
+                    // eslint-disable-next-line no-await-in-loop -- verdicts are memoized per host, so a shared push origin costs one lookup for the whole array
+                    await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
+                }
+            }
+
+            return pick(endpoints[0]).send(payload);
         },
     };
 };
 
 /** A resolved, ready-to-wire set of channel configs (edge-safe channels only). */
 export interface ResolvedProviders {
+    /** The definition's `allowedPushOrigins`, threaded to the push router's send-time SSRF guard. */
+    allowedPushOrigins?: string[];
     chat?: Provider;
     fcm?: FcmConfig;
     inApp?: Provider;
@@ -98,7 +200,7 @@ export const buildEngine = (resolved: ResolvedProviders): Notification => {
     const providers: NotificationProviders = {};
 
     if (webPush !== undefined || fcm !== undefined) {
-        providers.push = routingPushProvider({ fcm, webPush });
+        providers.push = routingPushProvider({ allowedPushOrigins: resolved.allowedPushOrigins, fcm, webPush });
     }
 
     if (resolved.chat !== undefined) {

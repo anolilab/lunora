@@ -63,7 +63,7 @@ export type X402ProcedureChargeGate = (
  * function's price + `resource`), since `createChargeMiddleware` fetches
  * facilitator support on first use. A failed init is not cached, so a transient
  * facilitator outage retries on the next request. Settlement runs before
- * `dispatch` (`settleBeforeHandler: true`) since `dispatch` commits the
+ * `dispatch` (the `settleBeforeHandler` default) since `dispatch` commits the
  * procedure's real mutation — see `createChargeMiddleware`'s `ChargeMiddlewareOptions`.
  * @experimental
  */
@@ -74,14 +74,12 @@ export const createProcedureChargeGate = (config: X402ProcedureChargeConfig): X4
         let pending = middlewareByFunction.get(spec.functionPath);
 
         if (pending === undefined) {
-            pending = createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }, { settleBeforeHandler: true }).catch(
-                (error: unknown) => {
-                    // Don't cache a failed init — let the next request retry.
-                    middlewareByFunction.delete(spec.functionPath);
+            pending = createChargeMiddleware({ ...config, price: spec.price }, { resource: spec.functionPath }).catch((error: unknown) => {
+                // Don't cache a failed init — let the next request retry.
+                middlewareByFunction.delete(spec.functionPath);
 
-                    throw error;
-                },
-            );
+                throw error;
+            });
             middlewareByFunction.set(spec.functionPath, pending);
         }
 

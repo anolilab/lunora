@@ -36,8 +36,25 @@
 import { LunoraError } from "@lunora/errors";
 
 import { applySelect } from "./query-args";
-import type { NestedWith, RelationDefinitionLike, ResolveWithOptions, TableDefinitionLike } from "./schema-types";
+import type { NestedWith, QueryArgs, RelationDefinitionLike, ResolveWithOptions, TableDefinitionLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
+
+/**
+ * The relation-scoped hooks a read hands down to {@link resolveWith}, pulled off
+ * `args` as a unit.
+ *
+ * Every backend's `findMany` calls `resolveWith` from TWO places (the unpaged and
+ * the paged branch), so there are four hand-written call sites across
+ * `@lunora/shard-engine` and `@lunora/sql-store` that each have to re-list these
+ * fields. That is not hypothetical bookkeeping: the sql-store pair silently
+ * drifted from the shard-engine pair and stopped forwarding `relationBaseWhere`
+ * at all, which dropped row-level security from every `with` hop on that backend.
+ * Spreading this instead means a third relation-scoped hook is added in one place
+ * and cannot be forgotten at a call site.
+ */
+const relationHooks = (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">): Pick<QueryArgs, "relationBaseWhere" | "relationMask"> => {
+    return { relationBaseWhere: args.relationBaseWhere, relationMask: args.relationMask };
+};
 
 /** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
 const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>
@@ -91,7 +108,14 @@ const distinctValues = (rows: Record<string, unknown>[], field: string): unknown
  * `Doc[]`, `_count` → merged into `parent._count`.
  */
 const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
-    const { groupedCounter, fetcher, parents, relationBaseWhere, schema, tableName, with: withInput } = options;
+    const { groupedCounter, fetcher, parents, relationBaseWhere, relationMask, schema, tableName, with: withInput } = options;
+
+    /**
+     * Apply the column mask for a hop's TARGET table. Masking lives above
+     * `ctx.db` and never sees these rows otherwise — see `RelationMask`. Runs
+     * before `projectChildren` so a `select` narrows the already-masked row.
+     */
+    const masked = (table: string, rows: Record<string, unknown>[]): Record<string, unknown>[] => relationMask?.(table, rows) ?? rows;
 
     if (parents.length === 0) {
         return;
@@ -141,12 +165,13 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         const { page } = await fetcher(relation.table, {
             baseWhere: relationBaseWhere?.(relation.table),
             relationBaseWhere,
+            relationMask,
             where: { [relation.references]: { in: fkValues } },
             with: nested.with,
         });
         const byReference = new Map<unknown, Record<string, unknown>>();
 
-        for (const child of page) {
+        for (const child of masked(relation.table, page)) {
             byReference.set(child[relation.references], child);
         }
 
@@ -177,13 +202,14 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             baseWhere: relationBaseWhere?.(relation.table),
             orderBy: nested.orderBy,
             relationBaseWhere,
+            relationMask,
             where,
             with: nested.with,
         });
 
         const groups = new Map<unknown, Record<string, unknown>[]>();
 
-        for (const child of page) {
+        for (const child of masked(relation.table, page)) {
             const key = child[relation.field];
             const group = groups.get(key);
 
@@ -423,7 +449,7 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
     }
 };
 
-export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators };
+export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators };
 export type { ApplyOnDeleteOptions };
 
 export { type NestedWith, type OnDeleteActionLike, type RelationDefinitionLike, type ResolveWithOptions, type WithInput } from "./schema-types";

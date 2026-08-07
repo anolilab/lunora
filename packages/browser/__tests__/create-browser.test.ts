@@ -1,8 +1,23 @@
 /* eslint-disable sonarjs/no-clear-text-protocols -- SSRF regression fixtures deliberately target http:// private/link-local hosts (metadata endpoint, RFC1918, loopback). */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
 import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from "../src/types";
+import { stubDohFetch } from "./_helpers/stub-doh";
+
+// `resolveDns` defaults ON, so every navigation here would otherwise issue a REAL
+// Cloudflare DoH request. Answer with a public IP so the re-check is a no-op and
+// the guards under test are the only thing deciding. File-wide on purpose — every
+// describe below navigates.
+/* eslint-disable vitest/require-top-level-describe -- the stub applies to every describe in this file, so it belongs at file scope */
+beforeEach(() => {
+    stubDohFetch();
+});
+
+afterEach(() => {
+    vi.unstubAllGlobals();
+});
+/* eslint-enable vitest/require-top-level-describe */
 
 // `fetch` is required on the marker type (it excludes a bare `{}`); a no-op is
 // fine because the fake `launch` chain never touches the binding.

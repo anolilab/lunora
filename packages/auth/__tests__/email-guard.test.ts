@@ -40,6 +40,20 @@ describe("classifyEmail", () => {
         expect(classifyEmail("throwaway@mailinator.com").emailClass).toBe("disposable");
     });
 
+    it("classifies a Unicode-form internationalized disposable domain as disposable", async () => {
+        expect.assertions(2);
+
+        await loadEmailDomainLists();
+
+        // The blocklists are ASCII-only (`xn--…` entries, no Unicode ones), so a
+        // caller submitting the Unicode form of a listed IDN must still be folded
+        // to punycode before the lookup or the gate is bypassed outright.
+        const classification = classifyEmail("a@пушка-тула.рф");
+
+        expect(classification.emailClass).toBe("disposable");
+        expect(classification.domain).toBe("xn----7sbb1bhuyee9b.xn--p1ai");
+    });
+
     it("honours a custom denyDomains list", async () => {
         expect.assertions(1);
 

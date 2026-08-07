@@ -359,6 +359,30 @@ describe("lunoraClient", () => {
             expect(headers["x-lunora-client-seq"]).toBe("1");
         });
 
+        it("pairs `x-lunora-client-id` with every `x-lunora-mutation-id` (anonymous dedup namespace)", async () => {
+            expect.assertions(2);
+
+            // The shard keys an ANONYMOUS caller's `__idempotency` row by the client
+            // id. A mutation id sent without one has no namespace, so the DO skips
+            // the dedup cache entirely and a replayed write re-runs — the header
+            // pair is what keeps exactly-once working for a signed-out caller.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: "ok" }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.mutation(fnRef("posts:create"), { title: "a" }, { mutationId: "m-1" });
+
+            const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+            expect(headers["x-lunora-mutation-id"]).toBe("m-1");
+            expect(headers["x-lunora-client-id"]).toBe("client-A");
+        });
+
         it("reports applied=false and surfaces the echoed watermark when the DO swallows a stale push as a replay", async () => {
             expect.assertions(2);
 

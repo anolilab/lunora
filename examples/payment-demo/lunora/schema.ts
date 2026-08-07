@@ -66,6 +66,10 @@ export default defineSchema({
         createdAt: v.number(),
         featureId: v.string(),
         idempotencyKey: v.string(),
+        // `"add"` (default when absent) or `"set"`: a `"set"` row is an absolute
+        // marker the period fold resets to, which is what keeps concurrent
+        // `track({ mode: "set" })` calls from double-applying.
+        mode: v.optional(v.string()),
         provider: v.string(),
         quantity: v.number(),
         referenceId: v.string(),

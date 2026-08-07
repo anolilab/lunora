@@ -30,6 +30,32 @@ import type {
     TrackResult,
 } from "./types";
 
+/**
+ * Strictly increasing event stamps for the usage ledger.
+ *
+ * The period total is a FOLD, not a sum (see `foldUsage`), so a `"set"` marker has
+ * to be orderable against the `"add"` events around it — and `Date.now()` is
+ * millisecond-granular, so a burst of `track` calls inside one millisecond would
+ * otherwise share a stamp and fold in an arbitrary order. Handing out `max(now,
+ * last + 1)` gives every event recorded by THIS isolate a distinct, ordered stamp
+ * at no storage cost.
+ *
+ * Across isolates a same-millisecond tie falls back to the `idempotencyKey`
+ * comparison in the fold. That is arbitrary, and deliberately so: those writes are
+ * genuinely concurrent, so any order is a valid linearization and the fold's
+ * last-writer-wins is the defined outcome — the property that matters is that
+ * they cannot BOTH apply, which absolute markers guarantee.
+ */
+let lastUsageStamp = 0;
+
+const nextUsageStamp = (): number => {
+    const now = Date.now();
+
+    lastUsageStamp = now > lastUsageStamp ? now : lastUsageStamp + 1;
+
+    return lastUsageStamp;
+};
+
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
     metadata && "referenceId" in metadata ? Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== "referenceId")) : metadata;
@@ -346,40 +372,69 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         track: async (input) => {
             await ensureAuthorized(input.referenceId);
 
-            const target = input.quantity ?? 1;
+            // `=== undefined`, not `??`. The two are equivalent to the TYPE (`number |
+            // undefined`), which is why the lint rule cannot tell them apart — but
+            // this is a trust boundary, and an untyped/JSON caller can send
+            // `quantity: null`. `??` would quietly turn that into the default 1
+            // instead of letting the check below reject it.
+            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- deliberate: `??` would swallow a runtime `null` the type says can't happen
+            const target = input.quantity === undefined ? 1 : input.quantity;
+
+            // A negative (or non-integer/non-finite) quantity is never a legitimate
+            // meter reading, and it is not merely garbage-in: the ledger is summed
+            // to `used`, and `evaluateFeature` derives `balance = limit - used`, so
+            // a negative event pushes `used` below zero and hands the caller an
+            // unbounded balance past its paid cap. Reject at the boundary — for
+            // BOTH modes ("set" to a negative total is the same bypass in one call).
+            if (!Number.isSafeInteger(target) || target < 0) {
+                throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
+            }
             // A caller-stable key dedupes retries; an omitted one means "always record".
             const key = input.idempotencyKey ?? crypto.randomUUID();
 
-            // The ledger is append-only, so a "set" reconciles to the absolute total by recording the
-            // delta from the current period usage; "add" records the increment directly.
+            // Both modes are a single append — the ledger is append-only and the
+            // period total is a FOLD over it (`foldUsage`), not a plain sum: an
+            // "add" event increments, a "set" event resets the total to its own
+            // quantity and discards everything earlier in the period.
             //
-            // CONCURRENCY: `mode: "set"` is a non-atomic read-modify-write — the `sumUsage` read and the
-            // `recordUsage` append below are separate `ctx.db` calls with no transaction spanning them,
-            // so two `set` calls that interleave (e.g. two Worker isolates reconciling the same
-            // reference) both read the same current total and both append their delta, over- or
-            // under-counting the period. `mode: "add"` has no such hazard (its delta is independent of
-            // the current total). Only call `mode: "set"` from a serialized context (a single DO, or a
-            // per-reference lock); prefer `mode: "add"` for concurrent writers.
-            let delta = target;
+            // CONCURRENCY: that fold is the whole point. Reconciling a "set" the
+            // obvious way — read the current total, append `target - current` —
+            // is a read-modify-write across two un-transacted store calls, so two
+            // interleaved "set" calls both read the same total, both append a
+            // delta, and leave the period over- or under-counted, which inflates
+            // `balance = limit - used` exactly like a negative quantity would.
+            // Appending the absolute target instead makes concurrent "set" calls
+            // resolve last-writer-wins and a replayed "set" idempotent, with no
+            // lock and no serialized-context requirement. "add" was never at risk
+            // (its increment is independent of the current total).
+            const isSet = input.mode === "set";
 
-            if (input.mode === "set") {
-                const subscriptions = await store.listSubscriptionsByReference(input.referenceId);
-                const current = await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(subscriptions));
+            // Advisory ONLY: skip a "set" that already matches, and an explicit
+            // `add 0`, so the ledger doesn't grow for a no-op. A stale read here
+            // can only cost a redundant marker — never a wrong total — because the
+            // fold resolves the period regardless of what this read saw. Nothing
+            // downstream depends on it, which is what keeps the path race-free.
+            const subscriptions = isSet ? await store.listSubscriptionsByReference(input.referenceId) : undefined;
+            const current = subscriptions === undefined ? 0 : await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(subscriptions));
 
-                delta = target - current;
-            }
-
-            // A no-op (set to the value it already holds, or add 0) writes nothing to the ledger.
-            if (delta === 0) {
+            if (isSet ? target === current : target === 0) {
                 return { recorded: false, reportedToProvider: false };
             }
 
+            // What this event moves the period total BY — the increment for "add",
+            // and for "set" the best-effort difference from the total just read.
+            // Local enforcement never uses it (the fold does); it exists only for
+            // the additive upstream meter below, which is already best-effort and
+            // reconciled separately.
+            const delta = isSet ? target - current : target;
+
             const recorded = await store.recordUsage({
-                createdAt: Date.now(),
+                createdAt: nextUsageStamp(),
                 featureId: input.featureId,
                 idempotencyKey: key,
+                ...(isSet ? { mode: "set" as const } : {}),
                 provider: adapter.identifier,
-                quantity: delta,
+                quantity: target,
                 referenceId: input.referenceId,
                 reportedToProvider: false,
             });

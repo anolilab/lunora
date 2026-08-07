@@ -59,7 +59,7 @@ const title = await browser.scrape("https://example.com", () => document.title);
 | `timeoutMs`           | `number`             | Factory-level navigation timeout (ms). Clamped to 120 000. Default 30 000.                                                |
 | `allowPrivateTargets` | `boolean`            | Opt in to navigating private/internal hosts (loopback, RFC1918, link-local). Default false.                               |
 | `allowedHosts`        | `string[]`           | Strict host allowlist. When set, a navigation URL is refused unless its hostname exactly matches an entry. Default unset. |
-| `resolveDns`          | `boolean`            | Best-effort DNS-rebinding re-check: resolve the hostname over Cloudflare DoH and refuse private results. Default false.   |
+| `resolveDns`          | `boolean`            | Best-effort DNS-rebinding re-check over Cloudflare DoH. Defaults to true, or false when `allowedHosts` is set.            |
 
 ### `Browser`
 
@@ -75,7 +75,7 @@ const title = await browser.scrape("https://example.com", () => document.title);
 
 Every navigation URL is validated before the browser is launched: non-`http(s)` schemes, embedded credentials, and private/internal targets (loopback, RFC1918, link-local, CGNAT, `localhost`/`*.internal`/`*.local`) are rejected by default. IPv4-mapped IPv6 and octal/hex encodings are normalized first. Set `allowPrivateTargets: true` only when every URL is trusted.
 
-When the navigation URL is **user-controlled**, harden further against DNS rebinding — a public hostname that resolves to a private/metadata IP passes the string guard above. Two options:
+A public hostname that resolves to a private/metadata IP passes the string guard above (classic DNS rebinding), so a second layer runs on top:
 
+- `resolveDns` — **on by default when `allowedHosts` is unset**: a DoH re-check that resolves the hostname over Cloudflare DNS and refuses if any A/AAAA record is private. Best-effort (it adds a round-trip and is TOCTOU-imperfect; it falls back to the string guard if the lookup fails). Setting `allowedHosts` turns it off by default — the allowlist is the stronger guard and may legitimately name an internal host that a resolved-address check would refuse; pass `resolveDns: true` to run both. Set `resolveDns: false` for trusted, non-user-controlled URLs where the round-trip matters.
 - `allowedHosts: [...]` — a strict allowlist that refuses any hostname not exactly on the list (case-insensitive, trailing-dot- and IPv6-bracket-normalized). This is the only guard that _fully_ closes rebinding, so prefer it whenever you can enumerate the destinations.
-- `resolveDns: true` — an opt-in DoH re-check that resolves the hostname over Cloudflare DNS and refuses if any A/AAAA record is private. Best-effort (it adds a round-trip and is TOCTOU-imperfect; it falls back to the string guard if the lookup fails), so reach for `allowedHosts` when you need a hard guarantee.

@@ -32,6 +32,41 @@
  */
 import { fromBase64Url, signCanonical, verifyCanonical } from "./hmac-url";
 
+/** Env values that read as "on". */
+const TRUTHY_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+
+/** Env values that read as "off". */
+const FALSY_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
+
+/**
+ * Read a boolean env knob against ONE vocabulary, falling back to `fallback` for
+ * an unset, blank, or unrecognised value.
+ *
+ * Lives here because the WS admin gate is enforced in two isolates — the worker
+ * (`checkAdminWsToken`) and the Durable Object (`isAdminSocket`) — that must agree
+ * on `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` exactly. They previously each held their
+ * own value set, so flipping the default meant flipping two copies in lockstep;
+ * missing one would have left the worker refusing a master token in `?token=`
+ * while the DO accepted it (or the reverse) — a split-brain on an auth gate that
+ * no type and no single-package test can catch. This is the same
+ * no-runtime-dependency-edge case the rest of `shared/` exists for.
+ *
+ * Taking `fallback` rather than negating a single set also keeps ONE vocabulary
+ * repo-wide: an unrecognised value never means "on" for one flag and "off" for
+ * another — it always means "whatever this flag defaults to".
+ * @param value the raw env value (`undefined` when unset).
+ * @param fallback the value to use when `value` says nothing recognisable.
+ */
+const isEnvFlagEnabled = (value: string | undefined, fallback: boolean): boolean => {
+    const normalized = (value ?? "").trim().toLowerCase();
+
+    if (TRUTHY_ENV_VALUES.has(normalized)) {
+        return true;
+    }
+
+    return FALSY_ENV_VALUES.has(normalized) ? false : fallback;
+};
+
 /** Version tag baked into (and verified on) every minted token. */
 const WS_ADMIN_TOKEN_VERSION = "v1";
 
@@ -105,4 +140,4 @@ const verifyWsAdminToken = async (secret: string, token: string, now: number = D
 };
 
 export type { MintedWsAdminToken };
-export { mintWsAdminToken, verifyWsAdminToken, WS_ADMIN_TOKEN_TTL_MS, WS_ADMIN_TOKEN_VERSION };
+export { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken, WS_ADMIN_TOKEN_TTL_MS, WS_ADMIN_TOKEN_VERSION };

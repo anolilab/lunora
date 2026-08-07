@@ -37,7 +37,7 @@ describe("serveRelationFanout", () => {
         const db = stubWriter({ count: async () => 0, findMany });
 
         const result = await serveRelationFanout(schema, db, READ, {
-            orderBy: [{ direction: "asc", field: "name" }],
+            orderBy: [{ name: "asc" }],
             table: "local",
             where: { globalId: { in: ["g1"] } },
             with: { owner: true },
@@ -46,10 +46,33 @@ describe("serveRelationFanout", () => {
         expect(result).toEqual([{ _id: "l1" }, { _id: "l2" }]);
         expect(findMany).toHaveBeenCalledWith(
             "local",
-            expect.objectContaining({ orderBy: [{ direction: "asc", field: "name" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }),
+            expect.objectContaining({ orderBy: [{ name: "asc" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }),
         );
         // The page envelope is unwrapped — callers fan out bare arrays for `concat`.
         expect(Array.isArray(result)).toBe(true);
+    });
+
+    it("rebuilds `relationBaseWhere` from `relationPolicies` so NESTED `with` hops stay RLS-filtered", async () => {
+        expect.assertions(2);
+
+        // `database` here is the RAW ctx-db — it applies no read policy of its own.
+        // The nested hops' policies arrive as data and must be turned back into the
+        // `relationBaseWhere` the relation loader threads down each level, or a
+        // deep `with` chain reads children the caller has no policy over.
+        const findMany = vi.fn<DatabaseWriterLike["findMany"]>(async () => pageOf([]));
+        const db = stubWriter({ count: async () => 0, findMany });
+
+        await serveRelationFanout(schema, db, READ, {
+            relationPolicies: { local: { ownerId: "u1" } },
+            table: "local",
+            where: { globalId: { in: ["g1"] } },
+            with: { owner: true },
+        });
+
+        const relationBaseWhere = findMany.mock.calls[0]?.[1]?.relationBaseWhere;
+
+        expect(relationBaseWhere?.("local")).toEqual({ ownerId: "u1" });
+        expect(relationBaseWhere?.("unpoliced")).toBeUndefined();
     });
 
     it("serves `:count` as a bare number, forwarding the where filter", async () => {

@@ -30,9 +30,11 @@ import type {
     AggregateResult,
     AggregateTally,
     ColumnMetaLike,
+    CrossShardReadArgs,
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    QueryPage,
     RankIndexDefinitionLike,
     RankPage,
     RankResult,
@@ -79,6 +81,7 @@ import {
     RANK_TIEBREAK,
     rankTableName,
     readAggregateValue,
+    relationHooks,
     resolveRankPartition,
     resolveRelationPredicates,
     resolveWith,
@@ -178,8 +181,11 @@ interface SqlCtxDbOptions {
      * RLS). Absent it, loading such a relation throws a clear "not supported"
      * error (legacy behaviour). The forward direction (shard-local parent →
      * global child) and same-backend relations never touch this.
+     *
+     * Takes {@link CrossShardReadArgs}, not `QueryArgs`: the hop is JSON, so the
+     * RLS filters are handed over as data (see that type's docblock).
      */
-    crossShardReader?: DatabaseWriterLike["findMany"];
+    crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
     /**
      * The SQL dialect that shapes every statement (identifier quoting, value
@@ -1875,6 +1881,56 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         );
     };
 
+    /**
+     * SECURITY (RLS across the fan-out): the cross-shard hop is a JSON envelope,
+     * so the two carriers the relation loader uses to enforce the CHILD table's
+     * read policy can't ride along as-is — and dropping them silently returns
+     * every child row for the FK, since the serving shard reads through its RAW
+     * ctx-db. Convert both to data (see {@link CrossShardReadArgs}):
+     *
+     * - `baseWhere` (this hop's policy filter) is ANDed into `where`.
+     * - `relationBaseWhere` (a function, for NESTED `with` levels) is projected
+     *   into a table → filter map. Projecting every schema table is cheaper than
+     *   walking the `with` tree and can't miss a hop; `readBase` is memoized
+     *   upstream, and tables with no restricting policy simply don't appear.
+     *
+     * `relationMask` has the same problem and NO such projection: a mask policy
+     * isn't serializable (a custom `MaskFn` is a closure over the request, and
+     * `"hash"` needs the caller context). THIS hop's own rows are still masked —
+     * the relation loader applies the mask to whatever the fetcher returns — but a
+     * nested `with` is hydrated on the serving shard, past the mask's reach. So a
+     * masked read that would cross with nested relations is REFUSED rather than
+     * served in the clear, matching how the mask middleware already fails closed
+     * on `aggregate`/`groupBy` over a masked column.
+     */
+    const toCrossShardArgs = (childTable: string, childArgs: Parameters<DatabaseWriterLike["findMany"]>[1]): CrossShardReadArgs => {
+        if (childArgs?.relationMask !== undefined && childArgs.with !== undefined && Object.keys(childArgs.with).length > 0) {
+            throw new LunoraError(
+                "MASK_UNSUPPORTED",
+                `masking cannot follow a nested \`with\` across the cross-shard relation hop to "${childTable}" — the nested rows are hydrated on the serving shard, where the mask policy does not exist. Read the nested relation at its own (masked) call site instead.`,
+            );
+        }
+
+        const relationPolicies: Record<string, WhereInput> = {};
+
+        if (childArgs?.relationBaseWhere) {
+            for (const table of Object.keys(schema.tables)) {
+                const policy = childArgs.relationBaseWhere(table);
+
+                if (policy !== undefined) {
+                    relationPolicies[table] = policy;
+                }
+            }
+        }
+
+        return {
+            orderBy: childArgs?.orderBy,
+            relationPolicies,
+            where: mergeWhere(childArgs?.baseWhere, childArgs?.where),
+            with: childArgs?.with,
+        };
+    };
+
     // Backend-routed child fetch for the relation pre-resolver, available to the
     // aggregate/count/groupBy paths (the `findMany` method aliases this for its
     // nested `with` load). Mutually recursive with `writer`, so it reads
@@ -1885,7 +1941,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return writer.findMany(childTable, childArgs);
         }
 
-        return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+        return crossShardReader ? crossShardReader(childTable, toCrossShardArgs(childTable, childArgs)) : crossBackendUnsupported(childTable);
     };
 
     /**
@@ -2312,8 +2368,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
             // backend-routed child fetch before compiling. `relationBaseWhere` is
             // threaded through so a child table's RLS read filter applies on the
-            // hop (the `with`-load `resolveWith` calls below omit it — a separate
-            // pre-existing gap; the pre-resolver does not depend on that).
+            // hop — as it is on the `with`-load `resolveWith` calls below.
             predicate = await resolveRelationPredicates(predicate, {
                 fetcher: relationFetcher,
                 maxRelationKeys,
@@ -2353,6 +2408,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         fetcher: relationFetcher,
                         groupedCounter: relationGroupedCounter,
                         parents: documents,
+                        ...relationHooks(args),
                         schema,
                         tableName,
                         with: args.with,
@@ -2368,7 +2424,15 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ fetcher: relationFetcher, groupedCounter: relationGroupedCounter, parents: page, schema, tableName, with: args.with });
+                await resolveWith({
+                    fetcher: relationFetcher,
+                    groupedCounter: relationGroupedCounter,
+                    parents: page,
+                    ...relationHooks(args),
+                    schema,
+                    tableName,
+                    with: args.with,
+                });
             }
 
             return {

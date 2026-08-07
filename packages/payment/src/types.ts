@@ -182,7 +182,21 @@ export interface UsageEvent {
     readonly featureId: string;
     /** Caller-stable dedupe key — recording the same key twice is a no-op (exactly-once `track`). */
     readonly idempotencyKey: string;
+
+    /**
+     * How the period total absorbs this event: `"add"` (the default, and the value
+     * assumed for rows written before this field existed) increments it, `"set"`
+     * RESETS it to `quantity` and discards everything recorded earlier in the
+     * period.
+     *
+     * The ledger stays append-only either way — a `"set"` is a marker, not a
+     * computed delta — which is what makes `track({ mode: "set" })` safe to call
+     * concurrently. `PaymentStore.sumUsage` (via `foldUsage`) applies the fold.
+     */
+    readonly mode?: "add" | "set";
     readonly provider: ProviderId;
+
+    /** For `"add"`, the increment. For `"set"`, the absolute period total this event declares. */
     readonly quantity: number;
     readonly referenceId: string;
     /** Whether the event was successfully forwarded to the provider's metering API. */
@@ -200,12 +214,19 @@ export interface TrackInput {
 
     /**
      * `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`.
-     * `"set"` is a non-atomic read-modify-write (it reads the current total, then appends the delta), so
-     * concurrent `"set"` calls for the same reference can over- or under-count — call it only from a
-     * serialized context (a single Durable Object or per-reference lock). `"add"` is always safe.
+     *
+     * Both are a single append: a `"set"` records the absolute target as a marker that the period fold
+     * resets to, rather than reading the current total and appending a delta. Concurrent `"set"` calls
+     * for the same reference therefore resolve last-writer-wins instead of over- or under-counting, and
+     * a replayed `"set"` is idempotent — neither mode needs a serialized context or a per-reference lock.
      */
     readonly mode?: "add" | "set";
-    /** Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`). */
+
+    /**
+     * Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`).
+     * Must be a non-negative safe integer — a negative value would drive the summed period usage
+     * below zero and hand the reference an unbounded metered balance, so it is rejected.
+     */
     readonly quantity?: number;
     readonly referenceId: string;
 }

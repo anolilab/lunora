@@ -43,11 +43,12 @@ const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState 
     };
 };
 
-const mutationRequest = (mutationId?: string, userId?: string): Request =>
+const mutationRequest = (mutationId?: string, userId?: string, clientId?: string): Request =>
     new Request("https://shard.internal/rpc", {
         body: JSON.stringify({ args: {}, functionPath: "messages:send" }),
         headers: {
             "content-type": "application/json",
+            ...(clientId === undefined ? {} : { "x-lunora-client-id": clientId }),
             ...(mutationId === undefined ? {} : { "x-lunora-mutation-id": mutationId }),
             ...(userId === undefined ? {} : { "x-lunora-userid": userId }),
         },
@@ -65,11 +66,11 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
 
             const shard = new CountingMutationShard(makeState(database), {});
 
-            const first = await shard.fetch(mutationRequest("m-1"));
+            const first = await shard.fetch(mutationRequest("m-1", "u1"));
 
             await expect(first.json()).resolves.toEqual({ result: { runs: 1 } });
 
-            const second = await shard.fetch(mutationRequest("m-1"));
+            const second = await shard.fetch(mutationRequest("m-1", "u1"));
 
             // The replay returns the FIRST result verbatim, not `{ runs: 2 }`,
             // because the handler never ran a second time.
@@ -109,11 +110,11 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
 
             const shard = new CountingMutationShard(makeState(database), {});
 
-            const a = await shard.fetch(mutationRequest("m-1"));
+            const a = await shard.fetch(mutationRequest("m-1", "u1"));
 
             await expect(a.json()).resolves.toEqual({ result: { runs: 1 } });
 
-            const b = await shard.fetch(mutationRequest("m-2"));
+            const b = await shard.fetch(mutationRequest("m-2", "u1"));
 
             await expect(b.json()).resolves.toEqual({ result: { runs: 2 } });
         } finally {
@@ -144,6 +145,59 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             const u1Replay = await shard.fetch(mutationRequest("shared", "u1"));
 
             await expect(u1Replay.json()).resolves.toEqual({ result: { runs: 1 } });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("namespaces ANONYMOUS callers by client id — one cannot suppress another's mutation", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new CountingMutationShard(makeState(database), {});
+
+            // An anonymous caller has no server-minted user id. Namespacing them all
+            // under one key would let a colliding (reused / guessed) mutation id make
+            // client B's write short-circuit to client A's cached result — suppressed
+            // without ever running. The per-device client id keeps them apart.
+            const a = await shard.fetch(mutationRequest("shared", undefined, "device-a"));
+
+            await expect(a.json()).resolves.toEqual({ result: { runs: 1 } });
+
+            const b = await shard.fetch(mutationRequest("shared", undefined, "device-b"));
+
+            await expect(b.json()).resolves.toEqual({ result: { runs: 2 } });
+
+            // Each still dedups its OWN replay.
+            const aReplay = await shard.fetch(mutationRequest("shared", undefined, "device-a"));
+
+            await expect(aReplay.json()).resolves.toEqual({ result: { runs: 1 } });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("skips the cache entirely for an anonymous caller with no client id (fails OPEN, never suppresses)", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new CountingMutationShard(makeState(database), {});
+
+            // No identity and no client id → no namespace that is safe to share, so
+            // the handler re-runs (the pre-idempotency behaviour) rather than risk
+            // serving — or suppressing — some other client's mutation.
+            await shard.fetch(mutationRequest("shared"));
+            await shard.fetch(mutationRequest("shared"));
+
+            expect(shard.runs).toBe(2);
         } finally {
             database.close();
         }
