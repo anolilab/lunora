@@ -12,6 +12,21 @@ import { createInterface } from "node:readline";
 
 import AdmZip from "adm-zip";
 
+/**
+ * Convex's own file table. Its rows describe stored BLOBS, not application
+ * data — the bytes sit next to the JSONL as separate files and belong in R2,
+ * so importing the rows alone would create dangling references.
+ */
+const CONVEX_STORAGE_TABLE = "_storage";
+
+/**
+ * Convex system tables are `_`-prefixed (`_storage`, `_scheduled_functions`,
+ * `_modules`, …). None of them are application data, and none of them exist on
+ * the target: streaming them in would create rows nothing reads, and `--verify`
+ * would then demand row parity for a table the endpoint rejected.
+ */
+const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
+
 /** One `documents.jsonl` file in a Convex export snapshot. */
 interface ConvexSnapshotTable {
     /** Absolute file path (directory) or archive-relative entry (zip). */
@@ -183,4 +198,12 @@ const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnap
 };
 
 export type { ConvexSnapshot, ConvexSnapshotTable };
-export { listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, readSnapshotText, resolveConvexSnapshot };
+export {
+    CONVEX_STORAGE_TABLE,
+    isConvexSystemTable,
+    listConvexSnapshotTables,
+    readSnapshotLines,
+    readSnapshotStorageBlob,
+    readSnapshotText,
+    resolveConvexSnapshot,
+};

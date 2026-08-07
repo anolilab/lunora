@@ -10,8 +10,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
-import { readSnapshotLines } from "../convex-snapshot";
-import { CONVEX_STORAGE_TABLE, isConvexSystemTable } from "./import-source";
+import { CONVEX_STORAGE_TABLE, isConvexSystemTable, readSnapshotLines } from "../convex-snapshot";
 import { readStorageMetadata } from "./storage-blobs";
 
 /** Shape of the `lunora/import-convex.json` mapping file. */

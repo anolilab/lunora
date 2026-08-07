@@ -10,13 +10,15 @@
  */
 import { createReadStream } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import { parse } from "csv-parse";
 
 import type { Logger } from "../../../util/logger";
-import { readAuthDump } from "./auth-reader";
+import { readAuthDump } from "./auth";
+import type { DumpFile } from "./dump-directory";
+import { listDumpFiles, readDumpFiles } from "./dump-directory";
 import type { ImportSourceMapping, TableMapping } from "./mapping";
 import { applyReshape } from "./reshape";
 
@@ -71,66 +73,27 @@ const castPostgresCsv = (value: string, context: { header: boolean; quoting: boo
     return (!context.quoting && value.length === 0) || value === TEXT_FORMAT_NULL ? null : value;
 };
 
-/** One `<table>.csv` in a Supabase dump directory. */
-interface SupabaseTableFile {
-    file: string;
-    table: string;
-}
+/** Auth dumps the mapping claims, plus anything in Postgres's `auth.` schema. */
+const authFilesFor = (mapping: ImportSourceMapping | undefined): Set<string> =>
+    new Set([mapping?.auth?.file, mapping?.auth?.identitiesFile].filter((file): file is string => file !== undefined).map((file) => basename(file)));
 
-/**
- * Find the CSV files in a dump directory, resolving each to its Lunora table.
- *
- * A mapping entry may name its file explicitly (`auth.users.csv` → `users`);
- * anything unnamed falls back to `<table>.csv`. Files the mapping does not
- * mention are still imported under their stem, so a dump of twenty tables needs
- * a mapping only for the columns that actually need reshaping.
- */
-const listSupabaseTables = async (directory: string, mapping: ImportSourceMapping | undefined): Promise<SupabaseTableFile[]> => {
-    const entries = await readdir(directory, { withFileTypes: true }).catch(() => undefined);
-
-    if (entries === undefined) {
-        throw new LunoraError("INTERNAL", `${directory} is not a readable directory of Supabase CSV exports`);
-    }
-
-    // The auth dumps are NOT application tables — see AUTH_SCHEMA_PREFIX. Both
-    // the mapping-named files and anything in the `auth.` schema are excluded,
-    // because the mapping is optional and the exclusion must not be.
-    const authFiles = new Set(
-        [mapping?.auth?.file, mapping?.auth?.identitiesFile].filter((file): file is string => file !== undefined).map((file) => basename(file)),
+/** Find the CSV files in a dump directory, resolving each to its Lunora table. */
+const listSupabaseTables = async (directory: string, mapping: ImportSourceMapping | undefined): Promise<DumpFile[]> =>
+    listDumpFiles(
+        directory,
+        mapping,
+        {
+            authFiles: authFilesFor(mapping),
+            emptyMessage: "holds no .csv files — export each table with `COPY <table> TO STDOUT WITH CSV HEADER` first",
+            // The `auth.` schema is excluded by SHAPE, not just by what the
+            // mapping names: the mapping is optional, and keying the exclusion off
+            // it meant a dump imported without one sent every credential column
+            // over the wire as an ordinary row.
+            matches: (name) => name.toLowerCase().endsWith(".csv") && !name.toLowerCase().startsWith(AUTH_SCHEMA_PREFIX),
+            tableNameOf: (name) => basename(name, ".csv"),
+        },
+        async (path) => readdir(path, { withFileTypes: true }),
     );
-    const csvFiles = entries
-        .filter(
-            (entry) =>
-                entry.isFile() &&
-                entry.name.toLowerCase().endsWith(".csv") &&
-                !authFiles.has(entry.name) &&
-                !entry.name.toLowerCase().startsWith(AUTH_SCHEMA_PREFIX),
-        )
-        .map((entry) => entry.name);
-    const claimed = new Map<string, string>();
-
-    for (const [table, tableMapping] of Object.entries(mapping?.tables ?? {})) {
-        if (tableMapping.file !== undefined) {
-            claimed.set(tableMapping.file, table);
-        }
-    }
-
-    const found: SupabaseTableFile[] = [];
-
-    for (const name of csvFiles) {
-        // A mapping `file` is operator-supplied and joined onto a path, so it is
-        // matched by basename rather than trusted as a path fragment.
-        const table = claimed.get(name) ?? basename(name, ".csv");
-
-        found.push({ file: join(directory, name), table });
-    }
-
-    if (found.length === 0) {
-        throw new LunoraError("INTERNAL", `${directory} holds no .csv files — export each table with \`COPY <table> TO STDOUT WITH CSV HEADER\` first`);
-    }
-
-    return found.toSorted((a, b) => a.table.localeCompare(b.table));
-};
 
 /**
  * Turn one CSV row into a Lunora document.
@@ -182,44 +145,27 @@ const toDocument = (row: Record<string, string | null>, tableMapping: TableMappi
 };
 
 /**
- * Stream one table's CSV as `{ table, doc }` NDJSON, tallying rows as it goes.
+ * Decode one table's CSV into documents.
  *
- * `cast` distinguishes NULL from the empty string the way Postgres CSV does:
- * an *unquoted* empty field is NULL, a quoted `""` is a genuine empty string.
+ * `cast` distinguishes NULL from the empty string the way Postgres CSV does: an
+ * unquoted* empty field is NULL, a quoted `""` is a genuine empty string.
  * Collapsing the two would turn every empty text column into a null.
  */
-const readSupabaseTable = async function* (
-    tableFile: SupabaseTableFile,
-    mapping: ImportSourceMapping | undefined,
-    sourceRows: Map<string, number>,
-): AsyncGenerator<string> {
-    const tableMapping = mapping?.tables?.[tableFile.table];
-
-    const parser = createReadStream(tableFile.file).pipe(
-        parse({
-            cast: castPostgresCsv,
-            columns: true,
-            relaxColumnCountLess: false,
-            skipEmptyLines: true,
-        }),
-    );
-
+const readSupabaseTable = async function* (dumpFile: DumpFile, mapping: ImportSourceMapping | undefined): AsyncGenerator<Record<string, unknown>> {
+    const tableMapping = mapping?.tables?.[dumpFile.table];
+    const parser = createReadStream(dumpFile.file).pipe(parse({ cast: castPostgresCsv, columns: true, relaxColumnCountLess: false, skipEmptyLines: true }));
     let lineNumber = 0;
 
     try {
         for await (const row of parser) {
             lineNumber += 1;
 
-            const document = toDocument(row as Record<string, string | null>, tableMapping, tableFile.table);
-
-            sourceRows.set(tableFile.table, (sourceRows.get(tableFile.table) ?? 0) + 1);
-
-            yield `${JSON.stringify({ doc: document, table: tableFile.table })}\n`;
+            yield toDocument(row as Record<string, string | null>, tableMapping, dumpFile.table);
         }
     } catch (error: unknown) {
         throw new LunoraError(
             "INTERNAL",
-            `${basename(tableFile.file)} row ${String(lineNumber + 1)}: ${error instanceof Error ? error.message : String(error)}`,
+            `${basename(dumpFile.file)} row ${String(lineNumber + 1)}: ${error instanceof Error ? error.message : String(error)}`,
             {
                 cause: error,
             },
@@ -232,26 +178,14 @@ const readSupabaseTable = async function* (
  * admin import endpoint accepts.
  */
 const readSupabaseExport = async function* (
-    tables: ReadonlyArray<SupabaseTableFile>,
+    tables: ReadonlyArray<DumpFile>,
     mapping: ImportSourceMapping | undefined,
     logger: Logger,
     sourceRows: Map<string, number>,
     directory: string,
 ): AsyncGenerator<string> {
     yield* readAuthDump("supabase", directory, mapping, logger, sourceRows);
-
-    for (const tableFile of tables) {
-        // Seed the tally so an empty table still appears in the parity report —
-        // absent-vs-zero is "never read" vs "nothing to import".
-        if (!sourceRows.has(tableFile.table)) {
-            sourceRows.set(tableFile.table, 0);
-        }
-
-        logger.info(`reading ${basename(tableFile.file)} → ${tableFile.table}`);
-
-        yield* readSupabaseTable(tableFile, mapping, sourceRows);
-    }
+    yield* readDumpFiles(tables, logger, sourceRows, (dumpFile) => readSupabaseTable(dumpFile, mapping));
 };
 
-export type { SupabaseTableFile };
 export { castPostgresCsv, listSupabaseTables, readSupabaseExport, toDocument };

@@ -16,20 +16,16 @@
  * - a single JSON file of `{ "<collection>": { "<docId>": { …fields } } }`.
  */
 import { readdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../../util/logger";
-import { readAuthDump } from "./auth-reader";
+import { readAuthDump } from "./auth";
+import type { DumpFile } from "./dump-directory";
+import { listDumpFiles, readDumpFiles } from "./dump-directory";
 import type { ImportSourceMapping, TableMapping } from "./mapping";
 import { applyReshape } from "./reshape";
-
-/** One collection's file in a Firestore export directory. */
-interface FirestoreCollectionFile {
-    file: string;
-    table: string;
-}
 
 /** A Firestore typed value, as the REST/RPC JSON encoding writes it. */
 interface FirestoreValue {
@@ -186,37 +182,20 @@ const toDocument = (
 };
 
 /** Enumerate the per-collection files in a Firestore export directory. */
-const listFirestoreCollections = async (directory: string, mapping: ImportSourceMapping | undefined): Promise<FirestoreCollectionFile[]> => {
-    const entries = await readdir(directory, { withFileTypes: true }).catch(() => undefined);
-
-    if (entries === undefined) {
-        throw new LunoraError("INTERNAL", `${directory} is not a readable directory of Firestore collection exports`);
-    }
-
-    const claimed = new Map<string, string>();
-
-    for (const [table, tableMapping] of Object.entries(mapping?.tables ?? {})) {
-        if (tableMapping.file !== undefined) {
-            claimed.set(tableMapping.file, table);
-        }
-    }
-
-    // The auth dump is not a collection — see the Supabase reader for why
-    // importing it as one would leak credential material into the target.
-    const authFile = mapping?.auth?.file === undefined ? undefined : basename(mapping.auth.file);
-
-    const found = entries
-        .filter((entry) => entry.isFile() && COLLECTION_FILE_RE.test(entry.name) && entry.name !== authFile)
-        .map((entry) => {
-            return { file: join(directory, entry.name), table: claimed.get(entry.name) ?? entry.name.replace(COLLECTION_FILE_RE, "") };
-        });
-
-    if (found.length === 0) {
-        throw new LunoraError("INTERNAL", `${directory} holds no .json/.ndjson collection files`);
-    }
-
-    return found.toSorted((a, b) => a.table.localeCompare(b.table));
-};
+const listFirestoreCollections = async (directory: string, mapping: ImportSourceMapping | undefined): Promise<DumpFile[]> =>
+    listDumpFiles(
+        directory,
+        mapping,
+        {
+            // The auth dump is not a collection — importing it as one would leak
+            // credential material, exactly as on the Supabase side.
+            authFiles: new Set(mapping?.auth?.file === undefined ? [] : [basename(mapping.auth.file)]),
+            emptyMessage: "holds no .json/.ndjson collection files",
+            matches: (name) => COLLECTION_FILE_RE.test(name),
+            tableNameOf: (name) => name.replace(COLLECTION_FILE_RE, ""),
+        },
+        async (path) => readdir(path, { withFileTypes: true }),
+    );
 
 /** Every document in one collection file, in either container shape. */
 const readCollectionDocuments = async (file: string): Promise<{ fallbackId?: string; raw: Record<string, unknown> }[]> => {
@@ -274,39 +253,30 @@ const readCollectionDocuments = async (file: string): Promise<{ fallbackId?: str
     throw new LunoraError("INTERNAL", `${basename(file)}: expected an object, an array, or \`{ documents: [...] }\``);
 };
 
+/** Decode one collection file into documents. */
+const readFirestoreCollection = async function* (dumpFile: DumpFile, mapping: ImportSourceMapping | undefined): AsyncGenerator<Record<string, unknown>> {
+    const documents = await readCollectionDocuments(dumpFile.file);
+    const tableMapping = mapping?.tables?.[dumpFile.table];
+
+    for (const [index, entry] of documents.entries()) {
+        yield toDocument(entry.raw, entry.fallbackId, tableMapping, `${dumpFile.table}[${String(index)}]`);
+    }
+};
+
 /**
  * Stream a Firestore export as the `{ table, doc }` NDJSON the admin import
  * endpoint accepts.
  */
 const readFirestoreExport = async function* (
-    collections: ReadonlyArray<FirestoreCollectionFile>,
+    collections: ReadonlyArray<DumpFile>,
     mapping: ImportSourceMapping | undefined,
     logger: Logger,
     sourceRows: Map<string, number>,
     directory: string,
 ): AsyncGenerator<string> {
     yield* readAuthDump("firebase", directory, mapping, logger, sourceRows);
-
-    for (const collection of collections) {
-        if (!sourceRows.has(collection.table)) {
-            sourceRows.set(collection.table, 0);
-        }
-
-        logger.info(`reading ${basename(collection.file)} → ${collection.table}`);
-
-        // eslint-disable-next-line no-await-in-loop -- one collection file at a time
-        const documents = await readCollectionDocuments(collection.file);
-        const tableMapping = mapping?.tables?.[collection.table];
-
-        for (const [index, entry] of documents.entries()) {
-            const document = toDocument(entry.raw, entry.fallbackId, tableMapping, `${collection.table}[${String(index)}]`);
-
-            sourceRows.set(collection.table, (sourceRows.get(collection.table) ?? 0) + 1);
-
-            yield `${JSON.stringify({ doc: document, table: collection.table })}\n`;
-        }
-    }
+    yield* readDumpFiles(collections, logger, sourceRows, (dumpFile) => readFirestoreCollection(dumpFile, mapping));
 };
 
-export type { FirestoreCollectionFile, FirestoreValue };
+export type { FirestoreValue };
 export { decodeValue, documentIdFromName, listFirestoreCollections, readFirestoreExport, toDocument };

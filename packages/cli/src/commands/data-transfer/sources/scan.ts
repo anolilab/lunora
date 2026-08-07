@@ -12,10 +12,9 @@ import { basename, dirname, join } from "node:path";
 import { parse } from "csv-parse/sync";
 
 import type { Logger } from "../../../util/logger";
-import type { FirestoreCollectionFile } from "./firebase";
+import type { DumpFile } from "./dump-directory";
 import { mappingFileFor } from "./mapping";
 import type { ReshapeKind } from "./reshape";
-import type { SupabaseTableFile } from "./supabase";
 
 /** How many rows to look at per column before deciding. */
 const SCAN_ROW_LIMIT = 200;
@@ -117,7 +116,7 @@ const writeCandidateMapping = async (mapping: unknown, cwd: string, source: "fir
 };
 
 /** Propose a mapping for a Supabase CSV dump by sampling each column. */
-const scanSupabaseDump = async (tables: ReadonlyArray<SupabaseTableFile>, cwd: string, logger: Logger): Promise<Record<string, unknown>> => {
+const scanSupabaseDump = async (tables: ReadonlyArray<DumpFile>, cwd: string, logger: Logger): Promise<Record<string, unknown>> => {
     const mapped: Record<string, unknown> = {};
 
     for (const table of tables) {
@@ -143,7 +142,7 @@ const scanSupabaseDump = async (tables: ReadonlyArray<SupabaseTableFile>, cwd: s
  * which columns hold storage paths, so the skeleton lists the collections with
  * an empty `storageColumns` to fill in.
  */
-const scanFirebaseDump = async (collections: ReadonlyArray<FirestoreCollectionFile>, cwd: string, logger: Logger): Promise<Record<string, unknown>> => {
+const scanFirebaseDump = async (collections: ReadonlyArray<DumpFile>, cwd: string, logger: Logger): Promise<Record<string, unknown>> => {
     const mapped: Record<string, unknown> = {};
 
     for (const collection of collections) {

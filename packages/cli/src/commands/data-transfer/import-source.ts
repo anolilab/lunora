@@ -9,30 +9,13 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
-import { listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
-import type { ImportCommandOptions } from "./import";
-import type { FirestoreCollectionFile } from "./sources/firebase";
+import { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
+import type { DumpFile } from "./sources/dump-directory";
 import { listFirestoreCollections } from "./sources/firebase";
 import type { ImportSourceMapping } from "./sources/mapping";
 import { readImportSourceMapping } from "./sources/mapping";
-import type { SupabaseTableFile } from "./sources/supabase";
 import { listSupabaseTables } from "./sources/supabase";
 import { readStorageMetadata } from "./storage-blobs";
-
-/**
- * Convex's own file table. Its rows describe stored BLOBS, not application
- * data — the bytes sit next to the JSONL as separate files and belong in R2,
- * so importing the rows alone would create dangling references.
- */
-const CONVEX_STORAGE_TABLE = "_storage";
-
-/**
- * Convex system tables are `_`-prefixed (`_storage`, `_scheduled_functions`,
- * `_modules`, …). None of them are application data, and none of them exist on
- * the target: streaming them in would create rows nothing reads, and `--verify`
- * would then demand row parity for a table the endpoint rejected.
- */
-const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
 
 /**
  * Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines, tallying what
@@ -126,16 +109,34 @@ async function* readConvexExport(
 }
 
 /**
+ * The flags source resolution actually reads.
+ *
+ * Declared locally rather than imported from the command: taking
+ * `ImportCommandOptions` made this module depend on the whole flag surface and
+ * created an import cycle with `./import`, which imports the union below.
+ */
+interface ImportSourceOptions {
+    file: string;
+    from?: ImportSourceName;
+    logger: Logger;
+    scan?: boolean;
+    storageDir?: string;
+    table?: string;
+    verify?: boolean;
+    withStorage?: boolean;
+}
+
+/**
  * What the positional path turned out to be. A discriminated union rather than a
  * bag of optionals: the snapshot and its table list are always both present or
  * both absent, and only a union lets the caller establish that once.
  */
 type ImportSource =
     | { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> }
-    | { collections: ReadonlyArray<FirestoreCollectionFile>; kind: "firebase"; mapping?: ImportSourceMapping }
+    | { collections: ReadonlyArray<DumpFile>; kind: "firebase"; mapping?: ImportSourceMapping }
     | { kind: "invalid" }
     | { kind: "ndjson" }
-    | { kind: "supabase"; mapping?: ImportSourceMapping; tables: ReadonlyArray<SupabaseTableFile> };
+    | { kind: "supabase"; mapping?: ImportSourceMapping; tables: ReadonlyArray<DumpFile> };
 
 /**
  * The sources `--from` accepts.
@@ -158,7 +159,7 @@ type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
  * project rather than from the dump — the dump is the vendor's artefact, the
  * mapping is the operator's statement about it.
  */
-const resolveForeignSource = async (options: ImportCommandOptions, from: "firebase" | "supabase", cwd: string): Promise<ImportSource> => {
+const resolveForeignSource = async (options: ImportSourceOptions, from: "firebase" | "supabase", cwd: string): Promise<ImportSource> => {
     if (options.withStorage === true && from === "firebase" && options.storageDir === undefined) {
         // Firebase Cloud Storage has no listing endpoint this CLI can reach
         // without owning Google's auth, so the bucket arrives as a local
@@ -209,7 +210,7 @@ const resolveForeignSource = async (options: ImportCommandOptions, from: "fireba
  * "--with-storage requires a Convex export" is a confusing way to learn you
  * typed the path wrong.
  */
-const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boolean> => {
+const rejectSnapshotFlags = async (options: ImportSourceOptions): Promise<boolean> => {
     const exists = await stat(options.file).then(
         () => true,
         () => false,
@@ -244,7 +245,7 @@ const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boole
 const rejectUnverifiableStorage = async (
     snapshot: ConvexSnapshot,
     tables: ReadonlyArray<ConvexSnapshotTable>,
-    options: ImportCommandOptions,
+    options: ImportSourceOptions,
 ): Promise<boolean> => {
     const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
@@ -281,7 +282,7 @@ const rejectUnverifiableStorage = async (
  * answer. Both halves live here because "what is this source" and "do these
  * flags mean anything for it" are the same question asked twice.
  */
-const resolveImportSource = async (options: ImportCommandOptions, cwd: string): Promise<ImportSource> => {
+const resolveImportSource = async (options: ImportSourceOptions, cwd: string): Promise<ImportSource> => {
     if (options.from === "supabase" || options.from === "firebase") {
         return resolveForeignSource(options, options.from, cwd);
     }
@@ -323,5 +324,7 @@ const resolveImportSource = async (options: ImportCommandOptions, cwd: string): 
     return { kind: "convex", snapshot, tables };
 };
 
-export type { ImportSource, ImportSourceName };
-export { CONVEX_STORAGE_TABLE, IMPORT_SOURCE_NAMES, isConvexSystemTable, readConvexExport, resolveImportSource };
+export type { ImportSource, ImportSourceName, ImportSourceOptions };
+export { IMPORT_SOURCE_NAMES, readConvexExport, resolveImportSource };
+
+export { CONVEX_STORAGE_TABLE, isConvexSystemTable } from "../convex-snapshot";
