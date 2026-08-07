@@ -6,7 +6,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
-import { readSnapshotStorageBlob, readSnapshotText } from "../convex-snapshot";
+import { readSnapshotLines, readSnapshotStorageBlob } from "../convex-snapshot";
 import type { StreamingFetchLike } from "./shared";
 import { STORAGE_ENDPOINT_PATH, STORAGE_URL_ENDPOINT_PATH } from "./shared";
 
@@ -128,13 +128,15 @@ const readStorageMetadata = async (snapshot: ConvexSnapshot, storageTableEntry: 
     const rows: StorageMetadataRow[] = [];
 
     try {
-        const text = await readSnapshotText(snapshot, storageTableEntry);
+        let lineNumber = 0;
 
-        for (const [index, line] of text.split("\n").entries()) {
+        for await (const line of readSnapshotLines(snapshot, storageTableEntry)) {
             const trimmed = line.trim();
 
+            lineNumber += 1;
+
             if (trimmed.length > 0) {
-                rows.push(parseStorageMetadataRow(trimmed, `_storage/documents.jsonl line ${String(index + 1)}`));
+                rows.push(parseStorageMetadataRow(trimmed, `_storage/documents.jsonl line ${String(lineNumber)}`));
             }
         }
     } catch (error: unknown) {

@@ -12,6 +12,8 @@ import { createInterface } from "node:readline";
 
 import AdmZip from "adm-zip";
 
+import openZipEntryStream from "./zip-entry-stream";
+
 /**
  * Convex's own file table. Its rows describe stored BLOBS, not application
  * data — the bytes sit next to the JSONL as separate files and belong in R2,
@@ -147,11 +149,24 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
         return;
     }
 
-    // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    const text = snapshot.zip.readAsText(tableEntry.file);
+    const entry = snapshot.zip.getEntry(tableEntry.file);
 
-    for (const line of text.split("\n")) {
-        yield line;
+    if (entry === null) {
+        throw new Error(`missing ${tableEntry.file} in archive`);
+    }
+
+    // Streamed rather than `readAsText`-ed: a table's `documents.jsonl` is
+    // unbounded, and inflating one whole into a string (then splitting it into
+    // an array of every line) is how a large snapshot runs the CLI out of
+    // memory on the ZIP path while the identical directory import succeeds.
+    const stream = await openZipEntryStream(snapshot.zipPath, entry);
+
+    if (stream === undefined) {
+        return;
+    }
+
+    for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
+        yield raw;
     }
 };
 
@@ -187,23 +202,5 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
     return Buffer.from(blob);
 };
 
-/** Read a `documents.jsonl` as text (for `_storage` metadata and `--scan`). */
-const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<string> => {
-    if (snapshot.kind === "directory") {
-        return readFile(tableEntry.file, "utf8");
-    }
-
-    // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    return snapshot.zip.readAsText(tableEntry.file);
-};
-
 export type { ConvexSnapshot, ConvexSnapshotTable };
-export {
-    CONVEX_STORAGE_TABLE,
-    isConvexSystemTable,
-    listConvexSnapshotTables,
-    readSnapshotLines,
-    readSnapshotStorageBlob,
-    readSnapshotText,
-    resolveConvexSnapshot,
-};
+export { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, resolveConvexSnapshot };
