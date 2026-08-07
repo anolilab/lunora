@@ -264,9 +264,12 @@ interface ImportCommandOptions {
     file: string;
     logger: Logger;
     prod?: boolean;
+    scan?: boolean;
     table?: string;
     token?: string;
     url?: string;
+    verify?: boolean;
+    withStorage?: boolean;
     yes?: boolean;
 }
 ```
@@ -545,7 +548,7 @@ type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
 ```ts
 type StreamingFetchLike = (input: string, init?: {
-    body?: string;
+    body?: string | Uint8Array;
     headers?: Record<string, string>;
     method?: string;
 }) => Promise<{
