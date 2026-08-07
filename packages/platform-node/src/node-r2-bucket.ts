@@ -23,11 +23,13 @@
  * Because `get` holds a descriptor, the object it returns is **read once** and
  * reading closes it — `arrayBuffer()`, `text()` and draining or cancelling
  * `body` all release, and a second read raises rather than silently reopening
- * the path. R2's own body is single-use for the same reason. The one case that
- * retains a descriptor is a `get` whose result is never touched at all; use
- * `head` when only metadata is wanted.
+ * the path. R2's own body is single-use for the same reason. An object that is
+ * never read at all is closed by a `FinalizationRegistry` when it is collected,
+ * so a caller that fetches and discards cannot walk to `EMFILE`; that path is
+ * bounded rather than prompt, so `head` is still the right call when only
+ * metadata is wanted.
  *
- * # Key grammar, and where it stops being injective
+ * # Key grammar and the key → path mapping
  *
  * `.lunora-tmp` is reserved at every depth — it is the staging tree puts are
  * renamed out of. Keys are otherwise rejected unless every `/`-separated
@@ -35,14 +37,15 @@
  * separator on Windows), no NUL or other control character, no leading `/`,
  * and no more than 1024 bytes — the same grammar `@lunora/storage` enforces.
  *
- * That confines every key to the bucket directory on every platform. It does
- * **not** make the mapping injective there: on a case-insensitive filesystem
- * (APFS by default, so most dev machines) `A` and `a` are one object, and on
- * Windows a trailing dot or space is stripped and `x:y` names an alternate
- * data stream. Real R2 treats all of those as distinct keys. Percent-encoding
- * each segment would fix it at the cost of an unreadable bucket directory;
- * for a local host the readable directory wins and the divergence is stated
- * here and in the capability note rather than papered over.
+ * That confines every key to the bucket directory. Staying *injective* inside
+ * it takes more, because filesystems fold names the way R2 does not: a
+ * case-insensitive volume (APFS by default, and NTFS) makes `A` and `a` one
+ * file, Windows strips a trailing `.` or space, and `x:y` names an NTFS
+ * alternate data stream. Each segment is therefore percent-escaped on exactly
+ * those characters (`encodeSegment`) and decoded back on the way out, so two
+ * distinct keys are always two distinct files. Lowercase keys — the
+ * overwhelming majority — pass through byte-identical, so the bucket directory
+ * stays browsable.
  *
  * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
@@ -91,8 +94,8 @@ interface NodeR2BucketOptions {
  * Reject keys that would leave the bucket directory or collide inside it. Every
  * segment must be a plain name: `a/./b` and `a//b` would otherwise resolve to
  * the same file as `a/b`, and `..\\outside` escapes the directory entirely on
- * Windows, where `\` is a separator `split("/")` cannot see. See the header for
- * the filesystem-folding cases this cannot reach.
+ * Windows, where `\` is a separator `split("/")` cannot see. Filesystem folding
+ * (case, trailing dot) is handled by {@link encodeSegment}, not here.
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
@@ -139,6 +142,50 @@ const validateKey = (key: string): void => {
         }
     }
 };
+
+/**
+ * Characters escaped in a path segment, and why each one folds:
+ *
+ * - `%` — the escape character itself, so the encoding stays reversible.
+ * - `A-Z` — a case-insensitive volume (APFS by default, so most dev machines,
+ * and NTFS) maps `A` and `a` to one file. Real R2 keeps them as two keys.
+ * - `:` — an NTFS alternate-data-stream separator; `x:y` writes a stream on `x`.
+ *
+ * Trailing `.` and space are handled separately: Windows strips them from a
+ * name, so `a.` and `a` collide, but only at the end of a segment.
+ */
+const ESCAPED_IN_SEGMENT = /[%A-Z:]/g;
+
+/** Percent-escape one path segment so distinct keys stay distinct files on every filesystem. */
+const encodeSegment = (segment: string): string => {
+    const escaped = segment.replaceAll(ESCAPED_IN_SEGMENT, (character) => `%${character.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}`);
+    const last = escaped.at(-1);
+
+    return last === "." || last === " " ? `${escaped.slice(0, -1)}%${last.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}` : escaped;
+};
+
+/** Inverse of {@link encodeSegment}. */
+const decodeSegment = (segment: string): string => decodeURIComponent(segment);
+
+/**
+ * Map an R2 key onto a path relative to the bucket directory.
+ *
+ * Lowercase keys — the overwhelming majority — pass through byte-identical, so
+ * the bucket directory stays browsable; only the segments that would otherwise
+ * fold pick up escapes.
+ */
+const encodeKey = (key: string): string =>
+    key
+        .split("/")
+        .map((segment) => encodeSegment(segment))
+        .join("/");
+
+/** Inverse of {@link encodeKey}. */
+const decodeKey = (relativePath: string): string =>
+    relativePath
+        .split("/")
+        .map((segment) => decodeSegment(segment))
+        .join("/");
 
 /** True when an `fs/promises` error is a missing path. */
 const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -266,6 +313,20 @@ const openObject = async (filePath: string): Promise<{ bodySize: number; handle:
     }
 };
 
+/**
+ * Closes the handle behind an object body that was never read.
+ *
+ * Reading always releases deterministically; this only covers the case where the
+ * returned object becomes unreachable with none of its accessors called. Without
+ * it a caller that fetches objects and drops them walks to `EMFILE`, because
+ * nothing else in the process holds a reference that would close the descriptor.
+ * Collection timing is the GC's, so this bounds the leak rather than removing
+ * it — `head` is still the right call when only metadata is wanted.
+ */
+const unreadBodies = new FinalizationRegistry<{ close: () => Promise<void> }>((held) => {
+    held.close().catch(() => undefined);
+});
+
 /** Metadata-only read: opens, reads the trailer, closes. */
 const readTrailer = async (filePath: string): Promise<{ bodySize: number; meta: NodeObjectMeta } | undefined> => {
     const opened = await openObject(filePath);
@@ -378,8 +439,8 @@ const readSlice = async (handle: FileHandle, start: number, end: number): Promis
 };
 
 /** Yield every supported R2 put body as byte chunks, without collecting them. */
-const toChunks = async function* (body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null | undefined): AsyncGenerator<Uint8Array> {
-    if (body === null || body === undefined) {
+const toChunks = async function* (body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null): AsyncGenerator<Uint8Array> {
+    if (body === null) {
         return;
     }
 
@@ -455,7 +516,9 @@ const walkObjects = async (directory: string): Promise<string[]> => {
             if (entry.isDirectory()) {
                 promises.push(walk(join(currentPath, entry.name), relativePath));
             } else {
-                keys.push(relativePath);
+                // Back to the key the caller wrote — the tree holds encoded
+                // segments, and `list` deals in keys.
+                keys.push(decodeKey(relativePath));
             }
         }
 
@@ -512,13 +575,13 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         delete: async (key: string): Promise<void> => {
             validateKey(key);
 
-            await unlinkIfPresent(join(directory, key));
+            await unlinkIfPresent(join(directory, encodeKey(key)));
         },
 
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
             validateKey(key);
 
-            const opened = await openObject(join(directory, key));
+            const opened = await openObject(join(directory, encodeKey(key)));
 
             if (opened === undefined) {
                 return null; // eslint-disable-line unicorn/no-null
@@ -533,10 +596,15 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             const { bodySize, handle, meta } = opened;
             const { end, start } = resolveRange(bodySize, getOptions?.range);
 
+            // Registered against a token rather than the returned object, so the
+            // registry's own reference does not keep that object alive.
+            const token = {};
+
             let released = false;
             const release = async (): Promise<void> => {
                 if (!released) {
                     released = true;
+                    unreadBodies.unregister(token);
                     await handle.close();
                 }
             };
@@ -559,7 +627,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 }
             };
 
-            return {
+            const object: R2ObjectBodyLike = {
                 ...toObject(key, meta),
                 arrayBuffer: async (): Promise<ArrayBuffer> => toArrayBuffer(await readWhole()),
                 // A getter, so a caller that only reads metadata or calls
@@ -584,12 +652,16 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                     return whole.toString("utf8");
                 },
             };
+
+            unreadBodies.register(object, { close: release }, token);
+
+            return object;
         },
 
         head: async (key: string): Promise<R2ObjectLike | null> => {
             validateKey(key);
 
-            const stored = await readTrailer(join(directory, key));
+            const stored = await readTrailer(join(directory, encodeKey(key)));
 
             return stored === undefined ? null : toObject(key, stored.meta); // eslint-disable-line unicorn/no-null
         },
@@ -615,7 +687,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             // failing the whole listing.
             const found = await Promise.all(
                 page.map(async (key) => {
-                    const stored = await readTrailer(join(directory, key));
+                    const stored = await readTrailer(join(directory, encodeKey(key)));
 
                     return stored === undefined ? undefined : toObject(key, stored.meta);
                 }),
@@ -632,12 +704,12 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
 
         put: async (
             key: string,
-            body: ReadableStream | ArrayBuffer | Blob | string | null,
+            body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
             putOptions?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
         ): Promise<R2ObjectLike> => {
             validateKey(key);
 
-            const filePath = join(directory, key);
+            const filePath = join(directory, encodeKey(key));
             const temporaryPath = join(directory, TMP_DIR, randomUUID());
 
             try {

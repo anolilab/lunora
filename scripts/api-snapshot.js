@@ -54,11 +54,13 @@ const snapshotsDir = join(rootDir, "api-snapshots");
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `platform-node` is deliberately NOT covered: it is a plan-234 spike (no
- * `lunora dev` wiring, no deploy driver, capabilities mostly
- * `unsupported`/`emulated`), and its public surface is still expected to move.
- * Add it here once it graduates past spike stage, alongside
- * `platform`/`platform-cloudflare`.
+ * `platform-node` IS covered. It was held out while it was a plan-234 spike, on
+ * the grounds that its surface was still expected to move. It now implements
+ * what it declares — durable alarms, scheduler, sockets and shard state, a
+ * `ShardDirectory` that dispatches, `.global()` tables, workflows and object
+ * storage — and being covered is not a stability promise (see {@link TIER_3});
+ * it is how the second host's surface stops drifting from the contracts in
+ * `platform` unnoticed, which is the whole reason those two are gated.
  *
  * `agent` and `ai` ARE covered, at TIER_3, and being covered is NOT a stability
  * promise — see {@link TIER_3}. The rest of the experimental tier (`replica`,
@@ -93,6 +95,7 @@ const TIER_1 = [
     // shape a second target has to match — so it is gated the same way.
     "platform",
     "platform-cloudflare",
+    "platform-node",
     "shard-engine",
     // Host-neutral observability: a second host consumes this surface directly,
     // so drifting it silently is exactly what this guard exists to catch.

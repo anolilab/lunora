@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
+import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
 import { createNodeWorkflowStore } from "../src/node-workflow-store";
@@ -15,7 +16,38 @@ const sleep = (ms: number): Promise<void> =>
         setTimeout(resolve, ms);
     });
 
-describe("createNodeWorkflowHost", () => {
+const temporaryDirectories: string[] = [];
+
+/**
+ * Every behavioural test runs against BOTH stores.
+ *
+ * `MemoryStore` round-trips snapshots with `structuredClone`; the SQLite store
+ * — the durable one, and the one a real deployment uses — round-trips them as
+ * JSON, which is what the engine's contract actually promises. Running the
+ * suite only on the in-memory store is how a `Date`, `Map` or `undefined` in a
+ * workflow's params or output passes in CI and flattens in production.
+ */
+const STORES: { make: () => WorkflowStore; name: string }[] = [
+    { make: () => new MemoryStore(), name: "MemoryStore" },
+    {
+        make: () => {
+            const directory = mkdtempSync(join(tmpdir(), "lunora-wf-suite-"));
+
+            temporaryDirectories.push(directory);
+
+            return createNodeWorkflowStore(new Database(join(directory, "workflows.sqlite3")));
+        },
+        name: "createNodeWorkflowStore",
+    },
+];
+
+describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore }) => {
+    afterAll(() => {
+        for (const directory of temporaryDirectories) {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("runs a workflow synchronously to completion and exposes the output", async () => {
         expect.hasAssertions();
 
@@ -27,7 +59,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { greet } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { greet } });
         const instance = await host.bindings.greet.create({ params: { name: "world" } });
         const status = await instance.status();
 
@@ -55,7 +87,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { replayed } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { replayed } });
         const instance = await host.bindings.replayed.create({});
 
         const status1 = await instance.status();
@@ -81,7 +113,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.step.waitForEvent("ping", { type: "poke" }),
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { poked } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { poked } });
         const instance = await host.bindings.poked.create({});
 
         const status1 = await instance.status();
@@ -108,7 +140,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.step.waitForEvent("ping", { timeout: 5, type: "poke" }),
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { timed } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { timed } });
         const instance = await host.bindings.timed.create({});
 
         const status1 = await instance.status();
@@ -121,7 +153,13 @@ describe("createNodeWorkflowHost", () => {
         const status2 = await instance.status();
 
         expect(status2.status).toBe("complete");
-        expect(status2.output).toStrictEqual({ payload: undefined, type: "poke" });
+        // Asserted on the observable, not on key presence: a timed-out wait
+        // resolves `payload` to `undefined`, and a JSON-backed store drops the
+        // key entirely where `structuredClone` keeps it. Both read the same to a
+        // consumer, and JSON is what the engine's contract (and Cloudflare's own
+        // Workflows) actually persist.
+        expect(status2.output).toMatchObject({ type: "poke" });
+        expect((status2.output as { payload?: unknown }).payload).toBeUndefined();
     });
 
     it("maps a failed run to errored with the error message", async () => {
@@ -133,7 +171,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { crashing } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { crashing } });
         const instance = await host.bindings.crashing.create({});
         const status = await instance.status();
 
@@ -149,7 +187,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.params.value * 2,
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { double } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double } });
         const instances = await host.bindings.double.createBatch([{ params: { value: 2 } }, { params: { value: 3 } }]);
 
         expect(instances).toHaveLength(2);
@@ -171,7 +209,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async () => "done",
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
         const instance = await host.bindings.trivial.get("missing-run");
 
         const status = await instance.status();
@@ -186,7 +224,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async () => "done",
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { trivial } });
         const instance = await host.bindings.trivial.create({});
 
         await expect(instance.pause()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
@@ -203,6 +241,48 @@ describe("createNodeWorkflowHost", () => {
         await expect(host.bindings.trivial.get("never-existed").then(async (missing) => missing.status())).resolves.toStrictEqual({ status: "unknown" });
     });
 
+    it("terminate holds against an activation already in flight", async () => {
+        expect.hasAssertions();
+
+        let release: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const slow = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.waitForEvent("go", { type: "go" });
+
+                return ctx.step.do("slow", async () => {
+                    await gate;
+
+                    return "COMPLETED-AFTER-TERMINATE";
+                });
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { slow } });
+        const instance = await host.bindings.slow.create({});
+
+        await expect(instance.status()).resolves.toMatchObject({ status: "waiting" });
+
+        // Starts an activation and leaves it parked inside the step.
+        const sending = instance.sendEvent({ payload: {}, type: "go" });
+
+        await instance.terminate();
+
+        await expect(instance.status()).resolves.toStrictEqual({ status: "terminated" });
+
+        // Let the in-flight activation finish. Its `save` used to land after the
+        // tombstone and un-terminate the run, output and all. It now finds the
+        // run gone, so whether it settles or rejects is the engine's business —
+        // what matters is that the terminal state holds.
+        release();
+        await sending.catch(() => undefined);
+
+        await expect(instance.status()).resolves.toStrictEqual({ status: "terminated" });
+    });
+
     it("terminating an id that was never a run writes nothing", async () => {
         expect.hasAssertions();
 
@@ -210,7 +290,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async () => "done",
         });
 
-        const store = new MemoryStore();
+        const store = freshStore();
         const host = createNodeWorkflowHost({ store, workflows: { trivial } });
         const ghost = await host.bindings.trivial.get("never-existed");
 
@@ -235,7 +315,7 @@ describe("createNodeWorkflowHost", () => {
                 }),
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { counted } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { counted } });
         const first = await host.bindings.counted.create({ id: "my-own-id" });
 
         // `get` by the caller's id resolves the alias — this is the pair
@@ -266,7 +346,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { child, parent } });
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { child, parent } });
         const instance = await host.bindings.parent.create({});
         const status = await instance.status();
 
@@ -295,7 +375,7 @@ describe("createNodeWorkflowHost", () => {
                     },
                 });
 
-                const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { sleeper } });
+                const host = createNodeWorkflowHost({ store: freshStore(), workflows: { sleeper } });
                 const instance = await host.bindings.sleeper.create({});
                 const status = await instance.status();
 
@@ -313,7 +393,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const untilHost = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { untilWorkflow } });
+        const untilHost = createNodeWorkflowHost({ store: freshStore(), workflows: { untilWorkflow } });
         const untilInstance = await untilHost.bindings.untilWorkflow.create({});
 
         await expect(untilInstance.status()).resolves.toMatchObject({ status: "errored" });
@@ -367,7 +447,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => `order-${ctx.params.orderId}`,
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), env: { EXTRA: "kept" }, workflows: { orderPipeline } });
+        const host = createNodeWorkflowHost({ store: freshStore(), env: { EXTRA: "kept" }, workflows: { orderPipeline } });
 
         expect(host.env.EXTRA).toBe("kept");
         expect(host.env.WORKFLOW_ORDER_PIPELINE).toBe(host.bindings.orderPipeline);
@@ -383,7 +463,7 @@ describe("createNodeWorkflowHost", () => {
     it("rejects a value that is not a defineWorkflow result", () => {
         expect.hasAssertions();
 
-        expect(() => createNodeWorkflowHost({ store: new MemoryStore(), workflows: { notAWorkflow: { handler: async () => 1 } as never } })).toThrow(
+        expect(() => createNodeWorkflowHost({ store: freshStore(), workflows: { notAWorkflow: { handler: async () => 1 } as never } })).toThrow(
             /is not a defineWorkflow result/,
         );
     });

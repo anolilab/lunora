@@ -25,10 +25,10 @@
  * `SqlStore` behaves the same way, so this is the sanctioned durable
  * behaviour — but it means a suite that runs on `MemoryStore` can pass over
  * values production would flatten.
- * - **Set `journal_mode = WAL` for the cross-process case.** A file-backed
- * `better-sqlite3` connection defaults to `journal_mode = delete`, which is
- * correct but serializes readers against writers; the lease is atomic either
- * way. `new Database(path).pragma("journal_mode = WAL")`.
+ * - **`journal_mode = WAL` is set here**, matching `node-shard-host` and
+ * `node-global-store`. The default (`delete`) is correct but serializes
+ * readers against writers, which is the wrong trade for a store whose whole
+ * point is two processes sharing one file.
  */
 
 import type { StoredRun, WorkflowStore } from "@visulima/workflow";
@@ -50,6 +50,7 @@ interface RunRow {
  * Pass the result as `createNodeWorkflowHost({ store })`.
  */
 export const createNodeWorkflowStore = (database: Database.Database): WorkflowStore => {
+    database.pragma("journal_mode = WAL");
     database.exec(`CREATE TABLE IF NOT EXISTS _lunora_workflow_runs (
         run_id TEXT PRIMARY KEY,
         definition_id TEXT NOT NULL,

@@ -372,7 +372,7 @@ interface R2BucketLike {
         objects: R2ObjectLike[];
         truncated?: boolean;
     }>;
-    put: (key: string, body: ReadableStream | ArrayBuffer | Blob | string | null, options?: {
+    put: (key: string, body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null, options?: {
         customMetadata?: Record<string, string>;
         httpMetadata?: {
             contentType?: string;

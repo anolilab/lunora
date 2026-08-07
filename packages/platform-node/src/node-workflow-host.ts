@@ -35,11 +35,11 @@
  * equivalent. `terminate` drops the run and writes a tombstone in its place, so
  * a later `status()` reports `terminated` instead of collapsing into the
  * `unknown` an invalid instance id also returns.
- * - **`terminate` is not a barrier.** It writes through `store` directly, which
- * is outside the engine's per-run activation queue, so an activation already
- * in flight finishes and its `save` overwrites the tombstone — the run reports
- * `terminated`, then reports its output. Stopping that needs a cancellation
- * hook the engine does not expose.
+ * - **`terminate` is a barrier only within this process.** The engine has no
+ * cancellation hook, so an activation already in flight still runs to
+ * completion; what stops it re-animating the run is that the store handed to
+ * the runtime drops writes for terminated ids. A `terminate` in another
+ * process cannot do that — cross-process, the lease is the only mechanism.
  * - `create({ id })` is honoured through an alias row rather than passed to the
  * engine, which mints its own run ids: the same id twice resolves to one run
  * and `get(id)` finds it. The id is not the run id, so `instance.id` is the
@@ -310,7 +310,51 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         }),
     );
 
-    const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store, workflows: visulimaWorkflows });
+    /**
+     * Ids terminated by this host.
+     *
+     * `terminate` writes its tombstone through `store` directly, which is
+     * outside the engine's per-run activation queue. An activation already in
+     * flight therefore runs to completion and its own `save` lands *after* the
+     * tombstone — the run reports `terminated`, then reports its output. The
+     * engine exposes no cancellation hook, but it does route every write through
+     * the store it was handed, so the barrier goes there: writes for a
+     * terminated run are dropped.
+     *
+     * In-process only, and deliberately: an activation racing a `terminate` is
+     * by definition in this process. A `terminate` in one process cannot stop an
+     * activation in another — that needs the lease, not a set.
+     */
+    const terminated = new Set<string>();
+
+    // Rebuilt member by member rather than spread: `MemoryStore` is a class, so
+    // its methods live on the prototype and `{ ...store }` would copy none of them.
+    const guardedStore: WorkflowStore = {
+        acquire: store.acquire === undefined ? undefined : async (runId, token, ttlMs) => store.acquire?.(runId, token, ttlMs) ?? false,
+        delete: async (runId) => store.delete(runId),
+        due: async (now, limit) => store.due(now, limit),
+        // Tombstones and aliases are this host's bookkeeping, not runs. They
+        // share the store because it is the only durable thing here, but handing
+        // one to the engine makes it look up a `definitionId` no workflow is
+        // registered under — which is how an in-flight activation that reloaded
+        // a terminated run used to surface as "No workflow registered with id
+        // @lunora/platform-node:terminated" instead of "this run is gone".
+        load: async (runId) => {
+            const row = await store.load(runId);
+
+            return row === undefined || row.definitionId === TERMINATED_DEFINITION_ID || row.definitionId === ALIAS_DEFINITION_ID ? undefined : row;
+        },
+        release: store.release === undefined ? undefined : async (runId, token) => store.release?.(runId, token),
+        save: async (run) => {
+            if (terminated.has(run.runId)) {
+                return;
+            }
+
+            await store.save(run);
+        },
+    };
+
+    const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store: guardedStore, workflows: visulimaWorkflows });
 
     const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
@@ -386,6 +430,10 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 if ((await store.load(id)) === undefined) {
                     return;
                 }
+
+                // Marked before the writes, so an activation that lands between
+                // the delete and the tombstone is dropped too.
+                terminated.add(id);
 
                 // Delete before writing the tombstone: `save` is an upsert of the
                 // run row alone, so on its own it would leave the run's lease held

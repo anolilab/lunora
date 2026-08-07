@@ -219,6 +219,67 @@ describe("createNodeR2Bucket", () => {
         await expect(bucket.put("nested/../../escape", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
+    it("resolves concurrent puts of one key to a single whole version", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+        const bodies = Array.from({ length: 8 }, (_, index) => `version-${String(index)}`.repeat(index + 1));
+
+        await Promise.all(bodies.map(async (body) => bucket.put("contended", body)));
+
+        const object = await bucket.get("contended");
+        const text = await object?.text();
+
+        // Each put stages its own temp file and publishes with one rename, so the
+        // winner is whole: the bytes are exactly one of the writers' payloads and
+        // the metadata describes those bytes, never a blend of two.
+        expect(bodies).toContain(text);
+        expect(object?.size).toBe(text?.length);
+        expect(object?.sha256).toBe(sha256Hex(text ?? ""));
+
+        // Staging is drained — a put that wins or loses leaves nothing behind.
+        expect(readdirSync(join(dir, ".lunora-tmp"))).toStrictEqual([]);
+
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((entry) => entry.key)).toStrictEqual(["contended"]);
+    });
+
+    it("keeps keys that the filesystem would fold distinct", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        // Case folds on APFS/NTFS, trailing dot and space are stripped by
+        // Windows, and `x:y` is an NTFS alternate data stream. R2 keeps all of
+        // these as separate keys, so the on-disk mapping has to as well.
+        await bucket.put("Report", "upper");
+        await bucket.put("report", "lower");
+        await bucket.put("dir/File.TXT", "mixed");
+
+        await expect(bucket.get("Report").then(async (o) => o?.text())).resolves.toBe("upper");
+        await expect(bucket.get("report").then(async (o) => o?.text())).resolves.toBe("lower");
+        await expect(bucket.get("dir/File.TXT").then(async (o) => o?.text())).resolves.toBe("mixed");
+
+        // Round-trips through list as the key the caller wrote, not the escaped
+        // filename it is stored under.
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((object) => object.key)).toStrictEqual(["Report", "dir/File.TXT", "report"]);
+
+        // Deleting one leaves its case-sibling alone.
+        await bucket.delete("Report");
+
+        await expect(bucket.head!("Report")).resolves.toBeNull();
+        await expect(bucket.get("report").then(async (o) => o?.text())).resolves.toBe("lower");
+
+        // A literal `%` in a key is not confused with an escape.
+        await bucket.put("100%25", "literal");
+
+        await expect(bucket.get("100%25").then(async (o) => o?.text())).resolves.toBe("literal");
+        await expect(bucket.get("100%")).resolves.toBeNull();
+    });
+
     it("leaves the previous version whole when a put fails mid-body", async () => {
         expect.hasAssertions();
 
