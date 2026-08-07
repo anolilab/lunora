@@ -124,6 +124,45 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     throw new LunoraError("INTERNAL", `${path}: unrecognised Firestore value ${JSON.stringify(value).slice(0, 80)}`);
 };
 
+/** Keys the wrapped (REST `Document`) form may carry alongside `fields`. */
+const WRAPPED_DOCUMENT_KEYS = new Set(["createTime", "fields", "name", "readTime", "updateTime"]);
+
+/** A Firestore `Value` is a one-key object whose key names the type (`stringValue`, `mapValue`, …). */
+const isFirestoreValue = (value: unknown): boolean => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return false;
+    }
+
+    const keys = Object.keys(value);
+
+    return keys.length === 1 && keys[0]?.endsWith("Value") === true;
+};
+
+/**
+ * Whether `raw` is the wrapped REST `Document` (`{ name, fields }`) rather than
+ * a bare field map keyed by document id.
+ *
+ * `name` is the reliable signal — `documents.list` emits it even for a document
+ * with no fields. Without one, a `fields` key is ambiguous: a BARE document may
+ * itself have a field called `fields`. The tie-break is what that key holds. In
+ * the wrapped form it is a map of name → `Value`; in the bare form it IS a
+ * single `Value` (a one-key `{ …Value: … }` object). Anything alongside it that
+ * is not wrapper metadata settles it as bare.
+ */
+const isWrappedDocument = (raw: Record<string, unknown>): boolean => {
+    if (typeof raw["name"] === "string") {
+        return true;
+    }
+
+    const { fields } = raw;
+
+    if (typeof fields !== "object" || fields === null) {
+        return false;
+    }
+
+    return Object.keys(raw).every((key) => WRAPPED_DOCUMENT_KEYS.has(key)) && !isFirestoreValue(fields);
+};
+
 /** Decode a `fields` map to a plain object. */
 const decodeFields = (fields: Record<string, FirestoreValue>, path: string): Record<string, unknown> =>
     Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, decodeValue(value, `${path}.${key}`)]));
@@ -146,7 +185,7 @@ const toDocument = (
     // `fields` sent an empty document down the bare branch, where `decodeValue`
     // ran `"nullValue" in value` against the `name` string and threw
     // "Cannot use 'in' operator" — unactionable for the operator.
-    const wrapped = typeof raw["name"] === "string" || (raw["fields"] !== undefined && typeof raw["fields"] === "object");
+    const wrapped = isWrappedDocument(raw);
     const decoded = wrapped
         ? decodeFields((raw["fields"] ?? {}) as Record<string, FirestoreValue>, path)
         : decodeFields(raw as unknown as Record<string, FirestoreValue>, path);

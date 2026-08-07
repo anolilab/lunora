@@ -106,6 +106,9 @@ const toDocument = (row: Record<string, string | null>, tableMapping: TableMappi
     const idColumn = tableMapping?.idColumn ?? "id";
     const types = tableMapping?.types ?? {};
     const document: Record<string, unknown> = {};
+    // Tracked explicitly rather than inferred from `document["_id"]`: a source
+    // column named `_id` would populate that field and pass the guard below.
+    let sawIdColumn = false;
 
     for (const [column, raw] of Object.entries(row)) {
         if (CREDENTIAL_COLUMNS.has(column.toLowerCase())) {
@@ -124,6 +127,16 @@ const toDocument = (row: Record<string, string | null>, tableMapping: TableMappi
             }
 
             document["_id"] = raw;
+            sawIdColumn = true;
+        } else if (column === "_id") {
+            // `_id` is the target's reserved id field. A source column of that
+            // name would land in it and satisfy the guard below, so a table whose
+            // real id column is missing would import with the wrong value as its
+            // id — the exact dangling-FK failure the guard exists to prevent.
+            throw new LunoraError(
+                "INTERNAL",
+                `${table}: source column \`_id\` collides with the reserved id field. Rename it in the source, or map it via \`tables.${table}.idColumn\` if it IS the id.`,
+            );
         } else {
             document[column] = value;
         }
@@ -134,7 +147,7 @@ const toDocument = (row: Record<string, string | null>, tableMapping: TableMappi
     // with `--verify` green, because the row counts still match. Preserving ids
     // is the premise the whole importer rests on, so failing to find one is a
     // hard error rather than a default.
-    if (document["_id"] === undefined) {
+    if (!sawIdColumn) {
         throw new LunoraError(
             "INTERNAL",
             `${table}: no \`${idColumn}\` column to preserve as the id (columns present: ${Object.keys(row).join(", ")}). Set \`tables.${table}.idColumn\` in the mapping.`,
@@ -156,20 +169,38 @@ const readSupabaseTable = async function* (dumpFile: DumpFile, mapping: ImportSo
     const parser = createReadStream(dumpFile.file).pipe(parse({ cast: castPostgresCsv, columns: true, relaxColumnCountLess: false, skipEmptyLines: true }));
     let lineNumber = 0;
 
-    try {
-        for await (const row of parser) {
-            lineNumber += 1;
+    const iterator = parser[Symbol.asyncIterator]();
 
-            yield toDocument(row as Record<string, string | null>, tableMapping, dumpFile.table);
+    // The `yield` sits OUTSIDE the try deliberately. A generator resumes at its
+    // yield, so an error thrown by the CONSUMER (the import loop failing on a
+    // row) propagates from there — and wrapping it would relabel it as
+    // `<file> row N: …`, a parse-location message for something that never
+    // touched the parser. Only reading and decoding a row is attributed here.
+    for (;;) {
+        let next: IteratorResult<unknown>;
+        let document: Record<string, unknown>;
+
+        try {
+            // eslint-disable-next-line no-await-in-loop -- rows are decoded one at a time by design; this is a stream, not a batch
+            next = await iterator.next();
+
+            if (next.done === true) {
+                return;
+            }
+
+            lineNumber += 1;
+            document = toDocument(next.value as Record<string, string | null>, tableMapping, dumpFile.table);
+        } catch (error: unknown) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${basename(dumpFile.file)} row ${String(lineNumber + 1)}: ${error instanceof Error ? error.message : String(error)}`,
+                {
+                    cause: error,
+                },
+            );
         }
-    } catch (error: unknown) {
-        throw new LunoraError(
-            "INTERNAL",
-            `${basename(dumpFile.file)} row ${String(lineNumber + 1)}: ${error instanceof Error ? error.message : String(error)}`,
-            {
-                cause: error,
-            },
-        );
+
+        yield document;
     }
 };
 

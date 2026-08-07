@@ -26,7 +26,11 @@ const importCommand: Command = {
         },
         { description: "Wrap each bare doc as `{table:<name>,doc:...}`", name: "table", type: String },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
-        { description: "Also migrate Convex `_storage` blobs (verified upload)", name: "with-storage", type: Boolean },
+        {
+            description: "Also migrate file storage — Convex `_storage` blobs, or a Supabase/Firebase bucket (verified upload)",
+            name: "with-storage",
+            type: Boolean,
+        },
         {
             description: "Directory of storage objects to upload alongside the rows (Firebase: after `gcloud storage cp -r`)",
             name: "storage-dir",

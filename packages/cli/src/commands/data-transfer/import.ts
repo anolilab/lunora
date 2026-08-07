@@ -291,6 +291,20 @@ const runForeignStorageTransfer = async (
         return transferStorageObjects(context, await listLocalObjects(options.storageDir), { cwd, keyPrefix, source: source.kind }, options.logger);
     }
 
+    // Everything below downloads from Supabase Storage. There is no remote
+    // Firebase path — a Cloud Storage bucket is pulled with `gcloud`/`gsutil`
+    // first — so a Firebase run reaching here must say that, rather than
+    // reporting a missing SUPABASE_URL for a migration that has no Supabase in
+    // it.
+    if (source.kind === "firebase") {
+        options.logger.error(
+            "--with-storage needs --storage-dir for a Firebase source: download the bucket first " +
+                "(`gcloud storage cp -r gs://<bucket> ./storage`), then point --storage-dir at it.",
+        );
+
+        return undefined;
+    }
+
     const url = process.env["SUPABASE_URL"];
     const serviceKey = process.env["SUPABASE_SERVICE_ROLE_KEY"];
 

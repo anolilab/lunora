@@ -15,7 +15,9 @@ import type { StaleMigrationImportIR } from "./ir";
 const MIGRATED_PLATFORMS: ReadonlyArray<[StaleMigrationImportIR["platform"], ReadonlyArray<string>]> = [
     ["convex", ["convex", "@convex-dev/"]],
     ["supabase", ["@supabase/"]],
-    ["firebase", ["firebase", "@firebase/"]],
+    // `firebase-admin` is listed separately because the matcher is exact-or-`prefix/`:
+    // the server-side SDK a migrated backend actually imported would not match `firebase`.
+    ["firebase", ["firebase", "@firebase/", "firebase-admin"]],
 ];
 
 /** Does this specifier belong to a migrated-away platform? */

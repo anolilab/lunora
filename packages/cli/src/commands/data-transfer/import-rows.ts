@@ -58,7 +58,22 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
     };
 
     const remapEnvelope = (trimmed: string, lineNumber: number): string => {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        let parsed: Record<string, unknown>;
+
+        try {
+            parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch (error: unknown) {
+            // Without this the operator gets a bare `Unexpected token …` with no
+            // way to find the offending line in a multi-GB NDJSON file, while
+            // every other failure on this path names its line.
+            throw new LunoraError(
+                "INTERNAL",
+                `line ${String(lineNumber)}: import envelope is not valid JSON — ${error instanceof Error ? error.message : String(error)}`,
+                {
+                    cause: error,
+                },
+            );
+        }
 
         if (typeof parsed["table"] !== "string") {
             throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
