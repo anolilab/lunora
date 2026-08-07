@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.64",
+    "version": "1.0.0-alpha.65",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
