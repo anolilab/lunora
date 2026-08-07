@@ -1,0 +1,156 @@
+---
+title: "Firestore's typed values, and the export that isn't JSON"
+description: "Building the Firebase importer meant discovering that gcloud firestore export writes protobuf, not JSON — and that the format worth supporting was somewhere else entirely."
+publishedAt: 2026-08-07
+author: Daniel Bannert
+category: Engineering
+image: /og-default.jpg
+tags:
+    - migration
+    - firebase
+    - firestore
+    - cli
+---
+
+The plan for the Firebase importer was one paragraph long and confidently wrong.
+
+It said: `gcloud firestore export` produces JSON document shards per
+collection; each document carries `__name__` and typed fields
+(`timestampValue`, `integerValue` as a string, `doubleValue`, `bytesValue`
+base64, `geoPointValue`, `mapValue`…). Read the shards, decode the fields, map
+`__name__` to `_id`.
+
+Every detail about the _fields_ was right. The bit about where they live was
+not.
+
+## What `gcloud firestore export` actually writes
+
+It writes LevelDB-log files wrapping protobuf entities. Same lineage as
+Datastore backups. Open one and you get framed binary records, not JSON:
+
+```
+2026-08-07T09:00:00_12345.overall_export_metadata
+all_namespaces/kind_posts/all_namespaces_kind_posts.export_metadata
+all_namespaces/kind_posts/output-0        ← binary
+```
+
+Reading that means implementing the LevelDB log framing _and_ a protobuf entity
+decoder. For a CLI whose job is to move your data once and never run again,
+that's a lot of surface area to own and keep correct.
+
+So the question became: what _does_ emit the typed-value JSON the plan
+described? Because that encoding is real — I'd seen it plenty.
+
+## The encoding is real; it just lives elsewhere
+
+Firestore's REST and RPC APIs speak exactly that shape. So does the Admin SDK's
+internal field representation, and so do the community export tools people
+already use. It looks like this:
+
+```json
+{
+    "name": "projects/p/databases/(default)/documents/posts/p1",
+    "fields": {
+        "title": { "stringValue": "hello" },
+        "views": { "integerValue": "9007199254740993" },
+        "publishedAt": { "timestampValue": "2026-08-07T09:00:00Z" },
+        "author": { "referenceValue": "projects/p/databases/(default)/documents/users/u1" },
+        "tags": { "arrayValue": { "values": [{ "stringValue": "a" }] } },
+        "meta": { "mapValue": { "fields": { "draft": { "booleanValue": false } } } }
+    }
+}
+```
+
+Decoding _that_ is the genuinely fiddly work, and it's the part worth owning.
+Producing it is a fifteen-line script against the Admin SDK, which the guide now
+includes. So the importer targets the encoding and documents how to get it —
+rather than shipping a protobuf decoder to reach the same values by a harder
+road.
+
+The plan was wrong about the container and right about the contents. Correcting
+it was worth more than following it.
+
+## `integerValue` is a string for a reason
+
+Notice `"views": { "integerValue": "9007199254740993" }`. A string, for an
+integer.
+
+That's not sloppiness in Firestore's encoding — it's the only correct choice.
+Firestore integers are 64-bit. JSON numbers are doubles. `9007199254740993`
+cannot survive the round trip; it comes back as `9007199254740992`.
+
+So the importer keeps it as a string whenever converting would change the value,
+and converts to a number when it's safely inside range. The same rule the
+Supabase reader applies to `int8`: a silently rounded 64-bit id is the kind of
+corruption you find months later, in a foreign key that no longer joins.
+
+`referenceValue` gets the matching treatment — the last path segment is the
+target document's id, which lines up with the ids the importer preserves, so
+your references still resolve on the other side.
+
+## Everything else, decoded
+
+| Firestore                | Lunora                      |
+| ------------------------ | --------------------------- |
+| `timestampValue`         | epoch milliseconds          |
+| `bytesValue`             | base64 string (already is)  |
+| `geoPointValue`          | `{ latitude, longitude }`   |
+| `arrayValue`, `mapValue` | array, object — recursively |
+| `nullValue`              | `null`                      |
+
+An unrecognised value shape fails the row rather than dropping the field
+silently. If Firestore grows a value kind we don't know about, you'll be told,
+not quietly handed a document with a hole in it.
+
+Three container shapes are accepted — `{ documents: [...] }` from REST, a plain
+`{ "<docId>": { …fields } }` object from the community tools, and NDJSON one per
+line — because whichever your tooling produced is the one you have.
+
+## Storage: let `gcloud` do the auth
+
+Cloud Storage needs Google's OAuth. The CLI could implement that; it would mean
+owning a credential flow, a token cache, and a refresh path for a tool you run
+once.
+
+`gcloud` already owns all of that, and it's already installed if you're running
+Firebase. So:
+
+```bash
+gcloud storage cp -r gs://<your-bucket> ./firebase-storage
+
+lunora import ./firestore-dump --from firebase \
+    --with-storage --storage-dir ./firebase-storage --verify
+```
+
+The objects then take the identical path into R2 as every other source —
+content-hash keys, checksum-verified, deduped, and checkpointed so a killed run
+resumes instead of restarting.
+
+## Passwords, again
+
+Firebase Auth uses its own scrypt variant with per-project parameters.
+better-auth hashes with something else. There is no honest conversion.
+
+`firebase auth:export` gives you the users; the importer maps them to
+better-auth `user` and `account` rows with linked providers (`google.com`,
+`github.com`) preserved, and drops the `password` provider rather than importing
+a credential that can't work. Everyone signs in once through "forgot password".
+
+Plan that announcement before cutover.
+
+## The one I'm still not happy about
+
+**Realtime Database is not Firestore.** RTDB exports one JSON tree with no
+collection boundary and no document ids — the nodes are arbitrarily nested, and
+where a "table" starts is a judgement only you can make about your own data.
+
+A reader that guessed at that split would guess wrong often enough to be worse
+than nothing. So for now the guide says so explicitly, and points you at
+exporting per-collection JSON yourself.
+
+I'd rather say "this isn't handled" in the docs than have you discover it
+half-way through a cutover.
+
+---
+
+Full walkthrough: [Migrating from Firebase](/docs/migrating/from-firebase).

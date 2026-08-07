@@ -1,0 +1,164 @@
+---
+title: "Supabase to Lunora, without the reshape script"
+description: "lunora import --from supabase reads your CSV dumps directly. The interesting part is what it refuses to do: a conversion that would lose a digit fails the run instead of rounding."
+publishedAt: 2026-08-07
+author: Daniel Bannert
+category: Engineering
+image: /og-default.jpg
+tags:
+    - migration
+    - supabase
+    - postgres
+    - cli
+---
+
+Until this week, the Supabase migration guide's data step said roughly: dump
+each table, reshape it to your new schema, then batch-insert it through a
+mutation or a `lunora run` script.
+
+Which is to say: write your own importer. For every app. That's not a migration
+path, it's a homework assignment.
+
+Now it's this:
+
+```bash
+lunora import ./supabase-dump --from supabase --verify
+```
+
+## Why CSV
+
+The obvious alternative was a live Postgres connection — hand the CLI a
+`--pg-url` and let it read the tables directly. We didn't, for three reasons.
+
+It adds a Postgres driver to a CLI that otherwise has no database client. It
+needs your production credentials at import time. And it buys almost nothing
+over a dump you can already produce with one command:
+
+```bash
+psql "$SUPABASE_DB_URL" -c "\copy public.posts TO 'posts.csv' WITH CSV HEADER"
+```
+
+CSV is the portable contract. Every hosted Postgres emits it, the dashboard
+exports it, and `COPY`'s quoting rules are unambiguous.
+
+That last part matters more than it sounds. `COPY` CSV encodes a NULL as an
+_unquoted_ empty field and an empty string as a quoted `""`. Most CSV readers
+collapse both to `""`. If we'd done that, every empty text column in your
+database would have become a null on the way across — a data change nobody
+would spot until something downstream tripped over it. The importer keeps them
+distinct, because Postgres does.
+
+## Ids survive, so foreign keys survive
+
+The same property that makes Convex migration a single pass applies here. The
+admin import inserts with `allowExplicitId`, and `v.id()` validates only that a
+value is a string. A `uuid` primary key is a string.
+
+So your `uuid`s come across verbatim. Every foreign key that pointed at one
+still points at it. No id map, no second pass, no ordering problem — including
+for self-referential tables, which is where hand-written importers usually
+break.
+
+## The part that refuses to run
+
+Here's the design decision I'd defend hardest.
+
+Postgres has types a JavaScript number cannot hold. `int8` goes to 2^63. A
+`numeric(20,4)` money column carries more significant digits than a double. If
+you convert those to a JS number, the value silently changes.
+
+Silently. The import succeeds. The row is there. The number is wrong.
+
+So the importer doesn't. Column conversions are declared per column, from a
+closed set with defined lossless targets, and **a conversion that would lose
+information fails the run and names the column**:
+
+```
+column `view_count`: cannot reshape "9007199254740993" as `number` —
+exceeds Number.MAX_SAFE_INTEGER, map this column to `int8-string` to keep it lossless
+```
+
+`int8-string` keeps it whole as a string. The failure costs you a minute. The
+alternative — a rounded money column — costs you an incident, months later, with
+no way to tell which rows were affected.
+
+A column with no declared conversion is copied through untouched. Doing nothing
+is always safe; guessing isn't.
+
+## `--scan` proposes, you decide
+
+You don't write that mapping by hand:
+
+```bash
+lunora import ./supabase-dump --from supabase --scan
+```
+
+It samples each column and proposes conversions, writing
+`lunora/import-supabase.json` for review. Two rules keep it honest:
+
+**Every non-null value has to agree.** One stray value and it proposes nothing,
+falling back to copy-through. A column that's 199 timestamps and one free-text
+note is free text.
+
+**`int8-string` is only proposed when a value actually needs it.** Otherwise
+every integer id in your database would come across as a string, which is
+technically lossless and practically annoying.
+
+It won't overwrite a mapping you've already edited.
+
+## Passwords, and the announcement you need to write
+
+The auth import maps `auth.users` (and `auth.identities`, for linked OAuth
+providers) into better-auth `user` and `account` rows. Emails, verified status,
+names, avatars, timestamps — all carried.
+
+Passwords are not, and cannot be. Supabase stores bcrypt; better-auth hashes
+with something else. There's no conversion that isn't a lie, and shipping a
+fabricated hash locks every user out with an error they can't act on.
+
+So every imported user arrives without a credential and signs in once through
+"forgot password". **Write that announcement before you cut over**, not after
+your support queue tells you about it.
+
+While testing this, a test asserting "the bcrypt prefix never appears in the
+output" caught something I'd missed: the auth CSV files were _also_ being picked
+up as ordinary tables, so `auth.users.csv` imported as a table called
+`auth.users` with `encrypted_password` intact. Files a mapping claims for auth
+are now excluded from the table listing. The test is still there.
+
+## Storage, resumably
+
+```bash
+export SUPABASE_URL="https://<project>.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="<service-role key>"
+
+lunora import ./supabase-dump --from supabase --with-storage --verify
+```
+
+The key comes from the environment, not a flag, because a service-role key
+grants full read/write on your project and a command-line flag is visible to
+every other process on the machine.
+
+Objects move through the same checksum-verified path the Convex blob migration
+uses: content-hash keys, verified before write, deduped for free.
+
+And the transfer is **checkpointed**. Every object is recorded as it completes,
+so a run that dies at object 40,000 of 50,000 resumes where it stopped instead
+of re-downloading everything. The checkpoint is append-only, so a process killed
+mid-write costs you one repeated object rather than a corrupt file that strands
+the migration.
+
+A partial transfer deliberately does _not_ then import rows — every path column
+would point at an object that isn't there yet.
+
+## What's still yours
+
+RLS policies, Edge Functions, database functions and triggers, realtime
+channels, sessions. The guide covers each, and the data step now links them so
+you can see what's left after the import runs.
+
+The importer moves data. It doesn't pretend to move an application.
+
+---
+
+Full walkthrough: [Migrating from Supabase](/docs/migrating/from-supabase).

@@ -1,7 +1,7 @@
 # Plan 305 — First-class Supabase and Firebase importers
 
 **Baseline:** `9ddd16f63` (2026-08-05)
-**Status:** TODO
+**Status:** DONE — W1–W7 shipped; see §10 for the two design deviations
 **Priority:** P2 · **Effort:** L · **Risk:** MED · **Category:** data/migration
 
 > **Executor instructions**: follow this plan step by step, run every verification
@@ -260,23 +260,23 @@ that made it past codegen already failed the build.
 
 Sized M/L, sequenced in §7. **Status is recorded here as each lands.**
 
-- **W1 (M) — Supabase CSV reader + mapping file.** `csv-parse` in the catalog;
+- **[x] W1 (M) — Supabase CSV reader + mapping file.** `csv-parse` in the catalog;
   `lunora/import-supabase.json`; reshape table (`timestamp-ms`, `jsonb`,
   `bytea-base64`, `int8-string`); ids preserved; `--scan`-style column-guess
   output for `types`.
-- **W2 (M) — Firestore export reader.** Directory scan for
+- **[x] W2 (M) — Firestore export reader.** Reads the REST/RPC typed-value JSON, not `gcloud firestore export` — see §10. Directory scan for
   `.export_metadata`/shard JSON; typed-field decoder; `__name__` → `_id`;
   `lunora/import-firebase.json`.
-- **W3 (M) — Auth import (both sources).** Better-auth `user`/`account` row
+- **[x] W3 (M) — Auth import (both sources).** Better-auth `user`/`account` row
   emission; password nulling; email-verified preservation; docs on the reset
   flow.
-- **W4 (L) — Storage transfer (both sources).** Supabase S3 listing + download;
+- **[x] W4 (L) — Storage transfer (both sources).** Supabase via its own REST API, not the S3 SDK — see §10. Adds a resumable checkpoint. Supabase S3 listing + download;
   Firebase local-dir ingest; both upload via 304's verified route with
   path-column remap per the mapping files.
-- **W5 (S) — `migration_stale_import` lint** + its fixtures.
-- **W6 (S) — Docs.** Steps 7+ of both guides rewritten around the importers;
+- **[x] W5 (S) — `migration_stale_import` lint** + its fixtures.
+- **[x] W6 (S) — Docs.** Steps 7+ of both guides rewritten around the importers;
   auth + storage recipes; every §3.1 out-of-scope row linked from the data step.
-- **W7 (S) — `--verify` + `--scan` parity with 304.** Per-table row parity
+- **[x] W7 (S) — `--verify` + `--scan` parity with 304.** Per-table row parity
   (source rows counted before the run, compared against inserted), the
   dangling-reference report for remapped storage/reference columns, and a
   `--scan` that _writes_ the candidate `lunora/import-<source>.json` (`wx`, never
@@ -341,21 +341,21 @@ must be green after every phase (the catalog grows new entries).
 
 ## Done criteria
 
-- [ ] `lunora import --from supabase` and `--from firebase` import data tables
+- [x] `lunora import --from supabase` and `--from firebase` import data tables
       with preserved ids through the existing admin import
-- [ ] Auth users land in better-auth `user`/`account` with nulled passwords and
+- [x] Auth users land in better-auth `user`/`account` with nulled passwords and
       preserved `emailVerified`; reset flow documented
-- [ ] Storage transfer ships for both sources through 304's verified upload
+- [x] Storage transfer ships for both sources through 304's verified upload
       with path-column remap
-- [ ] `migration_stale_import` lint flags stale imports with guide links
-- [ ] Both guides' data steps reference the importers; no manual reshape script
+- [x] `migration_stale_import` lint flags stale imports with guide links
+- [x] Both guides' data steps reference the importers; no manual reshape script
       remains in step 7
-- [ ] New deps in the catalog; `lint:package-json` green; no `ctx.*` change
-- [ ] `--verify` fails non-zero on row parity, a missing Firestore shard, or an
+- [x] New deps in the catalog; `lint:package-json` green; no `ctx.*` change
+- [x] `--verify` fails non-zero on row parity, a missing Firestore shard, or an
       unresolved reference; `--scan` writes the mapping file it documents
-- [ ] Every §3.1 row is either implemented or linked from the guide as the
+- [x] Every §3.1 row is either implemented or linked from the guide as the
       reader's own remaining work — no asset is left unmentioned
-- [ ] A storage-aware or source-specific flag that cannot apply exits non-zero
+- [x] A storage-aware or source-specific flag that cannot apply exits non-zero
       rather than being ignored
 
 ## 8. Risks & STOP conditions
@@ -423,3 +423,57 @@ must be green after every phase (the catalog grows new entries).
 Settled by 304 §10 — do not re-litigate: content-hash keys, skip-if-present
 without a `--force`, the 32 MiB verified-upload cap with a signed-PUT fallback
 above it, and "report, never guess" for unresolvable references.
+
+## 10. Answers and deviations (recorded at implementation)
+
+**D3 was factually wrong, and the correction was worth more than the plan.**
+`gcloud firestore export` does not write "JSON document shards" — it writes
+LevelDB-log files wrapping protobuf entities, which need a protobuf decoder. What
+D3 _described_ (`timestampValue`, `integerValue` as a string, `mapValue`, …) is
+the Firestore REST/RPC JSON encoding: real, emitted by every JSON-producing read
+path, and the genuinely fiddly part worth owning. The reader targets that
+encoding and the guide documents the ~15-line Admin SDK script that produces it.
+Three container shapes are accepted, because all three are what people have.
+
+**D5's `@aws-sdk/client-s3` was avoidable.** Supabase Storage has a first-party
+REST API taking the service-role key the operator already holds, so the transfer
+needs plain `fetch`. That removes the plan's own listed bundle-size risk (§8) and
+one credential the operator would otherwise create. The key is read from
+`SUPABASE_SERVICE_ROLE_KEY`, never a flag: it grants full project read/write, and
+a flag is visible in the process table.
+
+**Q1 (direct Postgres): no**, as recommended. CSV is the portable contract and
+the reader interface does not preclude adding `--pg-url` later.
+
+**Q2 (Firestore references): last path segment**, not an opt-in remap. It lines
+up with the ids the importer already preserves, so a reference resolves without
+any extra mapping — the opt-in key would have had no work to do.
+
+**Q3 (`bytea`/`bytesValue`): base64 string**, as recommended. It survives the
+NDJSON hop unchanged.
+
+**Q4 (auth email collisions): error with the list**, as recommended. Two rows
+claiming one identity is a merge the tool cannot adjudicate.
+
+**Q5 (Supabase timestamps): preserved.** `created_at`/`updated_at` map onto
+better-auth's `createdAt`/`updatedAt`, consistent with the `allowExplicitId`
+precedent.
+
+**Q6 (lint scope): the three guided platforms only**, as recommended.
+
+**Q7 (Realtime Database): not a reader.** RTDB exports one JSON tree with no
+collection boundary and no document ids; a node→table split cannot be inferred
+without guessing, and a wrong guess is worse than no reader. `from-firebase.mdx`
+states this explicitly rather than leaving it to be discovered mid-cutover.
+
+**Q8 (storage resumability): one prefix listing, plus a checkpoint.** The listing
+alone only makes re-_uploading_ cheap — the download is the expensive half
+against a live provider. An append-only NDJSON checkpoint records each completed
+object, so a resumed run skips the download too. Append-only because a killed
+process then costs one repeated object rather than a corrupt file.
+
+**Beyond the plan:** the auth dump files had to be excluded from the table
+listing. Without it, `auth.users.csv` imported as a table named `auth.users` with
+`encrypted_password` intact — the credential material the "passwords are never
+migrated" rule exists to keep out. A test asserting the bcrypt prefix never
+appears in the output is what caught it.

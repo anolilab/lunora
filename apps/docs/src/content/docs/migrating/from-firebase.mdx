@@ -248,17 +248,153 @@ job for recurring work. Under the hood Lunora persists schedules in a
 6. **Swap auth + storage.** Firebase Auth → [`@lunora/auth`](/docs/packages/auth)
    (or an external IdP via `@lunora/cloudflare-access`); Cloud Storage →
    `ctx.storage`.
-7. **Export & import data.** Dump each Firestore collection (the Firestore
-   export or the Admin SDK), reshape to your new schema (Firestore
-   `Timestamp` → a numeric `createdAt` you populate; document IDs → your `id`
-   columns), then batch-insert via a Lunora mutation or a `lunora run` script.
-   Any `.global()` table needs a `lunora migrate generate init` schema step plus
-   a one-off data-import migration.
+7. **Export & import data.** Dump each collection to JSON, then point
+   `lunora import` at the directory — Firestore's typed values are decoded for
+   you and document IDs are preserved. See
+   [Importing your data](#importing-your-data) below. Any `.global()` table
+   needs a `lunora migrate generate init` schema step first.
 8. **Wire the React provider.** Replace the Firebase app init with
    `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
    `*.workers.dev` hostname).
 9. **Deploy.** `lunora deploy` builds, runs migrations, and calls
    `wrangler deploy`. Your data plane now lives in your own Cloudflare account.
+
+## Importing your data
+
+`lunora import --from firebase` reads a directory of per-collection JSON files
+and inserts them through the admin import endpoint. Document IDs become `_id`
+verbatim, so a `referenceValue` pointing at another document still resolves
+afterwards.
+
+### 1. Export your collections as JSON
+
+<Callout type="warn">
+    `gcloud firestore export` is **not** the format to use here. It writes LevelDB-log files wrapping protobuf entities — a binary format that needs a protobuf
+    decoder, not JSON. What the importer reads is Firestore's typed-value JSON encoding, which is what every JSON-producing read path emits.
+</Callout>
+
+The shortest way to produce it is the Admin SDK, one file per collection:
+
+```js title="export-firestore.mjs"
+import { writeFileSync } from "node:fs";
+
+import { cert, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+
+initializeApp({ credential: cert(JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)) });
+
+const db = getFirestore();
+
+for (const collection of ["users", "posts", "comments"]) {
+    const snapshot = await db.collection(collection).get();
+    const documents = snapshot.docs.map((document_) => ({
+        fields: document_._fieldsProto, // the typed-value encoding
+        name: document_.ref.path,
+    }));
+
+    writeFileSync(`firestore-dump/${collection}.json`, JSON.stringify({ documents }));
+}
+```
+
+The importer also accepts a plain `{ "<docId>": { …fields } }` object (what the
+common community export tools write) and NDJSON with one document per line, so
+whichever shape your tooling produced will read.
+
+### 2. What gets decoded
+
+Every Firestore value kind is handled:
+
+| Firestore                     | Lunora                                              |
+| ----------------------------- | --------------------------------------------------- |
+| `stringValue`, `booleanValue` | string, boolean                                     |
+| `integerValue`                | number — or a string when it exceeds the safe range |
+| `doubleValue`                 | number                                              |
+| `timestampValue`              | epoch milliseconds                                  |
+| `bytesValue`                  | base64 string                                       |
+| `geoPointValue`               | `{ latitude, longitude }`                           |
+| `referenceValue`              | the target document's id                            |
+| `arrayValue`, `mapValue`      | array, object — decoded recursively                 |
+| `nullValue`                   | `null`                                              |
+
+<Callout type="info">
+    `integerValue` arrives as a *string* in Firestore's encoding precisely because it can exceed what a JS number holds. The importer keeps it as a string when
+    converting would change the value — a silently rounded 64-bit id is the kind of corruption you find months later.
+</Callout>
+
+### 3. Import
+
+```bash
+lunora import ./firestore-dump --from firebase --verify
+```
+
+`--verify` checks every source document is accounted for and exits non-zero
+otherwise. `--scan` writes a `lunora/import-firebase.json` skeleton listing your
+collections; because Firestore values are already self-describing, the only thing
+you have to declare there is which columns hold storage paths.
+
+### 4. Users and passwords
+
+Export your users and name the file in the mapping:
+
+```bash
+firebase auth:export firestore-dump/auth.json --format=json
+```
+
+```jsonc title="lunora/import-firebase.json"
+{
+    "auth": { "file": "auth.json" },
+}
+```
+
+Those become better-auth `user` and `account` rows, with linked providers
+(`google.com`, `github.com`, …) carried across as accounts.
+
+<Callout type="warn">
+    **Passwords do not migrate, and cannot.** Firebase uses its own scrypt variant with per-project parameters; better-auth hashes with something else. Every
+    imported user arrives without a credential and signs in once via "forgot password". Plan that announcement before you cut over.
+</Callout>
+
+The `password` provider is dropped rather than imported as a linked account, and
+the auth dump is excluded from the collection import, so no hash material lands
+in your database.
+
+### 5. Storage
+
+Cloud Storage needs Google's own auth, which `gcloud` already owns — so download
+the bucket first and point the importer at the directory:
+
+```bash
+gcloud storage cp -r gs://<your-bucket> ./firebase-storage
+
+lunora import ./firestore-dump --from firebase \
+    --with-storage --storage-dir ./firebase-storage --verify
+```
+
+Name the path columns so they get rewritten to the new R2 keys:
+
+```jsonc title="lunora/import-firebase.json"
+{
+    "tables": {
+        "users": { "storageColumns": ["avatarPath"] },
+    },
+}
+```
+
+Objects land under content-hash keys, so identical files dedupe. **The transfer
+is resumable**: every object is checkpointed as it completes, so a run that dies
+part-way resumes where it stopped rather than starting over.
+
+### What is not imported
+
+The importer moves data. These stay yours to port, and the steps above cover
+each:
+
+- **Security rules** → [Lunora RLS](/docs/concepts/rls) + `ctx.auth` checks (step 4)
+- **Cloud Functions** → `query`/`mutation`/`action` (step 5)
+- **Firestore triggers** → inline mutation logic or `ctx.scheduler` (step 5)
+- **Realtime listeners** → `useQuery`, which is live by default (step 4)
+- **Realtime Database** — a different format from Firestore (one JSON tree, no collection boundary); export it to per-collection JSON yourself and import it as above
+- **Sessions and refresh tokens** — deliberately not migrated; users sign in again
 
 ## Caveats
 

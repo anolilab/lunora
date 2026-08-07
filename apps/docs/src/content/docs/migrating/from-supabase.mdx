@@ -276,17 +276,162 @@ job for recurring work. Under the hood Lunora persists schedules in a
 6. **Swap auth + storage.** Supabase Auth → [`@lunora/auth`](/docs/packages/auth)
    (or an external IdP via `@lunora/cloudflare-access`); Supabase Storage →
    `ctx.storage`.
-7. **Export & import data.** Dump each table (`pg_dump`/`COPY … TO` or the
-   dashboard export), reshape to your new schema (`timestamptz` → numeric
-   `createdAt`; `uuid` PKs → your `id` columns), then batch-insert via a Lunora
-   mutation or a `lunora run` script. Any `.global()` table needs a
-   `lunora migrate generate init` schema step plus a one-off data-import
-   migration.
+7. **Export & import data.** Dump each table to CSV, then point `lunora import`
+   at the directory — no reshape script, and ids are preserved so foreign keys
+   survive. See [Importing your data](#importing-your-data) below. Any
+   `.global()` table needs a `lunora migrate generate init` schema step first.
 8. **Wire the React provider.** Replace the `createClient(...)` init with
    `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
    `*.workers.dev` hostname).
 9. **Deploy.** `lunora deploy` builds, runs migrations, and calls
    `wrangler deploy`. Your data plane now lives in your own Cloudflare account.
+
+## Importing your data
+
+`lunora import --from supabase` reads a directory of CSV dumps and inserts them
+through the admin import endpoint. Ids are preserved verbatim, so every foreign
+key that pointed at a `uuid` still points at it afterwards — there is no
+remapping pass and no ordering problem to solve.
+
+### 1. Dump each table to CSV
+
+```bash
+mkdir supabase-dump && cd supabase-dump
+
+# One file per table. The header row names the columns the importer reads.
+psql "$SUPABASE_DB_URL" -c "\copy public.users  TO 'users.csv'  WITH CSV HEADER"
+psql "$SUPABASE_DB_URL" -c "\copy public.posts  TO 'posts.csv'  WITH CSV HEADER"
+```
+
+The dashboard's per-table CSV export works too. A file's stem becomes the table
+name (`posts.csv` → `posts`), which a mapping can override.
+
+<Callout type="info">
+    CSV is the contract on purpose — every hosted Postgres can produce it, it needs no live database connection during the import, and `COPY`'s quoting rules
+    are unambiguous. The importer distinguishes a NULL from an empty string exactly as Postgres encodes them: an unquoted empty field is NULL, a quoted `""` is
+    a genuine empty string.
+</Callout>
+
+### 2. Generate the column mapping
+
+Postgres types that need converting — timestamps, `jsonb`, `bytea`, `int8` — are
+declared per column. `--scan` samples the dump and proposes them:
+
+```bash
+lunora import ./supabase-dump --from supabase --scan
+```
+
+That writes `lunora/import-supabase.json` for you to review:
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "keyPrefix": "", // optional R2 key prefix for migrated storage objects
+    "tables": {
+        "posts": {
+            "file": "posts.csv", // defaults to <table>.csv
+            "idColumn": "id", // preserved verbatim as _id
+            "types": {
+                "created_at": "timestamp-ms",
+                "metadata": "json",
+                "view_count": "int8-string",
+            },
+        },
+    },
+}
+```
+
+`--scan` is a proposal, not an authority: it only infers a type when _every_
+non-null value in the column agrees, and it never overwrites a mapping you have
+already edited. A column the mapping does not name is copied through untouched.
+
+The reshapes available are `timestamp-ms`, `timestamp-iso`, `json`,
+`bytea-base64`, `int8-string`, `number`, `boolean`, and `text-array`.
+
+<Callout type="warn">
+    A reshape that would lose information **fails the import and names the column** rather than silently rounding. An `int8` past `Number.MAX_SAFE_INTEGER` or a
+    `numeric` with more digits than a double holds will refuse `number` and point you at `int8-string`, which keeps the value whole as a string. This is
+    deliberate: a truncated money column is discovered in production months later, a failed import is fixed in a minute.
+</Callout>
+
+### 3. Import
+
+```bash
+lunora import ./supabase-dump --from supabase --verify
+```
+
+`--verify` checks that every source row is accounted for and exits non-zero if
+any table came up short.
+
+### 4. Users and passwords
+
+Add an `auth` block naming your `auth.users` dump (and `auth.identities`, if you
+have OAuth providers linked):
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "auth": {
+        "file": "auth.users.csv",
+        "identitiesFile": "auth.identities.csv",
+    },
+}
+```
+
+Those become better-auth `user` and `account` rows. Email addresses, verified
+status, display names, avatars, and creation timestamps all carry across.
+
+<Callout type="warn">
+    **Passwords do not migrate, and cannot.** Supabase stores bcrypt hashes; better-auth hashes with something else. There is no honest conversion, so every
+    imported user arrives without a credential and signs in once via "forgot password". Send a reset link to your whole user table on cutover — better-auth's
+    `sendResetPassword` does this. Plan the announcement before you cut over, not after.
+</Callout>
+
+The auth dump files are excluded from the table import, so no password hash ever
+lands in your database as an ordinary column.
+
+### 5. Storage
+
+`--with-storage` copies every object out of Supabase Storage into R2 and rewrites
+the columns that held object paths:
+
+```bash
+export SUPABASE_URL="https://<project>.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="<service-role key, not the anon key>"
+
+lunora import ./supabase-dump --from supabase --with-storage --verify
+```
+
+Name the path columns in the mapping so they get rewritten:
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "tables": {
+        "posts": { "storageColumns": ["cover_path"] },
+    },
+}
+```
+
+<Callout type="info">
+    The key comes from the environment rather than a flag on purpose: a service-role key grants full read/write on your project, and a command-line flag is
+    visible to every other process on the machine via the process table.
+</Callout>
+
+Objects land under content-hash keys, so identical files dedupe and a re-run is
+cheap. **The transfer is resumable**: every object is checkpointed as it
+completes, so if the run dies at object 40,000 of 50,000, re-running the same
+command picks up where it stopped instead of re-downloading what already moved.
+A partial transfer deliberately does not import rows — every path column would
+point at an object that is not there yet.
+
+### What is not imported
+
+The importer moves data. These are still yours to port by hand, and the sections
+above cover each:
+
+- **RLS policies** → [Lunora RLS](/docs/concepts/rls) + `ctx.auth` checks (step 4)
+- **Edge Functions** → `query`/`mutation`/`action` (step 5)
+- **Realtime channels** → `useQuery`, which is live by default (step 3)
+- **Database functions and triggers** → mutations, or [`@lunora/hyperdrive`](/docs/packages/hyperdrive) if you keep the Postgres
+- **Sessions and refresh tokens** — deliberately not migrated; users sign in again
 
 ## Caveats
 

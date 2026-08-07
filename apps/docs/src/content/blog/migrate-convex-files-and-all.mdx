@@ -1,0 +1,165 @@
+---
+title: "Migrating off Convex, files and all"
+description: "lunora import now moves a Convex export's blobs, not just its documents — verified before write, references rewritten, and safe to re-run. Here's why ids surviving is the whole trick."
+publishedAt: 2026-08-07
+author: Daniel Bannert
+category: Engineering
+image: /og-default.jpg
+tags:
+    - migration
+    - convex
+    - storage
+    - cli
+---
+
+A migration tool that moves 95% of your data is not a migration tool. It's a
+puzzle you now have to finish by hand, with the pieces already scattered.
+
+`lunora import` could read a Convex export from the start. It moved every
+document from every table, and it did the hard part correctly. But it skipped
+`_storage` — Convex's system table describing your uploaded files — with a
+warning suggesting you upload the blobs to R2 and re-point the keys yourself.
+
+So a Convex app with file storage migrated its rows and lost its files. Worse:
+every field holding a storage id kept the id, which now pointed at nothing.
+The import reported success.
+
+That's fixed. Here's what it took, and the two decisions that made it work.
+
+## The trick that makes Convex migration easy
+
+Most migration guides tell you to remap ids. Export the old rows, insert them,
+record `oldId → newId`, then walk every foreign key and patch it. It's a
+two-pass import, and it gets genuinely hard the moment you have a
+self-referential table — a comment whose `parentId` points at another comment in
+the same batch.
+
+Lunora doesn't need any of that, because the admin import path inserts with
+`allowExplicitId` and `v.id()` validates only that a value is a string. Convex
+ids are strings. So every `_id` carries across **verbatim**, every foreign key
+already pointing at one still points at it, and a single pass is correct.
+
+No id map. No second pass. No ordering problem. This is the reason the whole
+thing is one command instead of a weekend.
+
+## Files needed a different answer
+
+Documents could ride the existing pipeline. Blobs couldn't — they're bytes
+sitting next to the JSONL, and they have to reach R2 before any document
+referencing them lands.
+
+```bash
+npx convex export --path ./convex-export --include-file-storage
+
+lunora import ./convex-export --with-storage --verify
+```
+
+Two decisions shaped everything else.
+
+### Content-hash keys
+
+Every blob is stored under the hex SHA-256 of its own bytes. Identical files
+dedupe for free, re-running is idempotent by construction, and there's no
+foreign id format left sitting in your bucket forever.
+
+The cost is that a key is no longer the id a document holds, so references have
+to be rewritten. That turned out to be the interesting part.
+
+### Verify before write, always
+
+The admin upload route takes `expectedSha256` and `expectedSize`. It digests the
+body and rejects a mismatch with a 400 **before** calling storage — nothing
+unverified is ever written.
+
+This sounds obvious until you're the one holding a half-finished migration
+wondering whether the bytes that landed are the bytes you sent. "Import what we
+got" is not a thing a migration tool gets to do.
+
+## Rewriting references: what you can know, and what you can't
+
+A Convex document points at a file in one of two ways, and they are not equally
+knowable.
+
+`{ $storage: "kg2c..." }` is Convex's self-describing storage value. It is
+unambiguous — nothing else in your data looks like that — so it's rewritten
+wherever it appears, at any depth, inside arrays, inside nested objects.
+
+A plain string holding a storage id is a different problem. It's just text. A
+column of user-supplied strings could contain something that happens to match,
+and silently rewriting it would corrupt data in a way nobody would notice for
+months.
+
+So those are rewritten **only** where you've confirmed the column:
+
+```bash
+lunora import ./convex-export --scan
+```
+
+That exact-matches every string in your export against the `_storage` id set and
+writes `lunora/import-convex.json` for you to review:
+
+```jsonc title="lunora/import-convex.json"
+{
+    "keyPrefix": "",
+    "storageColumns": {
+        "users": ["avatarId"],
+        "posts": ["coverId"],
+    },
+}
+```
+
+Confirm it, re-run, done. A re-scan never overwrites a file you've already
+edited.
+
+The rule underneath: **a reference the tool cannot resolve is reported, never
+guessed.** Two kinds show up in the output, and they're kept apart because they
+mean different things. A reference whose blob does not exist is broken data no
+mapping can fix, and it fails `--verify`. A string that matches a _migrated_
+blob but sits in a column your mapping doesn't name might be a forgotten column
+— or might be user text that happens to look like an id. That one warns and
+names the column to add. Failing your run over a coincidence you can't disprove
+isn't a verdict a tool should make.
+
+## Re-running is safe, and cheap
+
+Keys are content hashes, so one listing up front tells the importer what's
+already present at the right size. Those are mapped without re-uploading. A
+migration that dies half-way is resumed by running the same command again.
+
+There's one hole that had to be closed for that to be true. Blobs over 32 MiB
+can't reach the worker — they take a signed PUT instead, and are verified after
+the write rather than before. If that verification fails, the object is
+**deleted** before the error propagates. Otherwise it would sit there at a
+content-hash key, and the next run would see it and skip it forever.
+
+## What `--verify` actually checks
+
+```bash
+lunora import ./convex-export --with-storage --verify
+```
+
+Per-table row parity against what the reader emitted, plus the unresolved
+reference report. It exits non-zero on either.
+
+A detail worth stating: rows that come back as _conflicts_ count toward parity,
+because a conflict means the row is already there — which is exactly what a
+re-run produces. Counting only inserts would fail `--verify` on every second
+run of the documented resume path.
+
+## What still isn't automatic
+
+Being straight about it: this moves your **data**. A Convex app is more than
+its data.
+
+Crons, scheduled functions, search and vector index definitions, and environment
+variables are re-declared in Lunora by hand — the migration guide walks each.
+Convex Auth's tables come across as ordinary documents, but the password hashes
+don't map into better-auth, so those users need a reset. And `_scheduled_functions`
+and the other `_`-prefixed system tables are deliberately skipped.
+
+A Convex app's data migrates in one command. A Convex app doesn't. The guide is
+honest about which is which, which is the least a migration guide can do.
+
+---
+
+Full walkthrough: [Migrating from Convex](/docs/migrating/from-convex).
