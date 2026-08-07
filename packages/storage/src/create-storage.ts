@@ -245,6 +245,29 @@ const validateKey = (key: string): void => {
  * and the resulting key must stay under R2's length ceiling. Recommended for
  * any multi-tenant deployment so client-supplied keys can't address peer data.
  */
+
+/**
+ * Enforce an `allowedContentTypes` allowlist.
+ *
+ * The allowlist is a security control (e.g. blocking `text/html` to prevent
+ * stored XSS), so omitting `contentType` must NOT bypass it — otherwise an
+ * uploader sidesteps the list by simply not declaring a type. When a list is
+ * configured, a `contentType` is REQUIRED and must be a member of it.
+ */
+const assertContentTypeAllowed = (uploadOptions: UploadOptions): void => {
+    if (uploadOptions.allowedContentTypes === undefined) {
+        return;
+    }
+
+    if (uploadOptions.contentType === undefined) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: contentType is required when allowedContentTypes is set");
+    }
+
+    if (!uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
+    }
+};
+
 export const scopeKey = (prefix: string, key: string): string => {
     validateKey(prefix);
     validateKey(key);
@@ -270,20 +293,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
     const upload = async (key: string, body: UploadBody, uploadOptions: UploadOptions = {}): Promise<{ etag: string; httpEtag: string; key: string }> => {
         validateKey(key);
 
-        // An `allowedContentTypes` allowlist is a security control (e.g. block
-        // `text/html` to prevent stored-XSS). Omitting `contentType` must NOT
-        // bypass it — otherwise an uploader sidesteps the allowlist by simply
-        // not declaring a type. So when an allowlist is configured, a
-        // `contentType` is REQUIRED and must be a member of the list.
-        if (uploadOptions.allowedContentTypes !== undefined) {
-            if (uploadOptions.contentType === undefined) {
-                throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: contentType is required when allowedContentTypes is set");
-            }
-
-            if (!uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
-                throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
-            }
-        }
+        assertContentTypeAllowed(uploadOptions);
 
         // `maxSize` enforcement. ArrayBuffer/Blob lengths are known up front and
         // rejected before the upload starts; a ReadableStream's length isn't, so
