@@ -8,6 +8,15 @@ import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";
 
+/** Decode a request body for assertions — the fetch shim also carries blob bytes. */
+const bodyText = (body: string | Uint8Array | undefined): string => {
+    if (typeof body === "string") {
+        return body;
+    }
+
+    return body === undefined ? "" : new TextDecoder().decode(body);
+};
+
 const silentLogger = (): Logger => {
     return {
         error: () => {},
@@ -66,7 +75,7 @@ describe("lunora data-transfer", () => {
             const ndjson = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${JSON.stringify({ doc: { _id: "u2" }, table: "users" })}\n`;
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
-                calls.push({ body: init?.body ? JSON.parse(init.body) : undefined, headers: init?.headers, url });
+                calls.push({ body: init?.body ? JSON.parse(bodyText(init.body)) : undefined, headers: init?.headers, url });
 
                 return {
                     body: stringStream(ndjson),
@@ -100,7 +109,7 @@ describe("lunora data-transfer", () => {
             const calls: { body: { tables?: unknown } }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (_url, init) => {
-                calls.push({ body: init?.body ? (JSON.parse(init.body) as { tables?: unknown }) : {} });
+                calls.push({ body: init?.body ? (JSON.parse(bodyText(init.body)) as { tables?: unknown }) : {} });
 
                 return {
                     body: stringStream(""),
@@ -166,9 +175,11 @@ describe("lunora data-transfer", () => {
             const calls: { body: string; url: string }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
-                calls.push({ body: init?.body ?? "", url });
+                calls.push({ body: bodyText(init?.body), url });
 
-                const rows = (init?.body ?? "").split("\n").filter((line) => line.trim().length > 0);
+                const rows = bodyText(init?.body)
+                    .split("\n")
+                    .filter((line) => line.trim().length > 0);
 
                 return {
                     body: null,
@@ -206,7 +217,7 @@ describe("lunora data-transfer", () => {
             const captured: { body: string }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (_url, init) => {
-                captured.push({ body: init?.body ?? "" });
+                captured.push({ body: bodyText(init?.body) });
 
                 return {
                     body: null,
@@ -264,7 +275,7 @@ describe("lunora data-transfer", () => {
             const captured: string[] = [];
 
             const fetchImpl: StreamingFetchLike = async (_url, init) => {
-                captured.push(init?.body ?? "");
+                captured.push(bodyText(init?.body));
 
                 return {
                     body: null,

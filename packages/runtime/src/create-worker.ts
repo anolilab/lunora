@@ -52,7 +52,7 @@ import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
-import { buildStorageAdminRoutes } from "./storage-admin-routes";
+import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
@@ -78,6 +78,16 @@ interface RpcEnvelope {
 }
 
 type Route = (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> | Response;
+
+/**
+ * Routes whose reader declares a body budget above the shared {@link MAX_BODY_BYTES}
+ * JSON cap. The entry-point `Content-Length` fast-reject reads this table so the
+ * header check agrees with the reader that actually enforces the limit.
+ */
+const ROUTE_BODY_BUDGETS: Record<string, number> = {
+    [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
+    [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
+};
 
 /**
  * Context handed to HTTP-action handlers. Built per request by the worker; its
@@ -4461,13 +4471,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // reader, which abort with 413 once cumulative bytes exceed the cap.
         if (request.method === "POST" || request.method === "PUT") {
             const contentLength = Number(request.headers.get("content-length") ?? "");
-            // Routes that declare their own larger body budget (currently the KV
-            // value PUT, which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a
-            // 25 MiB KV value) must not be pre-rejected by the shared 1 MiB cap —
-            // else the per-route cap is dead code for any client that sends a
-            // `Content-Length`. Pick the route's cap so the header check matches
-            // the reader's cap.
-            const maxBodyBytes = url.pathname === KV_VALUE_PATH ? KV_VALUE_MAX_BODY_BYTES : MAX_BODY_BYTES;
+            // Routes that declare their own larger body budget (the KV value PUT,
+            // which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a 25 MiB KV
+            // value, and the storage object upload, which moves real files) must
+            // not be pre-rejected by the shared 1 MiB cap — else the per-route cap
+            // is dead code for any client that sends a `Content-Length`. Pick the
+            // route's cap so the header check matches the reader's cap.
+            const maxBodyBytes = ROUTE_BODY_BUDGETS[url.pathname] ?? MAX_BODY_BYTES;
 
             if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
                 throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });

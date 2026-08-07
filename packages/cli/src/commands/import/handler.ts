@@ -29,7 +29,7 @@ const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ a
         token: options.token,
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
         verify: options.verify === true,
-        withStorage: options.withstorage === true,
+        withStorage: options.withStorage === true,
         yes: options.yes === true,
     });
 });

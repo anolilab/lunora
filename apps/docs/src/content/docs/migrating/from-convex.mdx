@@ -276,20 +276,45 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     ```
 
     Blobs are stored under content-hash keys (`sha256` hex of the bytes), and
-    every `{ $storage: id }` reference is rewritten automatically. Plain-string
-    columns that hold storage ids (validated with `v.id("_storage")` in Convex)
-    are ambiguous, so they are rewritten only through a
-    `lunora/import-convex.json` mapping — run with `--scan` to have the CLI
-    detect the candidate columns and print the file for you to confirm:
+    every `{ $storage: id }` reference is rewritten automatically, at any depth.
+    Plain-string columns that hold storage ids (validated with `v.id("_storage")`
+    in Convex) are ambiguous against ordinary text, so they are rewritten only
+    through a `lunora/import-convex.json` mapping. Run `--scan` first and the CLI
+    detects the candidate columns and writes that file for you to confirm — it
+    imports nothing, and never overwrites a mapping you already have:
 
     ```bash
-    lunora import ./convex-export --with-storage --scan
+    lunora import ./convex-export --scan
     ```
 
+    ```jsonc title="lunora/import-convex.json"
+    {
+        "keyPrefix": "", // optional R2 key prefix, e.g. "convex/"
+        "storageColumns": {
+            "users": ["avatarId"], // table → columns holding storage ids
+        },
+    }
+    ```
+
+    Re-running is safe: keys are content hashes, so blobs already present at the
+    right size are mapped without being uploaded again. Anything the migration
+    could not resolve is listed as a **dangling storage reference** and left
+    untouched — it is reported, never guessed at.
+
     A `snapshot.zip` from `npx convex export --path ./snapshot.zip` imports the
-    same way (`lunora import ./snapshot.zip --with-storage`); and `--verify`
-    checks each table's inserted count against its source line count, exiting
-    non-zero on a mismatch.
+    same way (`lunora import ./snapshot.zip --with-storage`). `--verify` checks
+    each table's inserted count against its source line count and fails on any
+    dangling reference, exiting non-zero on a mismatch:
+
+    ```bash
+    lunora import ./convex-export --with-storage --verify
+    ```
+
+    <Callout type="info">
+        Objects up to 32 MiB take the checksum-verified admin upload, which digests the body and refuses to write on a mismatch. Larger blobs go through a
+        signed `PUT` that bypasses the worker's body limit — those are verified after the write instead (by size, plus SHA-256 where the bucket records one),
+        and an object that fails is deleted rather than left behind.
+    </Callout>
 
     <Callout type="warn">
         `ctx.db.insert` does the **opposite**: it discards a supplied `_id` and mints a fresh one. So a hand-rolled importer that batch-inserts through a

@@ -6,8 +6,8 @@
  * surface and reads entries in full.
  */
 import { createReadStream } from "node:fs";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 
 import AdmZip from "adm-zip";
@@ -25,8 +25,12 @@ export interface ConvexSnapshotTable {
 /**
  * A resolvable Convex export snapshot: an exploded directory or a `.zip`
  * archive (whose layout sits under an `snapshot_<ts>/` root entry).
+ *
+ * The ZIP variant carries its already-opened {@link AdmZip} reader: the archive
+ * central directory is parsed once at resolve time and reused by every accessor,
+ * rather than re-parsed per table stream and per blob read.
  */
-export type ConvexSnapshot = { kind: "directory"; root: string } | { kind: "zip"; zipPath: string };
+export type ConvexSnapshot = { kind: "directory"; root: string } | { kind: "zip"; zip: AdmZip; zipPath: string };
 
 /**
  * Resolve the path the import command received to a snapshot, or `undefined`
@@ -43,7 +47,7 @@ export const resolveConvexSnapshot = async (
     }
 
     if (info?.isFile() && path.toLowerCase().endsWith(".zip")) {
-        return { kind: "zip", zipPath: path };
+        return { kind: "zip", zip: new AdmZip(path), zipPath: path };
     }
 
     return undefined;
@@ -77,11 +81,10 @@ export const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promis
         return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
     }
 
-    const zip = new AdmZip(snapshot.zipPath);
     const found: ConvexSnapshotTable[] = [];
     let storagePrefix: string | undefined;
 
-    for (const entry of zip.getEntries()) {
+    for (const entry of snapshot.zip.getEntries()) {
         if (entry.isDirectory) {
             continue;
         }
@@ -124,9 +127,8 @@ export const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tabl
         return;
     }
 
-    const zip = new AdmZip(snapshot.zipPath);
     // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    const text = zip.readAsText(tableEntry.file);
+    const text = snapshot.zip.readAsText(tableEntry.file);
 
     for (const line of text.split("\n")) {
         yield line;
@@ -136,15 +138,28 @@ export const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tabl
 /**
  * Read one `_storage` blob's bytes. Finds the blob entry under the table's
  * `_storage` directory (zip) or at `_storage/<id>` (directory).
+ *
+ * `blobId` comes from the export's own `_storage/documents.jsonl`, i.e. from
+ * data the operator downloaded rather than authored. A crafted export could put
+ * `../` segments in an `_id`, or drop a symlink under `_storage/`, and have the
+ * importer read an unrelated local file and upload it to the target bucket — so
+ * the resolved path is checked to still live inside the snapshot's `_storage`
+ * directory before anything is read.
  */
 export const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, blobId: string): Promise<Buffer> => {
     if (snapshot.kind === "directory") {
-        return readFile(join(snapshot.root, "_storage", blobId));
+        const storageRoot = await realpath(join(snapshot.root, "_storage"));
+        const blobPath = await realpath(resolve(storageRoot, blobId)).catch(() => undefined);
+
+        if (blobPath === undefined || (blobPath !== storageRoot && !blobPath.startsWith(storageRoot + sep))) {
+            throw new Error(`blob ${blobId} resolves outside the snapshot's _storage directory`);
+        }
+
+        return readFile(blobPath);
     }
 
-    const zip = new AdmZip(snapshot.zipPath);
     const prefix = tableEntry.storagePrefix ?? "_storage";
-    const blob = zip.readFile(`${prefix}/${blobId}`);
+    const blob = snapshot.zip.readFile(`${prefix}/${blobId}`);
 
     if (blob === null) {
         throw new Error(`missing blob ${blobId} in archive`);
@@ -160,5 +175,5 @@ export const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: Con
     }
 
     // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    return new AdmZip(snapshot.zipPath).readAsText(tableEntry.file);
+    return snapshot.zip.readAsText(tableEntry.file);
 };

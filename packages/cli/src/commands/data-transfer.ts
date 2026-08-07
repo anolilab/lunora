@@ -11,7 +11,7 @@
  * against accidentally targeting localhost in production scripts.
  */
 import { createReadStream, createWriteStream } from "node:fs";
-import { readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -23,27 +23,82 @@ import type { ConvexSnapshot, ConvexSnapshotTable } from "./convex-snapshot";
 import { listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, readSnapshotText, resolveConvexSnapshot } from "./convex-snapshot";
 import type { FetchLike } from "./run/handler";
 
-/** Shape of `lunora/import-convex.json` mapping file. */
+/** Shape of the `lunora/import-convex.json` mapping file. */
 interface ImportConvexMapping {
     keyPrefix?: string;
     storageColumns?: Record<string, string[]>;
 }
 
+/** Relative location of the mapping file inside a project. */
+const IMPORT_CONVEX_MAPPING_FILE = join("lunora", "import-convex.json");
+
 /**
- * Read `lunora/import-convex.json` from the project directory.
- * Returns the mapping if the file exists and is valid; undefined otherwise.
+ * Narrow a parsed mapping file, or throw naming the offending key.
+ *
+ * A mapping that fails to parse must NOT degrade to "no mapping": the mapping is
+ * what tells the importer which plain-string columns hold storage ids, so
+ * silently dropping it turns a configured rewrite into a silent no-rewrite and
+ * leaves every one of those columns pointing at a Convex id that no longer
+ * resolves. Only a *missing* file is optional.
+ */
+const parseImportConvexMapping = (raw: unknown, mappingPath: string): ImportConvexMapping => {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        throw new LunoraError("INTERNAL", `${mappingPath}: expected a JSON object`);
+    }
+
+    const candidate = raw as Record<string, unknown>;
+
+    if (candidate["keyPrefix"] !== undefined && typeof candidate["keyPrefix"] !== "string") {
+        throw new LunoraError("INTERNAL", `${mappingPath}: \`keyPrefix\` must be a string`);
+    }
+
+    const columns = candidate["storageColumns"];
+
+    if (columns !== undefined) {
+        if (columns === null || typeof columns !== "object" || Array.isArray(columns)) {
+            throw new LunoraError("INTERNAL", `${mappingPath}: \`storageColumns\` must be an object of table → column names`);
+        }
+
+        for (const [table, value] of Object.entries(columns)) {
+            if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+                throw new LunoraError("INTERNAL", `${mappingPath}: \`storageColumns.${table}\` must be an array of column names`);
+            }
+        }
+    }
+
+    return { keyPrefix: candidate["keyPrefix"], storageColumns: columns as Record<string, string[]> | undefined };
+};
+
+/**
+ * Read `lunora/import-convex.json` from the project directory. Returns
+ * `undefined` only when the file does not exist; an unreadable or invalid
+ * mapping throws.
  */
 const readImportConvexMapping = async (cwd: string, logger: Logger): Promise<ImportConvexMapping | undefined> => {
+    const mappingPath = join(cwd, IMPORT_CONVEX_MAPPING_FILE);
+    let content: string;
+
     try {
-        const mappingPath = join(cwd, "lunora", "import-convex.json");
-        const content = await readFile(mappingPath, "utf8");
+        content = await readFile(mappingPath, "utf8");
+    } catch (error: unknown) {
+        if ((error as { code?: string }).code === "ENOENT") {
+            logger.info(`no ${IMPORT_CONVEX_MAPPING_FILE} found — rewriting only self-describing { $storage } refs (run with --scan to generate one)`);
 
-        return JSON.parse(content) as ImportConvexMapping;
-    } catch {
-        logger.info("no import-convex.json mapping file found — using auto-detected { $storage } refs only");
+            return undefined;
+        }
 
-        return undefined;
+        throw error;
     }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(content);
+    } catch (error: unknown) {
+        throw new LunoraError("INTERNAL", `${mappingPath}: invalid JSON — ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+
+    return parseImportConvexMapping(parsed, mappingPath);
 };
 
 const EXPORT_ENDPOINT_PATH = "/_lunora/admin/export";
@@ -54,6 +109,9 @@ const STORAGE_URL_ENDPOINT_PATH = "/_lunora/admin/storage/url";
 /** Rows per HTTP request when importing. Convex uses ~500; same here. */
 const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
+/** How many dangling storage references to name individually before summarising. */
+const DANGLING_REPORT_LIMIT = 20;
+
 /**
  * Minimal projection of `globalThis.fetch` for the export path — we need
  * `body` as a stream-iterable, which the shared {@link FetchLike} type
@@ -61,7 +119,7 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
  */
 type StreamingFetchLike = (
     input: string,
-    init?: { body?: string; headers?: Record<string, string>; method?: string },
+    init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string },
 ) => Promise<{
     body: ReadableStream<Uint8Array> | null;
     json: () => Promise<unknown>;
@@ -296,11 +354,16 @@ interface ImportCommandOptions {
     prod?: boolean;
 
     /**
+     * Scan the export for columns holding `_storage` ids and write a candidate
+     * `lunora/import-convex.json`. Scan-only: nothing is imported.
+     */
+    scan?: boolean;
+
+    /**
      * Wrap each line as `{table:<name>,doc:<line>}`. Use when the source NDJSON
      * is bare docs from a single table — Convex's `convex import --table users`
      * shape.
      */
-    scan?: boolean;
     table?: string;
     token?: string;
     url?: string;
@@ -331,6 +394,8 @@ interface ImportCommandResult {
 }
 
 interface ImportRequest {
+    /** Worker origin — the storage phase hangs its own routes off it. */
+    baseUrl: string;
     fetchImpl: StreamingFetchLike;
     requestUrl: string;
     token: string;
@@ -395,7 +460,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
     }
 
-    return { fetchImpl, requestUrl: `${baseUrl}${IMPORT_ENDPOINT_PATH}`, token };
+    return { baseUrl, fetchImpl, requestUrl: `${baseUrl}${IMPORT_ENDPOINT_PATH}`, token };
 };
 
 /**
@@ -486,30 +551,87 @@ const resolveImportSource = async (
     return { convexSnapshot: snapshot, convexTables, error: false };
 };
 
+/** One validated `_storage/documents.jsonl` row: the blob's id, digest, and byte length. */
+interface StorageMetadataRow {
+    contentType?: string;
+    id: string;
+    /** Lowercase hex, whatever encoding the export used. */
+    sha256: string;
+    size: number;
+}
+
+const HEX_SHA256_RE = /^[\dA-F]{64}$/i;
+const BASE64_SHA256_RE = /^[\d+/A-Z]{43}=$/i;
+
 /**
- * Decide whether the positional path is a Convex export directory or a plain
- * NDJSON file, rejecting the shapes that cannot be either.
+ * Normalise the export's `sha256` to lowercase hex.
+ *
+ * Convex has emitted this field both as base16 and as base64 across versions,
+ * and the value is used three ways — as the R2 key, as the `expectedSha256`
+ * query parameter, and as the comparand for the digest the worker echoes back
+ * (always lowercase hex). Normalising once at the boundary is what keeps an
+ * uppercase or base64 source hash from becoming a false verification failure
+ * plus a case-split key namespace.
  */
-const readStorageMetadata = async (
-    snapshot: ConvexSnapshot,
-    storageTableEntry: ConvexSnapshotTable,
-    logger: Logger,
-): Promise<{ _id: string; contentType?: string; sha256: string; size: number }[]> => {
-    const rows: { _id: string; contentType?: string; sha256: string; size: number }[] = [];
+const normalizeSha256 = (raw: string): string | undefined => {
+    if (HEX_SHA256_RE.test(raw)) {
+        return raw.toLowerCase();
+    }
+
+    return BASE64_SHA256_RE.test(raw) ? Buffer.from(raw, "base64").toString("hex") : undefined;
+};
+
+/**
+ * Validate one `_storage` metadata row, or throw naming the offending field. An
+ * unusable row is never skipped: these values decide what bytes get written
+ * under what key, so guessing is never the right answer.
+ */
+const parseStorageMetadataRow = (line: string, where: string): StorageMetadataRow => {
+    const storageDocument = JSON.parse(line) as { _id?: unknown; contentType?: unknown; sha256?: unknown; size?: unknown };
+    const id = storageDocument._id;
+
+    if (typeof id !== "string" || id.length === 0 || id.includes("/") || id.includes("\\")) {
+        throw new LunoraError("INTERNAL", `${where}: \`_id\` must be a path-free non-empty string`);
+    }
+
+    if (typeof storageDocument.sha256 !== "string") {
+        throw new LunoraError("INTERNAL", `${where}: \`sha256\` is missing — re-export with \`npx convex export --include-file-storage\``);
+    }
+
+    const sha256 = normalizeSha256(storageDocument.sha256);
+
+    if (sha256 === undefined) {
+        throw new LunoraError("INTERNAL", `${where}: \`sha256\` is neither base16 nor base64 SHA-256 (${storageDocument.sha256})`);
+    }
+
+    if (typeof storageDocument.size !== "number" || !Number.isInteger(storageDocument.size) || storageDocument.size < 0) {
+        throw new LunoraError("INTERNAL", `${where}: \`size\` must be a non-negative integer`);
+    }
+
+    return {
+        contentType: typeof storageDocument.contentType === "string" ? storageDocument.contentType : undefined,
+        id,
+        sha256,
+        size: storageDocument.size,
+    };
+};
+
+/**
+ * Read and validate `_storage/documents.jsonl` — the metadata rows describing
+ * every exported blob.
+ */
+const readStorageMetadata = async (snapshot: ConvexSnapshot, storageTableEntry: ConvexSnapshotTable, logger: Logger): Promise<StorageMetadataRow[]> => {
+    const rows: StorageMetadataRow[] = [];
 
     try {
         const text = await readSnapshotText(snapshot, storageTableEntry);
 
-        for (const line of text.split("\n")) {
+        for (const [index, line] of text.split("\n").entries()) {
             const trimmed = line.trim();
 
-            if (trimmed.length === 0) {
-                continue;
+            if (trimmed.length > 0) {
+                rows.push(parseStorageMetadataRow(trimmed, `_storage/documents.jsonl line ${String(index + 1)}`));
             }
-
-            const storageDocument = JSON.parse(trimmed) as { _id: string; contentType?: string; sha256: string; size: number };
-
-            rows.push({ _id: storageDocument._id, contentType: storageDocument.contentType, sha256: storageDocument.sha256, size: storageDocument.size });
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -523,22 +645,65 @@ const readStorageMetadata = async (
 };
 
 /**
- * Upload one Convex storage blob to the worker's verified admin route (small blobs)
- * or via a presigned PUT URL (large blobs). Returns the R2 key the blob was stored
- * under (`[keyPrefix]<sha256hex>`).
+ * Body budget of `PUT /_lunora/admin/storage` (mirrors the runtime's
+ * `STORAGE_UPLOAD_MAX_BODY_BYTES`). Blobs up to this size take the verified
+ * route, which digests the body and refuses to write on a mismatch; above it the
+ * body cannot reach the worker at all, so the signed-PUT fallback applies.
  */
-const uploadSmallBlob = async (
-    baseUrl: string,
-    token: string,
-    key: string,
-    blobBytes: Buffer,
-    metadata: { contentType?: string; sha256: string; size: number },
-): Promise<string> => {
-    const url = `${baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&expectedSha256=${metadata.sha256}&expectedSize=${String(metadata.size)}`;
+const MAX_VERIFIED_UPLOAD_BYTES = 32 * 1_048_576;
 
-    const response = await fetch(url, {
+/** One object as `GET /_lunora/admin/storage` reports it. */
+interface StorageListObject {
+    key: string;
+    sha256?: string;
+    size?: number;
+}
+
+interface BlobUploadContext {
+    baseUrl: string;
+    fetchImpl: StreamingFetchLike;
+    token: string;
+}
+
+/** List the objects under `prefix`, following the cursor to the end. */
+const listStorageObjects = async (context: BlobUploadContext, prefix: string): Promise<StorageListObject[]> => {
+    const objects: StorageListObject[] = [];
+    let cursor: string | undefined;
+
+    do {
+        const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?prefix=${encodeURIComponent(prefix)}${cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`}`;
+
+        // eslint-disable-next-line no-await-in-loop -- cursor paging is sequential by definition
+        const response = await context.fetchImpl(url, { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
+
+        if (!response.ok) {
+            // eslint-disable-next-line no-await-in-loop -- error body of the failed page
+            const text = await response.text().catch(() => "<no body>");
+
+            throw new LunoraError("INTERNAL", `storage list failed (HTTP ${String(response.status)}): ${text}`);
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- one page at a time
+        const json = (await response.json()) as { cursor?: string; objects?: StorageListObject[]; truncated?: boolean };
+
+        objects.push(...(json.objects ?? []));
+        cursor = json.truncated === true ? json.cursor : undefined;
+    } while (cursor !== undefined);
+
+    return objects;
+};
+
+/**
+ * Upload one blob through the checksum-verified admin route. The worker digests
+ * the body and returns the computed hash, so a corrupt transfer is rejected
+ * before anything is written.
+ */
+const uploadSmallBlob = async (context: BlobUploadContext, key: string, blobBytes: Buffer, metadata: StorageMetadataRow): Promise<string> => {
+    const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&expectedSha256=${metadata.sha256}&expectedSize=${String(metadata.size)}`;
+
+    const response = await context.fetchImpl(url, {
         body: new Uint8Array(blobBytes),
-        headers: { authorization: `Bearer ${token}`, "content-type": metadata.contentType ?? "application/octet-stream" },
+        headers: { authorization: `Bearer ${context.token}`, "content-type": metadata.contentType ?? "application/octet-stream" },
         method: "PUT",
     });
 
@@ -557,29 +722,44 @@ const uploadSmallBlob = async (
     return key;
 };
 
-const uploadLargeBlob = async (
-    baseUrl: string,
-    token: string,
-    key: string,
-    blobBytes: Buffer,
-    metadata: { contentType?: string; sha256: string; size: number },
-): Promise<string> => {
-    const urlUrl = `${baseUrl}${STORAGE_URL_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&method=PUT&contentType=${encodeURIComponent(metadata.contentType ?? "application/octet-stream")}`;
+/** Best-effort removal of an object that failed post-upload verification. */
+const deleteStorageObject = async (context: BlobUploadContext, key: string): Promise<void> => {
+    await context
+        .fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}`, {
+            headers: { authorization: `Bearer ${context.token}` },
+            method: "DELETE",
+        })
+        .catch(() => undefined);
+};
 
-    const urlResponse = await fetch(urlUrl, {
-        headers: { authorization: `Bearer ${token}` },
-        method: "GET",
-    });
+/**
+ * Upload a blob too large for the worker's body cap through a signed `PUT` URL,
+ * then verify what landed by listing it back.
+ *
+ * The bytes bypass the worker, so the pre-write digest check is not available
+ * here. R2 only records a SHA-256 checksum when the writer supplied one, so the
+ * list may legitimately omit `sha256`; size is always comparable. When the
+ * object that landed does not match, it is DELETED before the failure
+ * propagates — otherwise the bad object would sit at a content-hash key and a
+ * later re-run would treat it as already-migrated.
+ */
+const uploadLargeBlob = async (context: BlobUploadContext, key: string, blobBytes: Buffer, metadata: StorageMetadataRow, logger: Logger): Promise<string> => {
+    const mintUrl = `${context.baseUrl}${STORAGE_URL_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&method=PUT&contentType=${encodeURIComponent(metadata.contentType ?? "application/octet-stream")}`;
+
+    const urlResponse = await context.fetchImpl(mintUrl, { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
 
     if (!urlResponse.ok) {
         const text = await urlResponse.text().catch(() => "<no body>");
 
-        throw new LunoraError("INTERNAL", `failed to get signed PUT URL (HTTP ${String(urlResponse.status)}): ${text}`);
+        throw new LunoraError(
+            "INTERNAL",
+            `blob ${key} is ${String(metadata.size)} bytes, above the ${String(MAX_VERIFIED_UPLOAD_BYTES)}-byte verified-upload cap, and no signed PUT URL could be minted (HTTP ${String(urlResponse.status)}): ${text}`,
+        );
     }
 
     const { url: signedUrl } = (await urlResponse.json()) as { key: string; url: string };
 
-    const putResponse = await fetch(signedUrl, {
+    const putResponse = await context.fetchImpl(signedUrl, {
         body: new Uint8Array(blobBytes),
         headers: { "content-type": metadata.contentType ?? "application/octet-stream" },
         method: "PUT",
@@ -591,125 +771,194 @@ const uploadLargeBlob = async (
         throw new LunoraError("INTERNAL", `signed PUT failed (HTTP ${String(putResponse.status)}): ${text}`);
     }
 
-    const listUrl = `${baseUrl}${STORAGE_ENDPOINT_PATH}?prefix=${encodeURIComponent(key)}`;
+    const listed = await listStorageObjects(context, key);
+    const stored = listed.find((object_) => object_.key === key);
 
-    const listResponse = await fetch(listUrl, {
-        headers: { authorization: `Bearer ${token}` },
-        method: "GET",
-    });
-
-    if (!listResponse.ok) {
-        const text = await listResponse.text().catch(() => "<no body>");
-
-        throw new LunoraError("INTERNAL", `post-upload verification failed (HTTP ${String(listResponse.status)}): ${text}`);
-    }
-
-    const listJson = (await listResponse.json()) as { objects: { contentType?: string; key: string; sha256?: string; size?: number }[] };
-    const stored = listJson.objects.find((object_) => object_.key === key);
-
-    if (!stored) {
+    if (stored === undefined) {
         throw new LunoraError("INTERNAL", `post-upload verification failed: blob not found at key ${key}`);
     }
 
-    if (stored.sha256 !== metadata.sha256 || stored.size !== metadata.size) {
+    const sizeMismatch = stored.size !== metadata.size;
+    const hashMismatch = stored.sha256 !== undefined && stored.sha256.toLowerCase() !== metadata.sha256;
+
+    if (sizeMismatch || hashMismatch) {
+        await deleteStorageObject(context, key);
+
         throw new LunoraError(
             "INTERNAL",
-            `post-upload verification failed: expected sha256=${metadata.sha256} size=${String(metadata.size)}, got sha256=${stored.sha256 ?? "none"} size=${String(stored.size ?? "none")}`,
+            `post-upload verification failed: expected sha256=${metadata.sha256} size=${String(metadata.size)}, got sha256=${stored.sha256 ?? "none"} size=${String(stored.size ?? "none")} (the object was removed)`,
         );
+    }
+
+    if (stored.sha256 === undefined) {
+        logger.warn(`blob ${key} exceeded the verified-upload cap and the host does not report a stored sha256 — verified by size only`);
     }
 
     return key;
 };
 
 const uploadStorageBlob = async (
-    baseUrl: string,
-    token: string,
+    context: BlobUploadContext,
     blobBytes: Buffer,
-    metadata: { contentType?: string; sha256: string; size: number },
+    metadata: StorageMetadataRow,
     keyPrefix: string,
+    logger: Logger,
 ): Promise<string> => {
     const key = `${keyPrefix}${metadata.sha256}`;
 
-    const MAX_VERIFIED_UPLOAD_BYTES = 1_048_576;
-
-    if (blobBytes.length <= MAX_VERIFIED_UPLOAD_BYTES) {
-        return uploadSmallBlob(baseUrl, token, key, blobBytes, metadata);
+    // Catch a truncated source before any network call: the export's own
+    // metadata is the only statement of what the blob should weigh.
+    if (blobBytes.length !== metadata.size) {
+        throw new LunoraError("INTERNAL", `blob ${metadata.id} is ${String(blobBytes.length)} bytes on disk but the export declares ${String(metadata.size)}`);
     }
 
-    return uploadLargeBlob(baseUrl, token, key, blobBytes, metadata);
+    if (blobBytes.length <= MAX_VERIFIED_UPLOAD_BYTES) {
+        return uploadSmallBlob(context, key, blobBytes, metadata);
+    }
+
+    return uploadLargeBlob(context, key, blobBytes, metadata, logger);
 };
 
 /**
  * Migrate Convex `_storage` blobs: read `_storage/documents.jsonl`, upload each
  * blob with sha256+size verification, and build the `storageId → key` map.
  * Fail-close on any mismatch or missing file.
+ *
+ * Re-runs are cheap and safe: keys are content hashes, so one prefix listing up
+ * front tells us which blobs are already present at the right size, and those
+ * are mapped without re-uploading.
  */
 const migrateStorageBlobs = async (
-    baseUrl: string,
-    adminToken: string,
+    context: BlobUploadContext,
     snapshot: ConvexSnapshot,
     storageTableEntry: ConvexSnapshotTable,
+    keyPrefix: string,
     logger: Logger,
 ): Promise<Map<string, string>> => {
     const metadataRows = await readStorageMetadata(snapshot, storageTableEntry, logger);
-    const keyPrefix = ""; // TODO: read from lunora/import-convex.json (W3)
     const storageIdMap = new Map<string, string>();
+    const alreadyStored = await listStorageObjects(context, keyPrefix);
+    const existing = new Map(alreadyStored.map((object_) => [object_.key, object_]));
+    let skipped = 0;
 
     logger.info(`migrating ${String(metadataRows.length)} storage blobs...`);
 
     for (const row of metadataRows) {
+        const key = `${keyPrefix}${row.sha256}`;
+        const present = existing.get(key);
+
+        if (present?.size === row.size) {
+            storageIdMap.set(row.id, key);
+            skipped += 1;
+
+            continue;
+        }
+
         try {
             // eslint-disable-next-line no-await-in-loop -- sequential: each blob is read + verified before the next starts
-            const blobBytes = await readSnapshotStorageBlob(snapshot, storageTableEntry, row._id);
+            const blobBytes = await readSnapshotStorageBlob(snapshot, storageTableEntry, row.id);
 
             // eslint-disable-next-line no-await-in-loop -- sequential upload: each blob must be verified before the next starts
-            const key = await uploadStorageBlob(baseUrl, adminToken, blobBytes, row, keyPrefix);
-
-            storageIdMap.set(row._id, key);
+            storageIdMap.set(row.id, await uploadStorageBlob(context, blobBytes, row, keyPrefix, logger));
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
-            logger.error(`failed to upload blob ${row._id}: ${message}`);
+            logger.error(`failed to upload blob ${row.id}: ${message}`);
 
             throw error;
         }
     }
 
-    logger.success(`migrated ${String(metadataRows.length)} storage blobs`);
+    logger.success(`migrated ${String(metadataRows.length - skipped)} storage blobs${skipped > 0 ? ` (${String(skipped)} already present)` : ""}`);
 
     return storageIdMap;
 };
 
+/** What a document's storage references resolved to, accumulated across the run. */
+interface StorageRemapReport {
+    /** Storage ids referenced by a document but absent from the migrated map. */
+    dangling: Map<string, string>;
+    /** Number of references rewritten to a content-hash key. */
+    rewritten: number;
+}
+
 /**
- * Rewrite storage references in a document using the storageIdMap.
- * - `{ $storage: id }` objects are auto-rewritten to the content-hash key.
- * - Plain-string columns listed in the mapping are rewritten.
- * - Unmapped storage-id strings are reported (not rewritten).
+ * Rewrite storage references in one document against the `storageId → key` map,
+ * returning the rewritten document plus what the walk found.
+ *
+ * `{ $storage: id }` objects are Convex's self-describing Storage value. They are
+ * unambiguous, so they are rewritten wherever they occur, at any depth. A plain
+ * string is ambiguous against ordinary text, so it is rewritten only where
+ * `lunora/import-convex.json` names its column — or, with no mapping file at all,
+ * wherever it exactly matches a migrated storage id. Anything that looks like a
+ * storage reference but has no migrated blob is recorded as dangling and left
+ * untouched; it is never guessed.
+ *
+ * The walk is recursive because Convex documents nest freely: a storage id in an
+ * array of attachments or inside a nested object is exactly as load-bearing as a
+ * top-level one, and skipping it leaves a reference that resolves to nothing
+ * while the import still reports success.
  */
 const remapStorageReferences = (
     document_: Record<string, unknown>,
     storageIdMap: Map<string, string>,
+    table: string,
     storageColumns?: Record<string, string[]>,
-): Record<string, unknown> => {
-    const remapped: Record<string, unknown> = {};
+): StorageRemapReport & { document: Record<string, unknown> } => {
+    const dangling = new Map<string, string>();
+    let rewritten = 0;
 
-    for (const [key, value] of Object.entries(document_)) {
-        if (value && typeof value === "object" && !Array.isArray(value) && "$storage" in (value as Record<string, unknown>)) {
-            // Auto-rewrite { $storage: id } objects.
-            const storageId = (value as Record<string, unknown>).$storage as string;
-            const mappedKey = storageIdMap.get(storageId);
+    /** `undefined` column = nested position, where only `{ $storage }` is unambiguous. */
+    const isMappedColumn = (column: string | undefined): boolean =>
+        column !== undefined && (storageColumns === undefined || storageColumns[table]?.includes(column) === true);
 
-            remapped[key] = mappedKey ?? value;
-        } else if (typeof value === "string" && storageIdMap.has(value)) {
-            // Plain string that matches a storage id — rewrite to the content-hash key.
-            // Only rewrite if this column is in the mapping (if mapping provided).
-            remapped[key] = !storageColumns || storageColumns[key] ? (storageIdMap.get(value) ?? value) : value;
-        } else {
-            remapped[key] = value;
+    const remapValue = (value: unknown, column: string | undefined): unknown => {
+        if (Array.isArray(value)) {
+            return value.map((entry) => remapValue(entry, column));
         }
-    }
 
-    return remapped;
+        if (value !== null && typeof value === "object") {
+            const record = value as Record<string, unknown>;
+
+            if (typeof record["$storage"] === "string") {
+                const storageId = record["$storage"];
+                const mappedKey = storageIdMap.get(storageId);
+
+                if (mappedKey === undefined) {
+                    dangling.set(storageId, table);
+
+                    return value;
+                }
+
+                rewritten += 1;
+
+                return mappedKey;
+            }
+
+            // Nested objects lose the column context: `storageColumns` addresses
+            // top-level columns, so a plain string deeper than that is ambiguous
+            // and gets reported rather than rewritten.
+            return Object.fromEntries(Object.entries(record).map(([nested, entry]) => [nested, remapValue(entry, undefined)]));
+        }
+
+        if (typeof value === "string" && storageIdMap.has(value)) {
+            if (!isMappedColumn(column)) {
+                dangling.set(value, table);
+
+                return value;
+            }
+
+            rewritten += 1;
+
+            return storageIdMap.get(value) ?? value;
+        }
+
+        return value;
+    };
+
+    const document = Object.fromEntries(Object.entries(document_).map(([column, value]) => [column, remapValue(value, column)]));
+
+    return { dangling, document, rewritten };
 };
 
 /**
@@ -739,42 +988,36 @@ const reportImportOutcome = (
 };
 
 /**
- * Scan a Convex export directory for storage id references and emit a candidate
- * `import-convex.json` mapping file.
+ * Scan a Convex export for plain-string columns whose values exactly match a
+ * `_storage` id, and write the candidate `lunora/import-convex.json` the import
+ * consumes.
+ *
+ * Exact-matching is a *candidate* detector, not an authority: a column of user
+ * text could in principle contain a storage id, so the operator confirms the
+ * file before the import rewrites anything. An existing mapping file is never
+ * overwritten — the candidate is printed instead.
  */
-/* eslint-disable sonarjs/cognitive-complexity -- the scan function iterates over tables and rows; complexity is justified */
-const scanStorageColumns = async (snapshot: ConvexSnapshot, convexTables: ReadonlyArray<ConvexSnapshotTable>, logger: Logger): Promise<void> => {
-    const storageIds = new Set<string>();
+/* eslint-disable sonarjs/cognitive-complexity -- the scan walks every table and every row; the branches are the scan */
+const scanStorageColumns = async (
+    snapshot: ConvexSnapshot,
+    convexTables: ReadonlyArray<ConvexSnapshotTable>,
+    cwd: string,
+    logger: Logger,
+): Promise<ImportConvexMapping | undefined> => {
     const storageColumns: Record<string, string[]> = {};
     const storageTable = convexTables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
-    // Read _storage metadata to get the set of valid storage ids.
     if (storageTable === undefined) {
-        logger.warn("no _storage metadata found — cannot scan for storage columns");
-        return;
+        logger.error("no `_storage` table in this export — re-export with `npx convex export --include-file-storage`");
+
+        return undefined;
     }
 
-    try {
-        const metadataText = await readSnapshotText(snapshot, storageTable);
-
-        for (const line of metadataText.split("\n")) {
-            const trimmed = line.trim();
-
-            if (trimmed.length === 0) {
-                continue;
-            }
-
-            const storageDocument = JSON.parse(trimmed) as { _id: string };
-            storageIds.add(storageDocument._id);
-        }
-    } catch {
-        logger.warn("no _storage metadata found — cannot scan for storage columns");
-        return;
-    }
+    const metadataRows = await readStorageMetadata(snapshot, storageTable, logger);
+    const storageIds = new Set(metadataRows.map((row) => row.id));
 
     logger.info(`found ${String(storageIds.size)} storage ids`);
 
-    // Scan all table documents for storage id references.
     for (const tableEntry of convexTables) {
         if (tableEntry.table === CONVEX_STORAGE_TABLE) {
             continue;
@@ -788,27 +1031,59 @@ const scanStorageColumns = async (snapshot: ConvexSnapshot, convexTables: Readon
                 continue;
             }
 
+            let row: Record<string, unknown>;
+
             try {
-                const row = JSON.parse(line) as Record<string, unknown>;
-                const { table } = tableEntry;
+                row = JSON.parse(line) as Record<string, unknown>;
+            } catch (error: unknown) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `${tableEntry.table}/documents.jsonl: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
+                    {
+                        cause: error,
+                    },
+                );
+            }
 
-                for (const [key, value] of Object.entries(row)) {
-                    if (typeof value === "string" && storageIds.has(value)) {
-                        storageColumns[table] ??= [];
+            const { table } = tableEntry;
 
-                        if (!storageColumns[table].includes(key)) {
-                            storageColumns[table].push(key);
-                        }
+            for (const [column, value] of Object.entries(row)) {
+                const matches =
+                    typeof value === "string"
+                        ? storageIds.has(value)
+                        : Array.isArray(value) && value.some((entry) => typeof entry === "string" && storageIds.has(entry));
+
+                if (matches) {
+                    storageColumns[table] ??= [];
+
+                    if (!storageColumns[table].includes(column)) {
+                        storageColumns[table].push(column);
                     }
                 }
-            } catch {
-                // Skip invalid JSON lines.
             }
         }
     }
 
-    logger.info("candidate storage column mapping:");
-    logger.info(JSON.stringify({ keyPrefix: "", storageColumns }, undefined, 2));
+    const mapping: ImportConvexMapping = { keyPrefix: "", storageColumns };
+    const mappingPath = join(cwd, IMPORT_CONVEX_MAPPING_FILE);
+    const serialized = `${JSON.stringify(mapping, undefined, 4)}\n`;
+
+    await mkdir(join(cwd, "lunora"), { recursive: true });
+
+    try {
+        // `wx` so a confirmed mapping is never clobbered by a re-scan.
+        await writeFile(mappingPath, serialized, { encoding: "utf8", flag: "wx" });
+        logger.success(`wrote candidate mapping to ${mappingPath} — review it, then re-run without --scan`);
+    } catch (error: unknown) {
+        if ((error as { code?: string }).code !== "EEXIST") {
+            throw error;
+        }
+
+        logger.warn(`${mappingPath} already exists — leaving it untouched. Candidate mapping:`);
+        logger.info(serialized);
+    }
+
+    return mapping;
 };
 /* eslint-enable sonarjs/cognitive-complexity */
 
@@ -842,7 +1117,11 @@ const countConvexSourceRows = async (
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
-            logger.warn(`failed to count ${tableEntry.table} source rows: ${message}`);
+            // A source table we cannot count is a source table we cannot verify;
+            // reporting 0 here would let `--verify` pass on an unread table.
+            logger.error(`failed to count ${tableEntry.table} source rows: ${message}`);
+
+            throw error;
         }
 
         counts[tableEntry.table] = count;
@@ -859,15 +1138,6 @@ const countConvexSourceRows = async (
  */
 /* eslint-disable sonarjs/cognitive-complexity -- the import command orchestrates several phases; extracted helpers keep each small */
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
-    const request = await resolveImportRequest(options);
-
-    if (request === undefined) {
-        return { body: undefined, code: 1, inserted: 0 };
-    }
-
-    const { fetchImpl, requestUrl, token } = request;
-    const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
-
     const source = await resolveImportSource(options);
 
     if (source.error) {
@@ -875,52 +1145,67 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     }
 
     const { convexSnapshot, convexTables } = source;
+    const cwd = options.cwd ?? process.cwd();
 
-    // W3: scan for storage columns and emit candidate mapping.
-    if (options.scan && convexTables && convexSnapshot) {
-        await scanStorageColumns(convexSnapshot, convexTables, options.logger);
+    // Every storage-aware flag needs the export's `_storage` sidecar. A plain
+    // NDJSON source cannot supply one, and silently ignoring the flag is how an
+    // operator ends up believing blobs migrated when none did.
+    if (convexSnapshot === undefined || convexTables === undefined) {
+        for (const [flag, enabled] of [
+            ["--scan", options.scan],
+            ["--verify", options.verify],
+            ["--with-storage", options.withStorage],
+        ] as const) {
+            if (enabled === true) {
+                options.logger.error(`${flag} requires a Convex export directory or .zip snapshot — ${options.file} is not one.`);
 
-        return { body: undefined, code: 0, inserted: 0 };
+                return { body: undefined, code: 1, inserted: 0 };
+            }
+        }
     }
+
+    // W3: scan for storage columns and write the candidate mapping. Scan-only —
+    // it never imports, so it runs before the worker/token preconditions: the
+    // operator inspects an export long before a target exists.
+    if (options.scan === true && convexTables && convexSnapshot) {
+        const scanned = await scanStorageColumns(convexSnapshot, convexTables, cwd, options.logger);
+
+        return { body: scanned, code: scanned === undefined ? 1 : 0, inserted: 0 };
+    }
+
+    const request = await resolveImportRequest(options);
+
+    if (request === undefined) {
+        return { body: undefined, code: 1, inserted: 0 };
+    }
+
+    const { baseUrl, fetchImpl, requestUrl, token } = request;
+    const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 
     // Phase 1 (W2): migrate Convex `_storage` blobs when `--with-storage` is set.
     let storageIdMap: Map<string, string> | undefined;
-    let storageColumns: Record<string, string[]> | undefined;
+    let mapping: ImportConvexMapping | undefined;
 
-    // W3: read import-convex.json mapping file if it exists.
-    if (options.withStorage && options.cwd) {
-        const mapping = await readImportConvexMapping(options.cwd, options.logger);
-
-        storageColumns = mapping?.storageColumns;
-    }
-
-    if (options.withStorage && convexTables && convexSnapshot) {
-        const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
-
-        if (baseUrl === undefined) {
-            return { body: undefined, code: 1, inserted: 0 };
-        }
-
-        const { token: adminToken } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
-
-        if (!adminToken) {
-            options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
-
-            return { body: undefined, code: 1, inserted: 0 };
-        }
+    if (options.withStorage === true && convexTables && convexSnapshot) {
+        mapping = await readImportConvexMapping(cwd, options.logger);
 
         const storageTableEntry = convexTables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
         if (storageTableEntry === undefined) {
-            options.logger.error("--with-storage requires a Convex export with a `_storage` metadata table — none found.");
+            options.logger.error(
+                "--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.",
+            );
 
             return { body: undefined, code: 1, inserted: 0 };
         }
 
-        storageIdMap = await migrateStorageBlobs(baseUrl, adminToken, convexSnapshot, storageTableEntry, options.logger);
+        storageIdMap = await migrateStorageBlobs({ baseUrl, fetchImpl, token }, convexSnapshot, storageTableEntry, mapping?.keyPrefix ?? "", options.logger);
 
         options.logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
     }
+
+    const storageColumns = mapping?.storageColumns;
+    const remapReport: StorageRemapReport = { dangling: new Map<string, string>(), rewritten: 0 };
 
     options.logger.info(
         convexTables
@@ -1020,21 +1305,32 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         lineNumber += 1;
 
         if (options.table === undefined) {
-            // W3: remap storage references in Convex export documents.
-            if (storageIdMap && (trimmed.includes("_storage") || trimmed.includes("$storage"))) {
-                try {
-                    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+            // W3: remap storage references in Convex export documents. Every
+            // envelope is parsed — a storage id can sit in a plain column, which
+            // no substring of the line announces.
+            if (storageIdMap !== undefined) {
+                const parsed = JSON.parse(trimmed) as Record<string, unknown>;
 
-                    if (parsed.doc && typeof parsed.doc === "object" && !Array.isArray(parsed.doc)) {
-                        const storageDocument = parsed.doc as Record<string, unknown>;
-
-                        parsed.doc = remapStorageReferences(storageDocument, storageIdMap, storageColumns);
-                        batch.push(JSON.stringify({ doc: parsed.doc, table: typeof parsed.table === "string" ? parsed.table : "" }));
-                        return;
-                    }
-                } catch {
-                    // Not valid JSON or not a Convex doc — pass through.
+                if (typeof parsed["table"] !== "string") {
+                    throw new LunoraError("INTERNAL", `line ${String(lineNumber)}: import envelope is missing a string \`table\``);
                 }
+
+                if (parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
+                    // Rebuild from the parsed envelope so any field beyond
+                    // `{ table, doc }` survives the rewrite.
+                    const remap = remapStorageReferences(parsed["doc"] as Record<string, unknown>, storageIdMap, parsed["table"], storageColumns);
+
+                    parsed["doc"] = remap.document;
+                    remapReport.rewritten += remap.rewritten;
+
+                    for (const [storageId, sourceTable] of remap.dangling) {
+                        remapReport.dangling.set(storageId, sourceTable);
+                    }
+                }
+
+                batch.push(JSON.stringify(parsed));
+
+                return;
             }
 
             batch.push(trimmed);
@@ -1055,11 +1351,8 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             throw new LunoraError("INTERNAL", `invalid JSON on line ${String(lineNumber)}: ${message}`, { cause: error });
         }
 
-        // W3: remap storage references in the document.
-        if (storageIdMap && parsedDocument && typeof parsedDocument === "object" && !Array.isArray(parsedDocument)) {
-            parsedDocument = remapStorageReferences(parsedDocument as Record<string, unknown>, storageIdMap, storageColumns);
-        }
-
+        // No storage remap on this path: `--table` is rejected alongside a Convex
+        // export (`resolveImportSource`), and the map only exists for one.
         batch.push(JSON.stringify({ doc: parsedDocument, table: options.table }));
     };
 
@@ -1117,13 +1410,46 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         }
     }
 
+    // W4: dangling-storage report. A reference the migration could not resolve is
+    // listed with the table it came from; under `--verify` it also fails the run,
+    // because a "successful" import full of unresolvable file references is the
+    // exact outcome the blob migration exists to prevent.
+    if (storageIdMap !== undefined) {
+        options.logger.info(`storage refs: ${String(remapReport.rewritten)} rewritten, ${String(remapReport.dangling.size)} unresolved`);
+
+        for (const [storageId, table] of [...remapReport.dangling].slice(0, DANGLING_REPORT_LIMIT)) {
+            options.logger.warn(
+                `dangling storage reference in ${table}: ${storageId} (add its column to ${IMPORT_CONVEX_MAPPING_FILE}, or re-export with the blob)`,
+            );
+        }
+
+        if (remapReport.dangling.size > DANGLING_REPORT_LIMIT) {
+            options.logger.warn(`… and ${String(remapReport.dangling.size - DANGLING_REPORT_LIMIT)} more dangling storage references`);
+        }
+
+        if (options.verify === true && remapReport.dangling.size > 0) {
+            options.logger.error(`verify: ${String(remapReport.dangling.size)} storage reference(s) resolved to no migrated blob`);
+        }
+    }
+
+    const danglingFailure = options.verify === true && remapReport.dangling.size > 0;
+
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
-    const body = { conflicts, errors, inserted, received, ...(warnings.length > 0 ? { warnings } : {}) };
+    const body = {
+        conflicts,
+        errors,
+        inserted,
+        received,
+        ...(storageIdMap === undefined
+            ? {}
+            : { storage: { blobs: storageIdMap.size, dangling: [...remapReport.dangling.keys()], rewritten: remapReport.rewritten } }),
+        ...(warnings.length > 0 ? { warnings } : {}),
+    };
 
     options.logger.info(JSON.stringify(body, undefined, 2));
     reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, insertedTotal, received, warnings });
 
-    return { body, code: errors.length > 0 || parityMismatch > 0 ? 1 : 0, inserted: insertedTotal };
+    return { body, code: errors.length > 0 || parityMismatch > 0 || danglingFailure ? 1 : 0, inserted: insertedTotal };
 };
 /* eslint-enable sonarjs/cognitive-complexity */
 

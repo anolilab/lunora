@@ -27,6 +27,19 @@ const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 
 /**
+ * Body budget for an object upload, declared by this route the way the KV value
+ * PUT declares its own (`KV_VALUE_MAX_BODY_BYTES`). The shared 1 MiB default is
+ * a JSON-request cap; a blob migration (`lunora import --with-storage`) moves
+ * real files, and a 1 MiB ceiling would push nearly every photo onto the
+ * signed-URL fallback. 32 MiB is what the isolate can buffer and digest
+ * comfortably inside the Workers memory limit.
+ */
+const STORAGE_UPLOAD_MAX_BODY_BYTES: number = 32 * 1_048_576;
+
+/** Methods `/_lunora/admin/storage/url` will sign. Anything else is a 400, not a signed `DELETE`. */
+const SIGNABLE_METHODS = new Set(["GET", "PUT"]);
+
+/**
  * Lowercase hex-encode an `ArrayBuffer` — WebCrypto digest output (base16) as
  * the storage importer's `sha256` surface expects it.
  */
@@ -49,8 +62,8 @@ interface StorageAdminRouteDeps {
     parsePaging: (request: Request) => { limit?: number; offset?: number };
     /** Read a query param, collapsing missing/empty to `undefined`. */
     queryParameter: (url: URL, name: string) => string | undefined;
-    /** Read the request body as bytes under the runtime's size limit (for upload). */
-    readBodyBytes: (request: Request) => Promise<ArrayBuffer>;
+    /** Read the request body as bytes under the given size limit (defaults to the runtime's shared cap). */
+    readBodyBytes: (request: Request, limit?: number) => Promise<ArrayBuffer>;
     /** Admin-gate + require a configured option, else throw the `*_NOT_CONFIGURED` error. */
     requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
     /** The storage admin options off `WorkerOptions`. */
@@ -132,7 +145,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         // The entry-point `Content-Length` guard already rejects an oversized
         // declared length for PUT; reading the buffer here is the authoritative
         // size check the runtime owns (R2 enforces its own ceilings downstream).
-        const body = await readBodyBytes(request);
+        const body = await readBodyBytes(request, STORAGE_UPLOAD_MAX_BODY_BYTES);
         const headerContentType = request.headers.get("content-type");
         const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
 
@@ -206,11 +219,19 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
         const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
         // Optional HTTP method for the presigned URL — the importer uses `PUT` for
-        // large blobs that exceed the worker's body-size cap.
-        const method = queryParameter(url, "method") as "GET" | "PUT" | undefined;
+        // large blobs that exceed the worker's body-size cap. Validated against an
+        // allowlist rather than cast: the value is caller-supplied and
+        // `buildSignedUrl` signs whatever method string it is handed, so an
+        // unchecked `?method=DELETE` would mint a signed destructive URL.
+        const methodRaw = queryParameter(url, "method");
+
+        if (methodRaw !== undefined && !SIGNABLE_METHODS.has(methodRaw)) {
+            throw new LunoraError("Storage URL `method` must be GET or PUT", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const method = methodRaw as "GET" | "PUT" | undefined;
         const contentType = queryParameter(url, "contentType");
         const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), contentType, expiresInSeconds, method });
-
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -223,4 +244,4 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 };
 
 export type { StorageAdminRouteDeps };
-export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_URL_PATH };
+export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH };
