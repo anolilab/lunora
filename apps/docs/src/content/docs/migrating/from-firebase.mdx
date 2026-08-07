@@ -288,13 +288,20 @@ const db = getFirestore();
 for (const collection of ["users", "posts", "comments"]) {
     const snapshot = await db.collection(collection).get();
     const documents = snapshot.docs.map((document_) => ({
-        fields: document_._fieldsProto, // the typed-value encoding
+        fields: document_._fieldsProto, // the typed-value encoding (see the note below)
         name: document_.ref.path,
     }));
 
     writeFileSync(`firestore-dump/${collection}.json`, JSON.stringify({ documents }));
 }
 ```
+
+<Callout type="info">
+    `_fieldsProto` is the Admin SDK's own representation and is *almost* the REST encoding, not exactly it: a timestamp comes out as the protobuf
+    `{ seconds, nanos }` rather than an RFC-3339 string, and bytes as a `Buffer` rather than base64. The importer accepts both spellings, so this
+    script's output reads as-is — but if you write your own dumper against the REST API instead, you will see the string/base64 forms and those
+    read too.
+</Callout>
 
 The importer also accepts a plain `{ "<docId>": { …fields } }` object (what the
 common community export tools write) and NDJSON with one document per line, so

@@ -372,6 +372,36 @@ describe("lunora import --from firebase", () => {
         rmSync(workDir, { force: true, recursive: true });
     });
 
+    it("decodes the Admin SDK's `_fieldsProto` encoding, not just REST", async () => {
+        expect.assertions(2);
+
+        // `document._fieldsProto` — what the documented dump script reads — holds
+        // a protobuf Timestamp (`{ seconds, nanos }`) and a Buffer, where REST
+        // holds an RFC-3339 string and base64. Accepting only REST made that
+        // script fail on every collection with a `createdAt`.
+        const root = writeDump({
+            "events.json": JSON.stringify({
+                documents: [
+                    {
+                        fields: {
+                            at: { timestampValue: { nanos: 500_000_000, seconds: "1704164645" } },
+                            blob: { bytesValue: { data: [72, 105], type: "Buffer" } },
+                        },
+                        name: "projects/p/databases/(default)/documents/events/e1",
+                    },
+                ],
+            }),
+        });
+
+        writeMapping("firebase", {});
+
+        const { imported } = await runImport(root, "firebase");
+        const document_ = imported.find((row) => row.table === "events")?.doc as { at: number; blob: string };
+
+        expect(document_.at).toBe(1_704_164_645_500);
+        expect(document_.blob).toBe("SGk=");
+    });
+
     it("decodes every Firestore typed value and takes `_id` from the resource path", async () => {
         expect.assertions(1);
 

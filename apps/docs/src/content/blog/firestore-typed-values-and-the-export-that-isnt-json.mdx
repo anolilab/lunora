@@ -62,10 +62,17 @@ already use. It looks like this:
 ```
 
 Decoding _that_ is the genuinely fiddly work, and it's the part worth owning.
-Producing it is a fifteen-line script against the Admin SDK, which the guide now
-includes. So the importer targets the encoding and documents how to get it —
-rather than shipping a protobuf decoder to reach the same values by a harder
-road.
+Producing it is a short script against the Admin SDK, which the guide includes.
+So the importer targets the encoding and documents how to get it — rather than
+shipping a protobuf decoder to reach the same values by a harder road.
+
+With one wrinkle worth naming, because it cost us a round: the Admin SDK's
+`_fieldsProto` is _almost_ that shape, not exactly it. `Timestamp.toProto()`
+returns `{ timestampValue: { seconds, nanos } }`, a protobuf Timestamp — where
+REST returns an RFC-3339 string — and bytes arrive as a `Buffer` rather than
+base64. A decoder that accepted only the REST spelling would reject the very
+dump the guide tells you to produce, on the first document with a `createdAt`.
+The importer accepts both spellings for exactly that reason.
 
 The plan was wrong about the container and right about the contents. Correcting
 it was worth more than following it.

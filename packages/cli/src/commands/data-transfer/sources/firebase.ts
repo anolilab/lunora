@@ -15,8 +15,10 @@
  * - a directory of `<collection>.json` / `<collection>.ndjson` files, and
  * - a single JSON file of `{ "<collection>": { "<docId>": { …fields } } }`.
  */
+import { createReadStream } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { createInterface } from "node:readline";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -31,7 +33,7 @@ import { applyReshape } from "./reshape";
 interface FirestoreValue {
     arrayValue?: { values?: FirestoreValue[] };
     booleanValue?: boolean;
-    bytesValue?: string;
+    bytesValue?: { data?: number[]; type?: string } | number[] | string;
     doubleValue?: number | string;
     geoPointValue?: { latitude?: number; longitude?: number };
     integerValue?: number | string;
@@ -39,7 +41,7 @@ interface FirestoreValue {
     nullValue?: null;
     referenceValue?: string;
     stringValue?: string;
-    timestampValue?: string;
+    timestampValue?: { nanos?: number; seconds?: number | string } | string;
 }
 
 /** The document id is the last segment of `projects/…/documents/<collection>/<id>`. */
@@ -49,6 +51,25 @@ const documentIdFromName = (name: string): string => {
     const segments = name.split("/").filter((segment) => segment.length > 0);
 
     return segments[segments.length - 1] ?? name;
+};
+
+/** Protobuf `Timestamp` → epoch milliseconds; `NaN` when the parts are unusable. */
+const protoTimestampToMs = (timestamp: { nanos?: number; seconds?: number | string }): number => {
+    const seconds = Number(timestamp.seconds ?? 0);
+    const nanos = Number(timestamp.nanos ?? 0);
+
+    return Number.isFinite(seconds) && Number.isFinite(nanos) ? seconds * 1000 + Math.floor(nanos / 1_000_000) : Number.NaN;
+};
+
+/** A JSON-rendered Buffer (`{ type: "Buffer", data }`) or a byte array → base64. */
+const bytesToBase64 = (value: { data?: number[]; type?: string } | number[], path: string): string => {
+    const bytes = Array.isArray(value) ? value : value.data;
+
+    if (!Array.isArray(bytes)) {
+        throw new LunoraError("INTERNAL", `${path}: \`bytesValue\` ${JSON.stringify(value)} is neither base64 nor a byte array`);
+    }
+
+    return Buffer.from(bytes).toString("base64");
 };
 
 /**
@@ -86,26 +107,35 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     }
 
     if (value.timestampValue !== undefined) {
-        // Truncates to milliseconds, and Firestore stores microseconds. That is
-        // deliberate rather than overlooked: the target column is a Lunora
-        // timestamp, which IS milliseconds, and returning the RFC-3339 string
-        // for the sub-millisecond rows would make the column's type depend on
-        // its data — number for most rows, string for a few — which no schema
-        // can describe. An app that needs the original precision should carry it
-        // in its own string column.
-        const parsed = Date.parse(value.timestampValue);
+        // Two encodings reach here. REST (`documents.list`) writes RFC-3339; the
+        // Admin SDK's `_fieldsProto` — what the documented dump script reads —
+        // writes the protobuf Timestamp, `{ seconds, nanos }`. Accepting only
+        // the first made that script fail on every collection with a `createdAt`.
+        //
+        // Both truncate to milliseconds, and Firestore stores microseconds. That
+        // is deliberate rather than overlooked: the target column is a Lunora
+        // timestamp, which IS milliseconds, and returning the RFC-3339 string for
+        // the sub-millisecond rows would make the column's type depend on its
+        // data — number for most rows, string for a few — which no schema can
+        // describe. An app that needs the rest should carry it in its own column.
+        const parsed = typeof value.timestampValue === "string" ? Date.parse(value.timestampValue) : protoTimestampToMs(value.timestampValue);
 
         if (Number.isNaN(parsed)) {
-            throw new LunoraError("INTERNAL", `${path}: \`timestampValue\` ${JSON.stringify(value.timestampValue)} is not an RFC-3339 timestamp`);
+            throw new LunoraError(
+                "INTERNAL",
+                `${path}: \`timestampValue\` ${JSON.stringify(value.timestampValue)} is neither an RFC-3339 string nor a \`{ seconds, nanos }\` protobuf timestamp`,
+            );
         }
 
         return parsed;
     }
 
     if (value.bytesValue !== undefined) {
-        // Already base64 in the wire encoding, and base64 is what survives the
-        // NDJSON hop unchanged.
-        return value.bytesValue;
+        // Base64 in the REST encoding, and base64 is what survives the NDJSON hop
+        // unchanged. The Admin SDK holds a Buffer instead, which `JSON.stringify`
+        // renders as `{ type: "Buffer", data: [...] }` — decoded back to base64
+        // here so both dump shapes land on the same value.
+        return typeof value.bytesValue === "string" ? value.bytesValue : bytesToBase64(value.bytesValue, path);
     }
 
     if (value.geoPointValue !== undefined) {
@@ -243,29 +273,48 @@ const listFirestoreCollections = async (directory: string, mapping: ImportSource
         async (path) => readdir(path, { withFileTypes: true }),
     );
 
+/**
+ * Every document in an `.ndjson` collection file, one line at a time.
+ *
+ * The container shapes below (`[...]`, `{ documents: [...] }`, `{ id: {…} }`)
+ * are single JSON values and have to be parsed whole. NDJSON does not: reading
+ * the file into a string and then building an array of every document held two
+ * full copies of a collection that can be tens of gigabytes.
+ */
+const streamNdjsonDocuments = async function* (file: string): AsyncGenerator<{ fallbackId?: string; raw: Record<string, unknown> }> {
+    const lines = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(file, "utf8") });
+    let lineNumber = 0;
+
+    try {
+        for await (const line of lines) {
+            lineNumber += 1;
+
+            const trimmed = line.trim();
+
+            if (trimmed.length === 0) {
+                continue;
+            }
+
+            try {
+                yield { raw: JSON.parse(trimmed) as Record<string, unknown> };
+            } catch (error: unknown) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `${basename(file)} line ${String(lineNumber)}: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
+                    {
+                        cause: error,
+                    },
+                );
+            }
+        }
+    } finally {
+        lines.close();
+    }
+};
+
 /** Every document in one collection file, in either container shape. */
 const readCollectionDocuments = async (file: string): Promise<{ fallbackId?: string; raw: Record<string, unknown> }[]> => {
     const text = await readFile(file, "utf8");
-
-    if (file.toLowerCase().endsWith(".ndjson")) {
-        return text
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.length > 0)
-            .map((line, index) => {
-                try {
-                    return { raw: JSON.parse(line) as Record<string, unknown> };
-                } catch (error: unknown) {
-                    throw new LunoraError(
-                        "INTERNAL",
-                        `${basename(file)} line ${String(index + 1)}: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
-                        {
-                            cause: error,
-                        },
-                    );
-                }
-            });
-    }
 
     let parsed: unknown;
 
@@ -301,11 +350,13 @@ const readCollectionDocuments = async (file: string): Promise<{ fallbackId?: str
 
 /** Decode one collection file into documents. */
 const readFirestoreCollection = async function* (dumpFile: DumpFile, mapping: ImportSourceMapping | undefined): AsyncGenerator<Record<string, unknown>> {
-    const documents = await readCollectionDocuments(dumpFile.file);
     const tableMapping = mapping?.tables?.[dumpFile.table];
+    const documents = dumpFile.file.toLowerCase().endsWith(".ndjson") ? streamNdjsonDocuments(dumpFile.file) : await readCollectionDocuments(dumpFile.file);
+    let index = 0;
 
-    for (const [index, entry] of documents.entries()) {
+    for await (const entry of documents) {
         yield toDocument(entry.raw, entry.fallbackId, tableMapping, `${dumpFile.table}[${String(index)}]`);
+        index += 1;
     }
 };
 
