@@ -161,9 +161,9 @@ const remapStorageReferences = (
      */
     const isMappedColumn = (column: string): boolean => storageColumns?.[table]?.includes(column) === true;
 
-    const remapValue = (value: unknown, column: string): unknown => {
+    const remapValue = (value: unknown, column: string, topLevel = false): unknown => {
         if (Array.isArray(value)) {
-            return value.map((entry) => remapValue(entry, column));
+            return value.map((entry) => remapValue(entry, column, topLevel));
         }
 
         if (value !== null && typeof value === "object") {
@@ -199,10 +199,24 @@ const remapStorageReferences = (
             return storageIdMap.get(value) ?? value;
         }
 
+        // A string in a column the operator DECLARED to hold storage ids, which
+        // resolves to no migrated blob — the blob was deleted between the last
+        // write and the export, or the export omitted it. The self-describing
+        // form gets this check; the declared column is the one the mapping file
+        // exists to serve, so it needs it more.
+        //
+        // Only at the top level: the walk descends into mapped object columns,
+        // and flagging every unresolvable string underneath one would bury the
+        // real finding in noise. `storageColumns` addresses columns, so that is
+        // the depth it can speak about.
+        if (topLevel && typeof value === "string" && value.length > 0 && isMappedColumn(column) && storageColumns !== undefined) {
+            unmigrated.push({ column, storageId: value, table });
+        }
+
         return value;
     };
 
-    const document = Object.fromEntries(Object.entries(document_).map(([column, value]) => [column, remapValue(value, column)]));
+    const document = Object.fromEntries(Object.entries(document_).map(([column, value]) => [column, remapValue(value, column, true)]));
 
     return { ambiguous, document, rewritten, unmigrated };
 };

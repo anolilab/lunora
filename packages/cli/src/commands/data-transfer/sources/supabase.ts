@@ -20,8 +20,56 @@ import { readAuthDump } from "./auth-reader";
 import type { ImportSourceMapping, TableMapping } from "./mapping";
 import { applyReshape } from "./reshape";
 
+/**
+ * Supabase keeps its auth schema in `auth.*` tables. A dump of one is never
+ * application data, and it carries live credential material — the bcrypt hash
+ * plus single-use `recovery_token`, `confirmation_token`, `email_change_token_*`
+ * and `reauthentication_token` values.
+ *
+ * Excluding these by *shape* rather than by what a mapping happens to name is
+ * the point: the mapping is optional, so keying the exclusion off it meant a
+ * dump imported without one sent every hash and reset token over the wire as an
+ * ordinary table row.
+ */
+const AUTH_SCHEMA_PREFIX = "auth.";
+
+/**
+ * Columns that are credential material in any table. A row carrying one is
+ * refused rather than filtered, because its presence means the file is an auth
+ * dump the exclusions did not catch — and quietly dropping the column would hide
+ * that.
+ */
+const CREDENTIAL_COLUMNS = new Set([
+    "confirmation_token",
+    "email_change_token_current",
+    "email_change_token_new",
+    "encrypted_password",
+    "password",
+    "password_hash",
+    "passwordhash",
+    "reauthentication_token",
+    "recovery_token",
+    "salt",
+]);
+
 /** Postgres `COPY … WITH (FORMAT text)` writes NULL as `\N`; CSV mode writes it unquoted-empty. */
 const TEXT_FORMAT_NULL = String.raw`\N`;
+
+/**
+ * Parse Postgres CSV, distinguishing NULL from the empty string the way `COPY`
+ * encodes them: an *unquoted* empty field is NULL, a quoted `""` is a genuine
+ * empty string, and `\N` is NULL in the text format. Shared with the auth
+ * reader — a second copy of this callback had already drifted, losing the `\N`
+ * case and turning null emails into the literal string "\N".
+ */
+const castPostgresCsv = (value: string, context: { header: boolean; quoting: boolean }): null | string => {
+    if (context.header) {
+        return value;
+    }
+
+    // eslint-disable-next-line unicorn/no-null -- a SQL NULL is `null`; `undefined` would drop the column from the row
+    return (!context.quoting && value.length === 0) || value === TEXT_FORMAT_NULL ? null : value;
+};
 
 /** One `<table>.csv` in a Supabase dump directory. */
 interface SupabaseTableFile {
@@ -44,14 +92,20 @@ const listSupabaseTables = async (directory: string, mapping: ImportSourceMappin
         throw new LunoraError("INTERNAL", `${directory} is not a readable directory of Supabase CSV exports`);
     }
 
-    // The auth dumps are NOT application tables. Importing `auth.users.csv` as a
-    // table would carry `encrypted_password` straight into the target as an
-    // ordinary column — the exact thing "passwords are never migrated" forbids.
+    // The auth dumps are NOT application tables — see AUTH_SCHEMA_PREFIX. Both
+    // the mapping-named files and anything in the `auth.` schema are excluded,
+    // because the mapping is optional and the exclusion must not be.
     const authFiles = new Set(
         [mapping?.auth?.file, mapping?.auth?.identitiesFile].filter((file): file is string => file !== undefined).map((file) => basename(file)),
     );
     const csvFiles = entries
-        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".csv") && !authFiles.has(entry.name))
+        .filter(
+            (entry) =>
+                entry.isFile() &&
+                entry.name.toLowerCase().endsWith(".csv") &&
+                !authFiles.has(entry.name) &&
+                !entry.name.toLowerCase().startsWith(AUTH_SCHEMA_PREFIX),
+        )
         .map((entry) => entry.name);
     const claimed = new Map<string, string>();
 
@@ -85,12 +139,19 @@ const listSupabaseTables = async (directory: string, mapping: ImportSourceMappin
  * survive without a second remapping pass, exactly as the Convex importer relies
  * on.
  */
-const toDocument = (row: Record<string, string | null>, tableMapping: TableMapping | undefined): Record<string, unknown> => {
+const toDocument = (row: Record<string, string | null>, tableMapping: TableMapping | undefined, table: string): Record<string, unknown> => {
     const idColumn = tableMapping?.idColumn ?? "id";
     const types = tableMapping?.types ?? {};
     const document: Record<string, unknown> = {};
 
     for (const [column, raw] of Object.entries(row)) {
+        if (CREDENTIAL_COLUMNS.has(column.toLowerCase())) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${table}.${column} is credential material — this looks like an auth dump being imported as a table. Name it under \`auth\` in the mapping instead; passwords are never migrated.`,
+            );
+        }
+
         const kind = types[column];
         const value = kind === undefined ? raw : applyReshape(column, kind, raw);
 
@@ -103,6 +164,18 @@ const toDocument = (row: Record<string, string | null>, tableMapping: TableMappi
         } else {
             document[column] = value;
         }
+    }
+
+    // Without this the row imports with no `_id`, the target mints a fresh one,
+    // and every foreign key pointing at the old primary key dangles — silently,
+    // with `--verify` green, because the row counts still match. Preserving ids
+    // is the premise the whole importer rests on, so failing to find one is a
+    // hard error rather than a default.
+    if (document["_id"] === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${table}: no \`${idColumn}\` column to preserve as the id (columns present: ${Object.keys(row).join(", ")}). Set \`tables.${table}.idColumn\` in the mapping.`,
+        );
     }
 
     return document;
@@ -124,14 +197,7 @@ const readSupabaseTable = async function* (
 
     const parser = createReadStream(tableFile.file).pipe(
         parse({
-            cast: (value, context) => {
-                if (context.header) {
-                    return value;
-                }
-
-                // eslint-disable-next-line unicorn/no-null -- a SQL NULL is `null`; `undefined` would drop the column from the row
-                return (!context.quoting && value.length === 0) || value === TEXT_FORMAT_NULL ? null : value;
-            },
+            cast: castPostgresCsv,
             columns: true,
             relaxColumnCountLess: false,
             skipEmptyLines: true,
@@ -144,7 +210,7 @@ const readSupabaseTable = async function* (
         for await (const row of parser) {
             lineNumber += 1;
 
-            const document = toDocument(row as Record<string, string | null>, tableMapping);
+            const document = toDocument(row as Record<string, string | null>, tableMapping, tableFile.table);
 
             sourceRows.set(tableFile.table, (sourceRows.get(tableFile.table) ?? 0) + 1);
 
@@ -188,4 +254,4 @@ const readSupabaseExport = async function* (
 };
 
 export type { SupabaseTableFile };
-export { listSupabaseTables, readSupabaseExport, toDocument };
+export { castPostgresCsv, listSupabaseTables, readSupabaseExport, toDocument };

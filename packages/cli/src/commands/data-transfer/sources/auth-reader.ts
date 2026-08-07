@@ -16,26 +16,16 @@ import type { Logger } from "../../../util/logger";
 import type { AuthRows, FirebaseAuthUser, SupabaseAuthUser } from "./auth";
 import { emitAuthRows, fromFirebaseUser, fromSupabaseUser } from "./auth";
 import type { ImportSourceMapping } from "./mapping";
+import { castPostgresCsv } from "./supabase";
 
 /** Resolve a mapping-named file inside the dump directory, by basename only. */
 const resolveDumpFile = (directory: string, file: string): string => join(directory, basename(file));
 
-/** Parse a Supabase auth CSV to rows, treating an unquoted empty field as NULL. */
+/** Parse a Supabase auth CSV, sharing the table reader's NULL handling. */
 const readCsvRows = async (path: string): Promise<Record<string, string | null>[]> => {
     const text = await readFile(path, "utf8");
 
-    return parse(text, {
-        cast: (value, context) => {
-            if (context.header) {
-                return value;
-            }
-
-            // eslint-disable-next-line unicorn/no-null -- a SQL NULL is `null`; `undefined` would drop the column
-            return !context.quoting && value.length === 0 ? null : value;
-        },
-        columns: true,
-        skipEmptyLines: true,
-    });
+    return parse(text, { cast: castPostgresCsv, columns: true, skipEmptyLines: true });
 };
 
 /** Group `auth.identities` rows by the user they belong to. */

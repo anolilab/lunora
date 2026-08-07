@@ -112,8 +112,9 @@ const readStorageMetadata = async (snapshot: ConvexSnapshot, storageTableEntry: 
 /**
  * Body budget of `PUT /_lunora/admin/storage` (mirrors the runtime's
  * `STORAGE_UPLOAD_MAX_BODY_BYTES`). Blobs up to this size take the verified
- * route, which digests the body and refuses to write on a mismatch; above it the
- * body cannot reach the worker at all, so the signed-PUT fallback applies.
+ * route, which digests the body and refuses to write on a mismatch. Above it the
+ * admin route refuses the body, so the signed-PUT fallback applies — see
+ * `uploadLargeBlob` for what that path can and cannot promise.
  */
 const MAX_VERIFIED_UPLOAD_BYTES = 32 * 1_048_576;
 
@@ -211,8 +212,11 @@ const deleteStorageObject = async (context: BlobUploadContext, key: string): Pro
  * Upload a blob too large for the worker's body cap through a signed `PUT` URL,
  * then verify what landed by listing it back.
  *
- * The bytes bypass the worker, so the pre-write digest check is not available
- * here. R2 only records a SHA-256 checksum when the writer supplied one, so the
+ * The signed URL is worker-signed (`@lunora/storage`'s `getSignedUrl`), so the
+ * bytes still flow through an app-served route rather than straight to R2 — and
+ * that route gets the runtime's shared 1 MiB body cap unless the app raises it.
+ * The pre-write digest check is not available here either way, because the
+ * worker never sees this request as an admin upload. R2 only records a SHA-256 checksum when the writer supplied one, so the
  * list may legitimately omit `sha256`; size is always comparable. When the
  * object that landed does not match, it is DELETED before the failure
  * propagates — otherwise the bad object would sit at a content-hash key and a

@@ -76,8 +76,8 @@ const listSupabaseBucketObjects = async (
     bucket: string,
     fetchImpl: StreamingFetchLike,
     prefix = "",
-): Promise<{ name: string; size?: number }[]> => {
-    const objects: { name: string; size?: number }[] = [];
+): Promise<{ contentType?: string; name: string }[]> => {
+    const objects: { contentType?: string; name: string }[] = [];
     let offset = 0;
 
     for (;;) {
@@ -93,7 +93,7 @@ const listSupabaseBucketObjects = async (
                 // eslint-disable-next-line no-await-in-loop -- depth-first walk of the bucket
                 objects.push(...(await listSupabaseBucketObjects(credentials, bucket, fetchImpl, path)));
             } else {
-                objects.push({ name: path, size: entry.metadata?.size });
+                objects.push({ contentType: entry.metadata?.mimetype, name: path });
             }
         }
 
@@ -134,6 +134,7 @@ const listSupabaseObjects = async (credentials: SupabaseStorageCredentials, fetc
             const path = `${bucket.name}/${entry.name}`;
 
             objects.push({
+                contentType: entry.contentType,
                 bytes: async () => {
                     const download = await fetchImpl(
                         `${credentials.url}/storage/v1/object/${encodeURIComponent(bucket.name)}/${encodeObjectPath(entry.name)}`,
@@ -251,6 +252,12 @@ const transferStorageObjects = async (
     const done = await readTransferProgress(options.cwd, options.source, logger);
     const stored = await listStorageObjects(context, options.keyPrefix);
     const alreadyStored = new Map(stored.map((entry) => [entry.key, entry]));
+
+    if (done.size > 0 && stored.length === 0) {
+        logger.warn(
+            `the checkpoint records ${String(done.size)} transferred object(s) but the target holds none under \`${options.keyPrefix}\` — re-transferring (a different deployment, a wiped bucket, or a changed keyPrefix)`,
+        );
+    }
     const report = createProgressReporter(objects.length, logger);
     let completed = 0;
 
@@ -259,7 +266,13 @@ const transferStorageObjects = async (
     for (const entry of objects) {
         const checkpoint = done.get(entry.path);
 
-        if (checkpoint !== undefined) {
+        // The checkpoint says "this run moved it"; the listing says "it is still
+        // there". Both have to hold. A checkpoint carries no record of which
+        // deployment it was written against, so trusting it alone means a resume
+        // against a different or wiped bucket skips every upload and then
+        // rewrites documents to keys that do not exist — exit 0, `--verify`
+        // green, every file reference broken.
+        if (checkpoint !== undefined && alreadyStored.has(checkpoint.key)) {
             transferred.set(entry.path, checkpoint.key);
             completed += 1;
             report(completed);

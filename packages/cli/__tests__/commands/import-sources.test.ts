@@ -257,13 +257,66 @@ describe("lunora import --from supabase", () => {
     it("routes a mapping-named file to its declared table", async () => {
         expect.assertions(1);
 
-        const root = writeDump({ "auth.users.csv": "id,email\nu1,a@b.com\n" });
+        const root = writeDump({ "public.users.csv": "id,email\nu1,a@b.com\n" });
 
-        writeMapping("supabase", { tables: { users: { file: "auth.users.csv" } } });
+        writeMapping("supabase", { tables: { users: { file: "public.users.csv" } } });
 
         const { imported } = await runImport(root, "supabase");
 
         expect(imported[0]?.table).toBe("users");
+    });
+
+    it("never imports an `auth.` dump as a table, even with no mapping file at all", async () => {
+        expect.assertions(3);
+
+        // The exclusion used to be built only from the mapping's `auth` block, so
+        // a dump imported without one sent every hash and live reset token over
+        // the wire as an ordinary row.
+        // eslint-disable-next-line no-secrets/no-secrets -- a CSV header naming credential columns, which is the point of the fixture
+        const authDump = "id,email,encrypted_password,recovery_token\nu1,a@b.com,$2a$10$SECRET,RESETTOKEN\n";
+        const root = writeDump({ "auth.users.csv": authDump, "posts.csv": "id,title\np1,hello\n" });
+
+        const { imported } = await runImport(root, "supabase");
+
+        expect(imported.map((row) => row.table)).toStrictEqual(["posts"]);
+        expect(JSON.stringify(imported)).not.toContain("$2a$10$");
+        expect(JSON.stringify(imported)).not.toContain("RESETTOKEN");
+    });
+
+    it("refuses a credential column reaching the table path by any other route", async () => {
+        expect.assertions(3);
+
+        // Belt and braces: if a credential column ever arrives under a name the
+        // `auth.` exclusion does not catch, refuse the row rather than filtering
+        // the column — a silent filter would hide that the file is an auth dump.
+        // eslint-disable-next-line no-secrets/no-secrets -- a CSV header naming a credential column, which is the point of the fixture
+        const memberDump = "id,email,encrypted_password\nu1,a@b.com,$2a$10$SECRET\n";
+        const root = writeDump({ "members.csv": memberDump });
+
+        await expectAbort(root, "supabase", /credential material/);
+    });
+
+    it("fails loudly when no column matches the declared id, rather than dropping `_id`", async () => {
+        expect.assertions(3);
+
+        // Without this the row imports with no `_id`, the target mints a fresh
+        // one, and every foreign key pointing at the old PK dangles — with
+        // `--verify` green, because the row counts still match.
+        const root = writeDump({ "profiles.csv": "user_id,bio\nu1,hello\n" });
+
+        await expectAbort(root, "supabase", /no `id` column to preserve/);
+    });
+
+    it("preserves a non-default id column when the mapping names it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({ "profiles.csv": "user_id,bio\nu1,hello\n" });
+
+        writeMapping("supabase", { tables: { profiles: { idColumn: "user_id" } } });
+
+        const { imported } = await runImport(root, "supabase");
+
+        expect(imported[0]?.doc).toStrictEqual({ _id: "u1", bio: "hello" });
     });
 
     it("fails when the directory holds no CSV at all", async () => {
@@ -544,8 +597,13 @@ describe("storage transfer with a resumable checkpoint", () => {
         expect(failed.code).toBe(1);
         expect(existsSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"))).toBe(true);
 
-        // A second worker with an empty bucket: anything re-uploaded would show up.
+        // A realistic resume targets the SAME bucket, so the checkpoint and the
+        // listing agree and only the un-transferred objects move.
         const second = storageWorker();
+
+        for (const [key, value] of first.bucket) {
+            second.bucket.set(key, value);
+        }
 
         await runImportCommand({
             cwd: workDir,
@@ -567,6 +625,50 @@ describe("storage transfer with a resumable checkpoint", () => {
         // to move the two the failed run never reached.
         expect(checkpoint).toHaveLength(3);
         expect(second.uploads).toHaveLength(2);
+    });
+
+    it("re-transfers when the checkpoint claims objects the target does not hold", async () => {
+        expect.assertions(2);
+
+        const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
+        const storage = join(workDir, "bucket");
+
+        mkdirSync(storage, { recursive: true });
+        writeFileSync(join(storage, "a.txt"), "content", "utf8");
+
+        const first = storageWorker();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: first.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        // A different deployment, a wiped bucket, or a changed keyPrefix: the
+        // checkpoint says "moved", the target says otherwise. Trusting the
+        // checkpoint alone rewrote documents to keys that do not exist.
+        const fresh = storageWorker();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: fresh.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(fresh.uploads).toStrictEqual([sha256Hex("content")]);
+        expect(fresh.bucket.has(sha256Hex("content"))).toBe(true);
     });
 
     it("survives a torn final checkpoint line rather than stranding the migration", async () => {

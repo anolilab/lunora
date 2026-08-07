@@ -80,14 +80,15 @@ async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnaps
  * Stream a Convex export snapshot as the `{ table, doc }` NDJSON the admin
  * import endpoint accepts.
  *
- * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
- * rewritten to freshly-minted Lunora ids, which forces a two-pass import
- * (insert with FKs nulled, then patch them back through an id map) to survive
- * self-referential cycles. That is unnecessary here: the admin import path
- * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
- * validates only that the value is a string. So every Convex id — including
- * every `v.id()` foreign key already pointing at one — carries across
- * unchanged, and a plain single-pass import is correct.
+ * **No id remapping.** Convex `_id`s are preserved verbatim: the admin import
+ * path inserts with `allowExplicitId`, and `v.id()` validates only that the
+ * value is a string. So every Convex id — including every `v.id()` foreign key
+ * already pointing at one — carries across unchanged, and a single-pass import
+ * is correct.
+ *
+ * The alternative, remapping to freshly-minted ids, forces two passes (insert
+ * with FKs nulled, then patch them back through an id map) to survive
+ * self-referential cycles. None of that is needed here.
  */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* readConvexExport(
@@ -136,8 +137,17 @@ type ImportSource =
     | { kind: "ndjson" }
     | { kind: "supabase"; mapping?: ImportSourceMapping; tables: ReadonlyArray<SupabaseTableFile> };
 
-/** The sources `--from` accepts. `convex` and `ndjson` are also auto-detected. */
-const IMPORT_SOURCE_NAMES = ["convex", "firebase", "ndjson", "supabase"] as const;
+/**
+ * The sources `--from` accepts.
+ *
+ * Only the two that cannot be detected. A Convex snapshot announces itself (a
+ * directory of `<table>/documents.jsonl`, or a `.zip` of one) and anything else
+ * is NDJSON, so naming those would advertise a control this does not implement:
+ * `--from ndjson` against a Convex export would have to either refuse it or
+ * silently import it as Convex, and the second is what an unhonoured flag
+ * actually did.
+ */
+const IMPORT_SOURCE_NAMES = ["firebase", "supabase"] as const;
 
 type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
 
@@ -165,6 +175,19 @@ const resolveForeignSource = async (options: ImportCommandOptions, from: "fireba
     }
 
     const mapping = await readImportSourceMapping(cwd, from, options.logger);
+
+    // Same rule the Convex path applies: verifying row counts while every
+    // storage reference still points at the platform being torn down is worse
+    // than not verifying, because it reports success over broken data.
+    const declaresStorageColumns = Object.values(mapping?.tables ?? {}).some((table) => (table.storageColumns ?? []).length > 0);
+
+    if (options.verify === true && options.withStorage !== true && declaresStorageColumns) {
+        options.logger.error(
+            `--verify with \`storageColumns\` declared requires --with-storage — otherwise every storage path stays unmigrated and only row counts would be checked.`,
+        );
+
+        return { kind: "invalid" };
+    }
 
     if (from === "supabase") {
         return { kind: "supabase", mapping, tables: await listSupabaseTables(options.file, mapping) };
@@ -212,6 +235,47 @@ const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boole
 };
 
 /**
+ * Refuse `--verify` when it could only ever check half the migration.
+ *
+ * Row counts over an export whose file references were never migrated is a
+ * clean bill of health over broken data — the worst possible output, because it
+ * is indistinguishable from a good one.
+ */
+const rejectUnverifiableStorage = async (
+    snapshot: ConvexSnapshot,
+    tables: ReadonlyArray<ConvexSnapshotTable>,
+    options: ImportCommandOptions,
+): Promise<boolean> => {
+    const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (storageTable === undefined) {
+        // No `_storage` at all means the export was taken WITHOUT
+        // `--include-file-storage`. That is the likeliest operator mistake,
+        // and it used to sail straight through: with no storage table the
+        // guard below never fired, no warning was printed, and every
+        // `{ $storage }` reference imported verbatim as a nested object that
+        // resolves to nothing — under a green "verify" line and exit 0.
+        options.logger.error(
+            "--verify cannot check file references: this export has no `_storage` table, so it was taken without `--include-file-storage`. Re-export with that flag and pass --with-storage, or drop --verify.",
+        );
+
+        return true;
+    }
+
+    const blobs = await readStorageMetadata(snapshot, storageTable, options.logger);
+
+    if (blobs.length > 0) {
+        options.logger.error(
+            `--verify on an export carrying ${String(blobs.length)} stored file(s) requires --with-storage — otherwise every file reference stays unmigrated and only row counts would be checked.`,
+        );
+
+        return true;
+    }
+
+    return false;
+};
+
+/**
  * Decide whether the positional path is a Convex export snapshot (directory or
  * `.zip`) or a plain NDJSON file, and check the flags are coherent with that
  * answer. Both halves live here because "what is this source" and "do these
@@ -252,18 +316,8 @@ const resolveImportSource = async (options: ImportCommandOptions, cwd: string): 
     // The check reads the metadata rather than trusting the directory's presence:
     // `--include-file-storage` on an app with no files still emits an empty
     // `_storage/`, and blocking `--verify` over nothing would be noise.
-    const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
-
-    if (options.verify === true && options.withStorage !== true && storageTable !== undefined) {
-        const blobs = await readStorageMetadata(snapshot, storageTable, options.logger);
-
-        if (blobs.length > 0) {
-            options.logger.error(
-                `--verify on an export carrying ${String(blobs.length)} stored file(s) requires --with-storage — otherwise every file reference stays unmigrated and only row counts would be checked.`,
-            );
-
-            return { kind: "invalid" };
-        }
+    if (options.verify === true && options.withStorage !== true && (await rejectUnverifiableStorage(snapshot, tables, options))) {
+        return { kind: "invalid" };
     }
 
     return { kind: "convex", snapshot, tables };

@@ -512,7 +512,7 @@ const runStoragePhase = async (
  */
 const reportImportOutcome = (
     logger: Logger,
-    outcome: { conflicts: number; errorCount: number; insertedTotal: number; received: number; warnings: ReadonlyArray<string> },
+    outcome: { conflicts: number; errorCount: number; failed: boolean; insertedTotal: number; received: number; warnings: ReadonlyArray<string> },
 ): void => {
     for (const warning of outcome.warnings) {
         logger.warn(warning);
@@ -524,9 +524,15 @@ const reportImportOutcome = (
         logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, conflicted, nor reported as errors`);
     }
 
-    logger.success(
-        `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`,
-    );
+    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
+
+    // A run that exits 1 must not end on a green line — the summary is the last
+    // thing an operator reads, and only the exit code disagreed with it.
+    if (outcome.failed) {
+        logger.error(summary);
+    } else {
+        logger.success(summary);
+    }
 };
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
@@ -574,9 +580,10 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
-    // Both sources are `for await`-able chunks of text, so the same buffering +
-    // batching loop below drives either one, and the in-memory cost stays bounded
-    // by `batchSize` rather than by the size of the source.
+    // Every source is a `for await`-able of text, so one drain loop drives all of
+    // them and the POST size stays bounded by `batchSize`. Note that only the
+    // Convex *directory* and Supabase CSV readers stream the source itself; the
+    // ZIP and Firestore readers materialise one table at a time.
     //
     // The Convex reader tallies what it emits into `sourceRows` as it goes; the
     // parity check after the run compares that against what the endpoint says it
@@ -608,10 +615,10 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = buildImportBody(batcher.totals, storageIdMap, remapReport);
 
-    options.logger.info(JSON.stringify(body, undefined, 2));
-    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, insertedTotal, received, warnings });
-
     const failed = streamFailure !== undefined || errors.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+
+    options.logger.info(JSON.stringify(body, undefined, 2));
+    reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, failed, insertedTotal, received, warnings });
 
     return { body, code: failed ? 1 : 0, inserted: insertedTotal };
 };

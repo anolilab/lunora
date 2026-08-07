@@ -1065,6 +1065,65 @@ describe("lunora import --with-storage", () => {
             expect(logs.error.join("\n")).toContain("verify: users inserted 1 of 2 source rows");
         });
 
+        it("refuses when the export was taken without --include-file-storage", async () => {
+            expect.assertions(2);
+
+            // No `_storage` directory at all. This used to sail through: the
+            // guard keyed on the table existing, so with none present nothing
+            // fired, no warning printed, and every `{ $storage }` reference
+            // imported verbatim as an object resolving to nothing — under a
+            // green verify line and exit 0.
+            const root = join(workDir, "no-storage-dir");
+
+            mkdirSync(join(root, "posts"), { recursive: true });
+            writeFileSync(join(root, "posts", "documents.jsonl"), `${JSON.stringify({ _id: "p1", cover: { $storage: "kg_a" } })}\n`, "utf8");
+
+            const worker = fakeWorker();
+            const { logger, logs } = capturingLogger();
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: worker.fetchImpl,
+                file: root,
+                logger,
+                token: "t",
+                url: "http://localhost:8787",
+                verify: true,
+            });
+
+            expect(result.code).toBe(1);
+            expect(logs.error.join("\n")).toContain("--include-file-storage");
+        });
+
+        it("reports an unresolvable id in a column the mapping declared", async () => {
+            expect.assertions(3);
+
+            // The self-describing form had a dangling check; the declared column
+            // — the one the mapping file exists to serve — did not, so a blob
+            // deleted between the last write and the export vanished silently.
+            const root = writeConvexExport({ kg_a: "bytes" }, { users: [{ _id: "u1", avatarId: "kg_deleted" }] });
+
+            writeMapping({ users: ["avatarId"] });
+
+            const worker = fakeWorker();
+            const { logger, logs } = capturingLogger();
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: worker.fetchImpl,
+                file: root,
+                logger,
+                token: "t",
+                url: "http://localhost:8787",
+                verify: true,
+                withStorage: true,
+            });
+
+            expect(result.code).toBe(1);
+            expect(worker.imported[0]?.doc["avatarId"]).toBe("kg_deleted");
+            expect(logs.warn.join("\n")).toContain("unmigrated storage reference users.avatarId: kg_deleted");
+        });
+
         it("passes when every table reaches parity", async () => {
             expect.assertions(1);
 
