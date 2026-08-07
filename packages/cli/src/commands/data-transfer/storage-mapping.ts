@@ -129,8 +129,8 @@ interface StorageRemapReport {
  * `{ $storage: id }` objects are Convex's self-describing Storage value. They are
  * unambiguous, so they are rewritten wherever they occur, at any depth. A plain
  * string is ambiguous against ordinary text, so it is rewritten only under a
- * column `lunora/import-convex.json` names — or, with no mapping file at all,
- * wherever it exactly matches a migrated storage id.
+ * column `lunora/import-convex.json` names — with no mapping file, no plain
+ * string is rewritten at all.
  *
  * The walk is recursive because Convex documents nest freely: a storage id in an
  * array of attachments or inside a nested object is exactly as load-bearing as a
@@ -222,13 +222,36 @@ const parseScanLine = (line: string, table: string, lineNumber: number): Record<
     }
 };
 
-/** Does this column's value hold a storage id, directly or inside an array? */
+/**
+ * Does this column hold a storage id anywhere under it?
+ *
+ * The walk has to go as deep as the rewrite does. `remapStorageReferences`
+ * rewrites plain strings at any depth beneath a mapped column, so a scan that
+ * only looked at the top level would never propose the column holding
+ * `{ file: "<storageId>" }` — leaving the operator with a reference reported as
+ * ambiguous and no candidate column to add for it.
+ */
 const holdsStorageId = (value: unknown, storageIds: ReadonlySet<string>): boolean => {
     if (typeof value === "string") {
         return storageIds.has(value);
     }
 
-    return Array.isArray(value) && value.some((entry) => typeof entry === "string" && storageIds.has(entry));
+    if (Array.isArray(value)) {
+        return value.some((entry) => holdsStorageId(entry, storageIds));
+    }
+
+    if (value !== null && typeof value === "object") {
+        // A `{ $storage: id }` object is rewritten automatically wherever it
+        // sits, so proposing its column would be noise — and would widen the
+        // plain-string rewrite to a column that never needed it.
+        if (typeof (value as Record<string, unknown>)["$storage"] === "string") {
+            return false;
+        }
+
+        return Object.values(value as Record<string, unknown>).some((entry) => holdsStorageId(entry, storageIds));
+    }
+
+    return false;
 };
 
 /** Columns of one table whose values match a storage id, in first-seen order. */

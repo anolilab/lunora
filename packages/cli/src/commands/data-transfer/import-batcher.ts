@@ -111,13 +111,26 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     };
 
     const push = async (row: string): Promise<void> => {
-        batch.push(row);
-        batchBytes += Buffer.byteLength(row) + 1;
+        const rowBytes = Buffer.byteLength(row) + 1;
 
         // Two ceilings, because `--batch-size` counts rows and says nothing about
         // how wide they are: 500 documents of a few KiB each is an ordinary table
         // and a 413 against the endpoint's 1 MiB body cap.
-        if (batch.length >= config.batchSize || batchBytes >= config.maxBatchBytes) {
+        //
+        // The byte ceiling has to be checked BEFORE the row joins the batch.
+        // Appending first and flushing after would send a body already one row
+        // past the limit — which is the 413 this ceiling exists to prevent.
+        if (batch.length > 0 && batchBytes + rowBytes > config.maxBatchBytes) {
+            await flush();
+        }
+
+        batch.push(row);
+        batchBytes += rowBytes;
+
+        // The row ceiling is exact, so it flushes on arrival. A single row wider
+        // than the whole byte budget still goes on its own — nothing can split
+        // one document, and sending it alone is its best chance.
+        if (batch.length >= config.batchSize) {
             await flush();
         }
     };

@@ -55,11 +55,32 @@ const resolveTables = (raw: string | undefined): string[] | undefined => {
  * stdout consumer), `sink.write` returns false — wait for `drain` before
  * resuming. Otherwise Node buffers writes in the heap and a 10M-row export
  * materialises in memory, defeating the streaming goal.
+ *
+ * The wait also has to lose to `error`. A sink that fails while we are parked on
+ * `drain` — a full disk, `EPIPE` from a closed pipe — emits `error` and never
+ * emits `drain`, so waiting on `drain` alone hangs the export forever. Rejecting
+ * here is what lets the caller run `discardPartialExport` instead.
  */
 const writeWithBackpressure = async (sink: NodeJS.WritableStream, line: string): Promise<void> => {
     if (!sink.write(line)) {
-        await new Promise<void>((resolve) => {
-            sink.once("drain", resolve);
+        await new Promise<void>((resolve, reject) => {
+            // Seeded before `onDrain` closes over it so the two can unregister
+            // each other — whichever event arrives, the other listener goes with
+            // it rather than accumulating across every backpressured write.
+            let onError = (_error: Error): void => {};
+
+            const onDrain = (): void => {
+                sink.removeListener("error", onError);
+                resolve();
+            };
+
+            onError = (error: Error): void => {
+                sink.removeListener("drain", onDrain);
+                reject(error);
+            };
+
+            sink.once("drain", onDrain);
+            sink.once("error", onError);
         });
     }
 };
@@ -135,6 +156,33 @@ const discardPartialExport = async (sink: NodeJS.WritableStream, outPath: string
 };
 
 /**
+ * Flush and close the file sink, turning any write failure into a thrown error
+ * over a discarded partial file. A failure captured mid-write must not be
+ * reported as a clean export.
+ */
+const closeFileSink = async (sink: NodeJS.WritableStream, outPath: string, getError: () => Error | undefined): Promise<void> => {
+    await new Promise<void>((resolve, reject) => {
+        (sink as ReturnType<typeof createWriteStream>).end((error?: Error) => {
+            const failure = error ?? getError();
+
+            if (failure === undefined) {
+                resolve();
+            } else {
+                reject(failure);
+            }
+        });
+    });
+
+    const failure = getError();
+
+    if (failure !== undefined) {
+        await discardPartialExport(sink, outPath);
+
+        throw failure;
+    }
+};
+
+/**
  * Stream an export. The worker emits NDJSON; we count newlines as we go and
  * pipe straight to the output sink, so a 10M-row export doesn't materialise
  * the body in memory.
@@ -199,6 +247,17 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     const outPath = options.out === undefined || options.out === "-" ? undefined : options.out;
     const sink = outPath === undefined ? process.stdout : createWriteStream(outPath, { encoding: "utf8" });
 
+    // A write stream with no `error` listener turns any write failure into an
+    // unhandled `error` event, which takes the process down instead of surfacing
+    // as a failed export. Hold the first one so the paths below can report it.
+    let sinkError: Error | undefined;
+
+    if (outPath !== undefined) {
+        sink.on("error", (error: Error) => {
+            sinkError ??= error;
+        });
+    }
+
     let bytes: number;
     let rows: number;
 
@@ -213,15 +272,7 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
     }
 
     if (outPath !== undefined) {
-        await new Promise<void>((resolve, reject) => {
-            (sink as ReturnType<typeof createWriteStream>).end((error?: Error) => {
-                if (error) {
-                    reject(error);
-                } else {
-                    resolve();
-                }
-            });
-        });
+        await closeFileSink(sink, outPath, () => sinkError);
 
         options.logger.success(`wrote ${String(rows)} rows to ${outPath} (${String(bytes)} bytes)`);
     }

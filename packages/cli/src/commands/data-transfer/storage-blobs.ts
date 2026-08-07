@@ -253,7 +253,10 @@ const uploadLargeBlob = async (context: BlobUploadContext, key: string, blobByte
         throw new LunoraError("INTERNAL", `post-upload verification failed: blob not found at key ${key}`);
     }
 
-    const sizeMismatch = stored.size !== metadata.size;
+    // Both fields are optional on the listing, and an absent one means "the host
+    // does not report this", not "it does not match". Treating a missing value as
+    // a mismatch would delete the object that was just uploaded correctly.
+    const sizeMismatch = stored.size !== undefined && stored.size !== metadata.size;
     const hashMismatch = stored.sha256 !== undefined && stored.sha256.toLowerCase() !== metadata.sha256;
 
     if (sizeMismatch || hashMismatch) {
@@ -265,8 +268,12 @@ const uploadLargeBlob = async (context: BlobUploadContext, key: string, blobByte
         );
     }
 
-    if (stored.sha256 === undefined) {
-        logger.warn(`blob ${key} exceeded the verified-upload cap and the host does not report a stored sha256 — verified by size only`);
+    const unchecked = [stored.size === undefined ? "size" : undefined, stored.sha256 === undefined ? "sha256" : undefined].filter(Boolean);
+
+    if (unchecked.length > 0) {
+        logger.warn(
+            `blob ${key} went through the signed-PUT path and the host reports no ${unchecked.join(" or ")} for it — that much of the write is unverified`,
+        );
     }
 
     return key;

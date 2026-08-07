@@ -177,6 +177,22 @@ const fakeWorker = (): FakeWorker => {
     return Object.assign(worker, { fetchImpl });
 };
 
+/** Wrap a worker's fetch so each import POST's body size is recorded. */
+const measureImportBodies = (worker: FakeWorker): { bodies: number[]; measuringFetch: StreamingFetchLike } => {
+    const bodies: number[] = [];
+
+    return {
+        bodies,
+        measuringFetch: async (input, init) => {
+            if (new URL(input).pathname === "/_lunora/admin/import") {
+                bodies.push(Buffer.byteLength(init?.body as string));
+            }
+
+            return worker.fetchImpl(input, init);
+        },
+    };
+};
+
 let workDir: string;
 
 /** Write a `npx convex export --include-file-storage` layout. */
@@ -696,15 +712,7 @@ describe("lunora import --with-storage", () => {
         });
         const root = writeConvexExport({}, { docs: rows });
         const worker = fakeWorker();
-        const bodies: number[] = [];
-
-        const measuringFetch: StreamingFetchLike = async (input, init) => {
-            if (new URL(input).pathname === "/_lunora/admin/import") {
-                bodies.push(Buffer.byteLength(init?.body as string));
-            }
-
-            return worker.fetchImpl(input, init);
-        };
+        const { bodies, measuringFetch } = measureImportBodies(worker);
 
         await runImportCommand({
             cwd: workDir,
@@ -717,6 +725,85 @@ describe("lunora import --with-storage", () => {
 
         expect(bodies.length).toBeGreaterThan(1);
         expect(Math.max(...bodies)).toBeLessThan(1_048_576);
+    });
+
+    it("never POSTs a body past the byte ceiling, even by one row", async () => {
+        expect.assertions(2);
+
+        // Rows just under a third of the ceiling: appending before flushing would
+        // send four of them (~1.2 MiB) and 413 against the endpoint's 1 MiB cap.
+        const rows = Array.from({ length: 9 }, (_, index) => {
+            return { _id: `d${String(index)}`, blob: "z".repeat(300 * 1024) };
+        });
+        const root = writeConvexExport({}, { docs: rows });
+        const worker = fakeWorker();
+        const { bodies, measuringFetch } = measureImportBodies(worker);
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: measuringFetch,
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(Math.max(...bodies)).toBeLessThanOrEqual(900_000);
+        expect(worker.imported).toHaveLength(9);
+    });
+
+    it("keeps a large blob whose listing omits size rather than deleting it", async () => {
+        expect.assertions(4);
+
+        const large = "q".repeat(33 * 1_048_576);
+        const root = writeConvexExport({ kg_big: large }, { files: [{ _id: "f1", blob: { $storage: "kg_big" } }] });
+        const worker = fakeWorker();
+        const key = sha256Hex(large);
+
+        // A host that lists objects without size or sha256 — absent means "not
+        // reported", not "does not match", so the upload must stand.
+        const terseFetch: StreamingFetchLike = async (input, init) => {
+            const url = new URL(input);
+
+            if (url.pathname === "/_lunora/admin/storage" && (init?.method ?? "GET") === "GET") {
+                const listed = [...worker.bucket.keys()].filter((entry) => entry.startsWith(url.searchParams.get("prefix") ?? ""));
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return {
+                            objects: listed.map((entry) => {
+                                return { key: entry };
+                            }),
+                            truncated: false,
+                        };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            return worker.fetchImpl(input, init);
+        };
+
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: terseFetch,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(worker.deleted).toStrictEqual([]);
+        expect(logs.warn.join("\n")).toContain(`no size or sha256 for it`);
+
+        expect(worker.bucket.has(key)).toBe(true);
     });
 
     it("reports what it managed to write when a batch fails part-way", async () => {
@@ -848,6 +935,33 @@ describe("lunora import --with-storage", () => {
                 keyPrefix: "",
                 storageColumns: { users: ["avatarId"] },
             });
+        });
+
+        it("proposes a column whose storage id is nested, matching what the rewrite does", async () => {
+            expect.assertions(1);
+
+            const root = writeConvexExport(
+                { kg_a: "bytes" },
+                {
+                    // `meta.hero` is rewritten once `meta` is mapped, so the scan
+                    // has to propose `meta` — otherwise the operator is told the
+                    // reference is ambiguous with no column to add for it.
+                    // `cover` holds the self-describing form, which needs no entry.
+                    posts: [{ _id: "p1", cover: { $storage: "kg_a" }, meta: { hero: "kg_a" } }],
+                },
+            );
+
+            await runImportCommand({
+                cwd: workDir,
+                fetchImpl: fakeWorker().fetchImpl,
+                file: root,
+                logger: capturingLogger().logger,
+                scan: true,
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(JSON.parse(readFileSync(join(workDir, "lunora", "import-convex.json"), "utf8")).storageColumns).toStrictEqual({ posts: ["meta"] });
         });
 
         it("never overwrites an existing mapping file", async () => {
