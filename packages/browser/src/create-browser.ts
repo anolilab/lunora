@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
-import { resolvePrivateAddress } from "../../../shared/ssrf-resolve";
+import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
 import type {
     Browser,
     BrowserLaunchLike,
@@ -30,25 +30,28 @@ const MAX_VIEWPORT_HEIGHT = 4320;
  * indefinitely and pin the worker before the browser even launches — a hung
  * resolver would defeat the whole point of paying for the pre-launch re-check.
  * The caller reuses the (smaller of the) navigation timeout budget, capped here.
+ * Named `CEILING` rather than `TIMEOUT` because it is a `Math.min` bound on the
+ * caller's own budget, not the value passed through — and so it can't be read as
+ * the shared resolver's own (smaller) default.
  */
-const DOH_TIMEOUT_MS = 5000;
+const DOH_CEILING_MS = 5000;
 
 /**
  * DNS-rebinding re-check for a validated navigation target: throws when the
  * host resolves to a private/internal address. The resolution + classification
- * live in the shared `resolvePrivateAddress` helper (see its docblock for the
+ * live in the shared `resolveHostSsrf` helper (see its docblock for the
  * best-effort semantics — IP literals skipped, a failed lookup falls back to the
  * string guard, never fail-open on an address that DID resolve private); this
- * only turns a positive result into the package's own user-facing refusal.
+ * only turns a `"private"` verdict into the package's own user-facing refusal.
  */
-const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DOH_TIMEOUT_MS): Promise<void> => {
+const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DOH_CEILING_MS): Promise<void> => {
     const host = normalizeHost(new URL(target).hostname);
-    const privateAddress = await resolvePrivateAddress(host, timeoutMs);
+    const resolution = await resolveHostSsrf(host, timeoutMs);
 
-    if (privateAddress !== undefined) {
+    if (resolution.kind === "private") {
         throw new LunoraError(
             "FORBIDDEN",
-            `@lunora/browser: url host "${host}" resolves to a private/internal address (${privateAddress}); refusing to navigate (DNS-rebinding guard)`,
+            `@lunora/browser: url host "${host}" resolves to a private/internal address (${resolution.address}); refusing to navigate (DNS-rebinding guard)`,
         );
     }
 };
@@ -75,8 +78,8 @@ const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DO
  * as-written — it does **not** resolve DNS. So on its own, a PUBLIC hostname that
  * resolves — via attacker-controlled DNS — to a private/metadata IP is NOT blocked
  * here (classic DNS rebinding). That gap is closed by the `resolveDns` re-check the
- * caller applies before `page.goto`, which is ON by default; `allowedHosts` is the
- * hard guarantee when the set of reachable hosts is known.
+ * caller applies before `page.goto` (on by default when no `allowedHosts` is set);
+ * `allowedHosts` is itself the hard guarantee when the reachable hosts are known.
  *
  * This validates the INITIAL navigation target. A 3xx redirect can point the
  * headless browser at a different (possibly private) host, so `withPage`
@@ -279,14 +282,20 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const allowPrivateTargets = options.allowPrivateTargets ?? false;
         const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
-        const resolveDns = options.resolveDns ?? true;
+        // A configured `allowedHosts` is the STRONGER guard — an exact-origin
+        // allowlist closes rebinding outright — and it may deliberately name an
+        // internal host reachable over a Tunnel/private-network binding. Running
+        // the resolved-address check on top would refuse that documented config,
+        // so the allowlist suppresses it, exactly as `allowedPushOrigins` does in
+        // `@lunora/notify`. An explicit `resolveDns: true` still forces it on.
+        const resolveDns = options.resolveDns ?? (options.allowedHosts?.length ?? 0) === 0;
         // Reuse the navigation timeout budget for the DoH re-check, but never let a
         // single lookup exceed the DoH ceiling — a stalled resolver mustn't burn
         // the full (up to 120s) navigation budget before the browser even launches.
-        const dohTimeout = Math.min(timeout, DOH_TIMEOUT_MS);
+        const dohTimeout = Math.min(timeout, DOH_CEILING_MS);
 
-        // Opt-in DNS-rebinding re-check: resolve the host and reject if it maps to
-        // a private address, before we pay for a browser launch + `page.goto`.
+        // DNS-rebinding re-check: resolve the host and reject if it maps to a
+        // private address, before we pay for a browser launch + `page.goto`.
         if (!allowPrivateTargets && resolveDns) {
             await assertResolvedHostIsPublic(target, dohTimeout);
         }

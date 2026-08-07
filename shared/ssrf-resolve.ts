@@ -18,9 +18,9 @@
  * - It is TOCTOU-imperfect: whoever connects afterwards re-resolves
  *   independently. An exact-host allowlist is the only hard guarantee.
  *
- * Returns the offending address (or `undefined`) rather than throwing — no
- * imports, no `LunoraError`, so it stays inline-safe per the repo `shared/`
- * convention. The caller wraps a positive result in its own user-facing error.
+ * Returns a verdict rather than throwing — no imports, no `LunoraError`, so it
+ * stays inline-safe per the repo `shared/` convention. The caller wraps a
+ * `"private"` result in its own user-facing error.
  */
 
 import { isPrivateIpv4, isPrivateIpv6, normalizeHost, parseIpv4 } from "./ssrf-host";
@@ -81,21 +81,36 @@ const dohLookup = async (hostname: string, type: number, timeoutMs: number): Pro
 };
 
 /**
+ * The outcome of a rebinding re-check. Three states, not two, because "no private
+ * address" and "we could not find out" are NOT the same fact: the first is a
+ * verified result, the second is a fallback to the string guard. A caller that
+ * merely refuses on `private` can treat them alike — but one that CACHES the
+ * verdict must not, or a single DoH outage disables its guard for that host for
+ * as long as the cache lives.
+ */
+type SsrfResolution =
+    /** Resolved, and at least one address is private/internal. `address` is the first such. */
+    | { address: string; kind: "private" }
+    /** Resolved, and every returned address is public. */
+    | { kind: "public" }
+    /** Nothing was learned: an IP-literal host (skipped — it cannot rebind) or a failed lookup. */
+    | { kind: "unknown" };
+
+/**
  * Resolve `hostname` (a `new URL(x).hostname` value, NOT a full URL) over DoH and
- * return the FIRST resolved address that lands in a private/internal range, or
- * `undefined` when nothing did (including the skipped and lookup-failed cases
- * described in the module docblock).
+ * classify what came back. See {@link SsrfResolution} for why the
+ * lookup-failed case is distinguishable from the all-public one.
  *
  * @param hostname a `new URL(x).hostname` value.
  * @param timeoutMs per-lookup ceiling; defaults to 2s.
  */
-const resolvePrivateAddress = async (hostname: string, timeoutMs: number = DOH_TIMEOUT_MS): Promise<string | undefined> => {
+const resolveHostSsrf = async (hostname: string, timeoutMs: number = DOH_TIMEOUT_MS): Promise<SsrfResolution> => {
     const host = normalizeHost(hostname);
 
     // IP literals can't rebind through DNS and were already classified by the
     // string guard; only a named host needs the resolved-address re-check.
     if (host.includes(":") || parseIpv4(host) !== undefined) {
-        return undefined;
+        return { kind: "unknown" };
     }
 
     const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A, timeoutMs), dohLookup(host, DNS_TYPE_AAAA, timeoutMs)]);
@@ -103,16 +118,17 @@ const resolvePrivateAddress = async (hostname: string, timeoutMs: number = DOH_T
     // Both lookups failed — fall back to the string guard (which already passed)
     // rather than fail open. If either resolved, inspect what came back.
     if (aRecords === undefined && aaaaRecords === undefined) {
-        return undefined;
+        return { kind: "unknown" };
     }
 
     for (const answer of [...(aRecords ?? []), ...(aaaaRecords ?? [])]) {
         if ((answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA) && isPrivateResolvedIp(answer.data, answer.type)) {
-            return answer.data;
+            return { address: answer.data, kind: "private" };
         }
     }
 
-    return undefined;
+    return { kind: "public" };
 };
 
-export { DOH_TIMEOUT_MS, resolvePrivateAddress };
+export type { SsrfResolution };
+export { resolveHostSsrf };

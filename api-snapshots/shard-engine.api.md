@@ -3752,6 +3752,12 @@ const recordQueueMessages: (sql: SqlExec, inputs: ReadonlyArray<RecordQueueMessa
 const recordSchemaVersion: (sql: SqlExec, hash: string, snapshotJson: string, now?: number) => boolean;
 ```
 
+### `relationHooks` (const)
+
+```ts
+const relationHooks: (args: Pick<QueryArgs, "relationBaseWhere" | "relationMask">) => Pick<QueryArgs, "relationBaseWhere" | "relationMask">;
+```
+
 ### `relayCountFor` (const)
 
 ```ts

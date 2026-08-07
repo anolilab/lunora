@@ -4,6 +4,13 @@ import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, Persis
 
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
+
+    /**
+     * The client id that queued this write (see {@link PersistedMutation.clientId}).
+     * Persisted and restored, so a replay namespaces by the id that issued the
+     * write rather than whatever the current session minted.
+     */
+    clientId?: string;
     readonly functionPath: string;
 
     /** Stable id used to remove the entry from durable storage once replayed; assigned by the queue when absent. */
@@ -156,6 +163,7 @@ class OfflineQueue {
         this.persistence
             ?.append({
                 args: item.args,
+                clientId: item.clientId,
                 functionPath: item.functionPath,
                 id: item.id,
                 identity: item.identity,
@@ -222,6 +230,7 @@ class OfflineQueue {
 
             restored.push({
                 args: mutation.args,
+                clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
                 id: mutation.id,
                 identity: mutation.identity,

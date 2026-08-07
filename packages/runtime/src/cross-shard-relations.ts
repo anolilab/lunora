@@ -150,10 +150,14 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
         const data = await fanOutRelation(
             options,
             {
-                // `where` already carries this hop's read policy (folded in by the
-                // caller); `relationPolicies` carries it for the nested `with`
-                // hops. Both are load-bearing — see the module docblock.
-                args: { orderBy: args.orderBy, relationPolicies: args.relationPolicies, table, where: args.where, with: args.with },
+                // Spread rather than re-list the fields: `where` already carries
+                // this hop's read policy (folded in by the caller) and
+                // `relationPolicies` carries it for the nested `with` hops, so a
+                // field silently stopping at this forwarder is an RLS bypass. A
+                // hand-written list is exactly how that happens when
+                // `CrossShardReadArgs` grows. `JSON.stringify` drops `undefined`,
+                // so the wire bytes are identical either way.
+                args: { ...args, table },
                 fanOut: { merge: { kind: "concat" }, table },
                 functionPath: "__lunora_relation__:read",
             },

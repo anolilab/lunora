@@ -11,8 +11,10 @@
  *
  * Masking transforms values on the **read/return path only**; it never changes
  * what is stored. It rewrites the rows of the table being read AND the rows
- * hydrated for each `with` relation hop, by that hop's own policy, at any
+ * hydrated for each `with` relation hop, by that hop's own policy, at every
  * nesting depth — the same boundary `rls()` enforces with `relationBaseWhere`.
+ * The one exception is a nested `with` across the cross-shard relation hop,
+ * which is refused (`MASK_UNSUPPORTED`) because the mask cannot travel there.
  */
 import type { Permission, Role } from "../rls/types";
 import type { IndexFieldsByTable } from "../schema";

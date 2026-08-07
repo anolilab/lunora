@@ -266,8 +266,13 @@ export interface CrossShardReadArgs {
  * table named in the call — a `with` hop is hydrated below it by the relation
  * loader and would come back in the clear. Threading this hook down the same
  * path `relationBaseWhere` takes lets the loader rewrite each hop's rows with
- * the policy for THAT table, at any nesting depth. Returns the rows unchanged
- * for a table with no mask policy.
+ * the policy for THAT table. Returns the rows unchanged for a table with no
+ * mask policy.
+ *
+ * Unlike `relationBaseWhere`, this hook cannot be projected into data for the
+ * cross-shard fan-out (a mask strategy may be a closure over the request), so a
+ * nested `with` crossing that hop is refused rather than served unmasked — see
+ * `toCrossShardArgs` in `@lunora/sql-store`.
  */
 export type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
 

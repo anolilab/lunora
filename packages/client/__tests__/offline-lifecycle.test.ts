@@ -567,7 +567,7 @@ describe("offline lifecycle (e2e)", () => {
     });
 
     it("10. coalesces a multi-write outbox flush into ONE rpc-batch round trip (plan 088 follow-on)", async () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         vi.useFakeTimers();
 
@@ -622,11 +622,20 @@ describe("offline lifecycle (e2e)", () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
         expect((fetchMock.mock.calls[0]![0] as string).endsWith("/_lunora/rpc-batch")).toBe(true);
 
-        const sentCalls = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string).calls as { functionPath: string; id: number; mutationId?: string }[];
+        const sentCalls = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string).calls as {
+            clientId?: string;
+            functionPath: string;
+            id: number;
+            mutationId?: string;
+        }[];
 
         expect(sentCalls).toHaveLength(3);
         // ...each carrying a stable per-write idempotency key (id)...
         expect(sentCalls.every((call) => typeof call.mutationId === "string" && call.mutationId.length > 0)).toBe(true);
+        // ...paired with the client id that issued it. The shard namespaces an
+        // ANONYMOUS caller's `__idempotency` row by this; a batch entry without one
+        // has no namespace, so the DO skips dedup and a replayed write RE-RUNS.
+        expect(sentCalls.every((call) => typeof call.clientId === "string" && call.clientId.length > 0)).toBe(true);
         // ...and every caller's Promise resolves with its own demuxed result.
         expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
         // FIFO order preserved in the request.

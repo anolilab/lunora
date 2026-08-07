@@ -13,7 +13,7 @@ import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
-import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
@@ -1092,10 +1092,16 @@ interface WorkerOptions {
      *
      * **On by default**: a query string lands in access logs, browser history and
      * `Referer`, so the master admin credential must not ride one. The studio
-     * mints and sends the ephemeral token already. Set `false` — or
-     * `env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` to `0`/`false`/`off`/`no`/`disabled`,
-     * which the shard/relay Durable Objects honor for their own upgrade gate too
-     * — only for a legacy client that still puts the master token in the URL.
+     * mints and sends the ephemeral token already.
+     *
+     * To opt back out for a legacy client that still puts the master token in a
+     * URL, set **`env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`** to
+     * `0`/`false`/`off`/`no`/`disabled`. That is the knob to use: it is read
+     * independently by the worker AND by the shard/relay Durable Objects, so the
+     * whole deployment agrees. This code-level option only governs the WORKER's
+     * gate — a DO stamps its own socket from `env` alone, so setting `false` here
+     * without the env var yields a socket the worker admits and the DO marks
+     * non-admin (admin subscriptions then return nothing).
      */
     requireEphemeralWsToken?: boolean;
     /* eslint-enable no-secrets/no-secrets */
@@ -1459,14 +1465,6 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
-
-/**
- * Env values that read as "off" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. The knob
- * is ON by default (a raw master admin token in `?token=` is refused), so this is
- * the OPT-OUT set — an unset/unrecognised value keeps the closed posture. Mirrors
- * the shard DO's copy; the two isolates don't import from each other.
- */
-const ALLOW_MASTER_WS_TOKEN_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
 
 /**
  * Read the optional caller identity a server-initiated dispatch may forward on
@@ -2253,7 +2251,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
 
             if (typeof raw === "string" && raw.length > 0) {
-                envRequireEphemeralWsToken = !ALLOW_MASTER_WS_TOKEN_ENV_VALUES.has(raw.trim().toLowerCase());
+                envRequireEphemeralWsToken = isEnvFlagEnabled(raw, true);
             }
         }
 
@@ -2418,8 +2416,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // dispatch — e.g. a scheduler retry after the origin response was lost but
         // the side effect already committed — so the job's effect isn't applied
         // twice. Without it, at-least-once delivery double-applies non-idempotent
-        // handlers. System dispatch shares the empty identity, but the caller passes
-        // a unique per-job id so `("", id)` stays unique across distinct jobs.
+        // handlers. Server-initiated dispatch shares the one `"system:"` namespace
+        // (it originates inside the trust boundary), but the caller passes a unique
+        // per-job id so `("system:", id)` stays unique across distinct jobs.
         if (mutationId !== undefined && mutationId.length > 0) {
             headers["x-lunora-mutation-id"] = mutationId;
         }

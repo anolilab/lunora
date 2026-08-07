@@ -219,7 +219,7 @@ export {
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";
-export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
+export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
     OwnerRelayFrame,
     PromotionState,

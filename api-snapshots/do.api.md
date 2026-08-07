@@ -1516,7 +1516,9 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `serveRelationFanout` (const)
 
 ```ts
-const serveRelationFanout: (schema: SchemaLike, database: DatabaseWriterLike, functionPath: string, args: Record<string, unknown>) => Promise<unknown>;
+const serveRelationFanout: (schema: SchemaLike, database: DatabaseWriterLike, functionPath: string, args: CrossShardReadArgs & {
+    table?: unknown;
+}) => Promise<unknown>;
 ```
 
 ### `softDeleteScope` (const)

@@ -37,7 +37,7 @@ describe("serveRelationFanout", () => {
         const db = stubWriter({ count: async () => 0, findMany });
 
         const result = await serveRelationFanout(schema, db, READ, {
-            orderBy: [{ direction: "asc", field: "name" }],
+            orderBy: [{ name: "asc" }],
             table: "local",
             where: { globalId: { in: ["g1"] } },
             with: { owner: true },
@@ -46,7 +46,7 @@ describe("serveRelationFanout", () => {
         expect(result).toEqual([{ _id: "l1" }, { _id: "l2" }]);
         expect(findMany).toHaveBeenCalledWith(
             "local",
-            expect.objectContaining({ orderBy: [{ direction: "asc", field: "name" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }),
+            expect.objectContaining({ orderBy: [{ name: "asc" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }),
         );
         // The page envelope is unwrapped — callers fan out bare arrays for `concat`.
         expect(Array.isArray(result)).toBe(true);

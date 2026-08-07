@@ -101,6 +101,64 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect(seen?.["relationPolicies"]).toEqual({ local: { ownerId: "u1" } });
     });
 
+    it("rEFUSES a masked read with a nested `with` across the hop instead of serving it unmasked", async () => {
+        expect.assertions(2);
+
+        // A mask policy can't be projected into data the way `relationBaseWhere`
+        // can (a custom `MaskFn` closes over the request), so the nested rows would
+        // be hydrated on the serving shard where no mask exists. This hop's OWN
+        // rows still mask fine — only the nested level is refused.
+        let reads = 0;
+
+        const writer = createD1ContextDatabase({
+            crossShardReader: async () => {
+                reads += 1;
+
+                return { continueCursor: null, isDone: true, page: [] };
+            },
+            exec: harness.exec,
+            schema: reverseSchema,
+        });
+
+        await seedParent(writer);
+
+        await expect(
+            writer.findMany("globals", {
+                relationMask: (_table, rows) => rows,
+                with: { items: { with: { owner: true } } },
+            }),
+        ).rejects.toMatchObject({ code: "MASK_UNSUPPORTED" });
+
+        // Refused before the fan-out went out, not after the rows came back.
+        expect(reads).toBe(0);
+    });
+
+    it("still serves a masked read with NO nested `with` across the hop", async () => {
+        expect.assertions(1);
+
+        const writer = createD1ContextDatabase({
+            crossShardReader: async () => {
+                return { continueCursor: null, isDone: true, page: [{ _id: "l2", globalId: "g1", name: "A" }] };
+            },
+            exec: harness.exec,
+            schema: reverseSchema,
+        });
+
+        await seedParent(writer);
+
+        const { page } = await writer.findMany("globals", {
+            relationMask: (table, rows) =>
+                table === "local"
+                    ? rows.map((row) => {
+                          return { ...row, name: null };
+                      })
+                    : rows,
+            with: { items: true },
+        });
+
+        expect((page[0]?.["items"] as Record<string, unknown>[])[0]?.["name"]).toBeNull();
+    });
+
     it("loads + groups a `many` shard-local relation through the injected crossShardReader", async () => {
         expect.assertions(1);
 

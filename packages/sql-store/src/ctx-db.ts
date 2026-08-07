@@ -81,6 +81,7 @@ import {
     RANK_TIEBREAK,
     rankTableName,
     readAggregateValue,
+    relationHooks,
     resolveRankPartition,
     resolveRelationPredicates,
     resolveWith,
@@ -1892,8 +1893,24 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      *   into a table → filter map. Projecting every schema table is cheaper than
      *   walking the `with` tree and can't miss a hop; `readBase` is memoized
      *   upstream, and tables with no restricting policy simply don't appear.
+     *
+     * `relationMask` has the same problem and NO such projection: a mask policy
+     * isn't serializable (a custom `MaskFn` is a closure over the request, and
+     * `"hash"` needs the caller context). THIS hop's own rows are still masked —
+     * the relation loader applies the mask to whatever the fetcher returns — but a
+     * nested `with` is hydrated on the serving shard, past the mask's reach. So a
+     * masked read that would cross with nested relations is REFUSED rather than
+     * served in the clear, matching how the mask middleware already fails closed
+     * on `aggregate`/`groupBy` over a masked column.
      */
-    const toCrossShardArgs = (childArgs: Parameters<DatabaseWriterLike["findMany"]>[1]): CrossShardReadArgs => {
+    const toCrossShardArgs = (childTable: string, childArgs: Parameters<DatabaseWriterLike["findMany"]>[1]): CrossShardReadArgs => {
+        if (childArgs?.relationMask !== undefined && childArgs.with !== undefined && Object.keys(childArgs.with).length > 0) {
+            throw new LunoraError(
+                "MASK_UNSUPPORTED",
+                `masking cannot follow a nested \`with\` across the cross-shard relation hop to "${childTable}" — the nested rows are hydrated on the serving shard, where the mask policy does not exist. Read the nested relation at its own (masked) call site instead.`,
+            );
+        }
+
         const relationPolicies: Record<string, WhereInput> = {};
 
         if (childArgs?.relationBaseWhere) {
@@ -1924,7 +1941,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return writer.findMany(childTable, childArgs);
         }
 
-        return crossShardReader ? crossShardReader(childTable, toCrossShardArgs(childArgs)) : crossBackendUnsupported(childTable);
+        return crossShardReader ? crossShardReader(childTable, toCrossShardArgs(childTable, childArgs)) : crossBackendUnsupported(childTable);
     };
 
     /**
@@ -2391,8 +2408,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         fetcher: relationFetcher,
                         groupedCounter: relationGroupedCounter,
                         parents: documents,
-                        relationBaseWhere: args.relationBaseWhere,
-                        relationMask: args.relationMask,
+                        ...relationHooks(args),
                         schema,
                         tableName,
                         with: args.with,
@@ -2412,8 +2428,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     fetcher: relationFetcher,
                     groupedCounter: relationGroupedCounter,
                     parents: page,
-                    relationBaseWhere: args.relationBaseWhere,
-                    relationMask: args.relationMask,
+                    ...relationHooks(args),
                     schema,
                     tableName,
                     with: args.with,

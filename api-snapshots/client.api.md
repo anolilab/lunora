@@ -954,6 +954,7 @@ interface OutboxSink {
 ```ts
 interface PersistedMutation {
     args: Record<string, unknown>;
+    clientId?: string;
     functionPath: string;
     id: string;
     identity?: string | null;
@@ -1027,6 +1028,7 @@ interface QueryCacheAdapter {
 ```ts
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
+    clientId?: string;
     readonly functionPath: string;
     id?: string;
     readonly identity?: string | null;

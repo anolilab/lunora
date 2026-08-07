@@ -145,6 +145,16 @@ export interface OfflineQueueOptions {
  */
 export interface PersistedMutation {
     args: Record<string, unknown>;
+
+    /**
+     * The client id that queued this write, persisted so a replay after a reload
+     * lands in the SAME server-side dedup namespace it was issued under. The
+     * standalone client's own `clientId` is minted per session, so replaying under
+     * the live one would miss the `__idempotency` row for an anonymous caller and
+     * re-run a write the server already committed. Absent on records written by
+     * older client versions, which replay under the live id.
+     */
+    clientId?: string;
     functionPath: string;
     id: string;
 

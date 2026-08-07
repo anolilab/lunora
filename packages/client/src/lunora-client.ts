@@ -3698,6 +3698,11 @@ class LunoraClient {
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
+                // Persisted alongside the write so a replay (including one after a
+                // reload) namespaces server-side under the id that ISSUED it — the
+                // standalone client's own id is per-session, and an anonymous
+                // caller's `__idempotency` row is keyed by it.
+                clientId: this.clientId,
                 // Persist the stamp alongside the record so a hydrated write can
                 // only replay under the identity that queued it.
                 identity: issuingIdentity,
@@ -5809,6 +5814,9 @@ class LunoraClient {
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     captureBookmark: true,
+                    // The id that queued the write, not the live session's — see the
+                    // `clientId` stamp in `enqueueOffline`.
+                    clientId: item.clientId ?? this.clientId,
                     mutationId: item.id,
                     onCommitCursor: (cursor) => {
                         commitCursor = cursor;
@@ -5865,6 +5873,12 @@ class LunoraClient {
                             id: index,
                             // Stable per-write key so the DO dedups a write it already
                             // committed (exactly-once), exactly as the single-call replay.
+                            // `clientId` rides with it: the DO namespaces an ANONYMOUS
+                            // caller's dedup row by it, and without one the batch entry
+                            // has no namespace and the write re-runs. Per entry, not on
+                            // the outer request — a batch is one transport hop but its
+                            // entries are dispatched as independent single calls.
+                            clientId: item.clientId ?? this.clientId,
                             mutationId: item.id,
                             shardKey: item.shardKey,
                         };

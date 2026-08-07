@@ -633,6 +633,55 @@ describe("d1 ctx-db", () => {
             expect(ids(ada["messages"] as Record<string, unknown>[])).toEqual(["m1", "m2"]);
         });
 
+        it("applies relationBaseWhere on a SAME-backend with hop (RLS on the relation)", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            // This writer's `findMany` used to call `resolveWith` WITHOUT forwarding
+            // `relationBaseWhere`, so a child table's read policy was dropped on
+            // every relation hop — a cross-tenant read on the global backend. The
+            // shard backend had always forwarded it; only this one drifted.
+            const { page } = await writer.findMany("users", {
+                relationBaseWhere: (table) => (table === "messages" ? { body: "hi" } : undefined),
+                with: { messages: true },
+            });
+            const ada = page.find((row) => row["_id"] === "u1")!;
+            const linus = page.find((row) => row["_id"] === "u2")!;
+
+            // Only m1 ("hi") is readable; m2 ("yo") and m3 ("hey") are filtered out.
+            expect(ids(ada["messages"] as Record<string, unknown>[])).toEqual(["m1"]);
+            expect(linus["messages"]).toEqual([]);
+        });
+
+        it("applies relationMask on a SAME-backend with hop, at depth", async () => {
+            expect.assertions(2);
+
+            const writer = setupRelations();
+
+            await seedRelations(writer);
+
+            // The column-level twin of the hook above, threaded the same way: a
+            // masked column on a `with`-hydrated child must not come back clear.
+            const { page } = await writer.findMany("users", {
+                relationMask: (table, rows) =>
+                    table === "reactions"
+                        ? rows.map((row) => {
+                              return { ...row, emoji: null };
+                          })
+                        : rows,
+                where: { _id: "u1" },
+                with: { messages: { with: { reactions: true } } },
+            });
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
+            const reactions = messages.find((row) => row["_id"] === "m1")!["reactions"] as Record<string, unknown>[];
+
+            expect(reactions.length).toBeGreaterThan(0);
+            expect(reactions.every((row) => row["emoji"] === null)).toBe(true);
+        });
+
         it("nested with recurses (users → messages → reactions)", async () => {
             expect.assertions(1);
 

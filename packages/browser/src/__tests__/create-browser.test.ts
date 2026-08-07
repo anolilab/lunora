@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { stubDohFetch } from "../../__tests__/_helpers/stub-doh";
 import { createBrowser } from "../create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
 
@@ -98,17 +99,7 @@ describe("createBrowser", () => {
     // Cloudflare DoH request from the suite. Answer it with a public IP by default;
     // the rebinding describe below re-stubs `fetch` per test for its own answers.
     beforeEach(() => {
-        vi.stubGlobal(
-            "fetch",
-            async () =>
-                ({
-                    json: async () => {
-                        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a public IP fixture so the DoH re-check passes; no connection is made
-                        return { Answer: [{ data: "93.184.216.34", type: 1 }] };
-                    },
-                    ok: true,
-                }) as unknown as Response,
-        );
+        stubDohFetch();
     });
 
     afterEach(() => {
@@ -342,27 +333,6 @@ describe("createBrowser", () => {
         afterEach(() => {
             vi.unstubAllGlobals();
         });
-
-        type DohAnswer = { data: string; type: number };
-        type FetchStub = (input: string) => Promise<Response>;
-
-        /** Stub global `fetch` to answer Cloudflare DoH JSON by the requested record `type`. */
-        const stubDohFetch = (answersByType: Record<number, DohAnswer[]>): ReturnType<typeof vi.fn<FetchStub>> => {
-            const fetchMock = vi.fn<FetchStub>(async (input) => {
-                const type = Number(new URL(input).searchParams.get("type"));
-
-                return {
-                    json: async () => {
-                        return { Answer: answersByType[type] ?? [] };
-                    },
-                    ok: true,
-                } as unknown as Response;
-            });
-
-            vi.stubGlobal("fetch", fetchMock);
-
-            return fetchMock;
-        };
 
         it("runs BY DEFAULT — a rebinding host is refused with no resolveDns option set", async () => {
             expect.assertions(2);

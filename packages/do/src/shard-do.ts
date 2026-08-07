@@ -215,7 +215,7 @@ import type { MetricEvent } from "../../../shared/metric-event";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
 import type {
     QueueBindingHandle,
     RunShardApplyCdcArgs,
@@ -289,22 +289,19 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
- * Hard ceiling on a single inbound WS frame. Every subscription envelope the
- * protocol defines (`connect` / `subscribe` / `unsubscribe` / a mutator push) is
- * kilobytes at most; without an explicit cap the only bound is the platform's own
- * per-message limit, which is orders of magnitude larger than anything legitimate
- * and leaves a decode + `JSON.parse` of that size reachable per frame.
+ * Hard ceiling on a single inbound WS frame — 1Mi UTF-16 code units for a text
+ * frame, 1 MiB for a binary one. Every subscription envelope the protocol defines
+ * (`connect` / `subscribe` / `unsubscribe` / a mutator push) is kilobytes at most;
+ * without an explicit cap the only bound is the platform's own per-message limit,
+ * which is orders of magnitude larger than anything legitimate and leaves a decode
+ * + `JSON.parse` of that size reachable per frame.
+ *
+ * Named UNITS, not BYTES: a text frame is measured with `String.length`, so an
+ * all-astral-plane payload is up to ~4x this in bytes. That is the intended
+ * trade — counting real bytes means encoding the string first, which is the exact
+ * work the cap exists to avoid. It bounds the parse, not the wire.
  */
-const MAX_WS_FRAME_BYTES = 1024 * 1024;
-
-/**
- * Env values that read as "off" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
- * {@link ShardDO.isAdminSocket}). The knob is ON by default, so this is the
- * OPT-OUT set — an unset/unrecognised value keeps the closed posture. Mirrors the
- * runtime's `ALLOW_MASTER_WS_TOKEN_ENV_VALUES` — the two packages don't import
- * from each other to avoid a circular dep.
- */
-const ALLOW_MASTER_WS_TOKEN_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
+const MAX_WS_FRAME_UNITS = 1024 * 1024;
 
 /** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
 const socketMap = <V>(store: WeakMap<ShardSocketLike, Map<string, V>>, ws: ShardSocketLike): Map<string, V> => {
@@ -2463,8 +2460,11 @@ abstract class ShardDO {
      * puts distinct clients in ONE key space, where a reused or guessable
      * `mutation_id` makes one client's mutation short-circuit to another's cached
      * result — suppressed without ever running. So an anonymous caller namespaces
-     * by its `x-lunora-client-id` instead (per-device, minted client-side); one
-     * that sends none gets `undefined` and simply skips the cache, which fails
+     * by its `x-lunora-client-id` instead (minted client-side — stable per device
+     * for an app with a durable outbox, which persists the id alongside each
+     * queued write; per session otherwise, so a reload widens the dedup window
+     * rather than defeating it); one that sends none gets `undefined` and simply
+     * skips the cache, which fails
      * OPEN (the handler re-runs, the pre-idempotency behaviour) rather than
      * risking another client's mutation.
      *
@@ -3962,11 +3962,11 @@ abstract class ShardDO {
         // Frame-size cap BEFORE the decode+parse: without it the only bound on an
         // inbound frame is the platform's own per-message limit, so a client can
         // make the DO decode and `JSON.parse` a multi-megabyte body per frame.
-        // Measured on the raw bytes for a binary frame and on the string length
-        // for a text one (an over-cap frame is refused, never truncated).
+        // Byte length for a binary frame, UTF-16 code units for a text one (see
+        // the constant). An over-cap frame is refused, never truncated.
         const rawSize = typeof message === "string" ? message.length : message.byteLength;
 
-        if (rawSize > MAX_WS_FRAME_BYTES) {
+        if (rawSize > MAX_WS_FRAME_UNITS) {
             ws.send(JSON.stringify({ message: "frame too large", type: "error" }));
 
             return;
@@ -8840,7 +8840,7 @@ abstract class ShardDO {
         // `suppliedWsToken` prefers the header; the token came from the query
         // string only when no bearer header was present.
         const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
-        const requireEphemeral = !ALLOW_MASTER_WS_TOKEN_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
+        const requireEphemeral = isEnvFlagEnabled(env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN, true);
 
         if (fromQuery && requireEphemeral) {
             return false;

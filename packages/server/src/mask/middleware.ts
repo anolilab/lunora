@@ -17,9 +17,15 @@
  * never sees, so the mask is threaded down as a `relationMask` hook the loader
  * applies per hop with that hop's TARGET table — exactly how `rls()` threads
  * `relationBaseWhere`. `ctx.db.posts.findMany({ with: { author: true } })`
- * therefore masks each `author` by the `users` policy, at any nesting depth;
+ * therefore masks each `author` by the `users` policy, at every nesting depth;
  * without it, chaining `with` reached masked columns on tables the caller could
  * not even name directly.
+ *
+ * The ONE hop a mask cannot follow is the cross-shard one — a `.global()` (D1)
+ * parent loading a `.shardBy()` child, where nested rows are hydrated on the
+ * serving shard and a mask policy (a closure over this request) cannot be sent
+ * along. That case is REFUSED with `MASK_UNSUPPORTED` rather than served in the
+ * clear; the hop's own rows still mask normally.
  *
  * 2. **Analytical reductions fail closed** — `aggregate` / `groupBy` over a
  * masked column throw `LunoraError("MASK_UNSUPPORTED")`: a group key *is* the
@@ -368,7 +374,8 @@ const wrapDatabase = <Context>(
      * come back in the clear, letting `findMany("posts", { with: { author: true } })`
      * read a masked `users.email` that a direct `users` read would have hidden
      * (and, chained, reach tables the caller can't name at all). The loader calls
-     * this per hop with the hop's TARGET table, at any nesting depth.
+     * this per hop with the hop's TARGET table, at every nesting depth it can
+     * reach — see the module docblock for the one hop (cross-shard) it cannot.
      */
     const relationMask = (table: string, rows: Record<string, unknown>[]): Record<string, unknown>[] => {
         const columns = perTable.get(table);
@@ -376,9 +383,20 @@ const wrapDatabase = <Context>(
         return columns ? rows.map((row) => maskRow(row, columns, context)) : rows;
     };
 
-    /** Attach {@link relationMask} to a read's args, preserving the caller's own. */
+    /**
+     * Attach {@link relationMask} to a read's args.
+     *
+     * COMPOSES rather than overwrites: `.use(mask(A)).use(mask(B))` stacks two
+     * wrappers, and the inner one's args already carry its own hook — replacing it
+     * would silently drop that policy from every `with`-hydrated child while
+     * top-level rows still got both, which is exactly the asymmetry that makes a
+     * masking bug hard to see. Applying both in sequence matches how the stacked
+     * wrappers already treat top-level rows.
+     */
     const withRelationMask = (args?: QueryArgs): QueryArgs => {
-        return { ...args, relationMask };
+        const inner = args?.relationMask;
+
+        return { ...args, relationMask: inner === undefined ? relationMask : (table, rows) => relationMask(table, inner(table, rows)) };
     };
 
     /**

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../src/create-browser";
 import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from "../src/types";
+import { stubDohFetch } from "./_helpers/stub-doh";
 
 // `resolveDns` defaults ON, so every navigation here would otherwise issue a REAL
 // Cloudflare DoH request. Answer with a public IP so the re-check is a no-op and
@@ -10,17 +11,7 @@ import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from 
 // describe below navigates.
 /* eslint-disable vitest/require-top-level-describe -- the stub applies to every describe in this file, so it belongs at file scope */
 beforeEach(() => {
-    vi.stubGlobal(
-        "fetch",
-        async () =>
-            ({
-                json: async () => {
-                    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a public IP fixture so the DoH re-check passes; no connection is made
-                    return { Answer: [{ data: "93.184.216.34", type: 1 }] };
-                },
-                ok: true,
-            }) as unknown as Response,
-    );
+    stubDohFetch();
 });
 
 afterEach(() => {
