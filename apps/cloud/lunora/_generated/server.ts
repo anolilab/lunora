@@ -24,12 +24,100 @@ import type {
     Validator,
 } from "@lunora/server";
 
-import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
+import type {
+    DatabaseReaderFacade as DatabaseReaderFacadeOf,
+    DatabaseWriterFacade as DatabaseWriterFacadeOf,
+    LoadWith as LoadWithOf,
+    TableReaderFacade as TableReaderFacadeOf,
+    TableWriterFacade as TableWriterFacadeOf,
+    WithArg as WithArgOf,
+} from "@lunora/server/data-model";
+
+export type {
+    AggregateOp,
+    GroupByEntry,
+    OrderBy,
+    QueryArgs,
+    QueryPage,
+    RankPage,
+    RankResult,
+    RestrictableQueryOptions,
+    RestrictableQueryOptionsOf,
+    SearchFilterBuilder,
+    SearchReader,
+    TableAggregateOptions,
+    TableAggregateOptionsOf,
+    TableGroupByOptions,
+    TableGroupByOptionsOf,
+    TableRankOptions,
+    TableRankPageOptions,
+    Where,
+    WhereOf,
+    WhereOperators,
+} from "@lunora/server/data-model";
+
+import type { DataModel, Doc, GeoIndexNamesByTable, Id as IdOfTable, IndexNamesByTable, Insert, InsertModel, RankIndexNamesByTable, Relations, SearchIndexNamesByTable, TableName } from "./dataModel.js";
 import type { LunoraAi } from "@lunora/ai";
 import type { LunoraPayment } from "@lunora/payment";
 import type * as lunoraEnvContract from "../env.js";
 
 export type { AppTableName, DataModel, Doc, Id, TableName } from "./dataModel.js";
+
+/**
+ * The query-DSL bindings: `@lunora/server/data-model`'s generics parameterized
+ * over this project's `DataModel` / `InsertModel` / `Relations` / index maps.
+ *
+ * They live here rather than in `dataModel.ts` because they are the half that
+ * needs the SERVER package. Keeping `dataModel.ts` free of it lets a sibling
+ * package — a web app, another Worker — compile `api.ts` for its `Doc`/`Id`
+ * types without installing a server dependency to do it.
+ */
+
+/** The `with` argument for table `T` — see `@lunora/server/data-model`. */
+export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;
+
+/** `Doc<T>` narrowed to exactly the relations requested in the with-arg `W`. */
+export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
+
+/** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
+export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
+
+/** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
+export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, T, GeoIndexNamesByTable>;
+
+/** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
+export type DatabaseReaderFacade = DatabaseReaderFacadeOf<DataModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
+
+/** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
+export type DatabaseWriterFacade = DatabaseWriterFacadeOf<DataModel, InsertModel, Relations, RankIndexNamesByTable, SearchIndexNamesByTable, GeoIndexNamesByTable>;
+
+/** Insert builder returned by `ctx.orm.insert(table)`. */
+export interface OrmInsertBuilder<T extends keyof DataModel> {
+    values: (values: Insert<T>) => Promise<IdOfTable<T>>;
+}
+
+/** Replace builder returned by `ctx.orm.replace(table, id)` — swaps the whole document. */
+export interface OrmReplaceBuilder<T extends keyof DataModel> {
+    with: (values: Insert<T>) => Promise<void>;
+}
+
+/** Update builder returned by `ctx.orm.update(table, id)` — patches the named fields. */
+export interface OrmUpdateBuilder<T extends keyof DataModel> {
+    set: (values: Partial<Insert<T>>) => Promise<void>;
+}
+
+/** Read-only ORM surface — `ctx.orm` on a `QueryCtx`. Mirrors `ctx.db` reads under a kitcn-style `query` namespace. */
+export interface OrmReader {
+    query: DatabaseReaderFacade;
+}
+
+/** Read-write ORM surface — `ctx.orm` on a `MutationCtx` / `ActionCtx`. Writes are addressed by id, like `ctx.db`. */
+export interface OrmWriter extends OrmReader {
+    delete: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => Promise<void>;
+    insert: <T extends keyof DataModel>(table: T) => OrmInsertBuilder<T>;
+    replace: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmReplaceBuilder<T>;
+    update: <T extends keyof DataModel>(table: T, id: IdOfTable<T>) => OrmUpdateBuilder<T>;
+}
 
 /** Storage buckets this schema declares (`v.storage("name")`), narrowing `ctx.storage.bucket(name)`. */
 export type StorageBucketName = "default";
@@ -73,8 +161,17 @@ export type LunoraEnv = ReturnType<typeof lunoraEnvContract.env>;
  * Intersected with the wide `(string) => TableReader` signature so the bound
  * `ctx.db` is still structurally assignable to schema-agnostic consumers that
  * call `db.query(someString)` (e.g. `@lunora/ratelimit`'s `createDbStore`).
+ *
+ * The three index-name unions are what make `.withIndex("by_TYPO")` a compile
+ * error: each resolves to the table's declared names, or `never` when it
+ * declares none of that kind. Without them a renamed or dropped index left
+ * every call site typechecking, and the query either threw at runtime or
+ * degraded silently to a full table scan.
  */
-type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) & ((table: string) => TableReader);
+type TypedTableQuery = (<T extends TableName>(
+    table: T,
+) => TableReader<Doc<T>, IndexNamesByTable[T], SearchIndexNamesByTable[T], GeoIndexNamesByTable[T]>) &
+    ((table: string) => TableReader);
 
 /**
  * The point read `ctx.db.get(id)`, bound to this schema: an `Id<"table">`
