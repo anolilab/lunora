@@ -54,18 +54,20 @@ const snapshotsDir = join(rootDir, "api-snapshots");
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `platform-node` IS covered. It was held out while it was a plan-234 spike, on
- * the grounds that its surface was still expected to move. It now implements
- * what it declares — durable alarms, scheduler, sockets and shard state, a
- * `ShardDirectory` that dispatches, `.global()` tables, workflows and object
- * storage — and being covered is not a stability promise (see {@link TIER_3});
- * it is how the second host's surface stops drifting from the contracts in
- * `platform` unnoticed, which is the whole reason those two are gated.
+ * `agent`, `ai` and `platform-node` ARE covered, at TIER_3, and being covered is
+ * NOT a stability promise — see {@link TIER_3}. The rest of the experimental
+ * tier (`replica`, `x402`, `react-native`, `angular`, `browser`, `container`,
+ * `payment`) is not covered yet.
  *
- * `agent` and `ai` ARE covered, at TIER_3, and being covered is NOT a stability
- * promise — see {@link TIER_3}. The rest of the experimental tier (`replica`,
- * `x402`, `react-native`, `angular`, `browser`, `container`, `payment`) is not
- * covered yet.
+ * `platform-node` was held out entirely while it was a plan-234 spike, on the
+ * grounds that its surface was still expected to move. It now implements what it
+ * declares — durable alarms, scheduler, sockets and shard state, a
+ * `ShardDirectory` that dispatches, `.global()` tables, workflows and object
+ * storage — so it is gated, at the tier `ROADMAP.md` publishes it in. Gating it
+ * is how the second host's surface stops drifting from the contracts in
+ * `platform` unnoticed, which is the whole reason those two are gated; TIER_1
+ * would have been a 1.0 SemVer promise this package is nowhere near making, and
+ * `check-roadmap-tiers` says so at install time.
  *
  * `auth-ui` IS covered (TIER_2) despite being `private: true` with no build
  * step — privacy and "no dist" are not exemptions (see `dispatch`, also
@@ -95,7 +97,6 @@ const TIER_1 = [
     // shape a second target has to match — so it is gated the same way.
     "platform",
     "platform-cloudflare",
-    "platform-node",
     "shard-engine",
     // Host-neutral observability: a second host consumes this surface directly,
     // so drifting it silently is exactly what this guard exists to catch.
@@ -146,7 +147,7 @@ const TIER_2 = [
  * tagged, plus every export appearing or disappearing — which is exactly the
  * settling signal.
  */
-const TIER_3 = ["agent", "ai"];
+const TIER_3 = ["agent", "ai", "platform-node"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
