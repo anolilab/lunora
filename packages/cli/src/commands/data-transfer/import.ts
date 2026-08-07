@@ -21,6 +21,7 @@ import { checkRowParity, reportStorageOutcome, reportUntransferredPaths } from "
 import type { StreamingFetchLike } from "./shared";
 import { IMPORT_ENDPOINT_PATH } from "./shared";
 import { readFirestoreExport } from "./sources/firebase";
+import { scanFirebaseDump, scanSupabaseDump } from "./sources/scan";
 import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
 import { migrateStorageBlobs } from "./storage-blobs";
@@ -205,15 +206,43 @@ const openSourceStream = (
         }
 
         case "firebase": {
-            return readFirestoreExport(source.collections, source.mapping, options.logger, sourceRows);
+            return readFirestoreExport(source.collections, source.mapping, options.logger, sourceRows, options.file);
         }
 
         case "supabase": {
-            return readSupabaseExport(source.tables, source.mapping, options.logger, sourceRows);
+            return readSupabaseExport(source.tables, source.mapping, options.logger, sourceRows, options.file);
         }
 
         default: {
             return createReadStream(options.file, { encoding: "utf8" });
+        }
+    }
+};
+
+/**
+ * Propose a mapping for whichever source this is, writing it for review.
+ *
+ * Scan-only, and it runs before the worker/token preconditions: an operator
+ * inspects a dump long before a target worker exists.
+ */
+const runScan = async (source: ImportSource, cwd: string, logger: Logger): Promise<unknown> => {
+    switch (source.kind) {
+        case "convex": {
+            return scanStorageColumns(source.snapshot, source.tables, cwd, logger);
+        }
+
+        case "firebase": {
+            return scanFirebaseDump(source.collections, cwd, logger);
+        }
+
+        case "supabase": {
+            return scanSupabaseDump(source.tables, cwd, logger);
+        }
+
+        default: {
+            logger.error("--scan needs a Convex, Supabase, or Firebase source.");
+
+            return undefined;
         }
     }
 };
@@ -511,8 +540,8 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // Scan-only: it writes the candidate mapping and imports nothing, so it runs
     // before the worker/token preconditions — the operator inspects an export
     // long before a target worker exists.
-    if (options.scan === true && source.kind === "convex") {
-        const scanned = await scanStorageColumns(source.snapshot, source.tables, cwd, options.logger);
+    if (options.scan === true) {
+        const scanned = await runScan(source, cwd, options.logger);
 
         return { body: scanned, code: scanned === undefined ? 1 : 0, inserted: 0 };
     }

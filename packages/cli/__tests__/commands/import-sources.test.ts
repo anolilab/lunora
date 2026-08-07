@@ -631,3 +631,157 @@ describe("storage transfer with a resumable checkpoint", () => {
         expect(logs.warn.join("\n")).toContain("storage path never transferred: users.avatar: avatars/missing.png");
     });
 });
+
+describe("auth import", () => {
+    beforeEach(() => {
+        workDir = mkdtempSync(join(tmpdir(), "lunora-import-auth-"));
+    });
+
+    afterEach(() => {
+        rmSync(workDir, { force: true, recursive: true });
+    });
+
+    it("maps Supabase users and identities to better-auth rows, without any password material", async () => {
+        expect.assertions(4);
+
+        const root = writeDump({
+            "auth.identities.csv": "user_id,provider,provider_id\nu1,github,gh-99\n",
+            "auth.users.csv":
+                "id,email,email_confirmed_at,encrypted_password,raw_user_meta_data,created_at\n" +
+                'u1,a@b.com,2024-01-02 03:04:05+00,"$2a$10$notportable","{""name"":""Ada"",""avatar_url"":""https://x/a.png""}",2024-01-01 00:00:00+00\n',
+            "posts.csv": "id,title\np1,hello\n",
+        });
+
+        writeMapping("supabase", { auth: { file: "auth.users.csv", identitiesFile: "auth.identities.csv" } });
+
+        const { imported, result } = await runImport(root, "supabase");
+        const user = imported.find((row) => row.table === "user");
+        const account = imported.find((row) => row.table === "account");
+
+        expect(result.code).toBe(0);
+        expect(user?.doc).toStrictEqual({
+            _id: "u1",
+            createdAt: Date.parse("2024-01-01T00:00:00+00:00"),
+            email: "a@b.com",
+            emailVerified: true,
+            id: "u1",
+            image: "https://x/a.png",
+            name: "Ada",
+        });
+        expect(account?.doc).toStrictEqual({ _id: "u1:github", accountId: "gh-99", id: "u1:github", providerId: "github", userId: "u1" });
+        // The bcrypt hash is in the dump and must not reach the target.
+        expect(JSON.stringify(imported)).not.toContain("$2a$10$");
+    });
+
+    it("maps a Firebase auth:export dump, dropping the password provider", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "auth.json": JSON.stringify({
+                users: [
+                    {
+                        displayName: "Grace",
+                        email: "g@h.com",
+                        emailVerified: true,
+                        localId: "f1",
+                        passwordHash: "c2NyeXB0",
+                        providerUserInfo: [
+                            { providerId: "password", rawId: "g@h.com" },
+                            { providerId: "google.com", rawId: "google-1" },
+                        ],
+                        salt: "abc",
+                    },
+                ],
+            }),
+            "t.json": JSON.stringify({ x1: {} }),
+        });
+
+        writeMapping("firebase", { auth: { file: "auth.json" } });
+
+        const { imported } = await runImport(root, "firebase");
+        const accounts = imported.filter((row) => row.table === "account");
+
+        expect(imported.find((row) => row.table === "user")?.doc).toStrictEqual({
+            _id: "f1",
+            email: "g@h.com",
+            emailVerified: true,
+            id: "f1",
+            name: "Grace",
+        });
+        // `password` is better-auth's own credential provider, not a linked
+        // account — and its hash is unusable anyway.
+        expect(accounts.map((row) => row.doc["providerId"])).toStrictEqual(["google.com"]);
+        expect(JSON.stringify(imported)).not.toContain("c2NyeXB0");
+    });
+
+    it("refuses a dump where two users claim the same email", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "auth.users.csv": "id,email\nu1,dup@x.com\nu2,dup@x.com\n",
+            "t.csv": "id\nx1\n",
+        });
+
+        writeMapping("supabase", { auth: { file: "auth.users.csv" } });
+
+        await expectAbort(root, "supabase", /duplicate email/);
+    });
+});
+
+describe("--scan for the foreign sources", () => {
+    beforeEach(() => {
+        workDir = mkdtempSync(join(tmpdir(), "lunora-import-scan-"));
+    });
+
+    afterEach(() => {
+        rmSync(workDir, { force: true, recursive: true });
+    });
+
+    it("infers reshapes from a Supabase dump and writes them for review", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "events.csv": "id,at,flag,big,plain\ne1,2024-01-02 03:04:05+00,t,9007199254740993,hello\ne2,2024-02-03 04:05:06+00,f,9007199254740994,world\n",
+        });
+
+        const worker = sink();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            from: "supabase",
+            logger: capturingLogger().logger,
+            scan: true,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const written = JSON.parse(readFileSync(join(workDir, "lunora", "import-supabase.json"), "utf8"));
+
+        expect(result.code).toBe(0);
+        expect(worker.imported).toStrictEqual([]);
+        expect(written.tables.events.types).toStrictEqual({ at: "timestamp-ms", big: "int8-string", flag: "boolean" });
+    });
+
+    it("never overwrites a mapping the operator has already confirmed", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({ "t.csv": "id,at\nx1,2024-01-02 03:04:05+00\n" });
+
+        writeMapping("supabase", { tables: { t: { types: { at: "timestamp-iso" } } } });
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: sink().fetchImpl,
+            file: root,
+            from: "supabase",
+            logger: capturingLogger().logger,
+            scan: true,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(JSON.parse(readFileSync(join(workDir, "lunora", "import-supabase.json"), "utf8")).tables.t.types.at).toBe("timestamp-iso");
+    });
+});

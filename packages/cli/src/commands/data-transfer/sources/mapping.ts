@@ -30,8 +30,12 @@ interface TableMapping {
 
 /** Shape of `lunora/import-<source>.json`. */
 interface ImportSourceMapping {
-    /** Auth dump → better-auth `user`/`account` rows. */
-    auth?: { file?: string };
+    /**
+     * Auth dump → better-auth `user`/`account` rows. `file` is the users dump
+     * (`auth.users.csv` / a Firebase `auth:export` JSON); `identitiesFile` is
+     * Supabase's `auth.identities` dump, which carries the linked providers.
+     */
+    auth?: { file?: string; identitiesFile?: string };
     /** Optional R2 key prefix for migrated storage objects. */
     keyPrefix?: string;
     tables?: Record<string, TableMapping>;
@@ -79,6 +83,36 @@ const parseTableMapping = (raw: unknown, where: string): TableMapping => {
     };
 };
 
+/** Validate the optional `auth` block. */
+const assertAuthMapping = (auth: unknown, mappingPath: string): void => {
+    if (auth === undefined) {
+        return;
+    }
+
+    if (!isPlainObject(auth)) {
+        throw new LunoraError("INTERNAL", `${mappingPath}: \`auth\` must be an object`);
+    }
+
+    for (const key of ["file", "identitiesFile"] as const) {
+        if (auth[key] !== undefined && typeof auth[key] !== "string") {
+            throw new LunoraError("INTERNAL", `${mappingPath}: \`auth.${key}\` must be a string`);
+        }
+    }
+};
+
+/** Validate the optional `tables` block, one entry at a time. */
+const parseTables = (tables: unknown, mappingPath: string): Record<string, TableMapping> | undefined => {
+    if (tables === undefined) {
+        return undefined;
+    }
+
+    if (!isPlainObject(tables)) {
+        throw new LunoraError("INTERNAL", `${mappingPath}: \`tables\` must be an object of table → mapping`);
+    }
+
+    return Object.fromEntries(Object.entries(tables).map(([table, mapping]) => [table, parseTableMapping(mapping, `${mappingPath}: tables.${table}`)]));
+};
+
 /**
  * Narrow a parsed mapping file, or throw naming the offending key.
  *
@@ -97,35 +131,14 @@ const parseImportSourceMapping = (raw: unknown, mappingPath: string): ImportSour
         throw new LunoraError("INTERNAL", `${mappingPath}: \`keyPrefix\` must be a string`);
     }
 
-    const { auth } = raw;
+    const { auth, tables } = raw;
 
-    if (auth !== undefined) {
-        if (!isPlainObject(auth)) {
-            throw new LunoraError("INTERNAL", `${mappingPath}: \`auth\` must be an object`);
-        }
-
-        if (auth["file"] !== undefined && typeof auth["file"] !== "string") {
-            throw new LunoraError("INTERNAL", `${mappingPath}: \`auth.file\` must be a string`);
-        }
-    }
-
-    const { tables } = raw;
-    const parsedTables: Record<string, TableMapping> = {};
-
-    if (tables !== undefined) {
-        if (!isPlainObject(tables)) {
-            throw new LunoraError("INTERNAL", `${mappingPath}: \`tables\` must be an object of table → mapping`);
-        }
-
-        for (const [table, mapping] of Object.entries(tables)) {
-            parsedTables[table] = parseTableMapping(mapping, `${mappingPath}: tables.${table}`);
-        }
-    }
+    assertAuthMapping(auth, mappingPath);
 
     return {
-        auth,
+        auth: auth as ImportSourceMapping["auth"],
         keyPrefix: raw["keyPrefix"],
-        tables: tables === undefined ? undefined : parsedTables,
+        tables: parseTables(tables, mappingPath),
     };
 };
 

@@ -16,6 +16,7 @@ import { LunoraError } from "@lunora/errors";
 import { parse } from "csv-parse";
 
 import type { Logger } from "../../../util/logger";
+import { readAuthDump } from "./auth-reader";
 import type { ImportSourceMapping, TableMapping } from "./mapping";
 import { applyReshape } from "./reshape";
 
@@ -43,7 +44,15 @@ const listSupabaseTables = async (directory: string, mapping: ImportSourceMappin
         throw new LunoraError("INTERNAL", `${directory} is not a readable directory of Supabase CSV exports`);
     }
 
-    const csvFiles = entries.filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".csv")).map((entry) => entry.name);
+    // The auth dumps are NOT application tables. Importing `auth.users.csv` as a
+    // table would carry `encrypted_password` straight into the target as an
+    // ordinary column — the exact thing "passwords are never migrated" forbids.
+    const authFiles = new Set(
+        [mapping?.auth?.file, mapping?.auth?.identitiesFile].filter((file): file is string => file !== undefined).map((file) => basename(file)),
+    );
+    const csvFiles = entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".csv") && !authFiles.has(entry.name))
+        .map((entry) => entry.name);
     const claimed = new Map<string, string>();
 
     for (const [table, tableMapping] of Object.entries(mapping?.tables ?? {})) {
@@ -161,7 +170,10 @@ const readSupabaseExport = async function* (
     mapping: ImportSourceMapping | undefined,
     logger: Logger,
     sourceRows: Map<string, number>,
+    directory: string,
 ): AsyncGenerator<string> {
+    yield* readAuthDump("supabase", directory, mapping, logger, sourceRows);
+
     for (const tableFile of tables) {
         // Seed the tally so an empty table still appears in the parity report —
         // absent-vs-zero is "never read" vs "nothing to import".

@@ -15,6 +15,9 @@ import { LunoraError } from "@lunora/errors";
 /** An all-digits value is already epoch milliseconds, not a date string. */
 const EPOCH_DIGITS_RE = /^\d+$/;
 
+/** Postgres writes `+00`, which is not a valid ISO-8601 offset until it gains its minutes. */
+const BARE_HOUR_OFFSET_RE = /[+-]\d{2}$/;
+
 /** One better-auth row pair for an imported identity. */
 interface AuthRows {
     accounts: Record<string, unknown>[];
@@ -59,18 +62,37 @@ const toEpochMs = (value: null | number | string | undefined): number | undefine
         return numeric;
     }
 
-    const parsed = Date.parse(value.includes("T") ? value : value.replace(" ", "T"));
+    const iso = value.includes("T") ? value : value.replace(" ", "T");
+    const parsed = Date.parse(BARE_HOUR_OFFSET_RE.test(iso) ? `${iso}:00` : iso);
 
     return Number.isNaN(parsed) ? undefined : parsed;
 };
 
-/** Pull a display name out of Supabase's free-form user metadata. */
-const nameFromMetadata = (metadata: unknown): string | undefined => {
-    if (metadata === null || typeof metadata !== "object") {
-        return undefined;
+/**
+ * Supabase's `raw_user_meta_data` is `jsonb`, so a CSV dump hands it over as a
+ * JSON *string* while a direct read hands over an object. Accept both.
+ */
+const asMetadataObject = (metadata: unknown): Record<string, unknown> | undefined => {
+    if (typeof metadata === "string") {
+        try {
+            const parsed: unknown = JSON.parse(metadata);
+
+            return parsed !== null && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+        } catch {
+            return undefined;
+        }
     }
 
-    const record = metadata as Record<string, unknown>;
+    return metadata !== null && typeof metadata === "object" ? (metadata as Record<string, unknown>) : undefined;
+};
+
+/** Pull a display name out of Supabase's free-form user metadata. */
+const nameFromMetadata = (metadata: unknown): string | undefined => {
+    const record = asMetadataObject(metadata);
+
+    if (record === undefined) {
+        return undefined;
+    }
 
     for (const key of ["name", "full_name", "user_name", "preferred_username"]) {
         if (typeof record[key] === "string" && record[key].length > 0) {
@@ -82,11 +104,11 @@ const nameFromMetadata = (metadata: unknown): string | undefined => {
 };
 
 const imageFromMetadata = (metadata: unknown): string | undefined => {
-    if (metadata === null || typeof metadata !== "object") {
+    const record = asMetadataObject(metadata);
+
+    if (record === undefined) {
         return undefined;
     }
-
-    const record = metadata as Record<string, unknown>;
 
     for (const key of ["avatar_url", "picture"]) {
         if (typeof record[key] === "string" && record[key].length > 0) {

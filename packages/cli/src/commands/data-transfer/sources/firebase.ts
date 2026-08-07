@@ -21,6 +21,7 @@ import { basename, join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../../util/logger";
+import { readAuthDump } from "./auth-reader";
 import type { ImportSourceMapping, TableMapping } from "./mapping";
 import { applyReshape } from "./reshape";
 
@@ -195,8 +196,12 @@ const listFirestoreCollections = async (directory: string, mapping: ImportSource
         }
     }
 
+    // The auth dump is not a collection — see the Supabase reader for why
+    // importing it as one would leak credential material into the target.
+    const authFile = mapping?.auth?.file === undefined ? undefined : basename(mapping.auth.file);
+
     const found = entries
-        .filter((entry) => entry.isFile() && COLLECTION_FILE_RE.test(entry.name))
+        .filter((entry) => entry.isFile() && COLLECTION_FILE_RE.test(entry.name) && entry.name !== authFile)
         .map((entry) => {
             return { file: join(directory, entry.name), table: claimed.get(entry.name) ?? entry.name.replace(COLLECTION_FILE_RE, "") };
         });
@@ -273,7 +278,10 @@ const readFirestoreExport = async function* (
     mapping: ImportSourceMapping | undefined,
     logger: Logger,
     sourceRows: Map<string, number>,
+    directory: string,
 ): AsyncGenerator<string> {
+    yield* readAuthDump("firebase", directory, mapping, logger, sourceRows);
+
     for (const collection of collections) {
         if (!sourceRows.has(collection.table)) {
             sourceRows.set(collection.table, 0);
