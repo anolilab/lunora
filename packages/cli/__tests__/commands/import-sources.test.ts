@@ -3,7 +3,8 @@
  * Firestore typed-value decoding, the declared reshapes, and the rule that a
  * reshape which would lose information errors rather than truncating.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -383,7 +384,7 @@ describe("lunora import --from firebase", () => {
         await expectAbort(root, "firebase", /unrecognised Firestore value/);
     });
 
-    it("refuses --with-storage, which is not how Firebase storage migrates", async () => {
+    it("refuses --with-storage without --storage-dir, which would migrate nothing", async () => {
         expect.assertions(2);
 
         const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
@@ -391,5 +392,242 @@ describe("lunora import --from firebase", () => {
 
         expect(result.code).toBe(1);
         expect(logs.error.join("\n")).toContain("gcloud storage cp");
+    });
+});
+
+describe("storage transfer with a resumable checkpoint", () => {
+    beforeEach(() => {
+        workDir = mkdtempSync(join(tmpdir(), "lunora-import-storage-"));
+    });
+
+    afterEach(() => {
+        rmSync(workDir, { force: true, recursive: true });
+    });
+
+    const sha256Hex = (bytes: string): string => createHash("sha256").update(bytes).digest("hex");
+
+    /** A worker that stores uploads, plus a counter so re-runs can be told apart. */
+    const storageWorker = () => {
+        const bucket = new Map<string, { sha256: string; size: number }>();
+        const imported: { doc: Record<string, unknown>; table: string }[] = [];
+        const uploads: string[] = [];
+        let failAfterUploads = Number.POSITIVE_INFINITY;
+
+        const json = (value: unknown) => {
+            return { arrayBuffer: async () => new ArrayBuffer(0), body: null, json: async () => value, ok: true, status: 200, text: async () => "" };
+        };
+
+        const fetchImpl: StreamingFetchLike = async (input, init) => {
+            const url = new URL(input);
+            const method = init?.method ?? "GET";
+
+            if (url.pathname === "/_lunora/admin/import") {
+                const inserted: Record<string, number> = {};
+
+                for (const line of String(init?.body ?? "")
+                    .split("\n")
+                    .filter((entry) => entry.trim().length > 0)) {
+                    const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
+
+                    imported.push(row);
+                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                }
+
+                return json({ conflicts: 0, errors: [], inserted, received: imported.length });
+            }
+
+            if (url.pathname === "/_lunora/admin/storage" && method === "GET") {
+                return json({
+                    objects: [...bucket.entries()].map(([key, o]) => {
+                        return { key, ...o };
+                    }),
+                    truncated: false,
+                });
+            }
+
+            if (url.pathname === "/_lunora/admin/storage" && method === "PUT") {
+                if (uploads.length >= failAfterUploads) {
+                    return {
+                        arrayBuffer: async () => new ArrayBuffer(0),
+                        body: null,
+                        json: async () => {
+                            return {};
+                        },
+                        ok: false,
+                        status: 500,
+                        text: async () => "boom",
+                    };
+                }
+
+                const key = url.searchParams.get("key") as string;
+                const bytes = new TextDecoder().decode(init?.body as Uint8Array);
+
+                uploads.push(key);
+                bucket.set(key, { sha256: sha256Hex(bytes), size: bytes.length });
+
+                return json({ key, sha256: sha256Hex(bytes) });
+            }
+
+            throw new Error(`unexpected ${method} ${input}`);
+        };
+
+        return {
+            bucket,
+            fetchImpl,
+            imported,
+            failAfter: (count: number) => {
+                failAfterUploads = count;
+            },
+            uploads,
+        };
+    };
+
+    it("uploads a local bucket dir and rewrites the mapped path column to the R2 key", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({ "users.json": JSON.stringify({ u1: { avatar: { stringValue: "avatars/a.png" } } }) });
+        const storage = join(workDir, "bucket");
+
+        mkdirSync(join(storage, "avatars"), { recursive: true });
+        writeFileSync(join(storage, "avatars", "a.png"), "image-bytes", "utf8");
+
+        writeMapping("firebase", { tables: { users: { storageColumns: ["avatar"] } } });
+
+        const worker = storageWorker();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(worker.uploads).toStrictEqual([sha256Hex("image-bytes")]);
+        expect(worker.imported[0]?.doc["avatar"]).toBe(sha256Hex("image-bytes"));
+    });
+
+    it("checkpoints each object, and a resumed run re-uploads none of them", async () => {
+        expect.assertions(4);
+
+        const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
+        const storage = join(workDir, "bucket");
+
+        mkdirSync(storage, { recursive: true });
+
+        for (const name of ["a.txt", "b.txt", "c.txt"]) {
+            writeFileSync(join(storage, name), `content-${name}`, "utf8");
+        }
+
+        const first = storageWorker();
+
+        // Kill the run on the second object: the first is checkpointed, the rest are not.
+        first.failAfter(1);
+
+        const failed = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: first.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(failed.code).toBe(1);
+        expect(existsSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"))).toBe(true);
+
+        // A second worker with an empty bucket: anything re-uploaded would show up.
+        const second = storageWorker();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: second.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        const checkpoint = readFileSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"), "utf8")
+            .split("\n")
+            .filter((line) => line.trim().length > 0);
+
+        // All three end up recorded exactly once, and the resumed run only had
+        // to move the two the failed run never reached.
+        expect(checkpoint).toHaveLength(3);
+        expect(second.uploads).toHaveLength(2);
+    });
+
+    it("survives a torn final checkpoint line rather than stranding the migration", async () => {
+        expect.assertions(2);
+
+        const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
+        const storage = join(workDir, "bucket");
+
+        mkdirSync(storage, { recursive: true });
+        writeFileSync(join(storage, "a.txt"), "only", "utf8");
+        mkdirSync(join(workDir, "lunora"), { recursive: true });
+        // Exactly what a process killed mid-append leaves behind.
+        writeFileSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"), '{"source":"a.txt","key":"x","si', "utf8");
+
+        const worker = storageWorker();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(worker.uploads).toStrictEqual([sha256Hex("only")]);
+    });
+
+    it("reports a mapped path the transfer never saw instead of guessing at it", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({ "users.json": JSON.stringify({ u1: { avatar: { stringValue: "avatars/missing.png" } } }) });
+        const storage = join(workDir, "bucket");
+
+        mkdirSync(storage, { recursive: true });
+        writeFileSync(join(storage, "other.png"), "x", "utf8");
+
+        writeMapping("firebase", { tables: { users: { storageColumns: ["avatar"] } } });
+
+        const worker = storageWorker();
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(worker.imported[0]?.doc["avatar"]).toBe("avatars/missing.png");
+        expect(logs.warn.join("\n")).toContain("storage path never transferred: users.avatar: avatars/missing.png");
     });
 });

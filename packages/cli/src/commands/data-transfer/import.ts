@@ -17,14 +17,17 @@ import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { CONVEX_STORAGE_TABLE, readConvexExport, resolveImportSource } from "./import-source";
-import { checkRowParity, reportStorageOutcome } from "./import-verify";
+import { checkRowParity, reportStorageOutcome, reportUntransferredPaths } from "./import-verify";
 import type { StreamingFetchLike } from "./shared";
 import { IMPORT_ENDPOINT_PATH } from "./shared";
 import { readFirestoreExport } from "./sources/firebase";
+import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
 import { migrateStorageBlobs } from "./storage-blobs";
 import type { ImportConvexMapping, StorageRemapReport } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
+
+const LEADING_SLASH_RE = /^\/+/;
 
 /** Rows per HTTP request when importing. Convex uses ~500; same here. */
 const DEFAULT_IMPORT_BATCH_SIZE = 500;
@@ -216,6 +219,133 @@ const openSourceStream = (
 };
 
 /**
+ * Move a foreign bucket into R2 and return the `sourcePath → R2 key` map.
+ *
+ * The Supabase service-role key is read from the environment rather than taken
+ * as a flag: it grants full read/write on the project, and a flag puts it in the
+ * process table where any other local process can read it. The `--token` option
+ * carries the same warning for the same reason.
+ */
+const runForeignStorageTransfer = async (
+    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
+    source: Extract<ImportSource, { kind: "firebase" | "supabase" }>,
+    options: ImportCommandOptions,
+    cwd: string,
+): Promise<Map<string, string> | undefined> => {
+    const keyPrefix = source.mapping?.keyPrefix ?? "";
+
+    if (options.storageDir !== undefined) {
+        return transferStorageObjects(context, await listLocalObjects(options.storageDir), { cwd, keyPrefix, source: source.kind }, options.logger);
+    }
+
+    const url = process.env["SUPABASE_URL"];
+    const serviceKey = process.env["SUPABASE_SERVICE_ROLE_KEY"];
+
+    if (url === undefined || serviceKey === undefined) {
+        options.logger.error(
+            "--with-storage needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment (the service-role key, not the anon key), or --storage-dir pointing at an already-downloaded bucket.",
+        );
+
+        return undefined;
+    }
+
+    let end = url.length;
+
+    while (end > 0 && url[end - 1] === "/") {
+        end -= 1;
+    }
+
+    const objects = await listSupabaseObjects({ serviceKey, url: url.slice(0, end) }, context.fetchImpl, options.logger);
+
+    return transferStorageObjects(context, objects, { cwd, keyPrefix, source: source.kind }, options.logger);
+};
+
+/**
+ * Rewrite the columns a mapping names from their provider-side path to the R2
+ * key the object landed under.
+ *
+ * A path the transfer never saw is left alone and reported, not guessed — the
+ * same rule the Convex importer applies to an unresolvable storage reference.
+ */
+const remapStoragePaths = (
+    document_: Record<string, unknown>,
+    table: string,
+    transferred: Map<string, string>,
+    source: Extract<ImportSource, { kind: "firebase" | "supabase" }>,
+    unresolved: Set<string>,
+): Record<string, unknown> => {
+    const columns = source.mapping?.tables?.[table]?.storageColumns ?? [];
+
+    if (columns.length === 0) {
+        return document_;
+    }
+
+    const remapped = { ...document_ };
+
+    for (const column of columns) {
+        const value = remapped[column];
+
+        if (typeof value !== "string" || value.length === 0) {
+            continue;
+        }
+
+        const key = transferred.get(value) ?? transferred.get(value.replace(LEADING_SLASH_RE, ""));
+
+        if (key === undefined) {
+            unresolved.add(`${table}.${column}: ${value}`);
+        } else {
+            remapped[column] = key;
+        }
+    }
+
+    return remapped;
+};
+
+/**
+ * The line→row transform for a run, with the foreign-source path rewrite layered
+ * on top of the Convex storage-reference rewrite.
+ *
+ * They are separate passes because they answer different questions: one rewrites
+ * a Convex storage id to a content-hash key, the other rewrites a provider-side
+ * object path to one. A run only ever needs one of them.
+ */
+const createSourceRowTransformer = (config: {
+    report: StorageRemapReport;
+    source: ImportSource;
+    storageColumns?: Record<string, string[]>;
+    storageIdMap?: Map<string, string>;
+    table?: string;
+    transferredPaths?: Map<string, string>;
+    unresolvedPaths: Set<string>;
+}): ((line: string, lineNumber: number) => string | undefined) => {
+    const toWireRow = createRowTransformer({
+        report: config.report,
+        storageColumns: config.storageColumns,
+        storageIdMap: config.storageIdMap,
+        table: config.table,
+    });
+
+    const foreignSource = config.source.kind === "supabase" || config.source.kind === "firebase" ? config.source : undefined;
+    const { transferredPaths } = config;
+
+    if (transferredPaths === undefined || foreignSource === undefined) {
+        return toWireRow;
+    }
+
+    return (line: string, lineNumber: number): string | undefined => {
+        const row = toWireRow(line, lineNumber);
+
+        if (row === undefined) {
+            return undefined;
+        }
+
+        const parsed = JSON.parse(row) as { doc: Record<string, unknown>; table: string };
+
+        return JSON.stringify({ ...parsed, doc: remapStoragePaths(parsed.doc, parsed.table, transferredPaths, foreignSource, config.unresolvedPaths) });
+    };
+};
+
+/**
  * Feed a source's text chunks through the row transform into the batcher,
  * returning the error that stopped it (or `undefined`).
  *
@@ -304,6 +434,47 @@ const runStorageMigration = async (
 };
 
 /**
+ * Run whichever storage phase this source has, or none.
+ *
+ * Convex carries its blobs inside the export; Supabase and Firebase keep theirs
+ * in a bucket that has to be walked. Both end at the same place — a map from the
+ * old reference to the new R2 key — so the caller does not care which ran.
+ */
+const runStoragePhase = async (
+    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
+    source: ImportSource,
+    options: ImportCommandOptions,
+    cwd: string,
+): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap?: Map<string, string>; transferredPaths?: Map<string, string> }> => {
+    if (options.withStorage !== true) {
+        return {};
+    }
+
+    if (source.kind === "convex") {
+        return runStorageMigration(context, source, cwd, options.logger);
+    }
+
+    if (source.kind !== "supabase" && source.kind !== "firebase") {
+        return {};
+    }
+
+    try {
+        const transferredPaths = await runForeignStorageTransfer(context, source, options, cwd);
+
+        return transferredPaths === undefined ? undefined : { transferredPaths };
+    } catch {
+        // The transfer already reported which object failed and that the
+        // checkpoint is saved. Rows are deliberately NOT imported after a
+        // partial transfer: every path column would point at an object that is
+        // not there yet, which is the dangling reference the files-first
+        // ordering exists to prevent.
+        options.logger.error("no rows were imported — fix the transfer and re-run; it will resume where it stopped");
+
+        return undefined;
+    }
+};
+
+/**
  * Print an import run's diagnostics and summary.
  *
  * `received` versus the inserted total is what distinguishes "wrote nothing
@@ -355,18 +526,16 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const { baseUrl, fetchImpl, requestUrl, token } = request;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
 
-    // Phase 1: migrate `_storage` blobs, so no document can reference an object
-    // that is not there yet.
-    const storage =
-        options.withStorage === true && source.kind === "convex"
-            ? await runStorageMigration({ baseUrl, fetchImpl, token }, source, cwd, options.logger)
-            : { mapping: undefined, storageIdMap: undefined };
+    // Phase 1: move the files first, so no imported document can reference an
+    // object that is not there yet.
+    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd);
 
     if (storage === undefined) {
         return { body: undefined, code: 1, inserted: 0 };
     }
 
-    const { mapping, storageIdMap } = storage;
+    const { mapping, storageIdMap, transferredPaths } = storage;
+    const unresolvedPaths = new Set<string>();
     const storageColumns = mapping?.storageColumns;
     const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
 
@@ -386,9 +555,17 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const sourceRows = new Map<string, number>();
     const stream = openSourceStream(source, options, storageIdMap !== undefined, sourceRows);
     const batcher = createImportBatcher({ batchSize, fetchImpl, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl, token });
-    const toWireRow = createRowTransformer({ report: remapReport, storageColumns, storageIdMap, table: options.table });
+    const toRow = createSourceRowTransformer({
+        report: remapReport,
+        source,
+        storageColumns,
+        storageIdMap,
+        table: options.table,
+        transferredPaths,
+        unresolvedPaths,
+    });
 
-    const streamFailure = await drainIntoBatcher(stream, toWireRow, batcher, options.logger);
+    const streamFailure = await drainIntoBatcher(stream, toRow, batcher, options.logger);
 
     const { conflicts, errors, inserted, received, warnings } = batcher.totals;
 
@@ -397,13 +574,15 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     const parityMismatch = options.verify === true && streamFailure === undefined ? checkRowParity(options.logger, sourceRows, { conflicts, inserted }) : 0;
     const unmigratedFailure = storageIdMap !== undefined && reportStorageOutcome(options.logger, remapReport, options.verify === true);
 
+    const unresolvedPathFailure = reportUntransferredPaths(options.logger, unresolvedPaths, options.verify === true);
+
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
     const body = buildImportBody(batcher.totals, storageIdMap, remapReport);
 
     options.logger.info(JSON.stringify(body, undefined, 2));
     reportImportOutcome(options.logger, { conflicts, errorCount: errors.length, insertedTotal, received, warnings });
 
-    const failed = streamFailure !== undefined || errors.length > 0 || parityMismatch > 0 || unmigratedFailure;
+    const failed = streamFailure !== undefined || errors.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
 
     return { body, code: failed ? 1 : 0, inserted: insertedTotal };
 };

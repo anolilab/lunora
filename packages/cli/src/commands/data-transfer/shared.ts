@@ -18,6 +18,8 @@ type StreamingFetchLike = (
     input: string,
     init?: { body?: string | Uint8Array; headers?: Record<string, string>; method?: string },
 ) => Promise<{
+    /** Optional: only the storage transfer reads raw bytes, and only real `fetch` needs to supply it. */
+    arrayBuffer?: () => Promise<ArrayBuffer>;
     body: ReadableStream<Uint8Array> | null;
     json: () => Promise<unknown>;
     ok: boolean;

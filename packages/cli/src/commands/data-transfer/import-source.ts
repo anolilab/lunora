@@ -149,11 +149,11 @@ type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
  * mapping is the operator's statement about it.
  */
 const resolveForeignSource = async (options: ImportCommandOptions, from: "firebase" | "supabase", cwd: string): Promise<ImportSource> => {
-    if (options.withStorage === true && from === "firebase") {
-        // Firebase storage arrives as a local directory the operator downloaded
-        // with `gcloud storage cp`, which is a different flag; accepting
-        // `--with-storage` here would silently migrate nothing.
-        options.logger.error("--with-storage is not how Firebase storage migrates — download the bucket with `gcloud storage cp -r` and pass --storage-dir.");
+    if (options.withStorage === true && from === "firebase" && options.storageDir === undefined) {
+        // Firebase Cloud Storage has no listing endpoint this CLI can reach
+        // without owning Google's auth, so the bucket arrives as a local
+        // directory. Accepting the flag on its own would migrate nothing.
+        options.logger.error("--with-storage on Firebase needs --storage-dir — download the bucket first with `gcloud storage cp -r gs://<bucket> <dir>`.");
 
         return { kind: "invalid" };
     }
