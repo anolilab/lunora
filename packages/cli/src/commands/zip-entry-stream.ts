@@ -107,7 +107,17 @@ const openZipEntryStream = async (zipPath: string, entry: IZipEntry): Promise<Re
         throw new Error(`${entry.entryName} uses unsupported compression method ${String(method)} — re-create the archive with standard deflate`);
     }
 
+    // An empty entry is empty in all three fields. Taking the early return on
+    // `compressedSize` alone let a header claiming zero compressed bytes skip the
+    // CRC check entirely — the entry would read as empty and import as no rows,
+    // which is the silent-wrong-data case the checksum exists to stop.
     if (compressedSize === 0) {
+        if (entry.header.size > 0 || entry.header.crc !== 0) {
+            throw new Error(
+                `${entry.entryName} declares 0 compressed bytes but ${String(entry.header.size)} uncompressed with CRC ${String(entry.header.crc)} — the archive is corrupt`,
+            );
+        }
+
         return undefined;
     }
 

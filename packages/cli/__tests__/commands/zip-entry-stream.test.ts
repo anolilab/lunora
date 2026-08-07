@@ -64,6 +64,20 @@ describe("openZipEntryStream", () => {
         await expect(collect(await openZipEntryStream(path, zip.getEntry("t/documents.jsonl")!))).resolves.toBe(payload.toString("utf8"));
     });
 
+    it("rejects an entry that claims zero compressed bytes but is not empty", async () => {
+        expect.assertions(1);
+
+        // Returning early on `compressedSize` alone would take the empty path and
+        // skip the CRC check, so the entry imports as no rows rather than failing.
+        const payload = Buffer.from("a\nb\nc\n");
+        const { path, zip } = await buildZip([["t/documents.jsonl", payload]]);
+        const entry = zip.getEntry("t/documents.jsonl")!;
+
+        entry.header.compressedSize = 0;
+
+        await expect(openZipEntryStream(path, entry)).rejects.toThrow(/declares 0 compressed bytes/u);
+    });
+
     it("rejects an entry whose bytes do not match its CRC", async () => {
         expect.assertions(1);
 
