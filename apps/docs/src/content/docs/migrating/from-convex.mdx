@@ -250,9 +250,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
    `INSERT INTO channels … FROM <exported.jsonl>` step. Run
    `lunora migrate generate init` to get the schema SQL, then add a
    one-off data-import migration alongside it.
-5. **Export Convex data**: `npx convex export --path ./convex-export` produces a
-   JSONL dump per table. Point `lunora import` straight at that directory —
-   it reads the export layout, so there is no reshaping step:
+5. **Export Convex data**: `npx convex export --path ./convex-export --include-file-storage`
+   produces a JSONL dump per table (plus `_storage/`, the file metadata + blob
+   bytes if your app uses file storage). Point `lunora import` straight at that
+   directory — it reads the export layout, so there is no reshaping step:
 
     ```bash
     lunora import ./convex-export
@@ -264,6 +265,58 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     makes self-referential and cross-table cycles (a folder's `parentId`, a
     supersession chain) ordinary rows rather than special cases — there is
     nothing to remap, so there is no ordering problem to solve.
+
+    **File storage needs the opt-in.** `lunora import` skips the `_storage`
+    table by default (those rows describe blobs, not application data). To
+    migrate the files too — uploading every blob to R2 with a sha256 + size
+    check before write, then rewriting references — pass `--with-storage`:
+
+    ```bash
+    lunora import ./convex-export --with-storage
+    ```
+
+    Blobs are stored under content-hash keys (`sha256` hex of the bytes), and
+    every `{ $storage: id }` reference is rewritten automatically, at any depth.
+    Plain-string columns that hold storage ids (validated with `v.id("_storage")`
+    in Convex) are ambiguous against ordinary text, so they are rewritten only
+    through a `lunora/import-convex.json` mapping. Run `--scan` first and the CLI
+    detects the candidate columns and writes that file for you to confirm — it
+    imports nothing, and never overwrites a mapping you already have:
+
+    ```bash
+    lunora import ./convex-export --scan
+    ```
+
+    ```jsonc title="lunora/import-convex.json"
+    {
+        "keyPrefix": "", // optional R2 key prefix, e.g. "convex/"
+        "storageColumns": {
+            "users": ["avatarId"], // table → columns holding storage ids
+        },
+    }
+    ```
+
+    Re-running is safe: keys are content hashes, so blobs already present at the
+    right size are mapped without being uploaded again. Anything the migration
+    could not resolve is listed as a **dangling storage reference** and left
+    untouched — it is reported, never guessed at.
+
+    A `snapshot.zip` from `npx convex export --path ./snapshot.zip` imports the
+    same way (`lunora import ./snapshot.zip --with-storage`). `--verify` checks
+    each table's inserted count against its source line count and fails on any
+    dangling reference, exiting non-zero on a mismatch:
+
+    ```bash
+    lunora import ./convex-export --with-storage --verify
+    ```
+
+    <Callout type="info">
+        Objects up to 32 MiB take the checksum-verified admin upload, which digests the body and refuses to write on a mismatch — that covers essentially every
+        image, document, and audio file. A larger blob cannot reach the worker at all, so it falls back to a signed `PUT`. That fallback needs your app to have
+        signed URLs configured (`publicBaseUrl` + `signingSecret`) **and** to serve the `PUT` route those URLs address; Lunora does not mount one for you. It is
+        also verified only after the write — by size, plus SHA-256 where the bucket records one — and an object that fails is deleted rather than left behind.
+        If you have blobs over 32 MiB and no signed-`PUT` route, copy them across with `wrangler r2 object put` and add their columns to the mapping by hand.
+    </Callout>
 
     <Callout type="warn">
         `ctx.db.insert` does the **opposite**: it discards a supplied `_id` and mints a fresh one. So a hand-rolled importer that batch-inserts through a

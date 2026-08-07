@@ -789,7 +789,8 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         expect.hasAssertions();
 
         const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
-        const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: () => {} };
+        const errors: string[] = [];
+        const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
 
         // Export streams rows, but the import batch POST returns a hard failure,
         // which makes runImportCommand throw — the temp dir must still be removed.
@@ -825,17 +826,21 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         const dumpDirsBefore = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));
 
         // No `out` — the command stages the dump in a private mkdtemp dir it owns.
-        await expect(
-            runMigrateToHyperdriveCommand({
-                fetchImpl,
-                fromToken: "source-token",
-                fromUrl: "https://old.example.com",
-                logger,
-                tables: "settings",
-                toToken: "target-token",
-                toUrl: "https://new.example.com",
-            }),
-        ).rejects.toThrow(/import batch failed/);
+        // The failing batch surfaces as a non-zero code with the reason logged,
+        // rather than as a throw: a bulk import that dies part-way has usually
+        // already written rows, and the operator needs that tally.
+        const failed = await runMigrateToHyperdriveCommand({
+            fetchImpl,
+            fromToken: "source-token",
+            fromUrl: "https://old.example.com",
+            logger,
+            tables: "settings",
+            toToken: "target-token",
+            toUrl: "https://new.example.com",
+        });
+
+        expect(failed.code).toBe(1);
+        expect(errors.join("\n")).toContain("import batch failed");
 
         const dumpDirsAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));
 

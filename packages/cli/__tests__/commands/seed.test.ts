@@ -127,7 +127,7 @@ describe("lunora seed", () => {
 
         const calls: { body: string; url: string }[] = [];
         const fetchImpl: StreamingFetchLike = async (url, init) => {
-            const body = init?.body ?? "";
+            const body = typeof init?.body === "string" ? init.body : new TextDecoder().decode(init?.body);
 
             calls.push({ body, url });
 

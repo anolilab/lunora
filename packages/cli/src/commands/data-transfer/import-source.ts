@@ -1,0 +1,221 @@
+/**
+ * What `lunora import` was pointed at: a Convex export snapshot or a plain
+ * NDJSON file — plus the reader that turns the former into the `{ table, doc }`
+ * NDJSON the admin import endpoint accepts.
+ */
+import { stat } from "node:fs/promises";
+
+import { LunoraError } from "@lunora/errors";
+
+import type { Logger } from "../../util/logger";
+import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
+import { listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
+import type { ImportCommandOptions } from "./import";
+import { readStorageMetadata } from "./storage-blobs";
+
+/**
+ * Convex's own file table. Its rows describe stored BLOBS, not application
+ * data — the bytes sit next to the JSONL as separate files and belong in R2,
+ * so importing the rows alone would create dangling references.
+ */
+const CONVEX_STORAGE_TABLE = "_storage";
+
+/**
+ * Convex system tables are `_`-prefixed (`_storage`, `_scheduled_functions`,
+ * `_modules`, …). None of them are application data, and none of them exist on
+ * the target: streaming them in would create rows nothing reads, and `--verify`
+ * would then demand row parity for a table the endpoint rejected.
+ */
+const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
+
+/**
+ * Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines, tallying what
+ * it emitted into `sourceRows`.
+ *
+ * The tally rides along with the read rather than coming from a separate
+ * counting pass: this generator already yields exactly the rows that reach the
+ * import endpoint, so counting here is both one pass cheaper and strictly more
+ * honest — `--verify` then compares "inserted" against what was actually sent,
+ * not against a number derived by re-reading the source under slightly
+ * different rules.
+ */
+// eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
+async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, sourceRows: Map<string, number>): AsyncGenerator<string> {
+    let lineNumber = 0;
+
+    for await (const raw of readSnapshotLines(snapshot, tableEntry)) {
+        const line = raw.trim();
+
+        lineNumber += 1;
+
+        if (line.length === 0) {
+            continue;
+        }
+
+        let document: unknown;
+
+        try {
+            document = JSON.parse(line);
+        } catch (error: unknown) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${tableEntry.table}/documents.jsonl line ${String(lineNumber)}: invalid JSON — ${error instanceof Error ? error.message : String(error)}`,
+                { cause: error },
+            );
+        }
+
+        sourceRows.set(tableEntry.table, (sourceRows.get(tableEntry.table) ?? 0) + 1);
+
+        yield `${JSON.stringify({ doc: document, table: tableEntry.table })}\n`;
+    }
+}
+
+/**
+ * Stream a Convex export snapshot as the `{ table, doc }` NDJSON the admin
+ * import endpoint accepts.
+ *
+ * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
+ * rewritten to freshly-minted Lunora ids, which forces a two-pass import
+ * (insert with FKs nulled, then patch them back through an id map) to survive
+ * self-referential cycles. That is unnecessary here: the admin import path
+ * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
+ * validates only that the value is a string. So every Convex id — including
+ * every `v.id()` foreign key already pointing at one — carries across
+ * unchanged, and a plain single-pass import is correct.
+ */
+// eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
+async function* readConvexExport(
+    snapshot: ConvexSnapshot,
+    tables: ReadonlyArray<ConvexSnapshotTable>,
+    logger: Logger,
+    storageMigrated: boolean,
+    sourceRows: Map<string, number>,
+): AsyncGenerator<string> {
+    for (const tableEntry of tables) {
+        if (isConvexSystemTable(tableEntry.table)) {
+            // `_storage` rows describe blobs, so they are never imported as
+            // documents either way. What differs is whether the blobs they
+            // describe went anywhere: telling an operator to upload the files by
+            // hand *after* `--with-storage` already migrated them is worse than
+            // saying nothing.
+            if (tableEntry.table === CONVEX_STORAGE_TABLE && !storageMigrated) {
+                logger.warn(
+                    `skipping "${CONVEX_STORAGE_TABLE}" — those rows describe stored files, and their blobs were not migrated. Re-run with --with-storage to upload them and rewrite the references.`,
+                );
+            }
+
+            continue;
+        }
+
+        // Seed the tally so a table that turns out to be empty still appears in
+        // the parity report — absent-vs-zero is the difference between "nothing
+        // to import" and "never read".
+        if (!sourceRows.has(tableEntry.table)) {
+            sourceRows.set(tableEntry.table, 0);
+        }
+
+        yield* wrapJsonlLines(snapshot, tableEntry, sourceRows);
+    }
+}
+
+/**
+ * What the positional path turned out to be. A discriminated union rather than a
+ * bag of optionals: the snapshot and its table list are always both present or
+ * both absent, and only a union lets the caller establish that once.
+ */
+type ImportSource = { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> } | { kind: "invalid" } | { kind: "ndjson" };
+
+/**
+ * Report any storage-aware flag passed against a source that cannot honour it.
+ *
+ * A plain NDJSON file carries no `_storage` sidecar and no per-table source to
+ * count, so `--scan` / `--verify` / `--with-storage` are all inapplicable.
+ * Accepting one and doing nothing is how an operator ends up believing the blobs
+ * migrated when none did.
+ *
+ * A path that does not exist at all is deliberately NOT reported here:
+ * `resolveImportRequest` stats the file and says so precisely, and
+ * "--with-storage requires a Convex export" is a confusing way to learn you
+ * typed the path wrong.
+ */
+const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boolean> => {
+    const exists = await stat(options.file).then(
+        () => true,
+        () => false,
+    );
+
+    if (!exists) {
+        return false;
+    }
+
+    for (const [flag, enabled] of [
+        ["--scan", options.scan],
+        ["--verify", options.verify],
+        ["--with-storage", options.withStorage],
+    ] as const) {
+        if (enabled === true) {
+            options.logger.error(`${flag} requires a Convex export directory or .zip snapshot — ${options.file} is not one.`);
+
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Decide whether the positional path is a Convex export snapshot (directory or
+ * `.zip`) or a plain NDJSON file, and check the flags are coherent with that
+ * answer. Both halves live here because "what is this source" and "do these
+ * flags mean anything for it" are the same question asked twice.
+ */
+const resolveImportSource = async (options: ImportCommandOptions): Promise<ImportSource> => {
+    const snapshot = await resolveConvexSnapshot(options.file);
+    const tables = snapshot === undefined ? undefined : await listConvexSnapshotTables(snapshot);
+
+    if (snapshot !== undefined && tables === undefined) {
+        options.logger.error(
+            `${options.file} is a ${snapshot.kind === "zip" ? ".zip" : "directory"} but holds no <table>/documents.jsonl — expected a \`npx convex export --path\` snapshot, or pass an NDJSON file.`,
+        );
+
+        return { kind: "invalid" };
+    }
+
+    if (snapshot === undefined || tables === undefined) {
+        return (await rejectSnapshotFlags(options)) ? { kind: "invalid" } : { kind: "ndjson" };
+    }
+
+    if (options.table !== undefined) {
+        options.logger.error("--table cannot be combined with a Convex export directory — each row's table comes from its source directory.");
+
+        return { kind: "invalid" };
+    }
+
+    // `--verify` over an export that HAS blobs, without migrating them, can only
+    // ever report row parity — and would then print a clean bill of health over
+    // documents whose every file reference still points at a Convex id that
+    // resolves to nothing. Verifying half the migration and calling it verified
+    // is worse than not verifying.
+    //
+    // The check reads the metadata rather than trusting the directory's presence:
+    // `--include-file-storage` on an app with no files still emits an empty
+    // `_storage/`, and blocking `--verify` over nothing would be noise.
+    const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (options.verify === true && options.withStorage !== true && storageTable !== undefined) {
+        const blobs = await readStorageMetadata(snapshot, storageTable, options.logger);
+
+        if (blobs.length > 0) {
+            options.logger.error(
+                `--verify on an export carrying ${String(blobs.length)} stored file(s) requires --with-storage — otherwise every file reference stays unmigrated and only row counts would be checked.`,
+            );
+
+            return { kind: "invalid" };
+        }
+    }
+
+    return { kind: "convex", snapshot, tables };
+};
+
+export type { ImportSource };
+export { CONVEX_STORAGE_TABLE, isConvexSystemTable, readConvexExport, resolveImportSource };

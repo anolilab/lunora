@@ -365,7 +365,8 @@ class AppBuilder<Env extends object> {
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
             storageSignedUrl: hasSigning
-                ? (key: string, opts?: { bucket?: string; expiresInSeconds?: number }) => pick(opts?.bucket).getSignedUrl(key, { expiresInSeconds: opts?.expiresInSeconds })
+                ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT" }) =>
+                      pick(opts?.bucket).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
                 : undefined,
             storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };

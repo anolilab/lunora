@@ -2641,6 +2641,9 @@ importers:
       '@visulima/tui':
         specifier: 1.0.5
         version: 1.0.5(@shikijs/langs@4.3.1)(@shikijs/themes@4.3.1)(@visulima/tabular@4.0.0)(ai@7.0.37(zod@4.4.3))(cfonts@3.3.1)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.8))(react@19.2.8)(shiki@4.3.1)(ws@8.21.0)
+      adm-zip:
+        specifier: '>=0.6.0'
+        version: 0.6.0
       cfonts:
         specifier: ^3.3.1
         version: 3.3.1
