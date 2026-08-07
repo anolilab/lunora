@@ -1,3 +1,5 @@
+## @lunora/payment [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/%40lunora%2Fpayment%401.0.0-alpha.62...%40lunora%2Fpayment%401.0.0-alpha.63) (2026-08-07)
+
 ## @lunora/payment [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/%40lunora%2Fpayment%401.0.0-alpha.61...%40lunora%2Fpayment%401.0.0-alpha.62) (2026-08-04)
 
 
