@@ -134,6 +134,39 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.markEventProcessed("stripe", "evt_2")).resolves.toBe(true);
     });
 
+    it("sumUsage folds a `set` marker the same way the in-memory store does", async () => {
+        expect.assertions(3);
+
+        const store = createDatabasePaymentStore(makeDb());
+        const event = (idempotencyKey: string, createdAt: number, quantity: number, mode?: "set") => {
+            return {
+                createdAt,
+                featureId: "api_calls",
+                idempotencyKey,
+                ...(mode === undefined ? {} : { mode }),
+                provider: "stripe" as const,
+                quantity,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            };
+        };
+
+        await store.recordUsage(event("a", 10, 30));
+
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(30);
+
+        // The marker RESETS the period rather than adding to it — the `mode` column
+        // has to survive the row round-trip for that to hold.
+        await store.recordUsage(event("b", 20, 5, "set"));
+
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+
+        // …and a later `add` accrues on top of the reset total.
+        await store.recordUsage(event("c", 30, 7));
+
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(12);
+    });
+
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {
         expect.assertions(3);
 

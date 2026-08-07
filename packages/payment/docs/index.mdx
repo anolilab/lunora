@@ -262,6 +262,9 @@ cap the same limit, the most-generous value wins.
 ```ts
 export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
     // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    // Both are a single append — a `"set"` records the absolute target as a marker
+    // the period fold resets to, so concurrent or replayed `"set"` calls resolve
+    // last-writer-wins instead of double-applying. Neither mode needs a lock.
     const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
     return { recorded: result.recorded };

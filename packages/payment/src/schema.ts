@@ -75,6 +75,8 @@ const usageEvents = defineTable({
     createdAt: v.number(),
     featureId: v.string(),
     idempotencyKey: v.string(),
+    /** `"add"` (default when absent, incl. rows predating this column) or `"set"` — see `UsageEvent.mode`. */
+    mode: v.optional(v.string()),
     provider: v.string(),
     quantity: v.number(),
     referenceId: v.string(),

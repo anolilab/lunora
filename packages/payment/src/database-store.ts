@@ -9,6 +9,7 @@
  */
 import { money } from "./money";
 import type { PaymentStore } from "./store";
+import { foldUsage } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 
 /**
@@ -139,6 +140,9 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
         createdAt: event.createdAt,
         featureId: event.featureId,
         idempotencyKey: event.idempotencyKey,
+        // Omitted for a plain "add" so existing rows and new ones look the same
+        // (the fold treats an absent mode as "add").
+        ...(event.mode === "set" ? { mode: "set" } : {}),
         provider: event.provider,
         quantity: event.quantity,
         referenceId: event.referenceId,
@@ -240,15 +244,20 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
             // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
             const rows = await database.findMany("usageEvents", { featureId, referenceId });
-            let total = 0;
+            const window = rows
+                .filter((row) => readNumber(row, "createdAt") >= since)
+                .map((row) => {
+                    return {
+                        createdAt: readNumber(row, "createdAt"),
+                        idempotencyKey: typeof row["idempotencyKey"] === "string" ? row["idempotencyKey"] : "",
+                        mode: row["mode"] === "set" ? ("set" as const) : ("add" as const),
+                        quantity: readNumber(row, "quantity"),
+                    };
+                });
 
-            for (const row of rows) {
-                if (readNumber(row, "createdAt") >= since) {
-                    total += readNumber(row, "quantity");
-                }
-            }
-
-            return total;
+            // Shared with `MemoryPaymentStore` so a "set" marker resets the period
+            // total identically in both — see `foldUsage`.
+            return foldUsage(window);
         },
 
         upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),

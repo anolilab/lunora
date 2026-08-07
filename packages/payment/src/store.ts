@@ -43,12 +43,55 @@ export interface PaymentStore {
      * is rolled back on failure. A no-op if the id was never claimed.
      */
     releaseEvent: (provider: ProviderId, eventId: string) => Promise<void>;
-    /** Sum recorded usage `quantity` for a `(referenceId, featureId)` pair since `since` (epoch ms). */
+
+    /**
+     * The period total for a `(referenceId, featureId)` pair since `since` (epoch ms).
+     *
+     * NOT a plain sum: events are folded in `createdAt` order (ties broken by
+     * `idempotencyKey`, so every store agrees on the same order for events stamped
+     * in the same millisecond). An `"add"` event increments the running total; a
+     * `"set"` event RESETS it to that event's `quantity`, discarding everything
+     * earlier in the period. Use {@link foldUsage} so the two implementations
+     * cannot drift.
+     *
+     * This fold is what lets `track({ mode: "set" })` be append-only. Reconciling by
+     * writing `target - current` instead would be a read-modify-write across two
+     * un-transacted store calls: two interleaved `set`s would both read the same
+     * total, both append a delta, and leave the period over- or under-counted —
+     * inflating `balance = limit - used`. Here a concurrent pair simply resolves
+     * last-writer-wins, and a replayed `set` is idempotent by construction.
+     */
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     upsertCustomer: (customer: Customer) => Promise<void>;
     upsertPaymentSession: (session: PaymentSession) => Promise<void>;
     upsertSubscription: (subscription: Subscription) => Promise<void>;
 }
+
+/**
+ * Fold usage events into a period total: `"add"` increments, `"set"` resets to its
+ * own `quantity` and discards everything before it.
+ *
+ * Sorting is part of the contract, not an optimisation — `createdAt` first, then
+ * `idempotencyKey` as a deterministic tiebreak so two events stamped in the same
+ * millisecond fold identically in every store and on every replay. Callers pass
+ * only the events already filtered to the `(referenceId, featureId, >= since)`
+ * window.
+ *
+ * Exported so {@link MemoryPaymentStore} and the database-backed store share ONE
+ * definition: a divergence between them would show up as a metered limit that
+ * enforces differently in tests than in production.
+ * @experimental
+ */
+export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "idempotencyKey" | "mode" | "quantity">>): number => {
+    const ordered = events.toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+    let total = 0;
+
+    for (const event of ordered) {
+        total = event.mode === "set" ? event.quantity : total + event.quantity;
+    }
+
+    return total;
+};
 
 /**
  * In-memory {@link PaymentStore} for tests and local development. Not durable.
@@ -123,15 +166,15 @@ export class MemoryPaymentStore implements PaymentStore {
     }
 
     public sumUsage(referenceId: string, featureId: string, since: number): Promise<number> {
-        let total = 0;
+        const window: UsageEvent[] = [];
 
         for (const event of this.usageEvents.values()) {
             if (event.referenceId === referenceId && event.featureId === featureId && event.createdAt >= since) {
-                total += event.quantity;
+                window.push(event);
             }
         }
 
-        return Promise.resolve(total);
+        return Promise.resolve(foldUsage(window));
     }
 
     public upsertCustomer(customer: Customer): Promise<void> {

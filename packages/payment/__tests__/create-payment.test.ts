@@ -480,7 +480,7 @@ describe("createPayment — attach / check / track", () => {
         });
     });
 
-    it("track mode:set reconciles the period total via a delta", async () => {
+    it("track mode:set reconciles the period total", async () => {
         expect.assertions(3);
 
         const store = new MemoryPaymentStore();
@@ -504,6 +504,60 @@ describe("createPayment — attach / check / track", () => {
             recorded: false,
             reportedToProvider: false,
         });
+    });
+
+    it("track mode:set is race-free — interleaved sets resolve last-writer-wins, not double-applied", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+
+        // Two isolates reconcile the same reference at once. Under the old
+        // read-then-append-a-delta scheme both read `used = 30` and both appended
+        // their own delta (+20 and +50), landing at 100 — the period double-counted
+        // and `balance = limit - used` wrong. Appending the absolute target makes
+        // the pair resolve to ONE of the two values instead.
+        await Promise.all([
+            payment.track({ featureId: "api_calls", mode: "set", quantity: 50, referenceId: "user_1" }),
+            payment.track({ featureId: "api_calls", mode: "set", quantity: 80, referenceId: "user_1" }),
+        ]);
+
+        const after = await payment.check({ featureId: "api_calls", referenceId: "user_1" });
+
+        expect([50, 80]).toContain(after.used);
+
+        // Replaying a "set" under its own idempotency key is a no-op, and re-issuing
+        // the same target is idempotent regardless of what ran in between.
+        await payment.track({ featureId: "api_calls", mode: "set", quantity: 80, referenceId: "user_1" });
+        await payment.track({ featureId: "api_calls", mode: "set", quantity: 80, referenceId: "user_1" });
+
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 20, used: 80 });
+    });
+
+    it("track mode:set discards earlier usage in the period, and later adds accrue on top", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+        await payment.track({ featureId: "api_calls", mode: "set", quantity: 5, referenceId: "user_1" });
+
+        // The "set" marker resets the fold: the earlier 30 is discarded, not summed.
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ used: 5 });
+
+        await payment.track({ featureId: "api_calls", quantity: 7, referenceId: "user_1" });
+
+        // …and an "add" after it accrues on top of the reset total.
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ used: 12 });
     });
 
     it("track on a provider without usage metering (Creem-style) records locally only", async () => {
