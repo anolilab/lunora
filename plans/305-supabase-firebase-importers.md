@@ -11,6 +11,13 @@
 > **Drift check (run first)**: re-confirm plan **304** (blob/`_storage` import)
 > has landed — this plan's storage transfer and verification reuse its admin
 > route work. If 304 is still open, branch after it, not before.
+>
+> **Read 304 §10 before writing any code.** Its answers are this plan's
+> defaults, not background: content-hash keys, skip-if-present idempotency, the
+> 32 MiB verified-upload cap with a signed-PUT fallback above it, digest
+> normalisation at the source boundary, dangling references reported rather than
+> guessed, and a flag that cannot apply failing loudly instead of no-opping. The
+> §3 contract below restates the ones that bind here.
 
 ## 0. Headline finding
 
@@ -105,6 +112,56 @@ new catalog entries.
   hand-written script, they don't change the schema-mapping advice.
 - New deps go in the catalog (`catalog:cli`-style), never hardcoded; `@lunora/cli`
   and `@lunora/advisor` stay the only packages that gain source in this plan.
+
+Carried over from 304 §10 — these are not optional restatements, they are the
+defects that plan hit and closed:
+
+- **A flag that cannot apply is an error.** `--from supabase` without a CSV dir,
+  `--verify` without a countable source, a storage transfer against a host with
+  no admin upload route: exit non-zero. Never accept the flag and do nothing.
+- **A malformed mapping file never degrades to a default.** Only a _missing_
+  `lunora/import-<source>.json` is optional; invalid JSON, a bad `types` entry,
+  or an unreadable file fails the run naming the key.
+- **Every source-supplied identifier is a path until proven otherwise.** A
+  Firestore `__name__`, a Supabase storage object key, a CSV filename from the
+  mapping — resolve and containment-check before reading or writing anything.
+- **Blob transfer is idempotent by construction and verified before write.**
+  Content-hash keys, one prefix listing to skip what is already present, the
+  verified admin route under the cap, and delete-on-mismatch above it.
+- **Unresolvable references are reported, never guessed.** Same dangling report
+  and same `--verify` failure as 304.
+
+## 3.1 Coverage — what "migrated" covers, and what it does not
+
+A migration that moves tables but leaves the operator to discover that their
+Realtime Database, their enum columns, or their `numeric(20,4)` money column
+never came across is not a migration. Each row is decided here, in the plan,
+rather than at runtime.
+
+| Asset                               | Supabase                                    | Firebase                                        | Verdict                             |
+| ----------------------------------- | ------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
+| Data tables                         | CSV per table (W1)                          | Firestore export (W2)                           | **In scope**                        |
+| Ids / foreign keys                  | source PK preserved via `allowExplicitId`   | `__name__` → `_id`                              | **In scope** — no remap pass        |
+| Auth users + linked providers       | `auth.users` + `auth.identities`            | `auth:export` JSON                              | **In scope**, passwords nulled      |
+| Object storage                      | S3-compatible listing → R2                  | local `gcloud storage cp` dir → R2              | **In scope** (W4)                   |
+| Sessions / refresh tokens           | —                                           | —                                               | **Out** — bearer state, re-login    |
+| Firebase Realtime Database          | n/a                                         | single-JSON-tree export, not Firestore's format | **Out of W2** — see Q7              |
+| Postgres enums / arrays / `numeric` | explicit `types` entries, else error        | n/a                                             | **In scope** — see the reshape rule |
+| RLS policies / DB functions         | ported by hand per the guide                | security rules ported by hand                   | **Out** — prose, not tooling        |
+| Edge functions / Cloud Functions    | rewritten as Lunora functions per the guide | same                                            | **Out** — prose, not tooling        |
+| Realtime channels / listeners       | rewritten against `useQuery` per the guide  | same                                            | **Out** — prose, not tooling        |
+
+The out-of-scope rows are not silence: the guides already cover them, and W6
+must link each one from the data step so a reader who followed the importer
+knows what is still theirs to do.
+
+**Reshape rule.** A column with no `types` entry is copied through untouched. A
+column whose declared reshape would lose information — `float8`/`numeric` into a
+JS number past `Number.MAX_SAFE_INTEGER`, `int8` into a number, a timestamp with
+an offset the target drops — **errors naming the column**, and the mapping must
+choose a lossless target (`v.bigint()`, a string) instead. This is the plan's
+first STOP condition; it is restated here because it is the rule most likely to
+be quietly relaxed under a failing fixture.
 
 ## 4. Design decisions
 
@@ -218,7 +275,15 @@ Sized M/L, sequenced in §7. **Status is recorded here as each lands.**
   path-column remap per the mapping files.
 - **W5 (S) — `migration_stale_import` lint** + its fixtures.
 - **W6 (S) — Docs.** Steps 7+ of both guides rewritten around the importers;
-  auth + storage recipes.
+  auth + storage recipes; every §3.1 out-of-scope row linked from the data step.
+- **W7 (S) — `--verify` + `--scan` parity with 304.** Per-table row parity
+  (source rows counted before the run, compared against inserted), the
+  dangling-reference report for remapped storage/reference columns, and a
+  `--scan` that _writes_ the candidate `lunora/import-<source>.json` (`wx`, never
+  clobbering a confirmed one) instead of printing it. Non-zero exit on any
+  mismatch. Firestore parity must count **every shard** named by
+  `.export_metadata`, which is what turns the sharding risk below into a caught
+  failure rather than a silent partial import.
 
 ## 6. Platform parity
 
@@ -243,7 +308,8 @@ admin import endpoint; storage transfer is gated exactly as in §304.
 | 2     | W3 — Auth import         | Fixture auth dumps produce `user`/`account` rows with nulled `passwordHash`; reset recipe in the guide                                    |
 | 3     | W4 — Storage transfer    | Supabase S3 fixture + Firebase local dir transfer through 304's route with checksum verify; path columns remapped per mapping             |
 | 4     | W5 — Stale-import lint   | A fixture with a `@supabase/*` import fails the lint; the message names the guide                                                         |
-| 5     | W6 — Docs                | `from-supabase.mdx` / `from-firebase.mdx` steps reference the importers; Prettier-clean                                                   |
+| 5     | W7 — `--verify`/`--scan` | A truncated fixture (dropped CSV row, missing Firestore shard, unmapped ref) exits non-zero naming the table; `--scan` writes the mapping |
+| 6     | W6 — Docs                | `from-supabase.mdx` / `from-firebase.mdx` steps reference the importers; every §3.1 out-of-scope row is linked; Prettier-clean            |
 
 Phase 3 depends on plan **304** (verified admin upload). Phases 0–2 and 4 are
 independent of 304. `pnpm --filter "@lunora/cli" run test` / `lint:types`,
@@ -285,6 +351,12 @@ must be green after every phase (the catalog grows new entries).
 - [ ] Both guides' data steps reference the importers; no manual reshape script
       remains in step 7
 - [ ] New deps in the catalog; `lint:package-json` green; no `ctx.*` change
+- [ ] `--verify` fails non-zero on row parity, a missing Firestore shard, or an
+      unresolved reference; `--scan` writes the mapping file it documents
+- [ ] Every §3.1 row is either implemented or linked from the guide as the
+      reader's own remaining work — no asset is left unmentioned
+- [ ] A storage-aware or source-specific flag that cannot apply exits non-zero
+      rather than being ignored
 
 ## 8. Risks & STOP conditions
 
@@ -334,3 +406,20 @@ must be green after every phase (the catalog grows new entries).
    adapter confusion or only the three migration targets named in the guides?
    Recommend the three — the lint exists to catch a half-finished port, not to
    police library choice.
+7. **Firebase Realtime Database.** RTDB exports one JSON tree, not Firestore's
+   typed shards, and its "documents" are arbitrarily nested nodes with no
+   collection boundary. Is it a third reader (`--from rtdb`, with the mapping
+   naming which top-level nodes become tables and which key becomes `_id`), or
+   does the guide keep telling RTDB users to reshape by hand? Recommend the
+   third reader **only if** a mapping can express the node→table split without
+   guessing; otherwise say so in `from-firebase.mdx` explicitly rather than
+   leaving the reader to discover it. Either way §3.1 must not stay ambiguous.
+8. **Storage transfer resumability.** 304 skips an object already present at its
+   content-hash key, which makes a re-run cheap. For an S3 source, does the
+   skip-probe list R2 once by prefix (304's shape) or HEAD per object? Recommend
+   the single prefix listing — a bucket with 100k objects makes per-object HEADs
+   the dominant cost of a resumed run.
+
+Settled by 304 §10 — do not re-litigate: content-hash keys, skip-if-present
+without a `--force`, the 32 MiB verified-upload cap with a signed-PUT fallback
+above it, and "report, never guess" for unresolvable references.

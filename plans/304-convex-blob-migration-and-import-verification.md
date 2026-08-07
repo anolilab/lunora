@@ -1,7 +1,7 @@
 # Plan 304 — Migrate Convex `_storage` blobs and verify imports
 
 **Baseline:** `9ddd16f63` (2026-08-05)
-**Status:** DONE (landed on PR #354)
+**Status:** DONE — W1–W5 shipped on PR #354; §9 answered in §10
 **Priority:** P1 · **Effort:** M · **Risk:** MED · **Category:** data/migration
 
 > **Executor instructions**: follow this plan step by step, run every verification
@@ -126,6 +126,16 @@ reader needs no new dependency.
   no `.js` extension on any relative import. `adm-zip` is a CLI-side dependency
   only.
 - Wire shape `{ table, doc }` and the `ImportRowError` contract are unchanged.
+  A rewritten envelope is rebuilt from the parsed original, so any field beyond
+  `{ table, doc }` survives the rewrite.
+- **A storage-aware flag that cannot apply is an error, not a no-op.**
+  `--with-storage` / `--scan` / `--verify` against a plain NDJSON source exit
+  non-zero. Silently ignoring the flag is how an operator ends up believing the
+  blobs migrated when none did.
+- **A malformed mapping file never degrades to "no mapping".**
+  `lunora/import-convex.json` is what names the ambiguous columns; dropping it on
+  a parse error would turn a configured rewrite into a silent no-rewrite. Only a
+  _missing_ file is optional.
 
 ## 4. Design decisions
 
@@ -168,10 +178,17 @@ reopens the dangling-reference window on a mid-stream failure.
     ```
 
 - **`--scan`** helper: the CLI exact-matches every string value in the source
-  documents against the `_storage` id set (new-format `_id` and legacy ids) and
-  prints a candidate `storageColumns` for the user to confirm into the file.
-  A string that matches a storage id but is **not** in the mapping is reported
-  as a candidate dangling reference, not silently rewritten.
+  documents (and every string inside a top-level array) against the `_storage`
+  id set and **writes** the candidate `storageColumns` to
+  `lunora/import-convex.json` for the user to confirm — `wx`, so a confirmed
+  mapping is never clobbered by a re-scan; the candidate is printed instead.
+  `--scan` imports nothing. A string that matches a storage id but is **not** in
+  the mapping is reported as a dangling reference, not silently rewritten.
+- **`{ $storage }` rewriting is recursive.** Convex documents nest freely, so the
+  walk descends objects and arrays; a storage id inside an attachment array is
+  exactly as load-bearing as a top-level one. Plain-string rewriting stays
+  top-level-only, because `storageColumns` addresses columns and a deeper string
+  has no column to name.
 
 **Rejected:** schema-driven detection (a Lunora `v.string()` column cannot be
 distinguished from a storage key — there is no validator for it yet) and
@@ -221,8 +238,9 @@ All S/M, sequenced in §7. **Status is recorded here as each lands.**
   auto-rewrite; `lunora/import-convex.json` mapping applied to the specified
   columns during doc streaming; `--scan` emits the candidate mapping; candidates
   outside the mapping are listed, not rewritten.
-- **[x] W4 (S) — `--verify`.** Per-table parity vs the source JSONL line counts,
-  dangling-storage list, optional FK spot check; non-zero exit on mismatch.
+- **[x] W4 (S) — `--verify`.** Per-table parity vs the source JSONL line counts
+  plus the dangling-storage list; non-zero exit on either. The FK spot check was
+  **cut** — see Q5 in §10.
 - **[x] W5 (S) — Docs + CLI help.** `from-convex.mdx` "files" step rewritten around
   `npx convex export --include-file-storage` + the opt-in; `import` command help
   and examples updated; the `_storage` warn message reworded to name the opt-in.
@@ -281,16 +299,19 @@ must be green after every phase.
 
 ## Done criteria
 
-- [ ] `--with-storage` imports a directory and ZIP Convex export with blobs,
-      every blob sha256+size verified before write
-- [ ] References rewritten: `{ $storage }` auto, mapped columns via
+- [x] `--with-storage` imports a directory and ZIP Convex export with blobs,
+      every blob sha256+size verified before write (≤ 32 MiB; above the cap,
+      verified after write and deleted on mismatch — see Q6)
+- [x] References rewritten: `{ $storage }` auto at any depth, mapped columns via
       `lunora/import-convex.json`, unmapped storage-id strings reported
-- [ ] `--scan` prints a candidate mapping the user can confirm
-- [ ] `--verify` fails non-zero on row-parity or dangling-storage mismatch
-- [ ] Default (no opt-in) import behaviour unchanged
-- [ ] `from-convex.mdx` + `--help` document the opt-in and the mapping file
-- [ ] Platform-parity row above reflects the shipped surface; `api:update` run
-      if any export changed
+- [x] `--scan` writes a candidate mapping the user confirms (never overwrites an
+      existing one, imports nothing)
+- [x] `--verify` fails non-zero on row-parity or dangling-storage mismatch
+- [x] Default (no opt-in) import behaviour unchanged; `--scan` / `--verify` /
+      `--with-storage` against plain NDJSON fail loudly rather than no-op
+- [x] `from-convex.mdx` + `--help` document the opt-in and the mapping file
+- [x] Platform-parity row above reflects the shipped surface; nothing public
+      changed, so no `api:update` was needed
 
 ## 8. Risks & STOP conditions
 
@@ -303,10 +324,19 @@ must be green after every phase.
   only ever reported, never guessed). If guessing creeps in, re-scope to
   preserve-id keys.
 - **Risk:** large blobs — the admin upload route buffers the whole body under the
-  runtime's declared-length guard (`storage-admin-routes.ts:117`). A
-  multi-hundred-MB file may exceed it. Mitigate: the CLI pre-checks each blob's
-  declared `size` against the cap and routes oversized blobs through the
-  signed-PUT path, and the plan records the cap value at implementation time.
+  runtime's declared-length guard (`storage-admin-routes.ts:117`). **Resolved:**
+  the route now declares a 32 MiB budget of its own (Q6); the CLI pre-checks each
+  blob's on-disk length against the export's declared `size` and routes anything
+  over the cap through the signed-PUT path.
+- **Risk (found in review):** the export's `sha256` has shipped both base16 and
+  base64 across Convex versions, and the value is used as the R2 key, as
+  `expectedSha256`, and as the comparand for the worker's echoed digest. It is
+  normalised to lowercase hex once at the metadata boundary; a row whose digest,
+  `_id`, or `size` is unusable fails the read rather than being skipped.
+- **Risk (found in review):** a crafted export could put `../` in a `_storage`
+  `_id`, or a symlink under `_storage/`, and have the importer upload an
+  unrelated local file. Directory blob reads resolve through `realpath` and are
+  rejected outside the snapshot's `_storage` root.
 - **Risk:** `MAX_BODY_BYTES` on the import stream caps per-request doc batches —
   unrelated to blobs, but a huge source table means many batches; the existing
   batching already handles this. Perf watch: measure blob throughput on a
@@ -316,7 +346,7 @@ must be green after every phase.
   re-run re-uploads everything. Mitigate: `--scan`-style existence probe via the
   list route before upload (cheap), per Q3's answer.
 
-## 9. Open questions (answer during execution)
+## 9. Open questions (answered — see §10)
 
 1. **Idempotency semantics.** On re-import, should an existing object with the
    same key be (a) skipped after a cheap existence probe, (b) skipped only if a
@@ -337,3 +367,52 @@ must be green after every phase.
    column against its target table, or only columns named in the mapping? Probing
    every `v.id()` is general but slow on wide schemas; scope the default to
    tables present in the export.
+
+## 10. Answers (recorded at implementation)
+
+**Q1 — Idempotency: (a), no `--force`.** One prefix listing runs before the
+upload loop; a blob whose content-hash key is already present at the declared
+size is mapped and skipped. A `--force` flag would have no honest use: the key
+_is_ the digest, so a present-and-right-sized object is by construction the same
+bytes. The one way a wrong object could sit at a content-hash key — a signed PUT
+that landed corrupt — is closed at the source: `uploadLargeBlob` deletes the
+object when post-upload verification fails, so a later run re-uploads instead of
+skipping a bad blob.
+
+**Q2 — Legacy ids: nothing special is needed.** The map is keyed by whatever
+`_id` the export's `_storage/documents.jsonl` carries, so a legacy id is indexed
+exactly like a modern one. What the code does **not** do is invent a second
+resolution path for ids that appear in documents but in no metadata row: those
+are reported as dangling storage references. That is the honest answer for an
+export whose `--include-file-storage` was omitted or whose blob was deleted, and
+the report names the table so the operator can act.
+
+**Q3 — Export parity: deferred, and deliberately.** `lunora export` stays
+blob-free. A round-trip export would have to re-download every object to rebuild
+the `_storage/<id>` layout, and the id it would have to write is a Convex id the
+target no longer has — the keys are content hashes now. The symmetric feature is
+"export R2 objects alongside the NDJSON", not "reproduce a Convex snapshot";
+file it separately if a user asks for it.
+
+**Q4 — `keyPrefix` default: empty.** A bare content hash is the plainest thing
+to reason about, keeps `getUrl`/`getSignedUrl` output short, and dedups across
+runs for free. `keyPrefix` in `lunora/import-convex.json` is how a shared bucket
+namespaces an import (`"convex/"`), and `--scan` emits the key explicitly so it
+is visible rather than discovered.
+
+**Q5 — Verify's FK spot check: cut.** It was scoped against a problem this
+importer does not have. Ids are preserved verbatim in a single pass (§1.1), so a
+`v.id()` foreign key cannot break during import — either both rows landed or the
+row-parity check already failed. Probing every `v.id()` column would spend a
+query per relation to re-derive what parity proves. The check that _does_ earn
+its keep is the storage one, because storage references are the only values the
+import rewrites; that is what `--verify` reports.
+
+**Q6 — Body cap (new, forced by W2).** The admin upload route buffered under the
+shared 1 MiB `MAX_BODY_BYTES`, which would have pushed nearly every photo onto
+the signed-PUT path. The route now declares its own 32 MiB budget
+(`STORAGE_UPLOAD_MAX_BODY_BYTES`), the way the KV value PUT already declares
+`KV_VALUE_MAX_BODY_BYTES`, and the entry-point `Content-Length` fast-reject reads
+a per-route table so the header check agrees with the reader. Above 32 MiB the
+signed PUT applies and verification moves after the write (size always, SHA-256
+when the bucket exposes one — R2 only records it if the writer supplied it).
