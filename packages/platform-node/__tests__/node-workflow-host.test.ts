@@ -203,20 +203,80 @@ describe("createNodeWorkflowHost", () => {
         await expect(host.bindings.trivial.get("never-existed").then(async (missing) => missing.status())).resolves.toStrictEqual({ status: "unknown" });
     });
 
-    it("refuses a caller-supplied instance id instead of minting a different one", async () => {
+    it("terminating an id that was never a run writes nothing", async () => {
         expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
             handler: async () => "done",
         });
 
-        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
+        const store = new MemoryStore();
+        const host = createNodeWorkflowHost({ store, workflows: { trivial } });
+        const ghost = await host.bindings.trivial.get("never-existed");
 
-        await expect(host.bindings.trivial.create({ id: "my-own-id" })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
-        await expect(host.bindings.trivial.createBatch([{ id: "my-own-id", params: {} }])).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+        await ghost.terminate();
 
-        // Nothing was started behind the rejection.
-        await expect(host.bindings.trivial.get("my-own-id").then(async (missing) => missing.status())).resolves.toStrictEqual({ status: "unknown" });
+        // An unconditional tombstone would both misreport this as terminated and
+        // leave a row behind for every id anyone ever passed to `get()`.
+        await expect(ghost.status()).resolves.toStrictEqual({ status: "unknown" });
+        await expect(store.load("never-existed")).resolves.toBeUndefined();
+    });
+
+    it("honours a caller-supplied instance id: one run, findable by that id", async () => {
+        expect.hasAssertions();
+
+        let runs = 0;
+        const counted = defineWorkflow<Record<string, never>, number>({
+            handler: async (ctx) =>
+                ctx.step.do("count", async () => {
+                    runs += 1;
+
+                    return runs;
+                }),
+        });
+
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { counted } });
+        const first = await host.bindings.counted.create({ id: "my-own-id" });
+
+        // `get` by the caller's id resolves the alias — this is the pair
+        // `ctx.spawn` relies on (create({ id }), then get(id)).
+        const fetched = await host.bindings.counted.get("my-own-id");
+
+        expect(fetched.id).toBe(first.id);
+        await expect(fetched.status()).resolves.toMatchObject({ output: 1, status: "complete" });
+
+        // A retried create with the same id is the same run, not a second one.
+        const retried = await host.bindings.counted.create({ id: "my-own-id" });
+
+        expect(retried.id).toBe(first.id);
+        expect(runs).toBe(1);
+    });
+
+    it("drives ctx.spawn end to end", async () => {
+        expect.hasAssertions();
+
+        const child = defineWorkflow<{ n: number }, number>({
+            handler: async (ctx) => ctx.params.n * 2,
+        });
+        const parent = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                const handle = await ctx.spawn("child", { n: 21 });
+
+                return handle.id;
+            },
+        });
+
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { child, parent } });
+        const instance = await host.bindings.parent.create({});
+        const status = await instance.status();
+
+        // `ctx.spawn` mints its own child id and calls create({ id }) — refusing
+        // the option instead of resolving it takes fan-out out entirely.
+        expect(status.status).toBe("complete");
+
+        const childInstance = await host.bindings.child.get(status.output as string);
+
+        await expect(childInstance.status()).resolves.toMatchObject({ output: 42, status: "complete" });
     });
 
     it("rejects non-finite sleep durations rather than passing them to the engine", async () => {

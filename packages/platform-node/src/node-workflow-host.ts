@@ -35,10 +35,15 @@
  * equivalent. `terminate` drops the run and writes a tombstone in its place, so
  * a later `status()` reports `terminated` instead of collapsing into the
  * `unknown` an invalid instance id also returns.
- * - `create({ id })` throws `NOT_IMPLEMENTED` — `runtime.trigger` assigns run
- * ids and takes no caller-supplied one, so honouring the option is impossible
- * and silently ignoring it would hand back a different instance than the caller
- * named (and break `get(id)` after a retried create).
+ * - **`terminate` is not a barrier.** It writes through `store` directly, which
+ * is outside the engine's per-run activation queue, so an activation already
+ * in flight finishes and its `save` overwrites the tombstone — the run reports
+ * `terminated`, then reports its output. Stopping that needs a cancellation
+ * hook the engine does not expose.
+ * - `create({ id })` is honoured through an alias row rather than passed to the
+ * engine, which mints its own run ids: the same id twice resolves to one run
+ * and `get(id)` finds it. The id is not the run id, so `instance.id` is the
+ * engine's.
  * - `ctx.run` still dispatches to `/_lunora/scheduler/dispatch`, which has no
  * Node HTTP server — a workflow body that calls `ctx.run` fails at runtime.
  * - `ctx.parallel`'s join cannot interleave inside one synchronous `trigger`
@@ -68,8 +73,9 @@ import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visuli
 
 /**
  * `definitionId` of the row `terminate` leaves behind. No workflow can carry it
- * (`defineWorkflow` ids come from export names), and it has no `wakeAt`, so
- * `store.due` never returns it and `sweep` never tries to resume it.
+ * (`defineWorkflow` ids come from export names). It is written `status: "failed"`,
+ * and `due` selects only `suspended`/`waiting`, so `sweep` never tries to resume
+ * it — that status, not the absent `wakeAt`, is what keeps it out.
  */
 const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
 
@@ -139,19 +145,21 @@ const toMs = (duration: number | string): number => {
 };
 
 /**
- * Refuse a caller-supplied instance id. `runtime.trigger` mints its own run id
- * and accepts no override, so accepting the option would return a *different*
- * instance than the caller asked for — a retried create would fan out into
- * distinct runs and `get(id)` would never find any of them.
+ * `definitionId` of an alias row: a caller-supplied instance id pointing at the
+ * run id the engine actually minted, with the real id in `snapshot`.
+ *
+ * `runtime.trigger` assigns run ids and accepts no override, so a caller id
+ * cannot *be* the run id. It can still be honoured, which is what the binding
+ * contract actually requires: `create({ id })` twice with one id yields one run,
+ * and `get(id)` finds it. `ctx.spawn` depends on exactly that pair — it mints a
+ * child id, calls `create({ id })`, then `get(id)` (`@lunora/workflow`'s
+ * `fan-out.ts`) — so refusing the option instead of resolving it takes fan-out
+ * out entirely.
+ *
+ * The alias lives in the store rather than a `Map` so a spawn survives the
+ * restart the rest of this host is built to survive.
  */
-const rejectCallerId = (instanceId: string | undefined): void => {
-    if (instanceId !== undefined) {
-        throw new LunoraError(
-            "NOT_IMPLEMENTED",
-            `@lunora/platform-node: workflow create({ id: "${instanceId}" }) is not supported — the visulima engine assigns run ids; use the returned instance's id`,
-        );
-    }
-};
+const ALIAS_DEFINITION_ID = "@lunora/platform-node:alias";
 
 /** The per-attempt info a `step.do` callback receives — the engine has no retries, so attempt is always 1. */
 const stepContext = (name: string): WorkflowStepContextLike => {
@@ -265,30 +273,22 @@ interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: 
 const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkflow: true }>>(
     options: NodeWorkflowHostOptions<Workflows>,
 ): NodeWorkflowHost<Workflows> => {
-    const entries = Object.entries(options.workflows);
-    const idByExport = new Map<string, string>();
-
-    for (const [exportName, value] of entries) {
+    // One pass, so `id` is a `string` by construction downstream — the earlier
+    // shape (validate into a Map, re-index, re-validate to recover the
+    // narrowing, then two `as string`) asserted three times what this proves once.
+    const compiled = Object.entries(options.workflows).map(([exportName, value]) => {
         if (!isWorkflowDefinition(value)) {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: "${exportName}" is not a defineWorkflow result`);
         }
 
-        idByExport.set(exportName, value.name ?? workflowDefaultName(exportName));
-    }
+        return { definition: value, exportName, id: value.name ?? workflowDefaultName(exportName) };
+    });
 
     const { store } = options;
     const env: Record<string, unknown> = { ...options.env };
 
-    const visulimaWorkflows = entries.map(([exportName]) => {
-        const definition = options.workflows[exportName];
-
-        if (!isWorkflowDefinition(definition)) {
-            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: "${exportName}" is not a defineWorkflow result`);
-        }
-
-        const id = idByExport.get(exportName) as string;
-
-        return defineVisulimaWorkflow({
+    const visulimaWorkflows = compiled.map(({ definition, exportName, id }) =>
+        defineVisulimaWorkflow({
             id,
             tags: [exportName],
             run: async (runContext: RunContext) => {
@@ -307,8 +307,8 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
 
                 return await definition.handler(context);
             },
-        });
-    });
+        }),
+    );
 
     const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store, workflows: visulimaWorkflows });
 
@@ -326,10 +326,20 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 Promise.reject(
                     new LunoraError(
                         "NOT_IMPLEMENTED",
-                        `@lunora/platform-node: workflow instance "${id}" cannot be restarted — the visulama engine has no restart equivalent`,
+                        `@lunora/platform-node: workflow instance "${id}" cannot be restarted — the visulima engine has no restart equivalent`,
                     ),
                 ),
             resume: async () => {
+                // The tombstone carries a `definitionId` no workflow is registered
+                // under, so handing it to the engine surfaces its "no workflow
+                // registered with id …" error instead of the state the caller asked
+                // about. `sendEvent` and `sweep` already screen it out.
+                const current = await store.load(id);
+
+                if (current?.definitionId === TERMINATED_DEFINITION_ID) {
+                    throw new LunoraError("BAD_REQUEST", `@lunora/platform-node: workflow instance "${id}" was terminated and cannot be resumed`);
+                }
+
                 await runtime.resume(id);
             },
             sendEvent: async (event) => {
@@ -342,9 +352,16 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 await runtime.signal(id, event.type, event.payload);
             },
             status: async (): Promise<WorkflowStatusResult> => {
+                // The store read comes first and answers two of the three cases
+                // outright, so the miss path costs one load rather than the two
+                // it would take to ask the runtime and then check for a tombstone.
                 const stored = await store.load(id);
 
-                if (stored?.definitionId === TERMINATED_DEFINITION_ID) {
+                if (stored === undefined) {
+                    return { status: "unknown" };
+                }
+
+                if (stored.definitionId === TERMINATED_DEFINITION_ID) {
                     return { status: "terminated" };
                 }
 
@@ -361,8 +378,22 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 };
             },
             terminate: async () => {
-                // Overwrite rather than delete: a deleted run reads back as
-                // `unknown`, which is also what an invalid instance id returns,
+                // Only a run that exists can be terminated. Writing the tombstone
+                // unconditionally would mint a row for any string a caller passed
+                // to `get()`, so `status()` would report `terminated` for an id
+                // that was never a run — and the store would grow one row per
+                // such call, forever.
+                if ((await store.load(id)) === undefined) {
+                    return;
+                }
+
+                // Delete before writing the tombstone: `save` is an upsert of the
+                // run row alone, so on its own it would leave the run's lease held
+                // until expiry. `delete` drops both.
+                await store.delete(id);
+
+                // Then a tombstone rather than nothing: a deleted run reads back
+                // as `unknown`, which is also what an invalid instance id returns,
                 // so the caller loses the ability to tell the two apart.
                 await store.save({
                     definitionId: TERMINATED_DEFINITION_ID,
@@ -375,28 +406,59 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         };
     };
 
+    /** Resolve a caller-supplied id to the run it names, or return it unchanged. */
+    const resolveAlias = async (instanceId: string): Promise<string> => {
+        const row = await store.load(instanceId);
+
+        return row?.definitionId === ALIAS_DEFINITION_ID ? (row.snapshot as string) : instanceId;
+    };
+
+    /** Start a run, honouring a caller-supplied id by aliasing it to the minted one. */
+    const startRun = async (definitionId: string, createOptions?: { id?: string; params?: unknown }): Promise<WorkflowInstanceLike> => {
+        if (createOptions?.id === undefined) {
+            const result = await runtime.trigger(definitionId, createOptions?.params);
+
+            return instanceFor(result.runId);
+        }
+
+        const existing = await store.load(createOptions.id);
+
+        // A retried create with the same id is the same run, not a second one.
+        if (existing?.definitionId === ALIAS_DEFINITION_ID) {
+            return instanceFor(existing.snapshot as string);
+        }
+
+        const result = await runtime.trigger(definitionId, createOptions.params);
+
+        await store.save({
+            definitionId: ALIAS_DEFINITION_ID,
+            runId: createOptions.id,
+            snapshot: result.runId,
+            status: "failed",
+            updatedAt: Date.now(),
+        });
+
+        return instanceFor(result.runId);
+    };
+
     const bindings: Record<string, WorkflowBindingLike> = {};
 
-    for (const [exportName] of entries) {
-        const id = idByExport.get(exportName) as string;
+    for (const { exportName, id } of compiled) {
         const binding: WorkflowBindingLike = {
-            create: async (createOptions) => {
-                rejectCallerId(createOptions?.id);
-
-                const result = await runtime.trigger(id, createOptions?.params);
-
-                return instanceFor(result.runId);
-            },
+            create: async (createOptions) => startRun(id, createOptions),
+            // Sequential, not `Promise.all`: two entries sharing a caller id must
+            // collapse onto one run, and concurrent alias reads would both miss.
             createBatch: async (batch) => {
+                const instances: WorkflowInstanceLike[] = [];
+
                 for (const createOptions of batch) {
-                    rejectCallerId(createOptions.id);
+                    // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
+                    instances.push(await startRun(id, createOptions));
                 }
 
-                const results = await Promise.all(batch.map((createOptions) => runtime.trigger(id, createOptions.params)));
-
-                return results.map((result) => instanceFor(result.runId));
+                return instances;
             },
-            get: (instanceId) => Promise.resolve(instanceFor(instanceId)),
+            get: async (instanceId) => instanceFor(await resolveAlias(instanceId)),
         };
 
         bindings[exportName] = binding;

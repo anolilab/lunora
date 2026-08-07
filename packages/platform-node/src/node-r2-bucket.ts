@@ -3,39 +3,46 @@
  * contract (`@lunora/platform`) over the local filesystem, so `@lunora/storage`'s
  * `createStorage({ bucket })` runs on the Node host.
  *
- * `@visulima/storage`'s providers were deliberately NOT wrapped: its `BaseStorage`
- * is a resumable-upload engine (`create` → `write` parts, checksums, sidecar meta)
- * whose surface has no `head`, a flat `list()` with no prefix/delimiter/cursor,
- * and a `delete` that throws on a missing key — all of which clash with the R2
- * contract `ctx.storage` consumes. The R2 contract is small enough to implement
- * directly over `fs/promises`, so that is what this does.
+ * # The invariant
  *
- * # One file per object, metadata in a trailer
- *
- * An object is a single file at `directory/key`, laid out as
+ * **An object is exactly one file carrying a valid trailer. There is no partial
+ * state and no fallback.** `directory/key` holds
  *
  * ```
  * <body bytes> <trailer JSON> <uint32be trailer length> "LNR1"
  * ```
  *
- * A sidecar tree was the obvious first design and is wrong: bytes and metadata
- * then live in two files, and no pair of filesystem operations publishes both
- * at once. A crash between them leaves an overwritten body carrying the previous
- * checksum, size and content-type, which `get`/`head` then report as fact. With
- * the metadata inside the file, the single `rename` that publishes the bytes
- * publishes the metadata with them — an interrupted `put` leaves the previous
- * version wholly intact, never a mixture of two.
+ * so the single `rename` that publishes the bytes publishes their checksum,
+ * size and content-type with them, and `readTrailerFrom` is a total predicate:
+ * anything that is not a well-formed object reads back as absent, never as an
+ * object with guessed metadata. `head` reads the trailer only (two small
+ * positioned reads); `get` holds that one handle and streams the requested
+ * range through it, so neither reopens the path and neither materialises the
+ * object. (The sidecar layout this replaced, and why, is in `plans/234`.)
  *
- * The cost is that `directory/key` is no longer byte-identical to the object;
- * a trailer sits after the body. `head` reads the trailer only (two small
- * positioned reads, no body transfer), and `get` streams the requested byte
- * range straight off the file rather than materialising the object in memory.
+ * Because `get` holds a descriptor, the object it returns is **read once** and
+ * reading closes it — `arrayBuffer()`, `text()` and draining or cancelling
+ * `body` all release, and a second read raises rather than silently reopening
+ * the path. R2's own body is single-use for the same reason. The one case that
+ * retains a descriptor is a `get` whose result is never touched at all; use
+ * `head` when only metadata is wanted.
  *
- * Reserved top-level name: `.lunora-tmp`, the staging tree puts are renamed out
- * of. Keys are rejected unless every `/`-separated segment is a plain name — no
- * empty, `.`, or `..` segments, no backslash (a path separator on Windows), no
- * NUL, no leading `/`. That keeps the key → path mapping injective and confined
- * to the bucket directory on every platform.
+ * # Key grammar, and where it stops being injective
+ *
+ * `.lunora-tmp` is reserved at every depth — it is the staging tree puts are
+ * renamed out of. Keys are otherwise rejected unless every `/`-separated
+ * segment is a plain name: no empty, `.` or `..` segments, no backslash (a
+ * separator on Windows), no NUL or other control character, no leading `/`,
+ * and no more than 1024 bytes — the same grammar `@lunora/storage` enforces.
+ *
+ * That confines every key to the bucket directory on every platform. It does
+ * **not** make the mapping injective there: on a case-insensitive filesystem
+ * (APFS by default, so most dev machines) `A` and `a` are one object, and on
+ * Windows a trailing dot or space is stripped and `x:y` names an alternate
+ * data stream. Real R2 treats all of those as distinct keys. Percent-encoding
+ * each segment would fix it at the cost of an unreadable bucket directory;
+ * for a local host the readable directory wins and the divergence is stated
+ * here and in the capability note rather than papered over.
  *
  * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
@@ -43,13 +50,15 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { mkdir, open, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
+
+import { hasControlChar } from "../../../shared/hmac-url";
+import { toArrayBuffer } from "./to-array-buffer";
 
 /** Scratch tree for atomic put staging (rename-in is atomic on POSIX). */
 const TMP_DIR = ".lunora-tmp";
@@ -59,6 +68,9 @@ const MAGIC = "LNR1";
 
 /** `uint32be` trailer length + {@link MAGIC}. */
 const FOOTER_SIZE = 8;
+
+/** Matches `@lunora/storage`'s ceiling, so the two layers agree on what a key may be. */
+const MAX_KEY_LENGTH = 1024;
 
 /** Per-object metadata, persisted in the object file's trailer. */
 interface NodeObjectMeta {
@@ -76,18 +88,33 @@ interface NodeR2BucketOptions {
 }
 
 /**
- * Reject keys that do not map injectively onto a path inside the bucket
- * directory. Every segment must be a plain name: `a/./b` and `a//b` would
- * otherwise resolve to the same file as `a/b`, and `..\\outside` escapes the
- * directory entirely on Windows, where `\` is a separator `split("/")` cannot see.
+ * Reject keys that would leave the bucket directory or collide inside it. Every
+ * segment must be a plain name: `a/./b` and `a//b` would otherwise resolve to
+ * the same file as `a/b`, and `..\\outside` escapes the directory entirely on
+ * Windows, where `\` is a separator `split("/")` cannot see. See the header for
+ * the filesystem-folding cases this cannot reach.
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key must be a non-empty string");
     }
 
+    // The same ceiling and control-character rule `@lunora/storage` applies, so a
+    // key accepted on one target is accepted on the other. Divergent key grammar
+    // per host is the thing the platform-parity convention exists to prevent —
+    // and without the ceiling an over-long key surfaces as a raw `ENAMETOOLONG`.
+    if (key.length > MAX_KEY_LENGTH) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+    }
+
     if (key.includes("\0")) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key contains a NUL byte");
+    }
+
+    // `hasControlChar` is the canonical detector in `shared/hmac-url.ts`, shared
+    // with `@lunora/storage`'s `validateKey` rather than re-derived here.
+    if (hasControlChar(key)) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key contains a control character (including CR/LF)");
     }
 
     if (key.includes("\\")) {
@@ -102,15 +129,39 @@ const validateKey = (key: string): void => {
         if (segment === "" || segment === "." || segment === "..") {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key has an empty, \`.\` or \`..\` path segment ("${key}")`);
         }
-    }
 
-    if (key.split("/")[0] === TMP_DIR) {
-        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (first segment must not be "${TMP_DIR}")`);
+        // Reserved at every depth, not just the first: `walkObjects` skips the
+        // staging tree wherever it appears, so a key like `a/.lunora-tmp/b` would
+        // otherwise be writable and readable but invisible to `list()` — and
+        // anything that reconciles through `list` would quietly lose it.
+        if (segment === TMP_DIR) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (no segment may be "${TMP_DIR}")`);
+        }
     }
 };
 
 /** True when an `fs/promises` error is a missing path. */
 const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+
+/**
+ * Name the one filesystem limitation the key grammar cannot rule out: a key and
+ * a prefix of it cannot both be objects, because one has to be a directory to
+ * hold the other. `a/b` then `a`, or the reverse, are both legal in R2 and
+ * neither is representable here — which is worth saying rather than letting
+ * `EISDIR`/`EEXIST`/`ENOTDIR` out of an `fs` call the caller never made.
+ */
+const asKeyCollision = (key: string, error: unknown): unknown => {
+    const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+    if (code === "EEXIST" || code === "EISDIR" || code === "ENOTDIR") {
+        return new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: R2 key "${key}" collides with an existing object at one of its path prefixes — this host stores one file per key, so a key and a prefix of it cannot both hold objects`,
+        );
+    }
+
+    return error;
+};
 
 /** Serialize a trailer: the metadata JSON, its length, and the sentinel. */
 const encodeTrailer = (meta: NodeObjectMeta): Buffer => {
@@ -123,8 +174,69 @@ const encodeTrailer = (meta: NodeObjectMeta): Buffer => {
     return Buffer.concat([json, footer]);
 };
 
-/** Read an object's trailer and the length of the body preceding it, or `undefined` when the key holds no object. */
-const readTrailer = async (filePath: string): Promise<{ bodySize: number; meta: NodeObjectMeta } | undefined> => {
+/** True when a parsed trailer carries the fields every projection reads. */
+const isObjectMeta = (value: unknown): value is NodeObjectMeta => {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const candidate = value as Partial<NodeObjectMeta>;
+
+    return typeof candidate.sha256Hex === "string" && typeof candidate.size === "number" && typeof candidate.uploaded === "string";
+};
+
+/**
+ * Read an object's trailer through an already-open handle, or `undefined` when
+ * the file is not one of ours.
+ *
+ * Every rejection is the same answer — "no object here" — including a trailer
+ * that carries the magic but whose JSON is corrupt or the wrong shape. Letting
+ * that one throw instead would make a single damaged file take down `list()`
+ * for the whole bucket, and `get`/`head` would report it as an error rather
+ * than the absence it is indistinguishable from.
+ */
+const readTrailerFrom = async (handle: FileHandle): Promise<{ bodySize: number; meta: NodeObjectMeta } | undefined> => {
+    const stats = await handle.stat();
+
+    if (!stats.isFile() || stats.size < FOOTER_SIZE) {
+        return undefined;
+    }
+
+    const footer = Buffer.alloc(FOOTER_SIZE);
+
+    await handle.read(footer, 0, FOOTER_SIZE, stats.size - FOOTER_SIZE);
+
+    if (footer.toString("ascii", 4, FOOTER_SIZE) !== MAGIC) {
+        return undefined;
+    }
+
+    const trailerLength = footer.readUInt32BE(0);
+    const bodySize = stats.size - FOOTER_SIZE - trailerLength;
+
+    if (trailerLength === 0 || bodySize < 0) {
+        return undefined;
+    }
+
+    const trailer = Buffer.alloc(trailerLength);
+    const { bytesRead } = await handle.read(trailer, 0, trailerLength, bodySize);
+
+    if (bytesRead !== trailerLength) {
+        return undefined;
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(trailer.toString("utf8"));
+    } catch {
+        return undefined;
+    }
+
+    return isObjectMeta(parsed) ? { bodySize, meta: parsed } : undefined;
+};
+
+/** Open an object file for reading, or `undefined` when the key holds no object. The handle is the caller's to close. */
+const openObject = async (filePath: string): Promise<{ bodySize: number; handle: FileHandle; meta: NodeObjectMeta } | undefined> => {
     let handle: FileHandle;
 
     try {
@@ -138,63 +250,62 @@ const readTrailer = async (filePath: string): Promise<{ bodySize: number; meta: 
     }
 
     try {
-        const stats = await handle.stat();
+        const stored = await readTrailerFrom(handle);
 
-        if (!stats.isFile() || stats.size < FOOTER_SIZE) {
+        if (stored === undefined) {
+            await handle.close();
+
             return undefined;
         }
 
-        const footer = Buffer.alloc(FOOTER_SIZE);
-
-        await handle.read(footer, 0, FOOTER_SIZE, stats.size - FOOTER_SIZE);
-
-        if (footer.toString("ascii", 4, FOOTER_SIZE) !== MAGIC) {
-            return undefined;
-        }
-
-        const trailerLength = footer.readUInt32BE(0);
-        const bodySize = stats.size - FOOTER_SIZE - trailerLength;
-
-        if (trailerLength === 0 || bodySize < 0) {
-            return undefined;
-        }
-
-        const trailer = Buffer.alloc(trailerLength);
-
-        await handle.read(trailer, 0, trailerLength, bodySize);
-
-        return { bodySize, meta: JSON.parse(trailer.toString("utf8")) as NodeObjectMeta };
-    } finally {
+        return { ...stored, handle };
+    } catch (error: unknown) {
         await handle.close();
+
+        throw error;
     }
 };
 
-/**
- * Copy a `Buffer`'s bytes into a standalone `ArrayBuffer`. The slice is what
- * makes it a copy — a `Buffer` is a view into Node's shared allocation pool, so
- * handing out `.buffer` would expose unrelated memory.
- */
-const toArrayBuffer = (buffer: Buffer): ArrayBuffer => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+/** Metadata-only read: opens, reads the trailer, closes. */
+const readTrailer = async (filePath: string): Promise<{ bodySize: number; meta: NodeObjectMeta } | undefined> => {
+    const opened = await openObject(filePath);
 
-/** Hex → the `ArrayBuffer` shape `R2ObjectLike.checksums.sha256` carries. */
-const hexToArrayBuffer = (hex: string): ArrayBuffer => toArrayBuffer(Buffer.from(hex, "hex"));
+    if (opened === undefined) {
+        return undefined;
+    }
+
+    await opened.handle.close();
+
+    return { bodySize: opened.bodySize, meta: opened.meta };
+};
 
 /** Build the body-free {@link R2ObjectLike} projection for a key from its trailer. */
 const toObject = (key: string, meta: NodeObjectMeta): R2ObjectLike => {
     const { sha256Hex } = meta;
+    // One decode feeds both encodings the contract derives from `checksums`.
+    const digest = Buffer.from(sha256Hex, "hex");
 
     return {
-        checksums: { sha256: hexToArrayBuffer(sha256Hex) },
+        checksums: { sha256: toArrayBuffer(digest) },
         customMetadata: meta.customMetadata,
         etag: sha256Hex,
         httpEtag: `"${sha256Hex}"`,
         httpMetadata: meta.httpMetadata,
         key,
         sha256: sha256Hex,
-        sha256Base64: Buffer.from(sha256Hex, "hex").toString("base64"),
+        sha256Base64: digest.toString("base64"),
         size: meta.size,
         uploaded: new Date(meta.uploaded),
     };
+};
+
+/** Clamp a caller-supplied byte count into `[0, limit]`, treating a non-finite one as absent. */
+const clamp = (value: number | undefined, fallback: number, limit: number): number => {
+    if (value === undefined || !Number.isFinite(value)) {
+        return fallback;
+    }
+
+    return Math.min(Math.max(0, Math.floor(value)), limit);
 };
 
 /** Resolve an {@link R2RangeLike} into absolute `[start, end)` body offsets. */
@@ -203,33 +314,48 @@ const resolveRange = (bodySize: number, range?: R2RangeLike): { end: number; sta
         return { end: bodySize, start: 0 };
     }
 
+    // Every arm clamps, so a `NaN` offset/length cannot reach `Buffer.alloc` and
+    // surface as a raw `ERR_OUT_OF_RANGE` from somewhere the caller can't place.
     if ("suffix" in range) {
-        return { end: bodySize, start: bodySize - Math.min(Math.max(0, range.suffix), bodySize) };
+        return { end: bodySize, start: bodySize - clamp(range.suffix, bodySize, bodySize) };
     }
 
-    const start = Math.min(Math.max(0, range.offset ?? 0), bodySize);
-    const end = range.length === undefined ? bodySize : Math.min(start + Math.max(0, range.length), bodySize);
+    const start = clamp(range.offset, 0, bodySize);
+    const end = range.length === undefined || !Number.isFinite(range.length) ? bodySize : Math.min(start + clamp(range.length, 0, bodySize), bodySize);
 
     return { end, start };
 };
 
 /**
- * Stream one window of an object file as a web `ReadableStream`. Written over
- * the file stream's async iterator rather than `Readable.toWeb`, which Node
- * still marks experimental below 22.17 while this package supports ^22.15.
+ * Stream one window of an open object file as a web `ReadableStream`, closing
+ * the handle when the stream ends, errors, or is cancelled.
+ *
+ * Written over the file stream's async iterator rather than `Readable.toWeb`,
+ * which Node still marks experimental below 22.17 while this package supports
+ * ^22.15.
  */
-const streamSlice = (filePath: string, start: number, end: number): ReadableStream => {
-    const source: AsyncIterator<Buffer> = createReadStream(filePath, { end: end - 1, start })[Symbol.asyncIterator]();
+const streamSlice = (handle: FileHandle, start: number, end: number, release: () => Promise<void>): ReadableStream => {
+    const source: AsyncIterator<Buffer> = handle.createReadStream({ autoClose: false, end: end - 1, start })[Symbol.asyncIterator]();
 
     return new ReadableStream({
         cancel: async () => {
             await source.return?.();
+            await release();
         },
         pull: async (controller) => {
-            const result = await source.next();
+            let result;
+
+            try {
+                result = await source.next();
+            } catch (error: unknown) {
+                await release();
+
+                throw error;
+            }
 
             if (result.done === true) {
                 controller.close();
+                await release();
             } else {
                 controller.enqueue(result.value);
             }
@@ -237,24 +363,18 @@ const streamSlice = (filePath: string, start: number, end: number): ReadableStre
     });
 };
 
-/** Read one window of an object file. Only the requested bytes are ever in memory. */
-const readSlice = async (filePath: string, start: number, end: number): Promise<Buffer> => {
+/** Read one window of an open object file. Only the requested bytes are ever in memory. */
+const readSlice = async (handle: FileHandle, start: number, end: number): Promise<Buffer> => {
     const length = end - start;
 
     if (length <= 0) {
         return Buffer.alloc(0);
     }
 
-    const handle = await open(filePath, "r");
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, start);
 
-    try {
-        const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, start);
-
-        return buffer.subarray(0, bytesRead);
-    } finally {
-        await handle.close();
-    }
+    return buffer.subarray(0, bytesRead);
 };
 
 /** Yield every supported R2 put body as byte chunks, without collecting them. */
@@ -398,23 +518,70 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
             validateKey(key);
 
-            const filePath = join(directory, key);
-            const stored = await readTrailer(filePath);
+            const opened = await openObject(join(directory, key));
 
-            if (stored === undefined) {
+            if (opened === undefined) {
                 return null; // eslint-disable-line unicorn/no-null
             }
 
-            const { end, start } = resolveRange(stored.bodySize, getOptions?.range);
+            // The body is read through the handle the trailer came from, never by
+            // reopening the path. An overwrite between the two would otherwise
+            // serve the *new* file's bytes — trailer included — under the old
+            // one's size and checksum. On POSIX the `rename` that publishes a new
+            // version swaps the directory entry while this handle keeps pointing
+            // at the version whose metadata was returned.
+            const { bodySize, handle, meta } = opened;
+            const { end, start } = resolveRange(bodySize, getOptions?.range);
+
+            let released = false;
+            const release = async (): Promise<void> => {
+                if (!released) {
+                    released = true;
+                    await handle.close();
+                }
+            };
+
+            // Reading closes the handle, so an object is read once — matching R2,
+            // whose `body` is a stream that cannot be consumed twice either.
+            const claim = (): void => {
+                if (released) {
+                    throw new LunoraError("BAD_REQUEST", `@lunora/platform-node: R2 object "${key}" body has already been consumed`);
+                }
+            };
+
+            const readWhole = async (): Promise<Buffer> => {
+                claim();
+
+                try {
+                    return await readSlice(handle, start, end);
+                } finally {
+                    await release();
+                }
+            };
 
             return {
-                ...toObject(key, stored.meta),
-                arrayBuffer: async (): Promise<ArrayBuffer> => toArrayBuffer(await readSlice(filePath, start, end)),
-                body: end > start ? streamSlice(filePath, start, end) : new Blob([]).stream(),
-                text: async (): Promise<string> => {
-                    const slice = await readSlice(filePath, start, end);
+                ...toObject(key, meta),
+                arrayBuffer: async (): Promise<ArrayBuffer> => toArrayBuffer(await readWhole()),
+                // A getter, so a caller that only reads metadata or calls
+                // `text()` never opens a stream — an eagerly-built one that
+                // nobody drains holds the descriptor until the process exits.
+                get body(): ReadableStream {
+                    claim();
 
-                    return slice.toString("utf8");
+                    if (end <= start) {
+                        // Nothing to stream, so release now — the returned empty
+                        // stream has no end event to hang the close off.
+                        release().catch(() => undefined);
+
+                        return new Blob([]).stream();
+                    }
+
+                    return streamSlice(handle, start, end, release);
+                },
+                text: async (): Promise<string> => {
+                    const whole = await readWhole();
+
+                    return whole.toString("utf8");
                 },
             };
         },
@@ -428,7 +595,7 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         },
 
         list: async (listOptions: { cursor?: string; delimiter?: string; limit?: number; prefix?: string } = {}) => {
-            const limit = Math.min(Math.max(1, Math.floor(listOptions.limit ?? 1000)), 1000);
+            const limit = Math.max(1, clamp(listOptions.limit, 1000, 1000));
 
             if (listOptions.prefix?.includes("\0")) {
                 throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 list prefix contains a NUL byte");
@@ -455,7 +622,12 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             );
             const objects = found.filter((object) => object !== undefined);
 
-            return { cursor: truncated ? objects.at(-1)?.key : undefined, objects, truncated };
+            // The cursor is the last key *considered*, not the last object
+            // *returned*. Those differ whenever an entry drops out above, and
+            // taking it from `objects` then rewinds the next page over keys
+            // already served — or, if the whole page dropped out, hands back
+            // `undefined` while claiming `truncated`, which strands the caller.
+            return { cursor: truncated ? page.at(-1) : undefined, objects, truncated };
         },
 
         put: async (
@@ -468,7 +640,12 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             const filePath = join(directory, key);
             const temporaryPath = join(directory, TMP_DIR, randomUUID());
 
-            await mkdir(dirname(filePath), { recursive: true });
+            try {
+                await mkdir(dirname(filePath), { recursive: true });
+            } catch (error: unknown) {
+                throw asKeyCollision(key, error);
+            }
+
             await mkdir(dirname(temporaryPath), { recursive: true });
 
             const hash = createHash("sha256");
@@ -505,7 +682,13 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
 
             // The one operation that publishes the object — body and metadata are
             // in this file together, so there is no window where they disagree.
-            await rename(temporaryPath, filePath);
+            try {
+                await rename(temporaryPath, filePath);
+            } catch (error: unknown) {
+                await unlinkIfPresent(temporaryPath);
+
+                throw asKeyCollision(key, error);
+            }
 
             return toObject(key, meta);
         },

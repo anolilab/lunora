@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,11 +47,52 @@ describe("createNodeR2Bucket", () => {
         const bucket = freshBucket();
 
         await bucket.put("a", "stream me");
-        const object = await bucket.get("a");
-        const text = await new Response(object?.body ?? null).text();
+
+        const streamed = await bucket.get("a");
+        const text = await new Response(streamed?.body ?? null).text();
 
         expect(text).toBe("stream me");
-        await expect(object?.arrayBuffer()).resolves.toEqual(new TextEncoder().encode("stream me").buffer);
+
+        // A fresh get: the body is single-use, as R2's is.
+        const buffered = await bucket.get("a");
+
+        await expect(buffered?.arrayBuffer()).resolves.toEqual(new TextEncoder().encode("stream me").buffer);
+    });
+
+    it("rejects a second read of the same object body", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("once", "only once");
+
+        const object = await bucket.get("once");
+
+        await expect(object?.text()).resolves.toBe("only once");
+        // The handle is closed on the first read, so a second one is refused
+        // rather than silently reopening the path and racing an overwrite.
+        await expect(object?.arrayBuffer()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("reads body and metadata from one version when a put lands mid-read", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("race", "A".repeat(1000));
+
+        const object = await bucket.get("race");
+
+        // Publishes a new version between the metadata read and the body read.
+        // Reopening the path here would serve the new bytes — trailer JSON and
+        // all — under the old version's size and checksum.
+        await bucket.put("race", "B".repeat(10));
+
+        const text = await object?.text();
+
+        expect(text).toBe("A".repeat(1000));
+        expect(object?.size).toBe(1000);
+        expect(text).toHaveLength(object?.size ?? -1);
     });
 
     it("accepts Blob, ArrayBuffer and ReadableStream bodies", async () => {
@@ -186,8 +227,10 @@ describe("createNodeR2Bucket", () => {
         await bucket.put("doc", "original", { httpMetadata: { contentType: "text/plain" } });
 
         const failing = new ReadableStream({
+            // A different length from "original", so a partially-published body
+            // could not pass the size assertion by coincidence.
             pull(controller) {
-                controller.enqueue(new TextEncoder().encode("replacem"));
+                controller.enqueue(new TextEncoder().encode("a much longer replacement"));
                 controller.error(new Error("upstream died"));
             },
         });
@@ -202,6 +245,110 @@ describe("createNodeR2Bucket", () => {
         expect(object?.sha256).toBe(sha256Hex("original"));
         expect(object?.size).toBe(8);
         expect(object?.httpMetadata?.contentType).toBe("text/plain");
+
+        // Nothing left staged.
+        expect(readdirSync(join(dir, ".lunora-tmp"))).toStrictEqual([]);
+    });
+
+    it("streams a multi-chunk body through put and back out of a range read", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+        const chunkCount = 16;
+        const chunk = "lunora-chunk-pad".repeat(4096); // 64 KiB per chunk, 1 MiB total
+        let pushed = 0;
+
+        const source = new ReadableStream({
+            pull(controller) {
+                if (pushed === chunkCount) {
+                    controller.close();
+
+                    return;
+                }
+
+                controller.enqueue(new TextEncoder().encode(chunk));
+                pushed += 1;
+            },
+        });
+
+        const stored = await bucket.put("big", source);
+        const whole = chunk.repeat(chunkCount);
+
+        expect(pushed).toBe(chunkCount);
+        expect(stored.size).toBe(whole.length);
+        expect(stored.sha256).toBe(sha256Hex(whole));
+
+        // A window that starts and ends inside the object, spanning a chunk
+        // boundary — the read must land on body bytes only, never the trailer.
+        const middle = await bucket.get("big", { range: { length: 20, offset: 65_526 } });
+
+        await expect(middle?.text()).resolves.toBe(whole.slice(65_526, 65_546));
+
+        // And the tail, which sits immediately before the trailer.
+        const tail = await bucket.get("big", { range: { suffix: 8 } });
+
+        await expect(tail?.text()).resolves.toBe(whole.slice(-8));
+
+        const streamed = await bucket.get("big");
+        const drained = await new Response(streamed?.body ?? null).text();
+
+        expect(drained).toHaveLength(whole.length);
+        expect(drained).toBe(whole);
+    });
+
+    it("treats a corrupt or truncated object as absent rather than throwing", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("good", "fine");
+        await bucket.put("truncated", "some content here");
+        await bucket.put("badjson", "some content here");
+
+        // Cut the trailer off entirely.
+        truncateSync(join(dir, "truncated"), 4);
+
+        // Keep the magic and length, corrupt the JSON they describe.
+        const corrupt = readFileSync(join(dir, "badjson"));
+
+        corrupt.fill(0x7b, 0, corrupt.length - 8);
+        writeFileSync(join(dir, "badjson"), corrupt);
+
+        await expect(bucket.get("truncated")).resolves.toBeNull();
+        await expect(bucket.head!("truncated")).resolves.toBeNull();
+        await expect(bucket.get("badjson")).resolves.toBeNull();
+        await expect(bucket.head!("badjson")).resolves.toBeNull();
+
+        // One damaged file must not take the whole listing down with it.
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((object) => object.key)).toStrictEqual(["good"]);
+    });
+
+    it("advances the cursor past keys that dropped out of a page", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("a", "1");
+        await bucket.put("b", "2");
+        await bucket.put("d", "4");
+
+        // Sorts between "b" and "d", so it lands last in a limit-3 page and is
+        // then filtered out of the results. A cursor taken from the returned
+        // objects would rewind to "b" and re-serve it.
+        writeFileSync(join(dir, "c"), "hand-written");
+
+        const first = await bucket.list({ limit: 3 });
+
+        expect(first.objects.map((object) => object.key)).toStrictEqual(["a", "b"]);
+        expect(first.truncated).toBe(true);
+        expect(first.cursor).toBe("c");
+
+        const second = await bucket.list({ cursor: first.cursor, limit: 3 });
+
+        expect(second.objects.map((object) => object.key)).toStrictEqual(["d"]);
+        expect(second.truncated).toBe(false);
     });
 
     it("ignores an unrelated file dropped into the bucket directory", async () => {

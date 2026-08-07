@@ -38,6 +38,8 @@ import { deserialize, serialize } from "node:v8";
 import type { SocketHandle, SocketHost } from "@lunora/platform";
 import type Database from "better-sqlite3";
 
+import { toArrayBuffer } from "./to-array-buffer";
+
 /** Internal record for one accepted (or restored) socket. */
 interface NodeSocket {
     attachment: unknown;
@@ -56,25 +58,6 @@ interface SocketRow {
     attachment: Buffer | null;
     tags: string;
 }
-
-const toArrayBuffer = (data: string | ArrayBufferLike | Blob | ArrayBufferView): ArrayBuffer => {
-    if (typeof data === "string") {
-        return new TextEncoder().encode(data).buffer;
-    }
-
-    if (data instanceof ArrayBuffer) {
-        return data;
-    }
-
-    if (ArrayBuffer.isView(data)) {
-        return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-    }
-
-    // Blob is not supported by this host — same limitation the reference host
-    // carries, and the engine never sends one (every Lunora wire frame is JSON
-    // text).
-    return new ArrayBuffer(0);
-};
 
 /**
  * The socket-host half of a Node platform instance, plus the test-only hooks

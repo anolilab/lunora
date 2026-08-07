@@ -16,6 +16,19 @@
  * `acquire` is a single conditional upsert. That matters: the contract says a
  * lease is only race-free if the claim is atomic, and a read-check-write pair
  * would let two processes on one database file both believe they own the run.
+ *
+ * Two things a caller should know:
+ *
+ * - **Snapshots round-trip as JSON, not structured clone.** `MemoryStore` uses
+ * `structuredClone`, so a `Date`/`Map`/`Set`/`undefined` in a workflow's params
+ * or output survives there and does not survive here. The engine's own
+ * `SqlStore` behaves the same way, so this is the sanctioned durable
+ * behaviour — but it means a suite that runs on `MemoryStore` can pass over
+ * values production would flatten.
+ * - **Set `journal_mode = WAL` for the cross-process case.** A file-backed
+ * `better-sqlite3` connection defaults to `journal_mode = delete`, which is
+ * correct but serializes readers against writers; the lease is atomic either
+ * way. `new Database(path).pragma("journal_mode = WAL")`.
  */
 
 import type { StoredRun, WorkflowStore } from "@visulima/workflow";

@@ -179,7 +179,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         queues: { level: "unsupported", note: "No Cloudflare Queues equivalent implemented" },
         workflows: {
             level: "emulated",
-            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). Gaps: no pause/restart, no caller-supplied instance id (create({ id }) throws NOT_IMPLEMENTED), ctx.run dispatches to an endpoint no Node HTTP server serves, ctx.parallel's synchronous join cannot interleave within one trigger activation",
+            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). Gaps: no pause/restart; terminate is not a barrier, so an activation already in flight overwrites the tombstone; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
         },
         scheduler: {
             level: "emulated",
@@ -187,7 +187,7 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         objectStorage: {
             level: "emulated",
-            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them; get streams the requested range and put streams into the staged file, so neither holds a whole object in memory. No multipart uploads, no presigned URLs",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys fold the way the host filesystem folds them, so `A` and `a` are one object on a case-insensitive volume where real R2 keeps two. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
