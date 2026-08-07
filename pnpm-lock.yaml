@@ -746,6 +746,10 @@ catalogs:
     viem:
       specifier: 2.55.8
       version: 2.55.8
+  workflow:
+    '@visulima/workflow':
+      specifier: 2.0.0
+      version: 2.0.0
 
 overrides:
   typescript: 6.0.3
@@ -3702,19 +3706,52 @@ importers:
 
   packages/platform-node:
     dependencies:
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../queue
+      '@lunora/sql-store':
+        specifier: workspace:*
+        version: link:../sql-store
+      '@lunora/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+      '@visulima/workflow':
+        specifier: catalog:workflow
+        version: 2.0.0(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.1(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1
+      cron-parser:
+        specifier: 5.6.2
+        version: 5.6.2
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@2.9.0)(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.10)
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
+      '@lunora/platform-cloudflare':
+        specifier: 1.0.0-alpha.3
+        version: 1.0.0-alpha.3
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/storage':
+        specifier: workspace:*
+        version: link:../storage
       '@types/better-sqlite3':
         specifier: ^7.6.13
         version: 7.6.13
@@ -7850,6 +7887,10 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.3':
+    resolution: {integrity: sha512-GamHgnRI6ZnIZ834LSU6u77kQZ7fplaRQEq0bbLzwmLZawLApbOa+rxE0I42rP73MC7dYHVtnTZIDz33C00EqA==}
+    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -14446,6 +14487,15 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     peerDependencies:
       vite: ^6 || ^7 || ^8
+
+  '@visulima/workflow@2.0.0':
+    resolution: {integrity: sha512-i76ERt1Dz0PRt/wBP4surfM+7k4HM06K1GFxnS/w/D3+/4FDLw5BKplzl5caMgbddO7wkrOcuXAmEJ0TDt1KyA==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+    peerDependencies:
+      unstorage: ^1.13.0
+    peerDependenciesMeta:
+      unstorage:
+        optional: true
 
   '@vitejs/plugin-react@6.0.4':
     resolution: {integrity: sha512-XcCQz0TBpBgljhj0gMuuDj49i6Ytqh5q1osT/Gp5uAVJUCTWxyskk/l1jwYYiu2xcNHHipdMz40EGfM1VdamVg==}
@@ -24325,6 +24375,9 @@ packages:
     engines: {node: '>= 0.10.0'}
     hasBin: true
 
+  xstate@5.32.5:
+    resolution: {integrity: sha512-ULazi1oe6wGrXl0Frb6otSlkm5HLifbbVTkMk5kkSKqz4TkxJaVpnl6jOJwKeid3ORPxYyZQgNLUSYX9q65SIA==}
+
   xtend@4.0.2:
     resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
     engines: {node: '>=0.4'}
@@ -27782,6 +27835,11 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.3':
+    dependencies:
+      '@lunora/errors': link:packages/errors
+      '@lunora/platform': link:packages/platform
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
@@ -35044,6 +35102,14 @@ snapshots:
       vite: 8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
     transitivePeerDependencies:
       - ai
+
+  '@visulima/workflow@2.0.0(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.1(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      croner: 10.0.1
+      xstate: 5.32.5
+    optionalDependencies:
+      unstorage: 1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.1(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2))
 
   '@vitejs/plugin-react@6.0.4(@rolldown/plugin-babel@0.2.3(@babel/core@8.0.1)(@babel/plugin-transform-runtime@7.29.7(@babel/core@8.0.1)(supports-color@10.2.2))(@babel/runtime@7.29.7)(rolldown@1.1.5)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))(babel-plugin-react-compiler@1.0.0)(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))':
     dependencies:
@@ -46886,6 +46952,8 @@ snapshots:
     dependencies:
       commander: 2.20.3
       cssfilter: 0.0.10
+
+  xstate@5.32.5: {}
 
   xtend@4.0.2: {}
 

@@ -2,6 +2,17 @@ import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
 import { resolveShard as resolveShardStub } from "@lunora/platform";
 
 /**
+ * The Cloudflare-binding members {@link toDirectory} reads.
+ *
+ * Only the optional two: a `ShardDirectory` returns early, so everything past
+ * that point is a binding, where `get` and `idFromName` are required.
+ */
+type ShardNamespaceParts = {
+    getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
+};
+
+/**
  * Adapt a Cloudflare-shaped {@link ShardNamespaceLike} to the provider-neutral
  * {@link ShardDirectory} contract.
  *
@@ -21,10 +32,38 @@ import { resolveShard as resolveShardStub } from "@lunora/platform";
  * weakly so a discarded namespace — a one-off jurisdiction view — does not
  * outlive its binding.
  */
-const directoryCache = new WeakMap<ShardNamespaceLike, ShardDirectory>();
+const directoryCache = new WeakMap<object, ShardDirectory>();
 
-const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
-    const cached = directoryCache.get(namespace);
+/**
+ * Read whichever id-derivation spelling the namespace supplies.
+ *
+ * Throws rather than returning the name unchanged when neither exists: a
+ * namespace with no `getByName` and no way to derive an id cannot resolve a
+ * shard at all, and silently substituting the raw name would route every key to
+ * whatever object that string happens to address.
+ */
+
+/**
+ * `idFromName` is the one member only a Cloudflare binding has — the contract
+ * spells it `idForName` — so it is what separates the two arms of the input
+ * union. Narrowed on the *binding*, not the directory, because
+ * `DirectShardDirectory` declares `idForName` optionally and an `in` check
+ * cannot exclude it.
+ */
+const isCloudflareBinding = (input: ShardNamespaceInput): input is ShardNamespaceLike => typeof (input as ShardNamespaceLike).idFromName === "function";
+
+const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
+    // A `ShardDirectory` is already the contract — adapting it would allocate a
+    // fresh object and three closures to re-derive `idForName` from `idForName`.
+    // Returning it also means everything below is a Cloudflare binding, where
+    // `get` and `idFromName` are required, which is what removes the cast and
+    // the all-optional projection this function used to need.
+    if (!isCloudflareBinding(input)) {
+        return input;
+    }
+
+    const namespace = input;
+    const cached = directoryCache.get(input);
 
     if (cached !== undefined) {
         return cached;
@@ -33,7 +72,7 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
     const jurisdiction =
         typeof namespace.jurisdiction === "function"
             ? (hint: ShardJurisdiction) =>
-                  toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceLike["jurisdiction"]>)(hint as DurableObjectJurisdiction))
+                  toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceParts["jurisdiction"]>)(hint as DurableObjectJurisdiction))
             : undefined;
 
     const directory: ShardDirectory =
@@ -46,7 +85,7 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
                   // as `this` and workerd rejects it with "Illegal invocation".
                   // Plain-object test doubles tolerate the detached reference,
                   // which is why only the workerd suites caught this.
-                  getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceLike["getByName"]>)(name),
+                  getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceParts["getByName"]>)(name),
                   idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               }
@@ -56,7 +95,7 @@ const toDirectory = (namespace: ShardNamespaceLike): ShardDirectory => {
                   jurisdiction,
               };
 
-    directoryCache.set(namespace, directory);
+    directoryCache.set(input, directory);
 
     return directory;
 };
@@ -76,6 +115,7 @@ export type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
  * unit-test doubles without coupling to `@cloudflare/workers-types`.
  */
 export interface ShardNamespaceLike {
+    /** Materialize a stub from an opaque id. */
     get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
 
     /**
@@ -84,6 +124,8 @@ export interface ShardNamespaceLike {
      * `idFromName` + `get` for compatibility.
      */
     getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
+
+    /** Cloudflare's `DurableObjectNamespace` spelling of `idForName`. */
     idFromName: (name: string) => unknown;
 
     /**
@@ -95,6 +137,25 @@ export interface ShardNamespaceLike {
      */
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
+
+/**
+ * What a fan-out entry point accepts: a Cloudflare binding **or** a
+ * `@lunora/platform` `ShardDirectory`.
+ *
+ * The two shapes differ by one method name — the contract spells `idFromName`
+ * as `idForName` — and that one letter made every entry point
+ * (`QueryCoordinator.fanOut`, the `orchestrate*` family) reject a fully
+ * conforming directory. A porting blocker, found by construction the first time
+ * `@lunora/platform-node` fanned out.
+ *
+ * It is a **union, not a loosened `ShardNamespaceLike`**. Making `get` and
+ * `idFromName` optional on that interface fixed fan-out and broke everything
+ * else: it is the projection of a real `DurableObjectNamespace`, so ~74 call
+ * sites and every app's `env.SHARD` inherited two members that were suddenly
+ * `possibly undefined`. Widening the input is what was wanted; widening the
+ * binding type was collateral.
+ */
+export type ShardNamespaceInput = ShardDirectory | ShardNamespaceLike;
 
 export interface ResolvedShard {
     fetch: (request: Request) => Promise<Response>;
@@ -130,4 +191,4 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
  * else `idFromName` + `get` — but the preference now lives in one place (the
  * contract's `resolveShard`) rather than being restated per resolution path.
  */
-export const resolveShard = (namespace: ShardNamespaceLike, shardKey: string): ResolvedShard => resolveShardStub(toDirectory(namespace), shardKey);
+export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string): ResolvedShard => resolveShardStub(toDirectory(namespace), shardKey);

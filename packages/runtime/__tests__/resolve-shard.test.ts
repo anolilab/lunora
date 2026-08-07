@@ -53,7 +53,7 @@ describe("applyJurisdiction", () => {
 
         expect(namespace.jurisdictionCalls).toStrictEqual(["us"]);
         // The subnamespace pins IDs to the jurisdiction.
-        expect(result.idFromName("user:1")).toStrictEqual({ __jurisdiction: "us", __name: "user:1" });
+        expect(result.idFromName?.("user:1")).toStrictEqual({ __jurisdiction: "us", __name: "user:1" });
     });
 
     it.each(["eu", "us", "fedramp"] as const)("supports the %s jurisdiction", (j) => {

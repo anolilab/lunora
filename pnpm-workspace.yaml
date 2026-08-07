@@ -359,6 +359,13 @@ catalogs:
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
     aws4fetch: 1.0.20
+  # Durable workflow engine emulating Cloudflare Workflows on the Node host
+  # (@lunora/platform-node). `@visulima/workflow` is the edge-safe engine —
+  # `defineWorkflow` + `createRuntime` with a pluggable `WorkflowStore` — that
+  # the node workflow binding adapts into the `@lunora/workflow` binding shape.
+  # Exact-pinned per the `@visulima/*` convention.
+  workflow:
+    "@visulima/workflow": 2.0.0
   # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
   # (Apache-2.0) plus chain signers. EXACT-pinned (saveExact); all versions are
   # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s

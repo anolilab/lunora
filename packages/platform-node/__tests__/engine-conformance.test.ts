@@ -18,8 +18,8 @@ describe("@lunora/shard-engine/conformance (node host)", () => {
     defineEngineContractSuite(
         "platform-node",
         () => {
-            const { host } = createNodeShardHost();
-            const { readFrames, socket } = createNodeSocketHost();
+            const { database, host } = createNodeShardHost();
+            const { readFrames, socket } = createNodeSocketHost(database);
 
             return { host, readFrames, sockets: socket };
         },

@@ -4,22 +4,50 @@
  * `SchedulerHost`) over `better-sqlite3` and an in-process socket/directory/
  * scheduler registry.
  *
- * **Spike (plan 234).** Promoted from `@lunora/platform`'s `node:sqlite`
- * reference host (`src/conformance/reference-host.ts`) and hardened toward
- * real persistence semantics — see each adapter module's docstring for what
- * changed and why, and `plans/234-node-host-findings.md` for every contract
- * gap this construction surfaced. Not wired into `lunora dev`; no deploy
- * driver; several capabilities are honestly rated `emulated`/`unsupported` in
- * `NODE_CAPABILITIES` (`@lunora/platform`).
+ * Promoted from `@lunora/platform`'s `node:sqlite` reference host
+ * (`src/conformance/reference-host.ts`) under plan 234, then hardened until the
+ * durability half of each contract actually holds: alarms and scheduler jobs
+ * are persisted **and re-armed on construction**, socket attachments and tags
+ * live in SQLite rather than a `Map`, and `.global()` tables run the real
+ * `@lunora/sql-store` core (`./node-global-store`). Each of those is pinned by
+ * a restart test — a second host over the same database file — not only by the
+ * TCK's simulated recycle.
+ *
+ * Three suites run against this package: `@lunora/platform/conformance`'s host
+ * TCK, `@lunora/shard-engine/conformance`'s engine suite, and its own
+ * lifecycle/global-store tests.
+ *
+ * **Still missing**, and rated accordingly in `NODE_CAPABILITIES`
+ * (`@lunora/platform`): a dev server — so `lunora dev --target node` does not
+ * exist yet — plus most Cloudflare product bindings (Queues, Vectorize, Workers
+ * AI, Browser Rendering, Containers, Analytics Engine, Pipelines, Secrets Store,
+ * Hyperdrive). R2 buckets are emulated over the local filesystem
+ * (`./node-r2-bucket`) and Workflows over the `@visulima/workflow` engine
+ * (`./node-workflow-host`). Cross-shard fan-out is emulated via
+ * `@lunora/runtime`'s query coordinator over the in-process shard registry, and
+ * a `@lunora/config` deploy driver makes `--target node` resolve. See
+ * `plans/234-node-host-findings.md`.
  */
 
+export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
+export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodePlatform, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
-export type { NodeSchedulerHost } from "./node-scheduler-host";
+export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
+export { createNodeQueueHost } from "./node-queue-host";
+export type { NodeR2BucketOptions } from "./node-r2-bucket";
+export { createNodeR2Bucket } from "./node-r2-bucket";
+export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
 export { createNodeSchedulerHost } from "./node-scheduler-host";
-export { createNodeShardDirectory } from "./node-shard-directory";
 export type { NodeShardHostOptions } from "./node-shard-host";
 export { createNodeShardHost } from "./node-shard-host";
+export type { NodeShard, NodeShardRegistry, NodeShardRegistryOptions } from "./node-shard-registry";
+export { createNodeShardRegistry } from "./node-shard-registry";
+export type { NodeShardState } from "./node-shard-state";
+export { createNodeShardState } from "./node-shard-state";
 export type { NodeSocketHost } from "./node-socket-host";
 export { createNodeSocketHost } from "./node-socket-host";
+export type { NodeWorkflowHost, NodeWorkflowHostOptions } from "./node-workflow-host";
+export { createNodeWorkflowHost } from "./node-workflow-host";
+export { createNodeWorkflowStore } from "./node-workflow-store";

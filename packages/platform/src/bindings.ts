@@ -302,7 +302,11 @@ export interface R2BucketLike {
     }>;
     put: (
         key: string,
-        body: ReadableStream | ArrayBuffer | Blob | string | null,
+        // `ArrayBufferView` is in the real `R2Bucket.put` signature and in this
+        // file's own `uploadPart`; it was missing here, which is the projection
+        // drifting from the binding it projects. A `Uint8Array` is the most
+        // natural thing to hand a byte store.
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
         options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
     ) => Promise<R2ObjectLike>;
     /** Resume an in-progress multipart upload by id (R2 `resumeMultipartUpload`). Optional; see {@link Storage.resumeMultipartUpload}. */

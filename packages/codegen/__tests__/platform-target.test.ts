@@ -149,24 +149,24 @@ describe("gatePlatformFeatures", () => {
         const { gatePlatformFeatures } = await import("../src/platform-target");
         // `browser` and `container` are rated "unsupported" for node
         // (`NODE_CAPABILITIES` — no headless-browser or container binding is
-        // implemented by `@lunora/platform-node`); as of plan 267, `scheduler`
-        // is ALSO rated "unsupported" — the Node host stores and times jobs but
-        // never dispatches them, so codegen must gate it off the same as
-        // `browser`/`container`. `kv` stays rated "emulated" (a real, if
-        // non-durable, better-sqlite3-backed implementation), so it must
-        // survive gating unchanged.
+        // implemented by `@lunora/platform-node`), so codegen gates both off.
+        //
+        // `scheduler` was gated off too under plan 267, when the Node host
+        // stored and timed jobs but never dispatched them. It dispatches now
+        // (`onDispatch`) and re-arms its durable rows on construction, so it is
+        // back to "emulated" and must survive gating — alongside `kv`, which
+        // has been a real better-sqlite3-backed implementation throughout.
         const usage: FeatureUsage = { ...ALL_OFF, browser: true, container: true, kv: true, scheduler: true };
 
         const result = gatePlatformFeatures(usage, "node");
 
         expect(result.usage.browser).toBe(false);
         expect(result.usage.container).toBe(false);
-        expect(result.usage.scheduler).toBe(false);
+        expect(result.usage.scheduler).toBe(true);
         expect(result.usage.kv).toBe(true);
         expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
             "browser",
             "container",
-            "scheduler",
         ]);
     });
 });

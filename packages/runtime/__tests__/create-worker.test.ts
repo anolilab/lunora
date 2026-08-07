@@ -495,9 +495,9 @@ describe("createWorker", () => {
 
         const stub = { fetch: vi.fn<(request: Request) => Promise<Response>>(async () => new Response("via-getByName")) };
         const namespace: ShardNamespaceLike = {
-            get: vi.fn<ShardNamespaceLike["get"]>(),
+            get: vi.fn<NonNullable<ShardNamespaceLike["get"]>>(),
             getByName: vi.fn<NonNullable<ShardNamespaceLike["getByName"]>>(() => stub),
-            idFromName: vi.fn<ShardNamespaceLike["idFromName"]>(),
+            idFromName: vi.fn<NonNullable<ShardNamespaceLike["idFromName"]>>(),
         };
 
         const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });

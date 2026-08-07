@@ -116,57 +116,83 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
  * (plan 234).
  *
- * `@lunora/platform-node` is a spike: a `ShardHost`/`SocketHost`/
- * `ShardDirectory`/`ShardKvStore`/`SchedulerHost` implementation over
- * `better-sqlite3` and an in-process registry, built to run the conformance
- * TCK against a second host and discover what the contracts under-specify.
- * It is a single Node process with no distributed placement, no host-level
- * scheduler to re-arm timers after a restart, and no bindings at all for the
- * Cloudflare-specific products (R2, Vectorize, Workers AI, Queues,
- * Workflows, Containers, Browser Rendering, Analytics Engine, Secrets Store,
- * Hyperdrive) most `ctx.*` surfaces are built on. Every one of those is
- * rated `"unsupported"` here rather than left undeclared — see
- * `gateAgainstMatrix` in `@lunora/codegen`, whose fail-closed gate (plan
- * 229) treats an undeclared feature as unsupported anyway, but under a
- * different diagnostic name than an honest, explicit rating.
+ * `@lunora/platform-node` implements every contract in this package
+ * (`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`,
+ * `SchedulerHost`) over `better-sqlite3` and an in-process registry, plus the
+ * `.global()` table backend via `@lunora/sql-store`. It began as a spike to run
+ * the conformance TCK against a second host; the durability gaps that spike
+ * surfaced — alarms and scheduler jobs that were persisted but never re-armed,
+ * socket attachments that lived only in memory — are closed, and each is now
+ * pinned by a restart test rather than only by a simulated recycle.
  *
- * Two features are rated `"emulated"` rather than `"native"` even though
- * this package fully implements their contract, because "native" would
- * overstate what a bare Node process provides on its own: `keyValueStore` is
- * a SQL table wearing a KV-shaped API, not a dedicated KV product, and
- * `websocketHibernation` never actually evicts a socket to save memory — it
- * only proves the attachment/tag durability half of the contract, not real
- * hibernation. `scheduler` and `shardAlarms` are rated `"unsupported"`, not
- * `"emulated"`: the Node host stores and times both, but its timer body only
- * clears bookkeeping — nothing dispatches the scheduled function or wakes the
- * alarm callback. `"emulated"` means built on lower-level primitives and
- * working; never-dispatched is not that (plan 267). `globalTables` is also
- * `"unsupported"` — no replicated SQL store is implemented. All ratings are
- * argued in detail in `plans/234-node-host-findings.md`.
+ * `scheduler` and `shardAlarms` were rated `"unsupported"` under plan 267, on
+ * the grounds that the host stored and timed both while its timer body only
+ * cleared bookkeeping — nothing dispatched the scheduled function or woke the
+ * alarm. That rating was correct for the code it described, and the code is
+ * what changed: both now dispatch (through `onDispatch` / `onAlarm`) and both
+ * re-arm from their durable rows on construction, so `"emulated"` — built on
+ * lower-level primitives and *working* — is now the honest reading.
+ *
+ * What remains genuinely absent is everything a single Node process cannot
+ * distribute: placement across nodes, failover, and most Cloudflare-specific
+ * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
+ * Analytics Engine, Secrets Store, Hyperdrive). Workflows, object storage and
+ * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
+ * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
+ * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
+ * semantics — so those three are rated `"emulated"`; the rest of the Cloudflare
+ * products most `ctx.*` surfaces are built on are rated `"unsupported"` here
+ * rather than left undeclared — see `gateAgainstMatrix` in `@lunora/codegen`,
+ * whose fail-closed gate (plan 229) treats an undeclared feature as unsupported
+ * anyway, but under a different diagnostic name than an honest, explicit rating.
+ *
+ * Almost nothing here is rated `"native"`, and that is the matrix's own
+ * definition doing its job rather than a hedge: `native` means the platform
+ * itself provides the feature, and a bare Node process provides essentially
+ * none of them — Lunora builds alarms out of `setTimeout` plus a durable row,
+ * a KV store out of a SQL table, and `.global()` tables out of a second SQLite
+ * file. `localSql` is the exception, because SQLite genuinely is the platform
+ * primitive there. The ratings say who does the work; the notes say how well.
+ * Both are argued in detail in `plans/234-node-host-findings.md`.
  */
 export const NODE_CAPABILITIES: PlatformCapabilities = {
     id: "node",
     name: "Node",
     features: {
         shardedState: { level: "emulated", note: "One better-sqlite3 database per shard key, one process — no distributed placement or failover" },
-        globalTables: { level: "unsupported", note: "No replicated SQL store (D1-equivalent) implemented" },
+        globalTables: {
+            level: "emulated",
+            note: "The @lunora/sql-store core on its own SQLite file via the reference sqliteDialect — full store semantics, but one node with no replication",
+        },
         websocketHibernation: {
             level: "emulated",
-            note: "In-process socket registry; attachments/tags survive a simulated recycle, not a process restart, and nothing is ever actually evicted from memory",
+            note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {
-            level: "unsupported",
-            note: "In-process bookkeeping only — the armed timer clears state and never wakes anything; no dispatch, and nothing re-arms across a restart",
+            level: "emulated",
+            note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",
         },
-        crossShardFanout: { level: "unsupported", note: "No query coordinator / relay tier implemented" },
-        queues: { level: "unsupported", note: "No Cloudflare Queues equivalent implemented" },
-        workflows: { level: "unsupported", note: "No Cloudflare Workflows equivalent implemented" },
+        crossShardFanout: {
+            level: "emulated",
+            note: "@lunora/runtime's query coordinator over the in-process shard registry; listShardKeys is seeded from the shard files on disk, and answers every shard rather than only those holding the table (a correct superset, at the cost of visiting shards with nothing to say)",
+        },
+        queues: {
+            level: "emulated",
+            note: 'createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd\'s implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. mode: "pull" queues are written but not consumed — nothing here serves the HTTP pull endpoint',
+        },
+        workflows: {
+            level: "emulated",
+            note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). Gaps: no pause/restart; terminate is not a barrier, so an activation already in flight overwrites the tombstone; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",
+        },
         scheduler: {
-            level: "unsupported",
-            note: "Jobs are stored and timed but never dispatched — no delivery, no retries; also not durable across a process restart",
+            level: "emulated",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue; the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer",
         },
-        objectStorage: { level: "unsupported", note: "No R2/S3-equivalent binding implemented" },
+        objectStorage: {
+            level: "emulated",
+            note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys fold the way the host filesystem folds them, so `A` and `a` are one object on a case-insensitive volume where real R2 keeps two. No multipart uploads, no presigned URLs",
+        },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },

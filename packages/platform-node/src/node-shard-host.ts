@@ -16,6 +16,13 @@ import type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSq
 import Database from "better-sqlite3";
 
 /**
+ * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
+ * above this (~24.8 days) is clamped to 1 ms with a `TimeoutOverflowWarning`,
+ * which would fire an alarm or job far ahead of its target timestamp.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
  * binding's own spelling of SQL `NULL` — the one place in this file that has
  * to use it, since better-sqlite3's FFI has no other way to write one.
@@ -102,19 +109,28 @@ const createAsyncSql = (database: Database.Database): ShardAsyncSqlExec => {
 };
 
 /**
- * Build the `ShardAlarms` surface over an in-process `setTimeout`.
+ * Build the `ShardAlarms` surface: a timestamp persisted to SQLite, an
+ * in-process `setTimeout` that delivers it, and — the part that makes the two
+ * add up to the contract — a re-arm on construction.
  *
- * This is the finding the spike's write-up leads with: an alarm that only
- * fires within the lifetime of the current Node process is not what
- * `ShardAlarms`'s docstring promises — "survive host recycling". SQLite could
- * persist the timestamp trivially — the gap is that nothing re-arms the timer
- * on process start, and a Node host has no host-level scheduler to do that for
- * it the way Cloudflare's runtime re-delivers alarms after an evicted DO
- * wakes. Persisting the timestamp without re-arming would be worse than not
- * persisting it: a caller reading `get()` after a restart would see a
- * "pending" alarm that will never fire.
+ * `ShardAlarms`'s docstring promises alarms "survive host recycling and fire at
+ * the requested timestamp". Cloudflare gets both halves from the runtime: DO
+ * storage holds the timestamp and workerd re-delivers `alarm()` to a freshly
+ * woken object. A Node process has no runtime to lean on, so this host owns
+ * both halves itself — the row in `_lunora_alarm` is the durable half, and
+ * reading it back when a host is constructed over the same database file is the
+ * delivery half. An alarm whose timestamp already elapsed while the process was
+ * down fires immediately on the next construction rather than being dropped,
+ * which is the at-least-once behavior a caller that scheduled it is owed.
+ *
+ * Delivery goes to `onAlarm`, because `ShardAlarms` deliberately has no
+ * callback of its own — on Cloudflare the runtime invokes the DO's `alarm()`
+ * method, so the contract models scheduling and leaves delivery to the host.
+ * A caller that supplies no `onAlarm` still gets the durable timestamp and the
+ * `get()`-clears-on-fire transition; it simply has nowhere for the wakeup to
+ * land.
  */
-const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispose: () => void } => {
+const createAlarms = (database: Database.Database, onAlarm?: () => Promise<void> | void): { alarms: ShardAlarms; dispose: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -135,6 +151,65 @@ const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispo
             clearTimeout(alarmTimeout);
             alarmTimeout = undefined;
         }
+    };
+
+    /**
+     * Arm the in-process timer for `ms`. Shared by `set` and by the
+     * construction-time re-arm below, so a restored alarm fires through exactly
+     * the same path as a freshly scheduled one.
+     */
+    const arm = (ms: number): void => {
+        clearAlarmTimeout();
+
+        const delay = Math.max(0, ms - Date.now());
+
+        // `setTimeout` clamps any delay above 2^31 - 1 ms (~24.8 days) down to
+        // 1 ms and warns (`TimeoutOverflowWarning`), so an alarm set further
+        // out would fire immediately — the durable row deleted, the wakeup
+        // weeks early, the original timestamp unrecoverable. Re-arm in
+        // maximum-sized chunks until the target is close enough to pass whole.
+        if (delay > MAX_TIMEOUT_MS) {
+            alarmTimeout = setTimeout(() => {
+                arm(ms);
+            }, MAX_TIMEOUT_MS);
+
+            return;
+        }
+
+        alarmTimeout = setTimeout(() => {
+            alarmAt = undefined;
+            alarmTimeout = undefined;
+
+            // A caller may close the database before this timer fires — e.g.
+            // it set a future alarm, then tore the platform down (process
+            // shutdown, test cleanup). `persist` runs a prepared statement
+            // against `database`; on a closed better-sqlite3 connection that
+            // throws synchronously *inside* the `setTimeout` callback, which
+            // is an uncaught exception Node has no way to route back to a
+            // caller's try/catch — it crashes the process. Guard on the
+            // connection's own open/closed state rather than trying to track
+            // "did dispose() already run" separately, since `close()` is the
+            // one fact that actually determines whether `.run()` is safe.
+            if (!database.open) {
+                return;
+            }
+
+            // Clear the durable row BEFORE delivering. An `onAlarm` that throws
+            // (or that itself schedules the next alarm, which is the normal
+            // pattern) must not race a stale row: the timestamp this timer just
+            // consumed is spent either way, and leaving it behind would re-fire
+            // it on the next construction over this database.
+            persist(undefined);
+
+            (async (): Promise<void> => {
+                await onAlarm?.();
+            })().catch(() => {
+                // Delivery is the caller's business. A throwing handler must
+                // not become an unhandled rejection that takes the process
+                // down — Cloudflare likewise isolates an `alarm()` that
+                // throws to that invocation.
+            });
+        }, delay);
     };
 
     const alarms: ShardAlarms = {
@@ -165,35 +240,38 @@ const createAlarms = (database: Database.Database): { alarms: ShardAlarms; dispo
 
             alarmAt = ms;
             persist(ms);
-            clearAlarmTimeout();
-
-            const delay = Math.max(0, ms - Date.now());
-
-            alarmTimeout = setTimeout(() => {
-                alarmAt = undefined;
-
-                // A caller may close the database before this timer fires — e.g.
-                // it set a future alarm, then tore the platform down (process
-                // shutdown, test cleanup). `persist` runs a prepared statement
-                // against `database`; on a closed better-sqlite3 connection that
-                // throws synchronously *inside* the `setTimeout` callback, which
-                // is an uncaught exception Node has no way to route back to a
-                // caller's try/catch — it crashes the process. Guard on the
-                // connection's own open/closed state rather than trying to track
-                // "did dispose() already run" separately, since `close()` is the
-                // one fact that actually determines whether `.run()` is safe.
-                if (database.open) {
-                    persist(undefined);
-                }
-            }, delay);
+            arm(ms);
         },
     };
+
+    // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
+    // `arm` means an alarm whose time passed while nothing was running fires on
+    // the next tick rather than never — late, but delivered.
+    const restored = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
+
+    if (restored !== undefined) {
+        alarmAt = restored.scheduled_for;
+        arm(restored.scheduled_for);
+    }
 
     return { alarms, dispose: clearAlarmTimeout };
 };
 
 /** Options for {@link createNodeShardHost}. */
 interface NodeShardHostOptions {
+    /**
+     * Called when a durable alarm comes due — this host's stand-in for the
+     * `alarm()` method workerd invokes on a Durable Object. Fires for alarms
+     * set during this process's lifetime AND for one restored from
+     * `_lunora_alarm` when the host is constructed over an existing database,
+     * including an alarm whose time elapsed while nothing was running.
+     *
+     * A handler that throws is isolated to its own delivery; it never reaches
+     * the caller that set the alarm, because by then that call has long
+     * returned.
+     */
+    onAlarm?: () => Promise<void> | void;
+
     /**
      * SQLite database file. Defaults to `:memory:` (matching the reference
      * host) — pass a real path to exercise cross-process persistence, the one
@@ -240,14 +318,29 @@ interface NodeShardHostOptions {
  * rather than closing `database` directly, so the alarm timer and the
  * connection are always retired together.
  */
-const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Database.Database; dispose: () => void; host: ShardHost } => {
+const createNodeShardHost = (
+    options: NodeShardHostOptions = {},
+): { database: Database.Database; dispose: () => void; drain: () => Promise<void>; host: ShardHost } => {
     const database = new Database(options.path ?? ":memory:");
 
     database.pragma("journal_mode = WAL");
 
     const sql = createSql(database);
     const asyncSql = createAsyncSql(database);
-    const { alarms, dispose: disposeAlarms } = createAlarms(database);
+    const { alarms, dispose: disposeAlarms } = createAlarms(database, options.onAlarm);
+
+    /**
+     * Background work handed to `waitUntil`, held until it settles.
+     *
+     * Retaining the promise is the whole job: a Node process has no
+     * request/response boundary to extend past, so the only thing the contract's
+     * `waitUntil` can meaningfully do here is make sure the work is not
+     * dropped*. A bare no-op left a rejected background promise with no
+     * handler attached, which Node surfaces as an unhandled rejection and — on
+     * the default `--unhandled-rejections=throw` — kills the process. The set
+     * also gives `drain()` something to await on shutdown.
+     */
+    const background = new Set<Promise<unknown>>();
 
     let tail: Promise<unknown> = Promise.resolve();
 
@@ -316,12 +409,36 @@ const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Da
         shardKey: options.shardKey,
         sql,
         transaction,
-        waitUntil: () => {
-            // A Node process has no separate request/background lifetime split —
-            // there is no response to return before background work finishes —
-            // so, like the reference host, this is a documented no-op rather than
-            // a fire-and-forget that could outlive the process silently.
+        waitUntil: (promise) => {
+            const tracked = promise
+                .catch(() => {
+                    // Swallowed on purpose — see `background`. Background work
+                    // that fails has no caller left to tell.
+                })
+                .finally(() => {
+                    background.delete(tracked);
+                });
+
+            background.add(tracked);
         },
+    };
+
+    /**
+     * Wait for every promise handed to `waitUntil` to settle.
+     *
+     * Kept separate from `dispose()` because the two answer different
+     * questions: `dispose()` releases handles and must stay synchronous (it
+     * backs `Symbol.dispose`), while draining is inherently awaitable. A
+     * graceful shutdown does `await drain()` then `dispose()`; a test that only
+     * needs the file handle back calls `dispose()` alone. Re-entrant by
+     * construction: each pass awaits the set as it stood, and background work
+     * that spawns more background work is picked up by the next loop.
+     */
+    const drain = async (): Promise<void> => {
+        while (background.size > 0) {
+            // eslint-disable-next-line no-await-in-loop -- sequential is the point: each pass drains the set as it stood, and background work that spawned more background work is picked up by the next iteration. Hoisting the await out would settle only the first generation.
+            await Promise.all(background);
+        }
     };
 
     const dispose = (): void => {
@@ -332,7 +449,7 @@ const createNodeShardHost = (options: NodeShardHostOptions = {}): { database: Da
         }
     };
 
-    return { database, dispose, host };
+    return { database, dispose, drain, host };
 };
 
 export type { NodeShardHostOptions };

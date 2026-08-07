@@ -9,7 +9,7 @@
  *
  * The one piece of real work here is {@link toResourceGraph}: projecting the
  * Cloudflare-shaped `InferredBindings` down to the provider-neutral
- * {@link ResourceGraph}. That projection is lossy on purpose — it drops the
+ * `ResourceGraph`. That projection is lossy on purpose — it drops the
  * host encodings (binding names, DO class wiring, hint-only capabilities that
  * need un-mintable remote ids) and keeps only what a second target would also
  * need to know. `provision` therefore runs its own inference rather than
@@ -17,50 +17,12 @@
  * encodings the neutral graph discards — see the note on `DeployDriver`.
  */
 
-import type { DeployDriver, DriverContext, DriverToolchain, NamedResource, ProvisionResult, ResourceGraph, ShardNamespaceResource } from "../deploy-driver";
-import type { InferredBindings } from "../infer-bindings";
+import type { DeployDriver, DriverContext, DriverToolchain, ProvisionResult } from "../deploy-driver";
 import { inferLunoraBindings } from "../infer-bindings";
+import toResourceGraph from "../resource-graph";
 import { reconcileWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { reconcileWranglerCrons } from "./reconcile-crons";
-
-/**
- * Project Cloudflare's `InferredBindings` onto the neutral {@link ResourceGraph}.
- *
- * Capabilities that are hint-only on Cloudflare (Hyperdrive, pipelines, and the
- * rest that need an un-mintable remote id) are intentionally absent: they are
- * not requirements a driver can provision, and modelling them neutrally would
- * imply a portability the graph cannot deliver.
- */
-const toResourceGraph = (inferred: InferredBindings, crons: ReadonlyArray<string>): ResourceGraph => {
-    const shardNamespaces: ShardNamespaceResource[] = inferred.durableObjects.map((durableObject) => {
-        // A DO binding is only written for a class the worker entry exports, so
-        // anything that reached this list is exported by construction.
-        return { className: durableObject.className, exported: true, name: durableObject.binding };
-    });
-
-    const queues: NamedResource[] = inferred.queues.map((queue) => {
-        return { name: queue.name };
-    });
-    const workflows: NamedResource[] = inferred.workflows.map((workflow) => {
-        return { exported: workflow.exported, name: workflow.exportName };
-    });
-    const containers: NamedResource[] = inferred.containers.map((container) => {
-        return { exported: container.exported, name: container.exportName };
-    });
-
-    return {
-        containers,
-        crons: [...crons],
-        globalDatabase: inferred.needsD1,
-        keyValueStore: inferred.usesKv,
-        objectStorage: inferred.usesStorage,
-        queues,
-        shardNamespaces,
-        signals: [...inferred.signals],
-        workflows,
-    };
-};
 
 /**
  * Reconcile one aspect of `wrangler.jsonc`, folding a thrown error into a

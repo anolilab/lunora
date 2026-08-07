@@ -17,6 +17,7 @@
 
 import CLOUDFLARE_DRIVER from "./cloudflare/cloudflare-driver";
 import type { DeployDriver } from "./deploy-driver";
+import NODE_DRIVER from "./node/node-driver";
 
 /** The default deploy target — today's behavior for every project. */
 const DEFAULT_DEPLOY_TARGET = "cloudflare";
@@ -27,6 +28,7 @@ const DEFAULT_DEPLOY_TARGET = "cloudflare";
  */
 const DEPLOY_DRIVERS: Readonly<Record<string, DeployDriver>> = {
     cloudflare: CLOUDFLARE_DRIVER,
+    node: NODE_DRIVER,
 };
 
 /** The ids a caller may select, for error messages and `--target` help text. */

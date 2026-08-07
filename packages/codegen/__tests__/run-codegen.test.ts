@@ -1793,7 +1793,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
         });
 
         it("emits the Durable-Object-backed auth branch alongside the D1 one", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             writeFileSync(
                 join(workdir, "package.json"),
@@ -1806,7 +1806,11 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             // `namespace` selects the DO mode — the tables live in the object because
             // `@better-auth/scim` needs transactions D1 cannot provide.
-            expect(app).toContain("namespace?: Selector<Env, ShardNamespaceLike>;");
+            // `AuthNamespaceLike`, not `ShardNamespaceLike`: `createDoAuthWiring`
+            // resolves through `idFromName` + `get` with no `getByName` fallback,
+            // so both members have to be required at the declaration.
+            expect(app).toContain("namespace?: Selector<Env, AuthNamespaceLike>;");
+            expect(app).toContain('import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";');
             expect(app).toContain("if (authDeclaration && authNamespace) {");
 
             // Identity resolution becomes a call to the object, gated on the shared
