@@ -74,8 +74,8 @@ closed set with defined lossless targets, and **a conversion that would lose
 information fails the run and names the column**:
 
 ```
-column `view_count`: cannot reshape "9007199254740993" as `number` —
-exceeds Number.MAX_SAFE_INTEGER, map this column to `int8-string` to keep it lossless
+column `view_count`: cannot reshape "9007199254740993" as `number` — exceeds
+Number.MAX_SAFE_INTEGER — map this column to `int8-string` to keep it lossless
 ```
 
 `int8-string` keeps it whole as a string. The failure costs you a minute. The
