@@ -1,7 +1,7 @@
 /**
- * What `lunora import` was pointed at: a Convex export snapshot or a plain
- * NDJSON file — plus the reader that turns the former into the `{ table, doc }`
- * NDJSON the admin import endpoint accepts.
+ * What `lunora import` was pointed at — a Convex export snapshot, a Supabase CSV
+ * dump, a Firestore export, or a plain NDJSON file — plus the readers that turn
+ * each into the `{ table, doc }` NDJSON the admin import endpoint accepts.
  */
 import { stat } from "node:fs/promises";
 
@@ -11,6 +11,12 @@ import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
 import { listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
 import type { ImportCommandOptions } from "./import";
+import type { FirestoreCollectionFile } from "./sources/firebase";
+import { listFirestoreCollections } from "./sources/firebase";
+import type { ImportSourceMapping } from "./sources/mapping";
+import { readImportSourceMapping } from "./sources/mapping";
+import type { SupabaseTableFile } from "./sources/supabase";
+import { listSupabaseTables } from "./sources/supabase";
 import { readStorageMetadata } from "./storage-blobs";
 
 /**
@@ -123,7 +129,49 @@ async function* readConvexExport(
  * bag of optionals: the snapshot and its table list are always both present or
  * both absent, and only a union lets the caller establish that once.
  */
-type ImportSource = { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> } | { kind: "invalid" } | { kind: "ndjson" };
+type ImportSource =
+    | { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> }
+    | { collections: ReadonlyArray<FirestoreCollectionFile>; kind: "firebase"; mapping?: ImportSourceMapping }
+    | { kind: "invalid" }
+    | { kind: "ndjson" }
+    | { kind: "supabase"; mapping?: ImportSourceMapping; tables: ReadonlyArray<SupabaseTableFile> };
+
+/** The sources `--from` accepts. `convex` and `ndjson` are also auto-detected. */
+const IMPORT_SOURCE_NAMES = ["convex", "firebase", "ndjson", "supabase"] as const;
+
+type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
+
+/**
+ * Resolve an explicitly-requested `--from supabase` / `--from firebase` source.
+ *
+ * Both are directories of per-table files, and both read their mapping from the
+ * project rather than from the dump — the dump is the vendor's artefact, the
+ * mapping is the operator's statement about it.
+ */
+const resolveForeignSource = async (options: ImportCommandOptions, from: "firebase" | "supabase", cwd: string): Promise<ImportSource> => {
+    if (options.withStorage === true && from === "firebase") {
+        // Firebase storage arrives as a local directory the operator downloaded
+        // with `gcloud storage cp`, which is a different flag; accepting
+        // `--with-storage` here would silently migrate nothing.
+        options.logger.error("--with-storage is not how Firebase storage migrates — download the bucket with `gcloud storage cp -r` and pass --storage-dir.");
+
+        return { kind: "invalid" };
+    }
+
+    if (options.table !== undefined) {
+        options.logger.error(`--table cannot be combined with --from ${from} — each row's table comes from its source file.`);
+
+        return { kind: "invalid" };
+    }
+
+    const mapping = await readImportSourceMapping(cwd, from, options.logger);
+
+    if (from === "supabase") {
+        return { kind: "supabase", mapping, tables: await listSupabaseTables(options.file, mapping) };
+    }
+
+    return { collections: await listFirestoreCollections(options.file, mapping), kind: "firebase", mapping };
+};
 
 /**
  * Report any storage-aware flag passed against a source that cannot honour it.
@@ -169,7 +217,11 @@ const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boole
  * answer. Both halves live here because "what is this source" and "do these
  * flags mean anything for it" are the same question asked twice.
  */
-const resolveImportSource = async (options: ImportCommandOptions): Promise<ImportSource> => {
+const resolveImportSource = async (options: ImportCommandOptions, cwd: string): Promise<ImportSource> => {
+    if (options.from === "supabase" || options.from === "firebase") {
+        return resolveForeignSource(options, options.from, cwd);
+    }
+
     const snapshot = await resolveConvexSnapshot(options.file);
     const tables = snapshot === undefined ? undefined : await listConvexSnapshotTables(snapshot);
 
@@ -217,5 +269,5 @@ const resolveImportSource = async (options: ImportCommandOptions): Promise<Impor
     return { kind: "convex", snapshot, tables };
 };
 
-export type { ImportSource };
-export { CONVEX_STORAGE_TABLE, isConvexSystemTable, readConvexExport, resolveImportSource };
+export type { ImportSource, ImportSourceName };
+export { CONVEX_STORAGE_TABLE, IMPORT_SOURCE_NAMES, isConvexSystemTable, readConvexExport, resolveImportSource };

@@ -15,11 +15,13 @@ import type { Logger } from "../../util/logger";
 import type { ImportBatcher, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
-import type { ImportSource } from "./import-source";
+import type { ImportSource, ImportSourceName } from "./import-source";
 import { CONVEX_STORAGE_TABLE, readConvexExport, resolveImportSource } from "./import-source";
 import { checkRowParity, reportStorageOutcome } from "./import-verify";
 import type { StreamingFetchLike } from "./shared";
 import { IMPORT_ENDPOINT_PATH } from "./shared";
+import { readFirestoreExport } from "./sources/firebase";
+import { readSupabaseExport } from "./sources/supabase";
 import { migrateStorageBlobs } from "./storage-blobs";
 import type { ImportConvexMapping, StorageRemapReport } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
@@ -42,6 +44,14 @@ interface ImportCommandOptions {
     fetchImpl?: StreamingFetchLike;
     /** Source NDJSON file. Required. */
     file: string;
+
+    /**
+     * Which reader to use. Omit to auto-detect between a Convex export snapshot
+     * and a plain NDJSON file; `supabase`/`firebase` must be explicit, because a
+     * directory of CSV or JSON has no signature that distinguishes it from
+     * anything else a user might point at.
+     */
+    from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
 
@@ -52,12 +62,19 @@ interface ImportCommandOptions {
     scan?: boolean;
 
     /**
+     * Local directory of storage objects to migrate alongside the rows — how
+     * Firebase Cloud Storage arrives, after `gcloud storage cp -r`.
+     */
+    storageDir?: string;
+
+    /**
      * Wrap each line as `{table:<name>,doc:<line>}`. Use when the source NDJSON
      * is bare docs from a single table — Convex's `convex import --table users`
      * shape.
      */
     table?: string;
     token?: string;
+
     url?: string;
 
     /**
@@ -170,6 +187,32 @@ const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string>
             : { storage: { ambiguous: report.ambiguous, blobs: storageIdMap.size, rewritten: report.rewritten, unmigrated: report.unmigrated } }),
         ...(totals.warnings.length > 0 ? { warnings: totals.warnings } : {}),
     };
+};
+
+/** Pick the reader for the resolved source. Every branch yields the same `{ table, doc }` NDJSON. */
+const openSourceStream = (
+    source: ImportSource,
+    options: ImportCommandOptions,
+    storageMigrated: boolean,
+    sourceRows: Map<string, number>,
+): AsyncIterable<Buffer | string> => {
+    switch (source.kind) {
+        case "convex": {
+            return readConvexExport(source.snapshot, source.tables, options.logger, storageMigrated, sourceRows);
+        }
+
+        case "firebase": {
+            return readFirestoreExport(source.collections, source.mapping, options.logger, sourceRows);
+        }
+
+        case "supabase": {
+            return readSupabaseExport(source.tables, source.mapping, options.logger, sourceRows);
+        }
+
+        default: {
+            return createReadStream(options.file, { encoding: "utf8" });
+        }
+    }
 };
 
 /**
@@ -287,13 +330,12 @@ const reportImportOutcome = (
 };
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
-    const source = await resolveImportSource(options);
+    const cwd = options.cwd ?? process.cwd();
+    const source = await resolveImportSource(options, cwd);
 
     if (source.kind === "invalid") {
         return { body: undefined, code: 1, inserted: 0 };
     }
-
-    const cwd = options.cwd ?? process.cwd();
 
     // Scan-only: it writes the candidate mapping and imports nothing, so it runs
     // before the worker/token preconditions — the operator inspects an export
@@ -342,10 +384,7 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     // parity check after the run compares that against what the endpoint says it
     // inserted.
     const sourceRows = new Map<string, number>();
-    const stream =
-        source.kind === "convex"
-            ? readConvexExport(source.snapshot, source.tables, options.logger, storageIdMap !== undefined, sourceRows)
-            : createReadStream(options.file, { encoding: "utf8" });
+    const stream = openSourceStream(source, options, storageIdMap !== undefined, sourceRows);
     const batcher = createImportBatcher({ batchSize, fetchImpl, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl, token });
     const toWireRow = createRowTransformer({ report: remapReport, storageColumns, storageIdMap, table: options.table });
 
