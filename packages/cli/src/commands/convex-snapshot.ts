@@ -13,78 +13,89 @@ import { createInterface } from "node:readline";
 import AdmZip from "adm-zip";
 
 /** One `documents.jsonl` file in a Convex export snapshot. */
-export interface ConvexSnapshotTable {
+interface ConvexSnapshotTable {
     /** Absolute file path (directory) or archive-relative entry (zip). */
     file: string;
-    /** Entry path of the table's `_storage` sibling directory (zip only; undefined for directory snapshots). */
-    storagePrefix?: string;
     /** Table name (directory / archive entry name). */
     table: string;
 }
 
 /**
  * A resolvable Convex export snapshot: an exploded directory or a `.zip`
- * archive (whose layout sits under an `snapshot_<ts>/` root entry).
+ * archive (whose layout sits under a `snapshot_<ts>/` root entry).
  *
- * The ZIP variant carries its already-opened {@link AdmZip} reader: the archive
- * central directory is parsed once at resolve time and reused by every accessor,
- * rather than re-parsed per table stream and per blob read.
+ * The ZIP variant carries its already-opened {@link AdmZip} reader, so the
+ * archive's central directory is parsed once at resolve time rather than per
+ * table stream and per blob read. `storagePrefix` lives here rather than on a
+ * table because it describes the archive's layout, not any one table.
  */
-export type ConvexSnapshot = { kind: "directory"; root: string } | { kind: "zip"; zip: AdmZip; zipPath: string };
+type ConvexSnapshot = { kind: "directory"; root: string } | { kind: "zip"; storagePrefix: string; zip: AdmZip; zipPath: string };
+
+/**
+ * Locate the archive's `_storage` directory. The export roots everything under
+ * `snapshot_<ts>/`, so the prefix is only knowable by looking, and it is worth
+ * looking once at resolve time rather than per blob read.
+ */
+const findZipStoragePrefix = (zip: AdmZip): string => {
+    for (const entry of zip.getEntries()) {
+        const name = entry.entryName.replaceAll("\\", "/");
+        const segments = name.split("/");
+
+        if (segments.length >= 2 && segments[segments.length - 2] === "_storage") {
+            return segments.slice(0, -1).join("/");
+        }
+    }
+
+    return "_storage";
+};
 
 /**
  * Resolve the path the import command received to a snapshot, or `undefined`
  * when it is neither a directory nor a `.zip` file.
  */
-export const resolveConvexSnapshot = async (
-    path: string,
-    statImpl: (p: string) => Promise<{ isDirectory: () => boolean; isFile: () => boolean }> = stat,
-): Promise<ConvexSnapshot | undefined> => {
-    const info = await statImpl(path).catch(() => undefined);
+const resolveConvexSnapshot = async (path: string): Promise<ConvexSnapshot | undefined> => {
+    const info = await stat(path).catch(() => undefined);
 
     if (info?.isDirectory()) {
         return { kind: "directory", root: path };
     }
 
     if (info?.isFile() && path.toLowerCase().endsWith(".zip")) {
-        return { kind: "zip", zip: new AdmZip(path), zipPath: path };
+        const zip = new AdmZip(path);
+
+        return { kind: "zip", storagePrefix: findZipStoragePrefix(zip), zip, zipPath: path };
     }
 
     return undefined;
 };
 
-/**
- * Enumerate the `<table>/documents.jsonl` files in a snapshot, sorted by table
- * name for deterministic output. Returns `undefined` when the snapshot is not a
- * Convex export layout.
- */
-/* eslint-disable sonarjs/cognitive-complexity -- walks both the directory and archive layouts with distinct enumeration branches */
-export const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promise<ConvexSnapshotTable[] | undefined> => {
-    if (snapshot.kind === "directory") {
-        const found: ConvexSnapshotTable[] = [];
+/** Enumerate `<table>/documents.jsonl` under an exploded export directory. */
+const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]> => {
+    const found: ConvexSnapshotTable[] = [];
 
-        for (const entry of await readdir(snapshot.root, { withFileTypes: true })) {
-            if (!entry.isDirectory()) {
-                continue;
-            }
-
-            const file = join(snapshot.root, entry.name, "documents.jsonl");
-
-            // eslint-disable-next-line no-await-in-loop -- one cheap stat per table directory; the set is small
-            const documents = await stat(file).catch(() => undefined);
-
-            if (documents?.isFile()) {
-                found.push({ file, table: entry.name });
-            }
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+            continue;
         }
 
-        return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
+        const file = join(root, entry.name, "documents.jsonl");
+
+        // eslint-disable-next-line no-await-in-loop -- one cheap stat per table directory; the set is small
+        const documents = await stat(file).catch(() => undefined);
+
+        if (documents?.isFile()) {
+            found.push({ file, table: entry.name });
+        }
     }
 
-    const found: ConvexSnapshotTable[] = [];
-    let storagePrefix: string | undefined;
+    return found;
+};
 
-    for (const entry of snapshot.zip.getEntries()) {
+/** Enumerate every `documents.jsonl` entry inside the archive. */
+const listZipTables = (zip: AdmZip): ConvexSnapshotTable[] => {
+    const found: ConvexSnapshotTable[] = [];
+
+    for (const entry of zip.getEntries()) {
         if (entry.isDirectory) {
             continue;
         }
@@ -92,33 +103,27 @@ export const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promis
         const name = entry.entryName.replaceAll("\\", "/");
         const segments = name.split("/");
 
-        if (segments.length < 2 || segments[segments.length - 1] !== "documents.jsonl") {
-            continue;
+        if (segments.length >= 2 && segments[segments.length - 1] === "documents.jsonl") {
+            found.push({ file: name, table: segments[segments.length - 2] as string });
         }
-
-        const table = segments[segments.length - 2] as string;
-
-        if (table === "_storage") {
-            storagePrefix = segments.slice(0, -1).join("/");
-        }
-
-        found.push({ file: name, table });
     }
 
-    if (found.length === 0) {
-        return undefined;
-    }
-
-    for (const tableEntry of found) {
-        tableEntry.storagePrefix = storagePrefix;
-    }
-
-    return found.toSorted((a, b) => a.table.localeCompare(b.table));
+    return found;
 };
-/* eslint-enable sonarjs/cognitive-complexity */
+
+/**
+ * Enumerate the `<table>/documents.jsonl` files in a snapshot, sorted by table
+ * name for deterministic output. Returns `undefined` when the snapshot is not a
+ * Convex export layout.
+ */
+const listConvexSnapshotTables = async (snapshot: ConvexSnapshot): Promise<ConvexSnapshotTable[] | undefined> => {
+    const found = snapshot.kind === "directory" ? await listDirectoryTables(snapshot.root) : listZipTables(snapshot.zip);
+
+    return found.length > 0 ? found.toSorted((a, b) => a.table.localeCompare(b.table)) : undefined;
+};
 
 /** Stream one table's `documents.jsonl` lines as the snapshot provides them. */
-export const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
+const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): AsyncGenerator<string> {
     if (snapshot.kind === "directory") {
         for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(tableEntry.file, { encoding: "utf8" }) })) {
             yield raw;
@@ -136,8 +141,8 @@ export const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tabl
 };
 
 /**
- * Read one `_storage` blob's bytes. Finds the blob entry under the table's
- * `_storage` directory (zip) or at `_storage/<id>` (directory).
+ * Read one `_storage` blob's bytes, from `_storage/<id>` (directory) or the
+ * archive's `_storage` entry (zip).
  *
  * `blobId` comes from the export's own `_storage/documents.jsonl`, i.e. from
  * data the operator downloaded rather than authored. A crafted export could put
@@ -146,7 +151,7 @@ export const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tabl
  * the resolved path is checked to still live inside the snapshot's `_storage`
  * directory before anything is read.
  */
-export const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, blobId: string): Promise<Buffer> => {
+const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string): Promise<Buffer> => {
     if (snapshot.kind === "directory") {
         const storageRoot = await realpath(join(snapshot.root, "_storage"));
         const blobPath = await realpath(resolve(storageRoot, blobId)).catch(() => undefined);
@@ -158,8 +163,7 @@ export const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, tableEnt
         return readFile(blobPath);
     }
 
-    const prefix = tableEntry.storagePrefix ?? "_storage";
-    const blob = snapshot.zip.readFile(`${prefix}/${blobId}`);
+    const blob = snapshot.zip.readFile(`${snapshot.storagePrefix}/${blobId}`);
 
     if (blob === null) {
         throw new Error(`missing blob ${blobId} in archive`);
@@ -169,7 +173,7 @@ export const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, tableEnt
 };
 
 /** Read a `documents.jsonl` as text (for `_storage` metadata and `--scan`). */
-export const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<string> => {
+const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<string> => {
     if (snapshot.kind === "directory") {
         return readFile(tableEntry.file, "utf8");
     }
@@ -177,3 +181,6 @@ export const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: Con
     // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
     return snapshot.zip.readAsText(tableEntry.file);
 };
+
+export type { ConvexSnapshot, ConvexSnapshotTable };
+export { listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, readSnapshotText, resolveConvexSnapshot };

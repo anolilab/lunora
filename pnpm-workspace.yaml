@@ -206,7 +206,7 @@ catalogs:
     fast-glob: ^3.3.3
     rimraf: 6.1.3
   prod:
-    adm-zip: ">=0.6.0"
+    adm-zip: 0.6.0
     "@anolilab/commitlint-config": 10.1.0
     "@anolilab/multi-semantic-release": ^4.4.6
     "@anolilab/textlint-config": 13.0.5

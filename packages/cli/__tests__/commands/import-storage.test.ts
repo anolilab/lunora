@@ -46,8 +46,13 @@ interface StoredObject {
 
 interface FakeWorker {
     bucket: Map<string, StoredObject>;
+    deleted: string[];
     fetchImpl: StreamingFetchLike;
     imported: { doc: Record<string, unknown>; table: string }[];
+    /** Objects returned per list page — small values force the cursor to be followed. */
+    listPageSize: number;
+    /** Keys reached through the signed-PUT fallback rather than the verified route. */
+    signedPuts: string[];
     uploads: string[];
 }
 
@@ -59,6 +64,9 @@ const fakeWorker = (): FakeWorker => {
     const bucket = new Map<string, StoredObject>();
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
     const uploads: string[] = [];
+    const signedPuts: string[] = [];
+    const deleted: string[] = [];
+    const worker = { bucket, deleted, imported, listPageSize: Number.POSITIVE_INFINITY, signedPuts, uploads };
 
     const json = (value: unknown) => {
         return {
@@ -70,65 +78,103 @@ const fakeWorker = (): FakeWorker => {
         };
     };
 
+    /** `POST /_lunora/admin/import` — record the rows and report them inserted. */
+    const handleImport = (body: string | Uint8Array | undefined) => {
+        const inserted: Record<string, number> = {};
+
+        for (const line of (typeof body === "string" ? body : "").split("\n").filter((entry) => entry.trim().length > 0)) {
+            const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
+
+            imported.push(row);
+            inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+        }
+
+        return json({ conflicts: 0, errors: [], inserted, received: imported.length });
+    };
+
+    /** `GET /_lunora/admin/storage` — one page per `listPageSize`, cursor-driven. */
+    const handleList = (url: URL) => {
+        const prefix = url.searchParams.get("prefix") ?? "";
+        const matching = [...bucket.entries()]
+            .filter(([key]) => key.startsWith(prefix))
+            .map(([key, object_]) => {
+                return { key, sha256: object_.sha256, size: object_.size };
+            });
+
+        const from = Number(url.searchParams.get("cursor") ?? "0");
+        const page = matching.slice(from, from + worker.listPageSize);
+        const next = from + page.length;
+
+        return json({ cursor: String(next), objects: page, truncated: next < matching.length });
+    };
+
+    /** `PUT /_lunora/admin/storage` — mirror the route's reject-before-write check. */
+    const handleVerifiedUpload = (url: URL, body: string | Uint8Array | undefined) => {
+        const key = url.searchParams.get("key") as string;
+        const bytes = new TextDecoder().decode(body as Uint8Array);
+        const digest = sha256Hex(bytes);
+
+        if (digest !== url.searchParams.get("expectedSha256") || String(bytes.length) !== url.searchParams.get("expectedSize")) {
+            return {
+                body: null,
+                json: async () => {
+                    return {};
+                },
+                ok: false,
+                status: 400,
+                text: async () => "STORAGE_CHECKSUM_MISMATCH",
+            };
+        }
+
+        uploads.push(key);
+        bucket.set(key, { bytes, sha256: digest, size: bytes.length });
+
+        return json({ key, sha256: digest });
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
 
         if (url.pathname === "/_lunora/admin/import") {
-            const inserted: Record<string, number> = {};
-
-            for (const line of (typeof init?.body === "string" ? init.body : "").split("\n").filter((entry) => entry.trim().length > 0)) {
-                const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
-
-                imported.push(row);
-                inserted[row.table] = (inserted[row.table] ?? 0) + 1;
-            }
-
-            return json({ conflicts: 0, errors: [], inserted, received: imported.length });
+            return handleImport(init?.body);
         }
 
-        if (url.pathname === "/_lunora/admin/storage" && method === "GET") {
-            const prefix = url.searchParams.get("prefix") ?? "";
-
-            return json({
-                objects: [...bucket.entries()]
-                    .filter(([key]) => key.startsWith(prefix))
-                    .map(([key, object_]) => {
-                        return { key, sha256: object_.sha256, size: object_.size };
-                    }),
-                truncated: false,
-            });
-        }
-
-        if (url.pathname === "/_lunora/admin/storage" && method === "PUT") {
+        // The signed-URL minter, and the app-served endpoint the minted URL
+        // points at. Both are needed to reach the >32 MiB fallback.
+        if (url.pathname === "/_lunora/admin/storage/url") {
             const key = url.searchParams.get("key") as string;
+
+            return json({ key, url: `https://cdn.test/signed/${encodeURIComponent(key)}?method=${url.searchParams.get("method") ?? "GET"}` });
+        }
+
+        if (url.hostname === "cdn.test" && method === "PUT") {
+            const key = decodeURIComponent(url.pathname.replace("/signed/", ""));
             const bytes = new TextDecoder().decode(init?.body as Uint8Array);
-            const digest = sha256Hex(bytes);
 
-            // Mirror the route: reject before writing when the body does not
-            // match what the caller declared.
-            if (digest !== url.searchParams.get("expectedSha256") || String(bytes.length) !== url.searchParams.get("expectedSize")) {
-                return {
-                    body: null,
-                    json: async () => {
-                        return {};
-                    },
-                    ok: false,
-                    status: 400,
-                    text: async () => "STORAGE_CHECKSUM_MISMATCH",
-                };
-            }
+            signedPuts.push(key);
+            bucket.set(key, { bytes, sha256: sha256Hex(bytes), size: bytes.length });
 
-            uploads.push(key);
-            bucket.set(key, { bytes, sha256: digest, size: bytes.length });
+            return json({ key });
+        }
 
-            return json({ key, sha256: digest });
+        if (url.pathname === "/_lunora/admin/storage" && method === "DELETE") {
+            const key = url.searchParams.get("key") as string;
+
+            deleted.push(key);
+            bucket.delete(key);
+
+            return json({ deleted: true, key });
+        }
+
+        if (url.pathname === "/_lunora/admin/storage") {
+            return method === "GET" ? handleList(url) : handleVerifiedUpload(url, init?.body);
         }
 
         throw new Error(`unexpected request: ${method} ${input}`);
     };
 
-    return { bucket, fetchImpl, imported, uploads };
+    return Object.assign(worker, { fetchImpl });
 };
 
 let workDir: string;
@@ -218,6 +264,37 @@ describe("lunora import --with-storage", () => {
         expect(worker.imported.find((row) => row.table === "posts")?.doc).toStrictEqual({ _id: "p1", cover: coverHash, title: "hello" });
     });
 
+    it("stops telling the operator to upload blobs by hand once it has uploaded them", async () => {
+        expect.assertions(2);
+
+        const root = writeConvexExport({ kg_a: "bytes" }, { files: [{ _id: "f1", blob: { $storage: "kg_a" } }] });
+        const migrated = capturingLogger();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: fakeWorker().fetchImpl,
+            file: root,
+            logger: migrated.logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        const skipped = capturingLogger();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: fakeWorker().fetchImpl,
+            file: root,
+            logger: skipped.logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(migrated.logs.warn.join("\n")).not.toContain("_storage");
+        expect(skipped.logs.warn.join("\n")).toContain("Re-run with --with-storage");
+    });
+
     it("accepts a base64 `sha256` from the export and still keys by hex", async () => {
         expect.assertions(2);
 
@@ -261,7 +338,33 @@ describe("lunora import --with-storage", () => {
         expect(worker.imported[0]?.doc).toStrictEqual({ _id: "p1", attachments: [hash], meta: { hero: hash } });
     });
 
-    it("reports an unmapped storage-id column instead of rewriting it, and fails --verify", async () => {
+    it("rewrites plain strings nested under a mapped column", async () => {
+        expect.assertions(1);
+
+        const hash = sha256Hex("bytes");
+        const root = writeConvexExport({ kg_a: "bytes" }, { posts: [{ _id: "p1", meta: { gallery: ["kg_a"], hero: "kg_a" } }] });
+
+        // `storageColumns` cannot address `meta.hero`, so the top-level column
+        // has to cover everything beneath it — otherwise the operator would be
+        // told about a reference they have no way to map.
+        writeMapping({ posts: ["meta"] });
+
+        const worker = fakeWorker();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(worker.imported[0]?.doc).toStrictEqual({ _id: "p1", meta: { gallery: [hash], hero: hash } });
+    });
+
+    it("warns about an unmapped storage-id column without failing --verify — the blob did migrate", async () => {
         expect.assertions(3);
 
         const root = writeConvexExport({ kg_a: "bytes" }, { users: [{ _id: "u1", avatarId: "kg_a" }] });
@@ -283,9 +386,58 @@ describe("lunora import --with-storage", () => {
             withStorage: true,
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(0);
         expect(worker.imported[0]?.doc).toStrictEqual({ _id: "u1", avatarId: "kg_a" });
-        expect(logs.warn.some((line) => line.includes("dangling storage reference in users: kg_a"))).toBe(true);
+        expect(logs.warn.some((line) => line.includes("unrewritten storage id in users.avatarId: kg_a"))).toBe(true);
+    });
+
+    it("fails --verify when a reference has no exported blob at all", async () => {
+        expect.assertions(3);
+
+        // `kg_missing` is referenced but absent from `_storage` — the export was
+        // taken without `--include-file-storage`, or the blob was deleted. No
+        // mapping can fix that, so it is a hard failure rather than a warning.
+        const root = writeConvexExport({ kg_a: "bytes" }, { posts: [{ _id: "p1", cover: { $storage: "kg_missing" } }] });
+        const worker = fakeWorker();
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.warn.some((line) => line.includes("unmigrated storage reference posts.cover: kg_missing"))).toBe(true);
+        expect(logs.error.some((line) => line.includes("resolved to no migrated blob"))).toBe(true);
+    });
+
+    it("leaves plain strings alone when there is no mapping file", async () => {
+        expect.assertions(2);
+
+        const root = writeConvexExport({ kg_a: "bytes" }, { users: [{ _id: "u1", avatarId: "kg_a" }] });
+        const worker = fakeWorker();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+            withStorage: true,
+        });
+
+        // No mapping means no plain-string rewriting — the same rule the docs and
+        // the "run --scan" message state. It must not silently rewrite instead.
+        expect(result.code).toBe(0);
+        expect(worker.imported[0]?.doc).toStrictEqual({ _id: "u1", avatarId: "kg_a" });
     });
 
     it("skips blobs already present at the same key on a re-run", async () => {
@@ -419,6 +571,205 @@ describe("lunora import --with-storage", () => {
                 withStorage: true,
             }),
         ).rejects.toThrow(/must be an array of column names/);
+    });
+
+    describe("blobs above the verified-upload cap", () => {
+        // The verified route caps at 32 MiB; anything larger takes a signed PUT
+        // straight at the bucket and is checked after the fact instead.
+        const LARGE = "x".repeat(33 * 1_048_576);
+
+        it("uploads through a signed PUT and verifies what landed", async () => {
+            expect.assertions(3);
+
+            const root = writeConvexExport({ kg_big: LARGE }, { files: [{ _id: "f1", blob: { $storage: "kg_big" } }] });
+            const worker = fakeWorker();
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: worker.fetchImpl,
+                file: root,
+                logger: capturingLogger().logger,
+                token: "t",
+                url: "http://localhost:8787",
+                withStorage: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(worker.signedPuts).toStrictEqual([sha256Hex(LARGE)]);
+            // Never through the buffering route — that request would 413.
+            expect(worker.uploads).toStrictEqual([]);
+        });
+
+        it("deletes the object and fails when what landed does not match", async () => {
+            expect.assertions(3);
+
+            const root = writeConvexExport({ kg_big: LARGE }, { files: [{ _id: "f1" }] });
+            const worker = fakeWorker();
+            const key = sha256Hex(LARGE);
+
+            // A bucket that truncates the write: the signed PUT succeeds, but the
+            // object that lands is the wrong size. Left in place it would be
+            // treated as already-migrated by every later run.
+            const lyingFetch: StreamingFetchLike = async (input, init) => {
+                const response = await worker.fetchImpl(input, init);
+
+                if (new URL(input).hostname === "cdn.test") {
+                    worker.bucket.set(key, { bytes: "short", sha256: sha256Hex("short"), size: 5 });
+                }
+
+                return response;
+            };
+
+            await expect(
+                runImportCommand({
+                    cwd: workDir,
+                    fetchImpl: lyingFetch,
+                    file: root,
+                    logger: capturingLogger().logger,
+                    token: "t",
+                    url: "http://localhost:8787",
+                    withStorage: true,
+                }),
+            ).rejects.toThrow(/post-upload verification failed/);
+
+            expect(worker.deleted).toStrictEqual([key]);
+            expect(worker.bucket.has(key)).toBe(false);
+        });
+    });
+
+    it("follows the list cursor when the bucket pages", async () => {
+        expect.assertions(2);
+
+        const root = writeConvexExport({ kg_a: "a-bytes", kg_b: "b-bytes", kg_c: "c-bytes" }, { files: [{ _id: "f1", blob: { $storage: "kg_c" } }] });
+        const worker = fakeWorker();
+
+        // Seed all three blobs, then force one object per page: a reader that
+        // stops at the first page would re-upload the other two.
+        for (const content of ["a-bytes", "b-bytes", "c-bytes"]) {
+            worker.bucket.set(sha256Hex(content), { bytes: content, sha256: sha256Hex(content), size: content.length });
+        }
+
+        worker.listPageSize = 1;
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(worker.uploads).toStrictEqual([]);
+    });
+
+    it("rejects --verify on an export with blobs unless --with-storage is set", async () => {
+        expect.assertions(2);
+
+        const root = writeConvexExport({ kg_a: "bytes" }, { files: [{ _id: "f1", blob: { $storage: "kg_a" } }] });
+        const worker = fakeWorker();
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.error.join("\n")).toContain("requires --with-storage");
+    });
+
+    it("splits a batch on byte size, not just row count", async () => {
+        expect.assertions(2);
+
+        // Ten rows of ~200 KiB: one 500-row batch would be ~2 MiB, over the
+        // import endpoint's 1 MiB body cap.
+        const rows = Array.from({ length: 10 }, (_, index) => {
+            return { _id: `d${String(index)}`, blob: "y".repeat(200 * 1024) };
+        });
+        const root = writeConvexExport({}, { docs: rows });
+        const worker = fakeWorker();
+        const bodies: number[] = [];
+
+        const measuringFetch: StreamingFetchLike = async (input, init) => {
+            if (new URL(input).pathname === "/_lunora/admin/import") {
+                bodies.push(Buffer.byteLength(init?.body as string));
+            }
+
+            return worker.fetchImpl(input, init);
+        };
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: measuringFetch,
+            file: root,
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(bodies.length).toBeGreaterThan(1);
+        expect(Math.max(...bodies)).toBeLessThan(1_048_576);
+    });
+
+    it("reports what it managed to write when a batch fails part-way", async () => {
+        expect.assertions(3);
+
+        const root = writeConvexExport(
+            {},
+            {
+                users: Array.from({ length: 5 }, (_, index) => {
+                    return { _id: `u${String(index)}` };
+                }),
+            },
+        );
+        const worker = fakeWorker();
+        let batches = 0;
+
+        const failingFetch: StreamingFetchLike = async (input, init) => {
+            if (new URL(input).pathname === "/_lunora/admin/import") {
+                batches += 1;
+
+                if (batches === 2) {
+                    return {
+                        body: null,
+                        json: async () => {
+                            return {};
+                        },
+                        ok: false,
+                        status: 500,
+                        text: async () => "boom",
+                    };
+                }
+            }
+
+            return worker.fetchImpl(input, init);
+        };
+
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            batchSize: 2,
+            cwd: workDir,
+            fetchImpl: failingFetch,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        // The first batch landed; the operator has to be told how far it got
+        // rather than just that something threw.
+        expect(result.code).toBe(1);
+        expect(result.inserted).toBe(2);
+        expect(logs.error.join("\n")).toContain("import failed part-way through");
     });
 
     it("migrates blobs out of a .zip snapshot the same way", async () => {

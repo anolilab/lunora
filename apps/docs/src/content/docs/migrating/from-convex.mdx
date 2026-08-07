@@ -311,9 +311,11 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     ```
 
     <Callout type="info">
-        Objects up to 32 MiB take the checksum-verified admin upload, which digests the body and refuses to write on a mismatch. Larger blobs go through a
-        signed `PUT` that bypasses the worker's body limit — those are verified after the write instead (by size, plus SHA-256 where the bucket records one),
-        and an object that fails is deleted rather than left behind.
+        Objects up to 32 MiB take the checksum-verified admin upload, which digests the body and refuses to write on a mismatch — that covers essentially every
+        image, document, and audio file. A larger blob cannot reach the worker at all, so it falls back to a signed `PUT`. That fallback needs your app to have
+        signed URLs configured (`publicBaseUrl` + `signingSecret`) **and** to serve the `PUT` route those URLs address; Lunora does not mount one for you. It is
+        also verified only after the write — by size, plus SHA-256 where the bucket records one — and an object that fails is deleted rather than left behind.
+        If you have blobs over 32 MiB and no signed-`PUT` route, copy them across with `wrangler r2 object put` and add their columns to the mapping by hand.
     </Callout>
 
     <Callout type="warn">
