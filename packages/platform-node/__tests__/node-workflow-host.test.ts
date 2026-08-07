@@ -1,9 +1,19 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
+import { MemoryStore } from "@visulima/workflow";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import { createNodeWorkflowHost } from "../src/node-workflow-host";
+import { createNodeWorkflowStore } from "../src/node-workflow-store";
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
+const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 
 describe("createNodeWorkflowHost", () => {
     it("runs a workflow synchronously to completion and exposes the output", async () => {
@@ -17,7 +27,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ workflows: { greet } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { greet } });
         const instance = await host.bindings.greet.create({ params: { name: "world" } });
         const status = await instance.status();
 
@@ -45,7 +55,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ workflows: { replayed } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { replayed } });
         const instance = await host.bindings.replayed.create({});
 
         const status1 = await instance.status();
@@ -71,7 +81,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.step.waitForEvent("ping", { type: "poke" }),
         });
 
-        const host = createNodeWorkflowHost({ workflows: { poked } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { poked } });
         const instance = await host.bindings.poked.create({});
 
         const status1 = await instance.status();
@@ -98,7 +108,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.step.waitForEvent("ping", { timeout: 5, type: "poke" }),
         });
 
-        const host = createNodeWorkflowHost({ workflows: { timed } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { timed } });
         const instance = await host.bindings.timed.create({});
 
         const status1 = await instance.status();
@@ -123,7 +133,7 @@ describe("createNodeWorkflowHost", () => {
             },
         });
 
-        const host = createNodeWorkflowHost({ workflows: { crashing } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { crashing } });
         const instance = await host.bindings.crashing.create({});
         const status = await instance.status();
 
@@ -139,7 +149,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => ctx.params.value * 2,
         });
 
-        const host = createNodeWorkflowHost({ workflows: { double } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { double } });
         const instances = await host.bindings.double.createBatch([{ params: { value: 2 } }, { params: { value: 3 } }]);
 
         expect(instances).toHaveLength(2);
@@ -161,7 +171,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async () => "done",
         });
 
-        const host = createNodeWorkflowHost({ workflows: { trivial } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
         const instance = await host.bindings.trivial.get("missing-run");
 
         const status = await instance.status();
@@ -169,14 +179,14 @@ describe("createNodeWorkflowHost", () => {
         expect(status.status).toBe("unknown");
     });
 
-    it("pause and restart are not implemented; terminate ends the run", async () => {
+    it("pause and restart are not implemented; terminate reports terminated, not unknown", async () => {
         expect.hasAssertions();
 
         const trivial = defineWorkflow<Record<string, never>, string>({
             handler: async () => "done",
         });
 
-        const host = createNodeWorkflowHost({ workflows: { trivial } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
         const instance = await host.bindings.trivial.create({});
 
         await expect(instance.pause()).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
@@ -184,11 +194,110 @@ describe("createNodeWorkflowHost", () => {
 
         await instance.terminate();
 
-        // Terminate is emulated as a store delete, so the run becomes unknown
-        // rather than reporting the terminated status the Cloudflare host uses.
         const status = await instance.status();
 
-        expect(status.status).toBe("unknown");
+        expect(status.status).toBe("terminated");
+
+        // The distinction the tombstone exists for: an id that was never a run
+        // still reads back as unknown.
+        await expect(host.bindings.trivial.get("never-existed").then(async (missing) => missing.status())).resolves.toStrictEqual({ status: "unknown" });
+    });
+
+    it("refuses a caller-supplied instance id instead of minting a different one", async () => {
+        expect.hasAssertions();
+
+        const trivial = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "done",
+        });
+
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { trivial } });
+
+        await expect(host.bindings.trivial.create({ id: "my-own-id" })).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+        await expect(host.bindings.trivial.createBatch([{ id: "my-own-id", params: {} }])).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
+
+        // Nothing was started behind the rejection.
+        await expect(host.bindings.trivial.get("my-own-id").then(async (missing) => missing.status())).resolves.toStrictEqual({ status: "unknown" });
+    });
+
+    it("rejects non-finite sleep durations rather than passing them to the engine", async () => {
+        expect.hasAssertions();
+
+        const durations: (number | string)[] = [Number.NaN, Number.POSITIVE_INFINITY, "1e400 ms"];
+        // Without the guard these reach `context.sleep` as a wake-at of `NaN`,
+        // and the run parks in `waiting` forever with nothing to explain it.
+        const statuses = await Promise.all(
+            durations.map(async (duration) => {
+                const sleeper = defineWorkflow<Record<string, never>, string>({
+                    handler: async (ctx) => {
+                        await ctx.step.sleep("wait", duration);
+
+                        return "done";
+                    },
+                });
+
+                const host = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { sleeper } });
+                const instance = await host.bindings.sleeper.create({});
+                const status = await instance.status();
+
+                return status.status;
+            }),
+        );
+
+        expect(statuses).toStrictEqual(["errored", "errored", "errored"]);
+
+        const untilWorkflow = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                await ctx.step.sleepUntil("wait", new Date("not a date"));
+
+                return "done";
+            },
+        });
+
+        const untilHost = createNodeWorkflowHost({ store: new MemoryStore(), workflows: { untilWorkflow } });
+        const untilInstance = await untilHost.bindings.untilWorkflow.create({});
+
+        await expect(untilInstance.status()).resolves.toMatchObject({ status: "errored" });
+    });
+
+    it("survives a process restart when backed by the SQLite store", async () => {
+        expect.hasAssertions();
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-platform-node-workflow-"));
+        const path = join(directory, "workflows.sqlite3");
+
+        const waiter = defineWorkflow<Record<string, never>, string>({
+            handler: async (ctx) => {
+                const event = await ctx.step.waitForEvent<{ ok: boolean }>("await-approval", { type: "approved" });
+
+                return event.payload.ok ? "approved" : "rejected";
+            },
+        });
+
+        try {
+            const firstDatabase = new Database(path);
+            const first = createNodeWorkflowHost({ store: createNodeWorkflowStore(firstDatabase), workflows: { waiter } });
+            const instance = await first.bindings.waiter.create({});
+
+            await expect(instance.status()).resolves.toMatchObject({ status: "waiting" });
+
+            firstDatabase.close();
+
+            // A second host over the same file — the restart the MemoryStore
+            // default could never survive.
+            const secondDatabase = new Database(path);
+            const second = createNodeWorkflowHost({ store: createNodeWorkflowStore(secondDatabase), workflows: { waiter } });
+            const restored = await second.bindings.waiter.get(instance.id);
+
+            await expect(restored.status()).resolves.toMatchObject({ status: "waiting" });
+
+            await restored.sendEvent({ payload: { ok: true }, type: "approved" });
+
+            await expect(restored.status()).resolves.toMatchObject({ output: "approved", status: "complete" });
+
+            secondDatabase.close();
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
     });
 
     it("derives the WORKFLOW_* env so createWorkflowContext resolves the seam", async () => {
@@ -198,7 +307,7 @@ describe("createNodeWorkflowHost", () => {
             handler: async (ctx) => `order-${ctx.params.orderId}`,
         });
 
-        const host = createNodeWorkflowHost({ env: { EXTRA: "kept" }, workflows: { orderPipeline } });
+        const host = createNodeWorkflowHost({ store: new MemoryStore(), env: { EXTRA: "kept" }, workflows: { orderPipeline } });
 
         expect(host.env.EXTRA).toBe("kept");
         expect(host.env.WORKFLOW_ORDER_PIPELINE).toBe(host.bindings.orderPipeline);
@@ -214,7 +323,7 @@ describe("createNodeWorkflowHost", () => {
     it("rejects a value that is not a defineWorkflow result", () => {
         expect.hasAssertions();
 
-        expect(() => createNodeWorkflowHost({ workflows: { notAWorkflow: { handler: async () => 1 } as never } })).toThrow(
+        expect(() => createNodeWorkflowHost({ store: new MemoryStore(), workflows: { notAWorkflow: { handler: async () => 1 } as never } })).toThrow(
             /is not a defineWorkflow result/,
         );
     });

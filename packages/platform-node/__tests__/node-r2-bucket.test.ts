@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -167,8 +167,56 @@ describe("createNodeR2Bucket", () => {
 
         await expect(bucket.put("/absolute", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         await expect(bucket.put("../escape", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-        await expect(bucket.put(".lunora-meta/sneaky", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(bucket.put(".lunora-tmp/sneaky", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         await expect(bucket.put("a/\0b", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        // `\` is a path separator on Windows, so `..\outside` would escape a
+        // validator that only splits on `/`.
+        await expect(bucket.put(String.raw`..\outside`, "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        // `a/./b` and `a//b` would both land on the same file as `a/b`.
+        await expect(bucket.put("a/./b", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(bucket.put("a//b", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(bucket.put("nested/../../escape", "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("leaves the previous version whole when a put fails mid-body", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("doc", "original", { httpMetadata: { contentType: "text/plain" } });
+
+        const failing = new ReadableStream({
+            pull(controller) {
+                controller.enqueue(new TextEncoder().encode("replacem"));
+                controller.error(new Error("upstream died"));
+            },
+        });
+
+        await expect(bucket.put("doc", failing)).rejects.toThrow("upstream died");
+
+        // Bytes and metadata are published by one rename, so a torn put cannot
+        // leave the new body carrying the old checksum (or the reverse).
+        const object = await bucket.get("doc");
+
+        await expect(object?.text()).resolves.toBe("original");
+        expect(object?.sha256).toBe(sha256Hex("original"));
+        expect(object?.size).toBe(8);
+        expect(object?.httpMetadata?.contentType).toBe("text/plain");
+    });
+
+    it("ignores an unrelated file dropped into the bucket directory", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        writeFileSync(join(dir, "not-an-object.txt"), "hand-written");
+
+        await expect(bucket.get("not-an-object.txt")).resolves.toBeNull();
+        await expect(bucket.head!("not-an-object.txt")).resolves.toBeNull();
+
+        const listed = await bucket.list();
+
+        expect(listed.objects).toStrictEqual([]);
     });
 
     it("drives the @lunora/storage seam (upload/download/getMetadata/list/delete)", async () => {

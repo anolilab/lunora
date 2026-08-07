@@ -39,8 +39,10 @@ describe("@lunora/platform contracts", () => {
         // synchronous SQL, matching Cloudflare's native rating.
         expect(NODE_CAPABILITIES.features.localSql?.level).toBe("native");
         // Most Cloudflare-specific products have no Node equivalent at all —
-        // spot-check one rather than enumerate all 15.
-        expect(NODE_CAPABILITIES.features.objectStorage?.level).toBe("unsupported");
+        // spot-check one rather than enumerate all 15. Not `objectStorage`: that
+        // one grew an emulation (`createNodeR2Bucket`), and a spot-check has to
+        // name a feature nothing is building towards.
+        expect(NODE_CAPABILITIES.features.vectorStore?.level).toBe("unsupported");
     });
 
     it("exports the noop execution context", () => {

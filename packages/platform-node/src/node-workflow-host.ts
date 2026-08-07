@@ -32,16 +32,24 @@
  * # Known gaps (documented in `plans/234-node-host-findings.md`)
  *
  * - `pause`, `restart` throw `NOT_IMPLEMENTED` — the visulima engine has no
- * equivalent. `terminate` is emulated as a store `delete` (the run becomes
- * `unknown` rather than `terminated`).
- * - `create({ id })` is accepted but ignored — the engine assigns run ids.
+ * equivalent. `terminate` drops the run and writes a tombstone in its place, so
+ * a later `status()` reports `terminated` instead of collapsing into the
+ * `unknown` an invalid instance id also returns.
+ * - `create({ id })` throws `NOT_IMPLEMENTED` — `runtime.trigger` assigns run
+ * ids and takes no caller-supplied one, so honouring the option is impossible
+ * and silently ignoring it would hand back a different instance than the caller
+ * named (and break `get(id)` after a retried create).
  * - `ctx.run` still dispatches to `/_lunora/scheduler/dispatch`, which has no
  * Node HTTP server — a workflow body that calls `ctx.run` fails at runtime.
  * - `ctx.parallel`'s join cannot interleave inside one synchronous `trigger`
  * activation (the child's signal arrives before the parent's `waitForEvent` is
  * persisted); `spawn` + direct create/get/signal flows are sound.
- * - The default `MemoryStore` is in-process only — runs do not survive a process
- * restart. Pass a durable `WorkflowStore` for cross-process durability.
+ *
+ * `store` is required rather than defaulted, because the only default available
+ * is the engine's in-process `MemoryStore` and a host that silently loses every
+ * run on restart should not be the thing a caller gets for saying nothing.
+ * `createNodeWorkflowStore` (`./node-workflow-store`) is the durable choice;
+ * `new MemoryStore()` stays available for tests, as an explicit one.
  */
 
 import { LunoraError } from "@lunora/errors";
@@ -56,7 +64,14 @@ import type {
 } from "@lunora/workflow";
 import { createWorkflowRunContext, isWorkflowDefinition, workflowBindingName, workflowDefaultName } from "@lunora/workflow";
 import type { RunContext, RunStatus, WorkflowRuntime, WorkflowStore } from "@visulima/workflow";
-import { createRuntime, defineWorkflow as defineVisulimaWorkflow, MemoryStore } from "@visulima/workflow";
+import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visulima/workflow";
+
+/**
+ * `definitionId` of the row `terminate` leaves behind. No workflow can carry it
+ * (`defineWorkflow` ids come from export names), and it has no `wakeAt`, so
+ * `store.due` never returns it and `sweep` never tries to resume it.
+ */
+const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
 
 /** Millisecond multipliers for every duration unit the parser recognises. */
 const DURATION_MS: Record<string, number> = {
@@ -88,6 +103,13 @@ const DURATION_PATTERN = /^(\d+(?:\.\d+)?)\s*([a-z]+)$/i;
 /** Parse a Cloudflare-style `number | string` duration into milliseconds. */
 const toMs = (duration: number | string): number => {
     if (typeof duration === "number") {
+        // `NaN` and `Infinity` are rejected rather than clamped: both would reach
+        // `context.sleep` as a wake-at the engine can never satisfy, so a run
+        // sleeps forever with no error to explain it.
+        if (!Number.isFinite(duration)) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: workflow duration must be finite, got ${String(duration)}`);
+        }
+
         return Math.max(0, duration);
     }
 
@@ -105,7 +127,30 @@ const toMs = (duration: number | string): number => {
         throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: unsupported workflow duration "${duration}"`);
     }
 
-    return Math.max(0, amount * perUnit);
+    const ms = amount * perUnit;
+
+    // A literal so large it overflows to `Infinity` ("1e400 ms") parses fine and
+    // is just as unsatisfiable as an explicit `Infinity`.
+    if (!Number.isFinite(ms)) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: workflow duration "${duration}" overflows`);
+    }
+
+    return Math.max(0, ms);
+};
+
+/**
+ * Refuse a caller-supplied instance id. `runtime.trigger` mints its own run id
+ * and accepts no override, so accepting the option would return a *different*
+ * instance than the caller asked for — a retried create would fan out into
+ * distinct runs and `get(id)` would never find any of them.
+ */
+const rejectCallerId = (instanceId: string | undefined): void => {
+    if (instanceId !== undefined) {
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            `@lunora/platform-node: workflow create({ id: "${instanceId}" }) is not supported — the visulima engine assigns run ids; use the returned instance's id`,
+        );
+    }
 };
 
 /** The per-attempt info a `step.do` callback receives — the engine has no retries, so attempt is always 1. */
@@ -160,6 +205,13 @@ const createStepAdapter = (context: RunContext): WorkflowStepLike => {
         },
         sleepUntil: async (name, timestamp) => {
             const target = typeof timestamp === "number" ? timestamp : timestamp.getTime();
+
+            // An invalid `Date` yields `NaN`, which `Math.max` propagates straight
+            // through to `context.sleep`.
+            if (!Number.isFinite(target)) {
+                throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: step.sleepUntil("${name}") needs a valid timestamp`);
+            }
+
             const ms = Math.max(0, target - Date.now());
 
             if (ms === 0) {
@@ -184,8 +236,8 @@ interface NodeWorkflowHostOptions<Workflows extends Record<string, { isLunoraWor
     env?: Record<string, unknown>;
     /** How long (ms) the engine holds a cross-process lease while an activation runs, for stores that implement `acquire`. Defaults to 30000. */
     leaseTtlMs?: number;
-    /** The durable store. Defaults to an in-process `MemoryStore` — see the restart-durability gap in the header. */
-    store?: WorkflowStore;
+    /** Where runs are persisted. Required — see the header for why there is no default. `createNodeWorkflowStore(database)` is the durable one. */
+    store: WorkflowStore;
     /** The declared workflows keyed by their `lunora/workflows.ts` export name (e.g. `{ orderPipeline: orderPipeline }`). Values must be `defineWorkflow` results. */
     workflows: Workflows;
 }
@@ -224,7 +276,7 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         idByExport.set(exportName, value.name ?? workflowDefaultName(exportName));
     }
 
-    const store = options.store ?? new MemoryStore();
+    const { store } = options;
     const env: Record<string, unknown> = { ...options.env };
 
     const visulimaWorkflows = entries.map(([exportName]) => {
@@ -263,11 +315,19 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
     const instanceFor = (id: string): WorkflowInstanceLike => {
         return {
             id,
-            pause: () => Promise.reject(
-                    new LunoraError("NOT_IMPLEMENTED", `@lunora/platform-node: workflow instance "${id}" cannot be paused — the visulima engine has no pause equivalent`),
+            pause: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be paused — the visulima engine has no pause equivalent`,
+                    ),
                 ),
-            restart: () => Promise.reject(
-                    new LunoraError("NOT_IMPLEMENTED", `@lunora/platform-node: workflow instance "${id}" cannot be restarted — the visulama engine has no restart equivalent`),
+            restart: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be restarted — the visulama engine has no restart equivalent`,
+                    ),
                 ),
             resume: async () => {
                 await runtime.resume(id);
@@ -282,6 +342,12 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 await runtime.signal(id, event.type, event.payload);
             },
             status: async (): Promise<WorkflowStatusResult> => {
+                const stored = await store.load(id);
+
+                if (stored?.definitionId === TERMINATED_DEFINITION_ID) {
+                    return { status: "terminated" };
+                }
+
                 const run = await runtime.getRun(id);
 
                 if (run === undefined) {
@@ -295,7 +361,16 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
                 };
             },
             terminate: async () => {
-                await store.delete(id);
+                // Overwrite rather than delete: a deleted run reads back as
+                // `unknown`, which is also what an invalid instance id returns,
+                // so the caller loses the ability to tell the two apart.
+                await store.save({
+                    definitionId: TERMINATED_DEFINITION_ID,
+                    runId: id,
+                    snapshot: undefined,
+                    status: "failed",
+                    updatedAt: Date.now(),
+                });
             },
         };
     };
@@ -306,11 +381,17 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
         const id = idByExport.get(exportName) as string;
         const binding: WorkflowBindingLike = {
             create: async (createOptions) => {
+                rejectCallerId(createOptions?.id);
+
                 const result = await runtime.trigger(id, createOptions?.params);
 
                 return instanceFor(result.runId);
             },
             createBatch: async (batch) => {
+                for (const createOptions of batch) {
+                    rejectCallerId(createOptions.id);
+                }
+
                 const results = await Promise.all(batch.map((createOptions) => runtime.trigger(id, createOptions.params)));
 
                 return results.map((result) => instanceFor(result.runId));

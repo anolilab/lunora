@@ -48,3 +48,4 @@ export type { NodeSocketHost } from "./node-socket-host";
 export { createNodeSocketHost } from "./node-socket-host";
 export type { NodeWorkflowHost, NodeWorkflowHostOptions } from "./node-workflow-host";
 export { createNodeWorkflowHost } from "./node-workflow-host";
+export { createNodeWorkflowStore } from "./node-workflow-store";

@@ -8,20 +8,34 @@
  * whose surface has no `head`, a flat `list()` with no prefix/delimiter/cursor,
  * and a `delete` that throws on a missing key — all of which clash with the R2
  * contract `ctx.storage` consumes. The R2 contract is small enough to implement
- * directly over `fs/promises`, so that is what this does:
+ * directly over `fs/promises`, so that is what this does.
  *
- * - object bytes live at `directory/key` (one file per object, nested dirs
- * from `/`);
- * - metadata lives in a parallel sidecar tree `directory/.lunora-meta/key.json`
- * (content-type, custom metadata, size, upload time, SHA-256);
- * - puts are atomic (write to `.lunora-tmp/` then rename), so a crash never
- * leaves a half-written object;
- * - `head` reads only the sidecar + stat (no body transfer), matching R2 HEAD.
+ * # One file per object, metadata in a trailer
  *
- * Reserved top-level names: `.lunora-meta` and `.lunora-tmp`. Keys whose first
- * segment is one of those (or a `..` segment, NUL, or leading `/`) are rejected —
- * the object and metadata trees must stay disjoint and confined to the bucket
- * directory.
+ * An object is a single file at `directory/key`, laid out as
+ *
+ * ```
+ * <body bytes> <trailer JSON> <uint32be trailer length> "LNR1"
+ * ```
+ *
+ * A sidecar tree was the obvious first design and is wrong: bytes and metadata
+ * then live in two files, and no pair of filesystem operations publishes both
+ * at once. A crash between them leaves an overwritten body carrying the previous
+ * checksum, size and content-type, which `get`/`head` then report as fact. With
+ * the metadata inside the file, the single `rename` that publishes the bytes
+ * publishes the metadata with them — an interrupted `put` leaves the previous
+ * version wholly intact, never a mixture of two.
+ *
+ * The cost is that `directory/key` is no longer byte-identical to the object;
+ * a trailer sits after the body. `head` reads the trailer only (two small
+ * positioned reads, no body transfer), and `get` streams the requested byte
+ * range straight off the file rather than materialising the object in memory.
+ *
+ * Reserved top-level name: `.lunora-tmp`, the staging tree puts are renamed out
+ * of. Keys are rejected unless every `/`-separated segment is a plain name — no
+ * empty, `.`, or `..` segments, no backslash (a path separator on Windows), no
+ * NUL, no leading `/`. That keeps the key → path mapping injective and confined
+ * to the bucket directory on every platform.
  *
  * Not emulated: multipart upload (`createMultipartUpload`/`resumeMultipartUpload`
  * are absent, so `@lunora/storage` throws its clear "binding does not support
@@ -29,19 +43,24 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname, join, sep } from "node:path";
+import { createReadStream } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { mkdir, open, readdir, rename, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { R2BucketLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
 
-/** Metadata sidecar tree, kept disjoint from the object tree. */
-const META_DIR = ".lunora-meta";
-
 /** Scratch tree for atomic put staging (rename-in is atomic on POSIX). */
 const TMP_DIR = ".lunora-tmp";
 
-/** Per-object metadata persisted next to the bytes. */
+/** Trailer sentinel — distinguishes a bucket object from an unrelated file dropped into the directory. */
+const MAGIC = "LNR1";
+
+/** `uint32be` trailer length + {@link MAGIC}. */
+const FOOTER_SIZE = 8;
+
+/** Per-object metadata, persisted in the object file's trailer. */
 interface NodeObjectMeta {
     customMetadata?: Record<string, string>;
     httpMetadata?: { contentType?: string };
@@ -56,7 +75,12 @@ interface NodeR2BucketOptions {
     directory: string;
 }
 
-/** Reject keys that would escape the bucket directory or collide with the sidecar trees. */
+/**
+ * Reject keys that do not map injectively onto a path inside the bucket
+ * directory. Every segment must be a plain name: `a/./b` and `a//b` would
+ * otherwise resolve to the same file as `a/b`, and `..\\outside` escapes the
+ * directory entirely on Windows, where `\` is a separator `split("/")` cannot see.
+ */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key must be a non-empty string");
@@ -66,32 +90,45 @@ const validateKey = (key: string): void => {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key contains a NUL byte");
     }
 
+    if (key.includes("\\")) {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key contains a backslash (a path separator on Windows)");
+    }
+
     if (key.startsWith("/")) {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key must not start with `/`");
     }
 
-    const firstSegment = key.split("/")[0];
-
-    if (firstSegment === META_DIR || firstSegment === TMP_DIR) {
-        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (first segment must not be "${firstSegment}")`);
+    for (const segment of key.split("/")) {
+        if (segment === "" || segment === "." || segment === "..") {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key has an empty, \`.\` or \`..\` path segment ("${key}")`);
+        }
     }
 
-    for (const segment of key.split("/")) {
-        if (segment === "..") {
-            throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 key contains a `..` path component");
-        }
+    if (key.split("/")[0] === TMP_DIR) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key is reserved (first segment must not be "${TMP_DIR}")`);
     }
 };
 
 /** True when an `fs/promises` error is a missing path. */
 const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
 
-/** Read the meta sidecar for a key, or `undefined` when absent. */
-const readMeta = async (directory: string, key: string): Promise<NodeObjectMeta | undefined> => {
-    try {
-        const raw = await readFile(join(directory, META_DIR, `${key}.json`), "utf8");
+/** Serialize a trailer: the metadata JSON, its length, and the sentinel. */
+const encodeTrailer = (meta: NodeObjectMeta): Buffer => {
+    const json = Buffer.from(JSON.stringify(meta), "utf8");
+    const footer = Buffer.alloc(FOOTER_SIZE);
 
-        return JSON.parse(raw) as NodeObjectMeta;
+    footer.writeUInt32BE(json.byteLength, 0);
+    footer.write(MAGIC, 4, "ascii");
+
+    return Buffer.concat([json, footer]);
+};
+
+/** Read an object's trailer and the length of the body preceding it, or `undefined` when the key holds no object. */
+const readTrailer = async (filePath: string): Promise<{ bodySize: number; meta: NodeObjectMeta } | undefined> => {
+    let handle: FileHandle;
+
+    try {
+        handle = await open(filePath, "r");
     } catch (error: unknown) {
         if (isMissing(error)) {
             return undefined;
@@ -99,145 +136,175 @@ const readMeta = async (directory: string, key: string): Promise<NodeObjectMeta 
 
         throw error;
     }
+
+    try {
+        const stats = await handle.stat();
+
+        if (!stats.isFile() || stats.size < FOOTER_SIZE) {
+            return undefined;
+        }
+
+        const footer = Buffer.alloc(FOOTER_SIZE);
+
+        await handle.read(footer, 0, FOOTER_SIZE, stats.size - FOOTER_SIZE);
+
+        if (footer.toString("ascii", 4, FOOTER_SIZE) !== MAGIC) {
+            return undefined;
+        }
+
+        const trailerLength = footer.readUInt32BE(0);
+        const bodySize = stats.size - FOOTER_SIZE - trailerLength;
+
+        if (trailerLength === 0 || bodySize < 0) {
+            return undefined;
+        }
+
+        const trailer = Buffer.alloc(trailerLength);
+
+        await handle.read(trailer, 0, trailerLength, bodySize);
+
+        return { bodySize, meta: JSON.parse(trailer.toString("utf8")) as NodeObjectMeta };
+    } finally {
+        await handle.close();
+    }
 };
 
-/** Persist the meta sidecar for a key. */
-const writeMeta = async (directory: string, key: string, meta: NodeObjectMeta): Promise<void> => {
-    const metaPath = join(directory, META_DIR, `${key}.json`);
-
-    await mkdir(dirname(metaPath), { recursive: true });
-    await writeFile(metaPath, JSON.stringify(meta));
-};
+/**
+ * Copy a `Buffer`'s bytes into a standalone `ArrayBuffer`. The slice is what
+ * makes it a copy — a `Buffer` is a view into Node's shared allocation pool, so
+ * handing out `.buffer` would expose unrelated memory.
+ */
+const toArrayBuffer = (buffer: Buffer): ArrayBuffer => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
 
 /** Hex → the `ArrayBuffer` shape `R2ObjectLike.checksums.sha256` carries. */
-const hexToArrayBuffer = (hex: string): ArrayBuffer => {
-    const buffer = Buffer.from(hex, "hex");
+const hexToArrayBuffer = (hex: string): ArrayBuffer => toArrayBuffer(Buffer.from(hex, "hex"));
 
-    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-};
-
-/** Compute the uploaded date from meta and file stat. */
-const getUploadedDate = (meta: NodeObjectMeta | undefined, fileStat?: { mtimeMs: number; size: number }): Date | undefined => {
-    if (meta?.uploaded !== undefined) {
-        return new Date(meta.uploaded);
-    }
-
-    if (fileStat !== undefined) {
-        return new Date(fileStat.mtimeMs);
-    }
-
-    return undefined;
-};
-
-/** Build the body-free {@link R2ObjectLike} projection for a key from its sidecar + stat. */
-const toObject = (key: string, meta: NodeObjectMeta | undefined, fileStat?: { mtimeMs: number; size: number }): R2ObjectLike => {
-    const { sha256Hex } = meta ?? { sha256Hex: undefined };
-
-    const checksums = sha256Hex === undefined ? undefined : { sha256: hexToArrayBuffer(sha256Hex) };
-    const etag = sha256Hex ?? `stat-${String(fileStat?.size)}-${String(fileStat?.mtimeMs)}`;
-    const httpEtag = sha256Hex === undefined ? undefined : `"${sha256Hex}"`;
-    const sha256Base64 = sha256Hex === undefined ? undefined : Buffer.from(sha256Hex, "hex").toString("base64");
+/** Build the body-free {@link R2ObjectLike} projection for a key from its trailer. */
+const toObject = (key: string, meta: NodeObjectMeta): R2ObjectLike => {
+    const { sha256Hex } = meta;
 
     return {
-        checksums,
-        customMetadata: meta?.customMetadata,
-        etag,
-        httpEtag,
-        httpMetadata: meta?.httpMetadata,
+        checksums: { sha256: hexToArrayBuffer(sha256Hex) },
+        customMetadata: meta.customMetadata,
+        etag: sha256Hex,
+        httpEtag: `"${sha256Hex}"`,
+        httpMetadata: meta.httpMetadata,
         key,
         sha256: sha256Hex,
-        sha256Base64,
-        size: meta?.size ?? fileStat?.size ?? 0,
-        uploaded: getUploadedDate(meta, fileStat),
+        sha256Base64: Buffer.from(sha256Hex, "hex").toString("base64"),
+        size: meta.size,
+        uploaded: new Date(meta.uploaded),
     };
 };
 
-/** Stat an object file, mapping a missing key to `undefined` and a directory to a miss. */
-const statObject = async (directory: string, key: string): Promise<{ mtimeMs: number; size: number } | undefined> => {
-    try {
-        const result = await stat(join(directory, key));
-
-        if (result.isFile()) {
-            return { mtimeMs: result.mtimeMs, size: result.size };
-        }
-    } catch (error: unknown) {
-        if (isMissing(error)) {
-            return undefined;
-        }
-    }
-
-    return undefined;
-};
-
-/** Apply an {@link R2RangeLike} window to a byte buffer. */
-const applyRange = (bytes: Uint8Array, range?: R2RangeLike): Uint8Array => {
+/** Resolve an {@link R2RangeLike} into absolute `[start, end)` body offsets. */
+const resolveRange = (bodySize: number, range?: R2RangeLike): { end: number; start: number } => {
     if (range === undefined) {
-        return bytes;
+        return { end: bodySize, start: 0 };
     }
-
-    const total = bytes.length;
 
     if ("suffix" in range) {
-        return bytes.slice(total - Math.min(range.suffix, total));
+        return { end: bodySize, start: bodySize - Math.min(Math.max(0, range.suffix), bodySize) };
     }
 
-    const offset = range.offset ?? 0;
-    const length = range.length ?? total - offset;
+    const start = Math.min(Math.max(0, range.offset ?? 0), bodySize);
+    const end = range.length === undefined ? bodySize : Math.min(start + Math.max(0, range.length), bodySize);
 
-    return bytes.slice(offset, Math.min(offset + length, total));
+    return { end, start };
 };
 
-/** Fold every supported R2 put body into one byte buffer. */
-const toBytes = async (body: ReadableStream | ArrayBuffer | Blob | string | null | undefined): Promise<Uint8Array> => {
+/**
+ * Stream one window of an object file as a web `ReadableStream`. Written over
+ * the file stream's async iterator rather than `Readable.toWeb`, which Node
+ * still marks experimental below 22.17 while this package supports ^22.15.
+ */
+const streamSlice = (filePath: string, start: number, end: number): ReadableStream => {
+    const source: AsyncIterator<Buffer> = createReadStream(filePath, { end: end - 1, start })[Symbol.asyncIterator]();
+
+    return new ReadableStream({
+        cancel: async () => {
+            await source.return?.();
+        },
+        pull: async (controller) => {
+            const result = await source.next();
+
+            if (result.done === true) {
+                controller.close();
+            } else {
+                controller.enqueue(result.value);
+            }
+        },
+    });
+};
+
+/** Read one window of an object file. Only the requested bytes are ever in memory. */
+const readSlice = async (filePath: string, start: number, end: number): Promise<Buffer> => {
+    const length = end - start;
+
+    if (length <= 0) {
+        return Buffer.alloc(0);
+    }
+
+    const handle = await open(filePath, "r");
+
+    try {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buffer, 0, length, start);
+
+        return buffer.subarray(0, bytesRead);
+    } finally {
+        await handle.close();
+    }
+};
+
+/** Yield every supported R2 put body as byte chunks, without collecting them. */
+const toChunks = async function* (body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null | undefined): AsyncGenerator<Uint8Array> {
     if (body === null || body === undefined) {
-        return new Uint8Array(0);
+        return;
     }
 
     if (typeof body === "string") {
-        return new TextEncoder().encode(body);
+        yield new TextEncoder().encode(body);
+
+        return;
     }
 
     if (body instanceof ArrayBuffer) {
-        return new Uint8Array(body);
+        yield new Uint8Array(body);
+
+        return;
     }
 
     if (ArrayBuffer.isView(body)) {
-        return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+        yield new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
+
+        return;
     }
 
     if (body instanceof Blob) {
-        return new Uint8Array(await body.arrayBuffer());
+        yield* toChunks(body.stream());
+
+        return;
     }
 
     if (body instanceof ReadableStream) {
-        const chunks: Uint8Array[] = [];
-
         for await (const chunk of body) {
             if (chunk instanceof Uint8Array) {
-                chunks.push(chunk);
+                yield chunk;
             } else if (chunk instanceof ArrayBuffer) {
-                chunks.push(new Uint8Array(chunk));
+                yield new Uint8Array(chunk);
             } else {
                 throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 put stream must yield byte chunks");
             }
         }
 
-        const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-        const out = new Uint8Array(total);
-        let offset = 0;
-
-        for (const chunk of chunks) {
-            out.set(chunk, offset);
-            offset += chunk.byteLength;
-        }
-
-        return out;
+        return;
     }
 
     throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: unsupported R2 put body");
 };
 
-/** Recursively collect object keys under the bucket directory, skipping the sidecar + staging trees. */
+/** Recursively collect object keys under the bucket directory, skipping the staging tree. */
 const walkObjects = async (directory: string): Promise<string[]> => {
     const keys: string[] = [];
 
@@ -257,11 +324,13 @@ const walkObjects = async (directory: string): Promise<string[]> => {
         const promises: Promise<void>[] = [];
 
         for (const entry of entries) {
-            if (entry.name === META_DIR || entry.name === TMP_DIR) {
+            if (entry.name === TMP_DIR) {
                 continue;
             }
 
-            const relativePath = relative === "" ? entry.name : `${relative}${sep}${entry.name}`;
+            // Keys always join with `/`, never the platform separator — `sep` would
+            // hand back `a\b` on Windows for a key stored as `a/b`.
+            const relativePath = relative === "" ? entry.name : `${relative}/${entry.name}`;
 
             if (entry.isDirectory()) {
                 promises.push(walk(join(currentPath, entry.name), relativePath));
@@ -274,7 +343,10 @@ const walkObjects = async (directory: string): Promise<string[]> => {
     };
 
     await walk(directory, "");
-    keys.sort((a, b) => a.localeCompare(b));
+    // Codepoint order, matching the `<=` comparison `firstIndexGreaterThan` uses
+    // to place the cursor. `localeCompare` would order them differently and the
+    // binary search would land in the wrong place.
+    keys.sort((a, b) => (a < b ? -1 : Number(a > b)));
 
     return keys;
 };
@@ -321,42 +393,38 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
             validateKey(key);
 
             await unlinkIfPresent(join(directory, key));
-            await unlinkIfPresent(join(directory, META_DIR, `${key}.json`));
         },
 
         get: async (key: string, getOptions?: { range?: R2RangeLike }): Promise<R2ObjectBodyLike | null> => {
             validateKey(key);
 
-            const fileStat = await statObject(directory, key);
+            const filePath = join(directory, key);
+            const stored = await readTrailer(filePath);
 
-            if (fileStat === undefined) {
+            if (stored === undefined) {
                 return null; // eslint-disable-line unicorn/no-null
             }
 
-            const bytes = await readFile(join(directory, key));
-            const ranged = Buffer.from(applyRange(bytes, getOptions?.range));
-            const meta = await readMeta(directory, key);
-            const object = toObject(key, meta, fileStat);
-            const rangedBuffer = ranged.buffer.slice(ranged.byteOffset, ranged.byteOffset + ranged.byteLength);
+            const { end, start } = resolveRange(stored.bodySize, getOptions?.range);
 
             return {
-                ...object,
-                arrayBuffer: (): Promise<ArrayBuffer> => Promise.resolve(rangedBuffer),
-                body: new Blob([rangedBuffer]).stream(),
-                text: (): Promise<string> => Promise.resolve(ranged.toString("utf8")),
+                ...toObject(key, stored.meta),
+                arrayBuffer: async (): Promise<ArrayBuffer> => toArrayBuffer(await readSlice(filePath, start, end)),
+                body: end > start ? streamSlice(filePath, start, end) : new Blob([]).stream(),
+                text: async (): Promise<string> => {
+                    const slice = await readSlice(filePath, start, end);
+
+                    return slice.toString("utf8");
+                },
             };
         },
 
         head: async (key: string): Promise<R2ObjectLike | null> => {
             validateKey(key);
 
-            const fileStat = await statObject(directory, key);
+            const stored = await readTrailer(join(directory, key));
 
-            if (fileStat === undefined) {
-                return null; // eslint-disable-line unicorn/no-null
-            }
-
-            return toObject(key, await readMeta(directory, key), fileStat);
+            return stored === undefined ? null : toObject(key, stored.meta); // eslint-disable-line unicorn/no-null
         },
 
         list: async (listOptions: { cursor?: string; delimiter?: string; limit?: number; prefix?: string } = {}) => {
@@ -368,12 +436,24 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
 
             const all = await walkObjects(directory);
             const prefix = listOptions.prefix ?? "";
-            const filtered = all.filter((key) => key.startsWith(prefix) && (listOptions.delimiter === undefined || !key.slice(prefix.length).includes(listOptions.delimiter)));
+            const filtered = all.filter(
+                (key) => key.startsWith(prefix) && (listOptions.delimiter === undefined || !key.slice(prefix.length).includes(listOptions.delimiter)),
+            );
 
             const startIndex = listOptions.cursor === undefined ? 0 : firstIndexGreaterThan(filtered, listOptions.cursor);
             const page = filtered.slice(startIndex, startIndex + limit);
             const truncated = startIndex + limit < filtered.length;
-            const objects = await Promise.all(page.map(async (key) => toObject(key, await readMeta(directory, key), await statObject(directory, key))));
+            // A key can vanish (or turn out to be an unrelated file) between the
+            // walk and the trailer read; those drop out of the page rather than
+            // failing the whole listing.
+            const found = await Promise.all(
+                page.map(async (key) => {
+                    const stored = await readTrailer(join(directory, key));
+
+                    return stored === undefined ? undefined : toObject(key, stored.meta);
+                }),
+            );
+            const objects = found.filter((object) => object !== undefined);
 
             return { cursor: truncated ? objects.at(-1)?.key : undefined, objects, truncated };
         },
@@ -385,25 +465,47 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
         ): Promise<R2ObjectLike> => {
             validateKey(key);
 
-            const bytes = await toBytes(body);
-            const sha256Hex = createHash("sha256").update(bytes).digest("hex");
             const filePath = join(directory, key);
             const temporaryPath = join(directory, TMP_DIR, randomUUID());
 
             await mkdir(dirname(filePath), { recursive: true });
             await mkdir(dirname(temporaryPath), { recursive: true });
-            await writeFile(temporaryPath, bytes);
+
+            const hash = createHash("sha256");
+            let size = 0;
+            let meta: NodeObjectMeta;
+
+            try {
+                const handle = await open(temporaryPath, "w");
+
+                try {
+                    for await (const chunk of toChunks(body)) {
+                        hash.update(chunk);
+                        size += chunk.byteLength;
+                        await handle.write(chunk);
+                    }
+
+                    meta = {
+                        customMetadata: putOptions?.customMetadata,
+                        httpMetadata: putOptions?.httpMetadata,
+                        sha256Hex: hash.digest("hex"),
+                        size,
+                        uploaded: new Date().toISOString(),
+                    };
+
+                    await handle.write(encodeTrailer(meta));
+                } finally {
+                    await handle.close();
+                }
+            } catch (error: unknown) {
+                await unlinkIfPresent(temporaryPath);
+
+                throw error;
+            }
+
+            // The one operation that publishes the object — body and metadata are
+            // in this file together, so there is no window where they disagree.
             await rename(temporaryPath, filePath);
-
-            const meta: NodeObjectMeta = {
-                customMetadata: putOptions?.customMetadata,
-                httpMetadata: putOptions?.httpMetadata,
-                sha256Hex,
-                size: bytes.length,
-                uploaded: new Date().toISOString(),
-            };
-
-            await writeMeta(directory, key, meta);
 
             return toObject(key, meta);
         },
