@@ -91,6 +91,9 @@
 "package: platform":
     - changed-files:
           - any-glob-to-any-file: "packages/platform/**/*"
+"package: platform-celld":
+    - changed-files:
+          - any-glob-to-any-file: "packages/platform-celld/**/*"
 "package: platform-cloudflare":
     - changed-files:
           - any-glob-to-any-file: "packages/platform-cloudflare/**/*"

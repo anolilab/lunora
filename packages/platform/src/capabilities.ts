@@ -406,6 +406,98 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
  * (plan 234).
  *
+ * `@lunora/platform-node` is a spike: a `ShardHost`/`SocketHost`/
+ * `ShardDirectory`/`ShardKvStore`/`SchedulerHost` implementation over
+ * `better-sqlite3` and an in-process registry, built to run the conformance
+ * TCK against a second host and discover what the contracts under-specify.
+ * It is a single Node process with no distributed placement, no host-level
+ * scheduler to re-arm timers after a restart, and no bindings at all for the
+ * Cloudflare-specific products (R2, Vectorize, Workers AI, Queues,
+ * Workflows, Containers, Browser Rendering, Analytics Engine, Secrets Store,
+ * Hyperdrive) most `ctx.*` surfaces are built on. Every one of those is
+ * rated `"unsupported"` here rather than left undeclared — see
+ * `gateAgainstMatrix` in `@lunora/codegen`, whose fail-closed gate (plan
+ * 229) treats an undeclared feature as unsupported anyway, but under a
+ * different diagnostic name than an honest, explicit rating.
+ *
+ * Two features are rated `"emulated"` rather than `"native"` even though
+ * this package fully implements their contract, because "native" would
+ * overstate what a bare Node process provides on its own: `keyValueStore` is
+ * a SQL table wearing a KV-shaped API, not a dedicated KV product, and
+ * `websocketHibernation` never actually evicts a socket to save memory — it
+ * only proves the attachment/tag durability half of the contract, not real
+ * hibernation. `scheduler` and `shardAlarms` are rated `"unsupported"`, not
+ * `"emulated"`: the Node host stores and times both, but its timer body only
+ * clears bookkeeping — nothing dispatches the scheduled function or wakes the
+ * alarm callback. `"emulated"` means built on lower-level primitives and
+ * working; never-dispatched is not that (plan 267). `globalTables` is also
+ * `"unsupported"` — no replicated SQL store is implemented. All ratings are
+ * The celld capability matrix — `@lunora/platform-celld`'s honest self-rating.
+ *
+ * celld (github.com/denoland/celld) is a self-hosted, distributed Durable
+ * Objects daemon: each node embeds V8, executes Wrangler bundles, and
+ * coordinates ownership through an S3-compatible bucket instead of a control
+ * plane. Because it implements the Workers/Durable Object API itself, the
+ * Cloudflare host adapters are the celld host adapters — what differs is which
+ * primitives exist, and that difference is exactly this matrix.
+ *
+ * Ratings derive from celld's documented compatibility surface
+ * (`docs/cloudflare-compat.md`, `docs/limitations.md` in the celld repo, both
+ * alpha), not from running the conformance TCK against a live fleet — celld is
+ * an external daemon plus an object store, which unit tests cannot stand up.
+ * The load-bearing entry is `localSql`: celld does not implement
+ * `state.storage.sql`, and the shard engine's state is SQL-backed, so a Lunora
+ * app cannot actually run on celld until celld ships its planned D1-compatible
+ * SQL surface. Everything engine-dependent is therefore rated honestly against
+ * that blocker rather than against the primitives it would use afterwards.
+ * `websocketHibernation` is `emulated`, not `native`: the hibernation API is
+ * implemented, but a cell with live sockets is protected from being shed
+ * rather than evicted, so sockets never actually outlive their cell's memory.
+ */
+export const CELLD_CAPABILITIES: PlatformCapabilities = {
+    id: "celld",
+    name: "celld",
+    features: {
+        shardedState: { level: "native", note: "Cells are Durable Objects: single-writer, per-cell SQLite persistence, replicated to an S3-compatible bucket" },
+        globalTables: { level: "unsupported", note: "d1_databases bindings are planned by celld but not implemented" },
+        websocketHibernation: {
+            level: "emulated",
+            note: "acceptWebSocket/getWebSockets/attachments are implemented, but cells with live sockets are protected from shedding rather than evicted, and getTags/auto-response pairs are missing",
+        },
+        localSql: {
+            level: "unsupported",
+            note: "state.storage.sql is not implemented (celld plans a D1-compatible SQL surface); the shard engine cannot mount until it ships",
+        },
+        shardAlarms: { level: "native", note: "storage.getAlarm/setAlarm/deleteAlarm and the alarm handler" },
+        crossShardFanout: { level: "unsupported", note: "The Lunora coordinator would mount over cells, but it requires localSql inside each shard" },
+        queues: { level: "unsupported", note: "No queues bindings or queue handler (celld: planned if demand appears)" },
+        workflows: { level: "unsupported", note: "Cloudflare Workflows is out of scope for celld" },
+        scheduler: {
+            level: "unsupported",
+            note: "No Cron Triggers equivalent — declarative crons would never fire; SchedulerDO's runAfter/runAt half runs on cell alarms but is unproven against a live fleet",
+        },
+        objectStorage: { level: "unsupported", note: "Declared r2_buckets bindings load, but each method throws" },
+        keyValueStore: {
+            level: "unsupported",
+            note: "kv_namespaces are rejected and not on celld's roadmap; per-cell storage.get/put is native but is not a global KV",
+        },
+        vectorStore: { level: "unsupported", note: "Managed Cloudflare platform service; no celld equivalent" },
+        ai: { level: "unsupported", note: "Managed Cloudflare platform service; no celld equivalent" },
+        browser: { level: "unsupported", note: "Managed Cloudflare platform service; no celld equivalent" },
+        containers: { level: "unsupported", note: "Container execution is out of scope for celld" },
+        analytics: { level: "unsupported", note: "Analytics Engine is out of scope for celld" },
+        pipelines: { level: "unsupported", note: "Cloudflare Pipelines is out of scope for celld" },
+        mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
+        secrets: { level: "unsupported", note: "No Secrets Store equivalent; celld carries plain wrangler vars only" },
+        hyperdrive: { level: "unsupported", note: "Managed Cloudflare platform service; no celld equivalent" },
+    },
+};
+
+
+/**
+ * The Node capability matrix — `@lunora/platform-node`'s honest self-rating
+ * (plan 234).
+ *
  * `@lunora/platform-node` implements every contract in this package
  * (`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`,
  * `SchedulerHost`) over `better-sqlite3` and an in-process registry, plus the

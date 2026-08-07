@@ -177,6 +177,36 @@ describe("gatePlatformFeatures", () => {
             "images",
         ]);
     });
+
+    // `celld` is the second spike target (see `@lunora/platform-celld`): a
+    // Workers-compatible self-hosted DO runtime whose matrix rates every
+    // gateable ctx.* feature "unsupported" — it carries no KV/R2/queues
+    // bindings and none of the managed platform services. Unlike the `node`
+    // test above there is no emulated survivor among the gateable keys; what
+    // celld does support (sharded state, alarms, sockets) is engine-internal
+    // and never gated here.
+    it("gates every declared ctx.* off for the celld target", async () => {
+        expect.assertions(5);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, kv: true, scheduler: true, storage: true };
+
+        const result = gatePlatformFeatures(usage, "celld");
+
+        expect(result.usage.kv).toBe(false);
+        expect(result.usage.scheduler).toBe(false);
+        expect(result.usage.storage).toBe(false);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual([
+            "platform_unsupported_feature",
+            "platform_unsupported_feature",
+            "platform_unsupported_feature",
+        ]);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.feature).toSorted((a, b) => String(a).localeCompare(String(b)))).toStrictEqual([
+            "kv",
+            "scheduler",
+            "storage",
+        ]);
+    });
 });
 
 describe("project-declared target", () => {
@@ -223,6 +253,17 @@ describe("project-declared target", () => {
         // resolved through the real registry (`PLATFORM_MATRICES`), not
         // rejected as `platform_unknown_target` the way "aws" is.
         writeConfig(`{ "target": "node" }`);
+
+        expect(diagnosticNames()).toStrictEqual([]);
+    });
+
+    it("recognises celld as a registered target end-to-end through runCodegen", () => {
+        expect.assertions(1);
+
+        // Same shape as the `node` case: the fixture uses no gated ctx.*
+        // surface, so a registered target resolves through `PLATFORM_MATRICES`
+        // with no diagnostics rather than failing as `platform_unknown_target`.
+        writeConfig(`{ "target": "celld" }`);
 
         expect(diagnosticNames()).toStrictEqual([]);
     });
