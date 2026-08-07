@@ -4174,8 +4174,14 @@ class LunoraClient {
         // Custom-mutator push protocol (server reads these in `classifyClientMutation`):
         // the per-client identity + the monotonic per-client sequence that drives
         // the `__client_watermark` advance.
-        if (flags.clientId !== undefined) {
-            headers["x-lunora-client-id"] = flags.clientId;
+        //
+        // Also sent alongside a bare `mutationId`: an ANONYMOUS caller has no
+        // server-minted user id, so the shard namespaces its `__idempotency` rows
+        // by this client id instead. Without it every anonymous client would share
+        // one dedup key space and a colliding mutation id would suppress another
+        // client's write (the shard skips the cache entirely rather than risk it).
+        if (flags.clientId !== undefined || flags.mutationId !== undefined) {
+            headers["x-lunora-client-id"] = flags.clientId ?? this.clientId;
         }
 
         if (flags.clientSeq !== undefined) {

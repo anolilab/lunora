@@ -70,6 +70,37 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect(page[0]).toMatchObject({ _id: "g1", owner: { _id: "l1", name: "Local One" } });
     });
 
+    it("carries the child's RLS filters ACROSS the hop (folded `where` + `relationPolicies`)", async () => {
+        expect.assertions(2);
+
+        // The hop is a JSON envelope, so the relation loader's two RLS carriers
+        // can't ride along as functions/extra args. Dropping them is not lossy —
+        // the serving shard reads through its RAW ctx-db, so an unfiltered
+        // `where` returns every child row for the FK regardless of the policy.
+        let seen: Record<string, unknown> | undefined;
+
+        const writer = createD1ContextDatabase({
+            crossShardReader: async (_table, args) => {
+                seen = args as unknown as Record<string, unknown>;
+
+                return { continueCursor: null, isDone: true, page: [] };
+            },
+            exec: harness.exec,
+            schema: reverseSchema,
+        });
+
+        await seedParent(writer);
+        await writer.findMany("globals", {
+            relationBaseWhere: (table) => (table === "local" ? { ownerId: "u1" } : undefined),
+            with: { items: true },
+        });
+
+        // The child's own read policy is ANDed into the `where` that crosses.
+        expect(seen?.["where"]).toEqual({ AND: [{ ownerId: "u1" }, { globalId: { in: ["g1"] } }] });
+        // …and the function form is projected to data for the NESTED `with` hops.
+        expect(seen?.["relationPolicies"]).toEqual({ local: { ownerId: "u1" } });
+    });
+
     it("loads + groups a `many` shard-local relation through the injected crossShardReader", async () => {
         expect.assertions(1);
 

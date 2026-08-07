@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
-import { isPrivateHost, isPrivateIpv4, isPrivateIpv6, normalizeHost, parseIpv4 } from "../../../shared/ssrf-host";
+import { isPrivateHost, normalizeHost } from "../../../shared/ssrf-host";
+import { resolvePrivateAddress } from "../../../shared/ssrf-resolve";
 import type {
     Browser,
     BrowserLaunchLike,
@@ -24,9 +25,6 @@ const MAX_TIMEOUT_MS = 120_000;
 const MAX_VIEWPORT_WIDTH = 3840;
 const MAX_VIEWPORT_HEIGHT = 4320;
 
-/** Cloudflare DoH JSON endpoint used for the opt-in `resolveDns` rebinding re-check. */
-const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
-
 /**
  * Hard ceiling on a single DoH lookup. Without it the `fetch` could stall
  * indefinitely and pin the worker before the browser even launches — a hung
@@ -35,86 +33,23 @@ const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
  */
 const DOH_TIMEOUT_MS = 5000;
 
-/** DoH `Answer.type` codes we inspect: 1 = A (IPv4), 28 = AAAA (IPv6). */
-const DNS_TYPE_A = 1;
-const DNS_TYPE_AAAA = 28;
-
 /**
- * Classify a single DoH-resolved IP (its record `type` + `data`) as private.
- * Reuses the same IPv4/IPv6 range tables as the string guard; an A `data` is a
- * dotted quad, an AAAA `data` is an IPv6 literal. An unparseable A record is
- * treated as private (fail-closed), matching {@link parseIpv4} elsewhere.
- */
-const isPrivateResolvedIp = (data: string, type: number): boolean => {
-    if (type === DNS_TYPE_A) {
-        const v4 = parseIpv4(data);
-
-        return v4 === undefined || isPrivateIpv4(v4);
-    }
-
-    return isPrivateIpv6(data.toLowerCase());
-};
-
-/**
- * Query Cloudflare DoH (JSON `application/dns-json`) for one record `type` of
- * `hostname`. Returns the `Answer` array (possibly empty) on success, or
- * `undefined` if the lookup itself failed (network error / non-200 / unparseable
- * body) so the caller can fall back to the string guard rather than fail-open.
- */
-const dohLookup = async (hostname: string, type: number, timeoutMs: number = DOH_TIMEOUT_MS): Promise<{ data: string; type: number }[] | undefined> => {
-    try {
-        const response = await fetch(`${DOH_ENDPOINT}?name=${encodeURIComponent(hostname)}&type=${String(type)}`, {
-            headers: { accept: "application/dns-json" },
-            // Bound the lookup so a stalled resolver can't hang the worker; an
-            // abort surfaces as a rejection caught below → `undefined` → the
-            // caller falls back to the (already-passed) string guard.
-            signal: AbortSignal.timeout(timeoutMs),
-        });
-
-        if (!response.ok) {
-            return undefined;
-        }
-
-        const body: { Answer?: { data: string; type: number }[] } = await response.json();
-
-        return body.Answer ?? [];
-    } catch {
-        return undefined;
-    }
-};
-
-/**
- * Opt-in DNS-rebinding re-check for a validated navigation target. Resolves the
- * host's A + AAAA records over DoH and throws if any resolved address is
- * private/internal. Best-effort: IP-literal hosts (already classified by the
- * string guard) are skipped, and if BOTH DoH queries fail we return silently and
- * lean on the string guard — we only ever refuse on an address that actually
- * resolved to a private range, never fail-open on one that did.
+ * DNS-rebinding re-check for a validated navigation target: throws when the
+ * host resolves to a private/internal address. The resolution + classification
+ * live in the shared `resolvePrivateAddress` helper (see its docblock for the
+ * best-effort semantics — IP literals skipped, a failed lookup falls back to the
+ * string guard, never fail-open on an address that DID resolve private); this
+ * only turns a positive result into the package's own user-facing refusal.
  */
 const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DOH_TIMEOUT_MS): Promise<void> => {
     const host = normalizeHost(new URL(target).hostname);
+    const privateAddress = await resolvePrivateAddress(host, timeoutMs);
 
-    // IP literals can't rebind through DNS and were already classified by the
-    // string guard; only a named host needs the resolved-address re-check.
-    if (host.includes(":") || parseIpv4(host) !== undefined) {
-        return;
-    }
-
-    const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A, timeoutMs), dohLookup(host, DNS_TYPE_AAAA, timeoutMs)]);
-
-    // Both lookups failed — fall back to the string guard (which already passed)
-    // rather than fail-open. If either resolved, inspect what came back.
-    if (aRecords === undefined && aaaaRecords === undefined) {
-        return;
-    }
-
-    for (const answer of [...(aRecords ?? []), ...(aaaaRecords ?? [])]) {
-        if ((answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA) && isPrivateResolvedIp(answer.data, answer.type)) {
-            throw new LunoraError(
-                "FORBIDDEN",
-                `@lunora/browser: url host "${host}" resolves to a private/internal address (${answer.data}); refusing to navigate (DNS-rebinding guard)`,
-            );
-        }
+    if (privateAddress !== undefined) {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/browser: url host "${host}" resolves to a private/internal address (${privateAddress}); refusing to navigate (DNS-rebinding guard)`,
+        );
     }
 };
 
@@ -137,12 +72,11 @@ const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DO
  * opts in explicitly.
  *
  * Returns the normalized absolute URL string. This string check classifies the host
- * as-written — it does **not** resolve DNS. So **without `allowedHosts` (or the opt-in
- * `resolveDns` re-check applied by the caller before `page.goto`), a PUBLIC hostname that
- * resolves — via attacker-controlled DNS — to a private/metadata IP is NOT blocked**
- * (classic DNS rebinding, out of scope here). Any app that passes client-controlled URLs
- * to the browser should set `allowedHosts` (hard guarantee) or enable `resolveDns`
- * (best-effort re-check); otherwise keep caller-supplied URLs trusted.
+ * as-written — it does **not** resolve DNS. So on its own, a PUBLIC hostname that
+ * resolves — via attacker-controlled DNS — to a private/metadata IP is NOT blocked
+ * here (classic DNS rebinding). That gap is closed by the `resolveDns` re-check the
+ * caller applies before `page.goto`, which is ON by default; `allowedHosts` is the
+ * hard guarantee when the set of reachable hosts is known.
  *
  * This validates the INITIAL navigation target. A 3xx redirect can point the
  * headless browser at a different (possibly private) host, so `withPage`
@@ -345,7 +279,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const allowPrivateTargets = options.allowPrivateTargets ?? false;
         const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
-        const resolveDns = options.resolveDns ?? false;
+        const resolveDns = options.resolveDns ?? true;
         // Reuse the navigation timeout budget for the DoH re-check, but never let a
         // single lookup exceed the DoH ceiling — a stalled resolver mustn't burn
         // the full (up to 120s) navigation budget before the browser even launches.

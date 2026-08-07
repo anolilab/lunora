@@ -205,7 +205,12 @@ export interface TrackInput {
      * serialized context (a single Durable Object or per-reference lock). `"add"` is always safe.
      */
     readonly mode?: "add" | "set";
-    /** Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`). */
+
+    /**
+     * Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`).
+     * Must be a non-negative safe integer — a negative value would drive the summed period usage
+     * below zero and hand the reference an unbounded metered balance, so it is rejected.
+     */
     readonly quantity?: number;
     readonly referenceId: string;
 }

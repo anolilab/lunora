@@ -289,13 +289,14 @@ describe("shardDO admin-socket upgrade flagging", () => {
         return captured;
     };
 
-    it("stamps admin:true when the upgrade presents the admin token via ?token", async () => {
+    it("stamps admin:false for the raw master token in ?token= (enforcement is the default)", async () => {
         expect.assertions(1);
 
         const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
-        // The upgrade also mints a per-connection id for lifecycle dispatch.
-        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
+        // The upgrade still mints a per-connection id for lifecycle dispatch; the
+        // socket just isn't admin — only a minted sub-token (or the header) is.
+        expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
     });
 
     it("stamps admin:false when no token is presented", async () => {

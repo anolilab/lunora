@@ -347,6 +347,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             await ensureAuthorized(input.referenceId);
 
             const target = input.quantity ?? 1;
+
+            // A negative (or non-integer/non-finite) quantity is never a legitimate
+            // meter reading, and it is not merely garbage-in: the ledger is summed
+            // to `used`, and `evaluateFeature` derives `balance = limit - used`, so
+            // a negative event pushes `used` below zero and hands the caller an
+            // unbounded balance past its paid cap. Reject at the boundary — for
+            // BOTH modes ("set" to a negative total is the same bypass in one call).
+            if (!Number.isSafeInteger(target) || target < 0) {
+                throw new LunoraPaymentError("VALIDATION_ERROR", `track(): \`quantity\` must be a non-negative safe integer (got ${String(input.quantity)})`);
+            }
             // A caller-stable key dedupes retries; an omitted one means "always record".
             const key = input.idempotencyKey ?? crypto.randomUUID();
 

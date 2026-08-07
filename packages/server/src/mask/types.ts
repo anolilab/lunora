@@ -10,9 +10,9 @@
  * raw values.
  *
  * Masking transforms values on the **read/return path only**; it never changes
- * what is stored. It rewrites the *top-level* rows of the table being read —
- * rows hydrated as a `with` relation are NOT masked (the same boundary RLS has);
- * mask such a relation at its own read site if it can surface PII.
+ * what is stored. It rewrites the rows of the table being read AND the rows
+ * hydrated for each `with` relation hop, by that hop's own policy, at any
+ * nesting depth — the same boundary `rls()` enforces with `relationBaseWhere`.
  */
 import type { Permission, Role } from "../rls/types";
 import type { IndexFieldsByTable } from "../schema";

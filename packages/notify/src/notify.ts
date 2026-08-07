@@ -74,6 +74,7 @@ const mapWithConcurrency = async <T, R>(items: ReadonlyArray<T>, limit: number, 
 /** Resolve the (possibly env-thunked) channel configs into a ready-to-wire set. */
 const resolveProviders = (definition: NotifyDefinition, env: NotifyEnv): ResolvedProviders => {
     return {
+        allowedPushOrigins: definition.allowedPushOrigins,
         chat: resolveMaybeFactory(definition.chat, env) as Provider | undefined,
         fcm: resolveMaybeFactory(definition.fcm, env),
         inApp: resolveMaybeFactory(definition.inApp, env) as Provider | undefined,
@@ -256,11 +257,12 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
 
     /**
      * Warn ONCE per isolate when a Web Push subscription is registered without an
-     * `allowedPushOrigins` allowlist. The default posture validates the endpoint
-     * host with a STRING classifier (`assertPushEndpoint` → shared `isPrivateHost`)
-     * that does NOT resolve DNS, so a public hostname that resolves to a
-     * private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) slips past it — only
-     * an exact-origin `allowedPushOrigins` allowlist closes that DNS-rebinding gap.
+     * `allowedPushOrigins` allowlist. Without it the posture is defence-in-depth
+     * rather than a guarantee: a STRING classifier at register time
+     * (`assertPushEndpoint` → shared `isPrivateHost`) plus a best-effort
+     * resolved-address re-check at send time. Both can be defeated (a DoH outage
+     * falls back to the string guard, and resolution is TOCTOU-imperfect); an
+     * exact-origin allowlist cannot.
      * Guarded on the per-isolate runtime, mirroring the no-store fallback warning.
      */
     const warnNoPushOriginAllowlist = (): void => {
@@ -273,7 +275,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
         runtime.warnedNoPushOriginAllowlist = true;
         // eslint-disable-next-line no-console -- one-time SSRF-posture warning, mirrors the no-store fallback warning
         console.warn(
-            "@lunora/notify: Web Push registered without `allowedPushOrigins` — the endpoint host is validated by a string classifier that does NOT resolve DNS, so a public hostname resolving to a private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT blocked. Set `allowedPushOrigins` to the exact push-service origins to close DNS rebinding.",
+            "@lunora/notify: Web Push registered without `allowedPushOrigins` — endpoints are guarded by a string classifier at register time and a best-effort DNS re-check at send time, both of which are defeatable. Set `allowedPushOrigins` to the exact push-service origins for a hard guarantee.",
         );
     };
 

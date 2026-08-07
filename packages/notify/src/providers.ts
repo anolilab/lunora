@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Notification, NotificationProviders, Provider, PushPayload } from "@visulima/notification";
 import { createNotification } from "@visulima/notification";
 import { circuitBreakerMiddleware, retryMiddleware } from "@visulima/notification/middleware";
@@ -5,6 +6,8 @@ import type { FcmConfig } from "@visulima/notification/providers/fcm";
 import { fcmProvider } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
 import { webPushProvider } from "@visulima/notification/providers/web-push";
+
+import { resolvePrivateAddress } from "../../../shared/ssrf-resolve";
 
 /**
  * A single push target is a web-push subscription when it JSON-parses to an object
@@ -29,8 +32,95 @@ const isWebPushTarget = (target: unknown): boolean => {
     }
 };
 
+/**
+ * Pull the web-push `endpoint` out of a routed target (a JSON string or the
+ * object form). `undefined` when the target isn't a web-push subscription or
+ * carries no string endpoint — the caller then has nothing to re-check.
+ */
+const endpointOf = (target: unknown): string | undefined => {
+    let parsed: unknown = target;
+
+    if (typeof target === "string") {
+        try {
+            parsed = JSON.parse(target);
+        } catch {
+            return undefined;
+        }
+    }
+
+    const endpoint = (parsed as { endpoint?: unknown } | null | undefined)?.endpoint;
+
+    return typeof endpoint === "string" ? endpoint : undefined;
+};
+
+/**
+ * Per-isolate memo of the send-time rebinding verdict, keyed by hostname. A
+ * `broadcast` fans out to every device, and real deployments share a handful of
+ * push-service origins across all of them — one DoH round-trip per host per
+ * isolate instead of one per device.
+ *
+ * ponytail: no TTL. An isolate lives minutes, so a host that rebinds mid-isolate
+ * keeps a stale verdict for that long; add an expiry if isolates ever get long
+ * enough for that to matter.
+ */
+const rebindVerdicts = new Map<string, Promise<string | undefined>>();
+
+/**
+ * Send-time SSRF re-check for a stored web-push endpoint — the second half of the
+ * boundary `assertPushEndpoint` opens at register time.
+ *
+ * Register-time validation is a STRING classifier: a public hostname that resolves
+ * to a private/internal IP passes it, and even a host that resolved public then can
+ * be re-pointed afterwards. Since every send `fetch`-POSTs the caller-supplied
+ * endpoint (and `broadcast` does it once per device), the resolved address has to be
+ * re-checked here, where the request actually goes out.
+ *
+ * Skipped when `allowedPushOrigins` is configured: that exact-origin allowlist is
+ * the stronger guard and may legitimately name an internal push service.
+ */
+const assertPushTargetResolvable = async (target: unknown, allowedPushOrigins?: string[]): Promise<void> => {
+    if (allowedPushOrigins !== undefined && allowedPushOrigins.length > 0) {
+        return;
+    }
+
+    const endpoint = endpointOf(target);
+
+    if (endpoint === undefined) {
+        return;
+    }
+
+    let hostname: string;
+
+    try {
+        ({ hostname } = new URL(endpoint));
+    } catch {
+        return;
+    }
+
+    let verdict = rebindVerdicts.get(hostname);
+
+    if (verdict === undefined) {
+        verdict = resolvePrivateAddress(hostname);
+        rebindVerdicts.set(hostname, verdict);
+    }
+
+    const privateAddress = await verdict;
+
+    if (privateAddress !== undefined) {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" resolves to a private/internal address (${privateAddress}); refusing to send (DNS-rebinding guard)`,
+        );
+    }
+};
+
 /** Options for {@link routingPushProvider}. */
 export interface RoutingPushOptions {
+    /**
+     * The definition's exact-origin allowlist, when configured. Its presence
+     * disables the send-time rebinding re-check (see {@link assertPushTargetResolvable}).
+     */
+    allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
     webPush?: Provider<unknown, PushPayload>;
 }
@@ -66,18 +156,23 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             await options.fcm?.initialize();
         },
         isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
-        send: (payload) => {
+        send: async (payload) => {
             // A multi-recipient `to` can mix kinds; our facade sends one target per
             // call, so route on the first (single) target here.
             const target = Array.isArray(payload.to) ? payload.to[0] : payload.to;
+            const provider = pick(target);
 
-            return pick(target).send(payload);
+            await assertPushTargetResolvable(target, options.allowedPushOrigins);
+
+            return provider.send(payload);
         },
     };
 };
 
 /** A resolved, ready-to-wire set of channel configs (edge-safe channels only). */
 export interface ResolvedProviders {
+    /** The definition's `allowedPushOrigins`, threaded to the push router's send-time SSRF guard. */
+    allowedPushOrigins?: string[];
     chat?: Provider;
     fcm?: FcmConfig;
     inApp?: Provider;
@@ -98,7 +193,7 @@ export const buildEngine = (resolved: ResolvedProviders): Notification => {
     const providers: NotificationProviders = {};
 
     if (webPush !== undefined || fcm !== undefined) {
-        providers.push = routingPushProvider({ fcm, webPush });
+        providers.push = routingPushProvider({ allowedPushOrigins: resolved.allowedPushOrigins, fcm, webPush });
     }
 
     if (resolved.chat !== undefined) {

@@ -148,6 +148,35 @@ describe("ctx-db relations", () => {
             expect((m1["_count"] as Record<string, number>)["reactions"]).toBe(1);
         });
 
+        it("applies relationMask to hydrated children at every nesting depth", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter(schema);
+
+            await seed(writer);
+
+            // The column-level twin of `relationBaseWhere`: masking is a middleware
+            // ABOVE ctx.db, so without this hook a `with` hop returns the child's
+            // masked columns in the clear — and a chained `with` reaches tables the
+            // caller could not read directly.
+            const { page } = await writer.findMany("users", {
+                relationMask: (table, rows) =>
+                    table === "reactions"
+                        ? rows.map((row) => {
+                              return { ...row, emoji: null };
+                          })
+                        : rows,
+                where: { _id: "u1" },
+                with: { messages: { with: { reactions: true } } },
+            });
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
+            const m1 = messages.find((row) => row["_id"] === "m1")!;
+            const reactions = m1["reactions"] as Record<string, unknown>[];
+
+            expect(reactions.length).toBeGreaterThan(0);
+            expect(reactions.every((row) => row["emoji"] === null)).toBe(true);
+        });
+
         it("many relation with no children attaches []", async () => {
             expect.assertions(1);
 

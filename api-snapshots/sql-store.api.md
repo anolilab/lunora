@@ -23,7 +23,7 @@ interface SqlCtxDbOptions {
     cdc?: boolean;
     clock?: () => number;
     crossShardCounter?: DatabaseWriterLike["count"];
-    crossShardReader?: DatabaseWriterLike["findMany"];
+    crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
     dialect: SqlDialect;
     exec: SqlCtxExec;
     idGenerator?: () => string;

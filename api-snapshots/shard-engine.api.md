@@ -452,6 +452,17 @@ interface CreateWorkflowInstanceResult {
 }
 ```
 
+### `CrossShardReadArgs` (interface)
+
+```ts
+interface CrossShardReadArgs {
+    orderBy?: OrderByInput[];
+    relationPolicies?: Record<string, WhereInput>;
+    where?: WhereInput;
+    with?: WithInput;
+}
+```
+
 ### `CtxDbOptions` (interface)
 
 ```ts
@@ -1388,6 +1399,7 @@ interface QueryArgs {
     limit?: number;
     orderBy?: OrderByInput[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
     restrictsCounts?: boolean;
     select?: ReadonlyArray<string>;
     where?: WhereInput;
@@ -1888,6 +1900,7 @@ interface ResolveWithOptions {
     groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
     relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
     schema: {
         readonly tables: Record<string, TableDefinitionLike>;
     };

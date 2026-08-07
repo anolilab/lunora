@@ -878,6 +878,34 @@ describe("mask — analytical reductions fail closed", () => {
     });
 });
 
+describe("mask — with-relation hops", () => {
+    it("attaches a relationMask that masks each hop's TARGET table", async () => {
+        expect.assertions(3);
+
+        // The middleware sits above ctx.db and never sees `with`-hydrated rows —
+        // the relation loader does. So it hands the loader a per-hop mask; without
+        // it, `findMany("posts", { with: { author: true } })` returns a masked
+        // `users.email` in the clear, and chained `with` reaches tables the caller
+        // cannot name directly.
+        const database = createFakeDatabase([{ _id: "p1", table: "posts", title: "Hello" }]);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("posts", {}));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "findMany");
+        const { relationMask } = call?.args as { relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] };
+
+        expect(relationMask).toBeTypeOf("function");
+        // A masked hop target is rewritten…
+        expect(relationMask?.("users", [{ _id: "u1", email: "a@b.c", name: "Ada" }])).toEqual([{ _id: "u1", email: null, name: "Ada" }]);
+        // …an unmasked one passes through untouched.
+        expect(relationMask?.("posts", [{ _id: "p1", title: "Hello" }])).toEqual([{ _id: "p1", title: "Hello" }]);
+    });
+});
+
 describe("mask — value oracle via filter/sort fails closed (regression)", () => {
     it("findMany with a where on a masked column throws MASK_UNSUPPORTED", async () => {
         expect.assertions(2);

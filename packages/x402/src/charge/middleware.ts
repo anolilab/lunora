@@ -214,21 +214,22 @@ export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">
 export interface ChargeMiddlewareOptions {
     /**
      * Settle the verified payment **before** dispatching `runHandler`, instead
-     * of after. Use this for a mutation/procedure gate: a settlement failure
-     * then means the handler never runs at all, so a paid mutation's writes can
-     * never be committed without payment (the free-execution gap X402-04
-     * closes). Once settlement succeeds the payment is final (on-chain) — a
-     * handler failure after that point is a normal application error, not a
-     * payment to unwind: there is nothing left to cancel, so it is not caught
-     * here and simply propagates.
+     * of after. **Default `true`** — a settlement failure then means the handler
+     * never runs at all, so its side effects (writes, LLM calls, mail, push) can
+     * never happen unpaid. This matters because `verifyPayment` only checks the
+     * signed intent, NOT solvency: an underfunded or facilitator-refused payment
+     * passes verify and fails at `/settle`. Once settlement succeeds the payment
+     * is final (on-chain) — a handler failure after that point is a normal
+     * application error, not a payment to unwind: there is nothing left to
+     * cancel, so it is not caught here and simply propagates.
      *
-     * Default `false` (settle-after, the historical behaviour): the handler's
-     * response is passed to settlement as transport context (`responseHeaders`
-     * — read by some schemes for settlement overrides), and a handler throw
-     * still releases the verified-but-unsettled payment via
-     * `cancellationDispatcher.cancel`. Because settlement can still fail after
-     * the handler already ran on this path, `.x402()` handlers gated this way
-     * MUST be idempotent or compensatable — see the `@lunora/x402` charge docs.
+     * Set `false` for settle-after: the handler's response is passed to
+     * settlement as transport context (`responseHeaders` — read by some schemes
+     * for settlement overrides), and a handler throw releases the
+     * verified-but-unsettled payment via `cancellationDispatcher.cancel`.
+     * Settlement can still FAIL after the handler already ran on this path, so a
+     * handler gated this way MUST be idempotent or compensatable — opt in only
+     * when you need the response as settlement context and can accept that.
      */
     readonly settleBeforeHandler?: boolean;
 }
@@ -251,7 +252,7 @@ export const createChargeMiddleware = async (
 
     await http.initialize();
 
-    const settleBeforeHandler = options?.settleBeforeHandler ?? false;
+    const settleBeforeHandler = options?.settleBeforeHandler ?? true;
 
     const handle = async (request: Request, runHandler: ChargeHandler, deps?: ChargeHandlerDeps): Promise<Response> => {
         const url = new URL(request.url);
@@ -299,8 +300,8 @@ export const createChargeMiddleware = async (
             return withHeaders(response, settlement.headers);
         }
 
-        // Settle-after (the historical/default ordering): run the handler, then
-        // settle around its response.
+        // Settle-after (opt-in via `settleBeforeHandler: false`): run the handler,
+        // then settle around its response.
         let response: Response;
 
         try {

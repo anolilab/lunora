@@ -244,6 +244,7 @@ export type {
     ApplyOnDeleteOptions,
     BroadcastDelta,
     ColumnMetaLike,
+    CrossShardReadArgs,
     DatabaseWriterLike,
     GeoFilterBuilderLike,
     GeoIndexDefinitionLike,

@@ -800,6 +800,7 @@ abstract class ShardDO {
         epoch: string | undefined;
         resumable: boolean;
     };
+    protected idempotencyNamespace(): string | undefined;
     protected readIdempotentResult(mutationId: string | undefined): {
         value: unknown;
     } | undefined;

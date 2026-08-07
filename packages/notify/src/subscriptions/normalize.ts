@@ -208,9 +208,10 @@ interface NormalizeOptions {
      *
      * When unset, the default posture applies: `https:` scheme + a host the
      * {@link assertPushEndpoint} STRING classifier does not flag as
-     * private/loopback. That classifier does NOT resolve DNS, so a public hostname
-     * resolving to a private/internal IP (e.g. `https://127.0.0.1.nip.io/…`) is NOT
-     * blocked by it — set this allowlist to close that gap.
+     * private/loopback, plus a resolved-address re-check at send time. Setting
+     * this allowlist replaces both with an exact-origin match — the hard
+     * guarantee, and the only one that also covers an internal push service you
+     * deliberately want to reach.
      */
     allowedPushOrigins?: string[];
 }
@@ -229,12 +230,15 @@ interface NormalizeOptions {
  * endpoint's origin must instead match one of those exactly — a hard allowlist
  * that also closes DNS rebinding.
  *
- * LIMIT OF THE DEFAULT POSTURE: `isPrivateHost` is a STRING classifier — it
- * inspects the host AS-WRITTEN and does NOT resolve DNS. So a PUBLIC hostname
- * that resolves (via attacker-controlled DNS) to a private/internal IP — e.g.
+ * LIMIT OF THIS CHECK: `isPrivateHost` is a STRING classifier — it inspects the
+ * host AS-WRITTEN and does NOT resolve DNS. So a PUBLIC hostname that resolves
+ * (via attacker-controlled DNS) to a private/internal IP — e.g.
  * `https://127.0.0.1.nip.io/…` or `https://169-254-169-254.sslip.io/…` — is NOT
- * blocked here. Only a configured `allowedPushOrigins` allowlist closes that
- * (classic DNS-rebinding) gap; the classifier cannot.
+ * blocked here. That (classic DNS-rebinding) gap is closed at SEND time instead,
+ * where the resolved address is re-checked before the POST goes out (see
+ * `assertPushTargetResolvable` in `../providers.ts`) — register time is the wrong
+ * place for it, since a host that resolves public now can be re-pointed later.
+ * A configured `allowedPushOrigins` allowlist remains the hard guarantee.
  */
 const assertPushEndpoint = (endpoint: string, allowedPushOrigins?: string[]): void => {
     let url: URL;

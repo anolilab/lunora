@@ -784,6 +784,13 @@ interface WorkerOptions {
      * every live shard for the table) and a per-shard gate is not
      * sufficient to authorize it. Apps that need client-driven fan-out
      * must opt in explicitly via this callback.
+     *
+     * SCOPE: this gate is TABLE-granular — it decides whether the caller may fan
+     * this function out over this table at all, never which ROWS come back. Row
+     * filtering is RLS's job and stays RLS's job on the fan-out path too: the
+     * reserved `__lunora_relation__:read` hop carries the child's read policy as
+     * data (`where` + `relationPolicies`) so each shard applies it. Do not read
+     * an `authorizeFanOut: () => true` as "this caller may see every row".
      */
     authorizeFanOut?: (identity: ResolvedIdentity | null, table: string, functionPath: string) => boolean | Promise<boolean>;
 
@@ -1074,20 +1081,24 @@ interface WorkerOptions {
      */
     queue?: QueueConsumerHandler;
 
+    /* eslint-disable no-secrets/no-secrets -- the env-var NAME below is a config key, not a credential */
+
     /**
-     * Enforce the ephemeral WS admin token: when `true`,
-     * the worker's WS admin gate rejects the raw master admin token in the
-     * `?token=` query parameter — only a short-lived sub-token minted by
-     * `POST /_lunora/admin/ws-token` (or the master token in the
-     * `Authorization` HEADER, which never leaks via URLs) authorizes. Off by
-     * default (the master token in `?token=` keeps working); also settable per
-     * deployment via `env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`
-     * (`1`/`true`/`on`/`yes`/`enabled`), which the shard/relay Durable Objects
-     * honor for their own upgrade gate too. Flipping it on is the step that
-     * actually closes the URL/log leak — do so once every studio the
-     * deployment uses mints ephemeral tokens.
+     * Enforce the ephemeral WS admin token: the worker's WS admin gate rejects
+     * the raw master admin token in the `?token=` query parameter — only a
+     * short-lived sub-token minted by `POST /_lunora/admin/ws-token` (or the
+     * master token in the `Authorization` HEADER, which never leaks via URLs)
+     * authorizes.
+     *
+     * **On by default**: a query string lands in access logs, browser history and
+     * `Referer`, so the master admin credential must not ride one. The studio
+     * mints and sends the ephemeral token already. Set `false` — or
+     * `env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` to `0`/`false`/`off`/`no`/`disabled`,
+     * which the shard/relay Durable Objects honor for their own upgrade gate too
+     * — only for a legacy client that still puts the master token in the URL.
      */
     requireEphemeralWsToken?: boolean;
+    /* eslint-enable no-secrets/no-secrets */
 
     /**
      * Resolve the calling identity from the inbound RPC request. Called once
@@ -1450,11 +1461,12 @@ const STATUS_PATH = "/_lunora/status";
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 
 /**
- * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. Mirrors
- * `security-headers.ts`' `ENABLED_ENV_VALUES` and the shard DO's copy — the two
- * isolates don't import from each other.
+ * Env values that read as "off" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. The knob
+ * is ON by default (a raw master admin token in `?token=` is refused), so this is
+ * the OPT-OUT set — an unset/unrecognised value keeps the closed posture. Mirrors
+ * the shard DO's copy; the two isolates don't import from each other.
  */
-const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+const ALLOW_MASTER_WS_TOKEN_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
 
 /**
  * Read the optional caller identity a server-initiated dispatch may forward on
@@ -2227,10 +2239,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // Ephemeral-WS-token enforcement: the explicit worker option, or — when
     // unset — the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env knob (resolved once
     // per isolate alongside the admin token, same env-is-constant reasoning).
-    // Default off: the master token in `?token=` keeps authorizing until the
-    // operator opts in.
+    // Default ON: a WS upgrade's `?token=` accepts only the 60s sub-token, since
+    // a URL query string lands in access logs, browser history and `Referer` —
+    // exactly where the master admin credential must never be. The studio already
+    // mints and sends the ephemeral token; opting out (`…=off`) restores the old
+    // master-token-in-URL behaviour.
     let envRequireEphemeralWsToken: boolean | undefined;
-    const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? false;
+    const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? true;
     const resolveAdminTokenFromEnv = (env: unknown): void => {
         const record = (env ?? {}) as Record<string, unknown>;
 
@@ -2238,7 +2253,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
 
             if (typeof raw === "string" && raw.length > 0) {
-                envRequireEphemeralWsToken = REQUIRE_EPHEMERAL_ENV_VALUES.has(raw.trim().toLowerCase());
+                envRequireEphemeralWsToken = !ALLOW_MASTER_WS_TOKEN_ENV_VALUES.has(raw.trim().toLowerCase());
             }
         }
 
@@ -3340,10 +3355,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             guardUnauthenticatedShardAccess("shard");
         }
 
-        // SECURITY: `x-lunora-userid` / `x-lunora-identity` are server-minted and
-        // trusted verbatim by the DO — `setIdentityHeaders` strips any
-        // client-supplied copies before re-setting the resolved values.
+        // SECURITY: strip EVERY client-supplied `x-lunora-*` header before
+        // re-setting the server-minted ones — the same blanket strip the main WS
+        // path does, not just the identity trio `setIdentityHeaders` overwrites.
+        // The voice DO ignores the rest today, but a divergence here is exactly
+        // how a future `x-lunora-system` read on this path becomes forgeable.
+        // Snapshot the keys before deleting: mutating a Headers object during
+        // live `.keys()` iteration skips entries, leaving forged headers behind.
         const upgradeHeaders = new Headers(request.headers);
+
+        for (const name of upgradeHeaders.keys()) {
+            if (name.startsWith("x-lunora-")) {
+                upgradeHeaders.delete(name);
+            }
+        }
 
         setIdentityHeaders(upgradeHeaders, forwardedHeaders);
 

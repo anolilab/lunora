@@ -396,6 +396,33 @@ describe("createPayment — attach / check / track", () => {
         await expect(payment.check({ featureId: "api_calls", quantity: 71, referenceId: "user_1" })).resolves.toMatchObject({ allowed: false, balance: 70 });
     });
 
+    it("track rejects a negative / non-integer quantity (metered-limit bypass)", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        // A negative delta lands in the append-only ledger, drives the summed
+        // period usage below zero, and `balance = limit - used` then hands the
+        // reference an unbounded metered allowance past its paid cap.
+        await expect(payment.track({ featureId: "api_calls", mode: "add", quantity: -1000, referenceId: "user_1" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        // `mode: "set"` is the same bypass in one call.
+        await expect(payment.track({ featureId: "api_calls", mode: "set", quantity: -1, referenceId: "user_1" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        await expect(payment.track({ featureId: "api_calls", quantity: Number.NaN, referenceId: "user_1" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+
+        // Nothing reached the ledger, so the cap still holds.
+        await expect(payment.check({ featureId: "api_calls", quantity: 101, referenceId: "user_1" })).resolves.toMatchObject({ allowed: false });
+    });
+
     it("track records usage exactly once per idempotency key", async () => {
         expect.assertions(3);
 

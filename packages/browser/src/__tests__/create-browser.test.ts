@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
@@ -94,6 +94,27 @@ const fakeLaunch = (config: { gotoThrows?: boolean } = {}): BrowserLaunchLike & 
 };
 
 describe("createBrowser", () => {
+    // `resolveDns` defaults ON, so every navigation would otherwise issue a REAL
+    // Cloudflare DoH request from the suite. Answer it with a public IP by default;
+    // the rebinding describe below re-stubs `fetch` per test for its own answers.
+    beforeEach(() => {
+        vi.stubGlobal(
+            "fetch",
+            async () =>
+                ({
+                    json: async () => {
+                        // eslint-disable-next-line sonarjs/no-hardcoded-ip -- a public IP fixture so the DoH re-check passes; no connection is made
+                        return { Answer: [{ data: "93.184.216.34", type: 1 }] };
+                    },
+                    ok: true,
+                }) as unknown as Response,
+        );
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
     it("throws when no binding is supplied", () => {
         expect.assertions(1);
 
@@ -342,6 +363,30 @@ describe("createBrowser", () => {
 
             return fetchMock;
         };
+
+        it("runs BY DEFAULT — a rebinding host is refused with no resolveDns option set", async () => {
+            expect.assertions(2);
+
+            stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://rebind.example.com")).rejects.toThrow(/resolves to a private\/internal address/);
+            expect(launch.browsers).toHaveLength(0);
+        });
+
+        it("can be turned off explicitly with resolveDns: false", async () => {
+            expect.assertions(2);
+
+            const fetchMock = stubDohFetch({ 1: [{ data: "169.254.169.254", type: 1 }] });
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: false });
+
+            await browser.content("https://rebind.example.com");
+
+            expect(launch.browsers).toHaveLength(1);
+            expect(fetchMock).not.toHaveBeenCalled();
+        });
 
         it("rejects a public host that resolves to a private IP, before launching", async () => {
             expect.assertions(3);

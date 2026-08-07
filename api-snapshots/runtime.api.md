@@ -458,7 +458,7 @@ type CrossShardCounter = DatabaseWriterLike["count"];
 ### `CrossShardReader` (type)
 
 ```ts
-type CrossShardReader = DatabaseWriterLike["findMany"];
+type CrossShardReader = (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 ```
 
 ### `CrossShardRelationCapabilities` (interface)

@@ -240,10 +240,16 @@ export interface LunoraBrowserOptions {
      * (`https://cloudflare-dns.com/dns-query`) and refuses to navigate if any
      * resolved A/AAAA record is a private/internal address — closing the gap
      * where a public hostname resolves to a private IP after the string guard
-     * passes. Off by default: it adds a DNS round-trip and is TOCTOU-imperfect
-     * (the browser re-resolves independently). If the DoH lookup itself fails, it
-     * falls back to the string guard rather than allowing a resolved private IP.
-     * For a hard guarantee prefer {@link LunoraBrowserOptions.allowedHosts}.
+     * passes.
+     *
+     * **On by default**, because a `scrape`/`screenshot` action that forwards a
+     * client-supplied URL is the common shape, and the string guard alone lets
+     * `http://127.0.0.1.nip.io:8787/…` through to an internal service. It costs
+     * one DNS round-trip per navigation and is TOCTOU-imperfect (the browser
+     * re-resolves independently), and if the DoH lookup itself fails it falls
+     * back to the string guard rather than allowing a resolved private IP. Set
+     * `false` only for trusted, non-caller-supplied URLs where the round-trip
+     * matters. For a hard guarantee prefer {@link LunoraBrowserOptions.allowedHosts}.
      */
     resolveDns?: boolean;
     /* eslint-enable no-secrets/no-secrets */

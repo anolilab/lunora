@@ -17,10 +17,15 @@
  * for `:read`, a count for `:count`. The coordinator merges them with `concat`
  * (rows) / `sum` (counts).
  *
- * The reserved `__lunora_relation__:*` reader reads the child through the raw
- * ctx-db (no read policy applied — matching same-backend relation reads, which
- * also bypass RLS), so the rows it returns are identity-independent. The
- * `x-lunora-userid` / `x-lunora-identity` headers are still forwarded from the
+ * RLS ACROSS THE HOP: the reserved `__lunora_relation__:*` reader reads the child
+ * through the RAW ctx-db, which applies no read policy of its own — so the policy
+ * has to arrive as data. `@lunora/d1`'s ctx-db folds the child's `baseWhere` into
+ * `where` and projects `relationBaseWhere` into a `relationPolicies` map
+ * (`CrossShardReadArgs`) before calling in here; both are forwarded verbatim and
+ * re-applied by `serveRelationFanout`. Without them the hop returns every child
+ * row for the FK regardless of the caller's row policy — a cross-tenant read.
+ *
+ * The `x-lunora-userid` / `x-lunora-identity` headers are still forwarded from the
  * per-request context the generated `createShardDO` threads into the `d1`
  * factory, but the public `/_lunora/rpc` re-resolves identity from credentials
  * and ignores them — so they have no effect today (see the per-shard reader).
@@ -35,21 +40,22 @@
 
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
-import type { DatabaseWriterLike } from "@lunora/shard-engine";
+import type { CrossShardReadArgs, DatabaseWriterLike, QueryPage } from "@lunora/shard-engine";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { LunoraError } from "./errors";
 
 /**
- * Reader / counter capabilities, typed against the SAME canonical
- * `DatabaseWriterLike` the `@lunora/d1` ctx-db derives its `crossShardReader` /
- * `crossShardCounter` options from (`DatabaseWriterLike["findMany"]` /
- * `["count"]`) — so the pair drops straight into `createD1CtxDb` with no cast and
- * no structural drift. The import is type-only: `@lunora/runtime` keeps no hard
- * (value) dependency on `@lunora/do`.
+ * Reader / counter capabilities, typed against the SAME canonical shard-engine
+ * types the `@lunora/d1` ctx-db derives its `crossShardReader` /
+ * `crossShardCounter` options from — so the pair drops straight into
+ * `createD1CtxDb` with no cast and no structural drift. The reader takes
+ * {@link CrossShardReadArgs} (not `QueryArgs`) because the hop is a JSON envelope
+ * and the RLS filters must travel as data. The import is type-only:
+ * `@lunora/runtime` keeps no hard (value) dependency on `@lunora/do`.
  */
 type CrossShardCounter = DatabaseWriterLike["count"];
-type CrossShardReader = DatabaseWriterLike["findMany"];
+type CrossShardReader = (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
 interface CrossShardRelationOptions {
     /**
@@ -144,7 +150,10 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
         const data = await fanOutRelation(
             options,
             {
-                args: { orderBy: args?.orderBy, table, where: args?.where, with: args?.with },
+                // `where` already carries this hop's read policy (folded in by the
+                // caller); `relationPolicies` carries it for the nested `with`
+                // hops. Both are load-bearing — see the module docblock.
+                args: { orderBy: args.orderBy, relationPolicies: args.relationPolicies, table, where: args.where, with: args.with },
                 fanOut: { merge: { kind: "concat" }, table },
                 functionPath: "__lunora_relation__:read",
             },

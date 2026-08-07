@@ -249,6 +249,7 @@ type RegisterInput = {
 
 ```ts
 interface ResolvedProviders {
+    allowedPushOrigins?: string[];
     chat?: Provider;
     fcm?: FcmConfig;
     inApp?: Provider;
@@ -261,6 +262,7 @@ interface ResolvedProviders {
 
 ```ts
 interface RoutingPushOptions {
+    allowedPushOrigins?: string[];
     fcm?: Provider<unknown, PushPayload>;
     webPush?: Provider<unknown, PushPayload>;
 }

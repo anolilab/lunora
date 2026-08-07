@@ -142,9 +142,27 @@ const loadEmailDomainLists = async (): Promise<void> => {
     return listsPromise;
 };
 
+/**
+ * Fold a domain to its IDNA/punycode (`xn--…`) ASCII form so it can be compared
+ * against the blocklists, which are ASCII-only: they carry ~300 `xn--` entries
+ * and NO Unicode ones, so an internationalized disposable domain submitted in its
+ * Unicode form (`почта.рф`) would otherwise miss its own blocklist entry and be
+ * classified `business`. The WHATWG `URL` parser applies ToASCII for us — no
+ * `node:punycode`, so this stays edge-safe. Falls back to the lowercased input
+ * when the domain doesn't parse as a host (the lookup then simply misses, as
+ * before).
+ */
+const toAsciiDomain = (domain: string): string => {
+    try {
+        return new URL(`https://${domain}`).hostname;
+    } catch {
+        return domain.toLowerCase();
+    }
+};
+
 /** Convert a list to a `Set`, or `undefined` when empty/absent (so the lookup helpers skip the arg). */
 const toDomainSet = (domains: ReadonlyArray<string> | undefined): Set<string> | undefined =>
-    domains && domains.length > 0 ? new Set(domains.map((domain) => domain.toLowerCase())) : undefined;
+    domains && domains.length > 0 ? new Set(domains.map((domain) => toAsciiDomain(domain))) : undefined;
 
 /**
  * Classify an email address' domain as `disposable` / `free` / `business`,
@@ -156,13 +174,18 @@ const toDomainSet = (domains: ReadonlyArray<string> | undefined): Set<string> | 
  * The lookup relies on the built-in domain lists being loaded. On Node they
  * auto-load from disk; on workerd, `await loadEmailDomainLists()` first (or use
  * {@link assertEmailAllowed} / {@link emailGateMiddleware}, which await it).
+ *
+ * The returned/compared domain is IDNA-normalized (see {@link toAsciiDomain}) so
+ * a Unicode-form internationalized domain matches its `xn--` blocklist entry.
  */
 const classifyEmail = (email: string, config: EmailGateConfig = {}): EmailClassification => {
-    const domain = extractDomain(email);
+    const extracted = extractDomain(email);
 
-    if (domain === undefined) {
+    if (extracted === undefined) {
         return { domain: undefined, emailClass: "business" };
     }
+
+    const domain = toAsciiDomain(extracted);
 
     const allowDomains = toDomainSet(config.allowDomains);
 

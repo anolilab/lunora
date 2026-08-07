@@ -289,12 +289,22 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
- * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
- * {@link ShardDO.isAdminSocket}). Mirrors the runtime's
- * `REQUIRE_EPHEMERAL_ENV_VALUES` — the two packages don't import from each
- * other to avoid a circular dep.
+ * Hard ceiling on a single inbound WS frame. Every subscription envelope the
+ * protocol defines (`connect` / `subscribe` / `unsubscribe` / a mutator push) is
+ * kilobytes at most; without an explicit cap the only bound is the platform's own
+ * per-message limit, which is orders of magnitude larger than anything legitimate
+ * and leaves a decode + `JSON.parse` of that size reachable per frame.
  */
-const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+const MAX_WS_FRAME_BYTES = 1024 * 1024;
+
+/**
+ * Env values that read as "off" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` (see
+ * {@link ShardDO.isAdminSocket}). The knob is ON by default, so this is the
+ * OPT-OUT set — an unset/unrecognised value keeps the closed posture. Mirrors the
+ * runtime's `ALLOW_MASTER_WS_TOKEN_ENV_VALUES` — the two packages don't import
+ * from each other to avoid a circular dep.
+ */
+const ALLOW_MASTER_WS_TOKEN_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
 
 /** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
 const socketMap = <V>(store: WeakMap<ShardSocketLike, Map<string, V>>, ws: ShardSocketLike): Map<string, V> => {
@@ -2444,21 +2454,61 @@ abstract class ShardDO {
     }
 
     /**
+     * The `__idempotency` namespace for the in-flight request, or `undefined` when
+     * the mutation must not be deduped at all.
+     *
+     * An authenticated caller namespaces by its server-minted user id, so a forged
+     * `mutation_id` can only ever collide with that caller's own mutations. An
+     * ANONYMOUS caller has no such id: namespacing every one of them under `""`
+     * puts distinct clients in ONE key space, where a reused or guessable
+     * `mutation_id` makes one client's mutation short-circuit to another's cached
+     * result — suppressed without ever running. So an anonymous caller namespaces
+     * by its `x-lunora-client-id` instead (per-device, minted client-side); one
+     * that sends none gets `undefined` and simply skips the cache, which fails
+     * OPEN (the handler re-runs, the pre-idempotency behaviour) rather than
+     * risking another client's mutation.
+     *
+     * A server-initiated dispatch (`x-lunora-system`, e.g. a queue/scheduler
+     * retry) shares one namespace even when it carries no identity: it originates
+     * INSIDE the trust boundary and its `mutationId` is server-minted, so there is
+     * no untrusted party to collide with — and it is exactly the caller that needs
+     * dedup most.
+     */
+    protected idempotencyNamespace(): string | undefined {
+        const userId = this.currentRequestUserId;
+
+        if (userId !== undefined && userId.length > 0) {
+            return userId;
+        }
+
+        if (this.currentRequestSystem) {
+            return "system:";
+        }
+
+        const clientId = this.currentRequestClientId;
+
+        return clientId !== undefined && clientId.length > 0 ? `anon:${clientId}` : undefined;
+    }
+
+    /**
      * Look up a previously-committed mutation for the in-flight request's
      * `(identity, mutationId)`. Returns `{ value }` (the cached, JSON-decoded
      * handler result) on a hit so the dispatch path can short-circuit, or
-     * `undefined` when `mutationId` is absent (queries / legacy clients) or the
+     * `undefined` when `mutationId` is absent (queries / legacy clients), the
+     * caller has no dedup namespace (see {@link idempotencyNamespace}), or the
      * mutation has not run yet. Tolerates a stub `sql` handle without the dedup
      * table (returns a miss) so unit harnesses that skip migrations still work.
      * @returns the cached result box on a hit, or `undefined` for a miss or absent mutationId
      */
     protected readIdempotentResult(mutationId: string | undefined): { value: unknown } | undefined {
-        if (mutationId === undefined) {
+        const namespace = this.idempotencyNamespace();
+
+        if (mutationId === undefined || namespace === undefined) {
             return undefined;
         }
 
         try {
-            const record = readIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", mutationId);
+            const record = readIdempotent(this.sql as SqlExec, namespace, mutationId);
 
             return record === undefined ? undefined : { value: JSON.parse(record.resultJson) };
         } catch {
@@ -2473,7 +2523,9 @@ abstract class ShardDO {
      * so a later replay of the same id short-circuits through
      * {@link readIdempotentResult} instead of re-running the handler. A no-op
      * unless the request carried an `x-lunora-mutation-id` header (queries and
-     * legacy clients leave `currentRequestMutationId` undefined).
+     * legacy clients leave `currentRequestMutationId` undefined) AND the caller
+     * has a dedup namespace — the read side skips the same two cases, so the two
+     * never disagree about whether a key exists.
      *
      * For a mutation this runs INSIDE the handler's transaction (via
      * {@link ShardDO.commitMutationBookkeeping}, which `handleRpc` invokes before
@@ -2486,7 +2538,9 @@ abstract class ShardDO {
      * throttled dedup-table GC.
      */
     protected persistIdempotentResult(result: unknown): void {
-        if (this.currentRequestMutationId === undefined) {
+        const namespace = this.idempotencyNamespace();
+
+        if (this.currentRequestMutationId === undefined || namespace === undefined) {
             return;
         }
 
@@ -2500,7 +2554,7 @@ abstract class ShardDO {
             // `JSON.stringify` always yields a string for real data — the old
             // `?? "null"` floor is now dead (a non-data result would throw and the
             // catch below swallows it, since this bookkeeping is best-effort).
-            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(encodeWire(result)), now);
+            writeIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId, JSON.stringify(encodeWire(result)), now);
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
@@ -3901,6 +3955,19 @@ abstract class ShardDO {
         // alone would never fire for the common case).
         if (this.isSocketExpired(ws)) {
             this.dropExpiredSocket(ws);
+
+            return;
+        }
+
+        // Frame-size cap BEFORE the decode+parse: without it the only bound on an
+        // inbound frame is the platform's own per-message limit, so a client can
+        // make the DO decode and `JSON.parse` a multi-megabyte body per frame.
+        // Measured on the raw bytes for a binary frame and on the string length
+        // for a text one (an over-cap frame is refused, never truncated).
+        const rawSize = typeof message === "string" ? message.length : message.byteLength;
+
+        if (rawSize > MAX_WS_FRAME_BYTES) {
+            ws.send(JSON.stringify({ message: "frame too large", type: "error" }));
 
             return;
         }
@@ -8745,11 +8812,12 @@ abstract class ShardDO {
      * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
      * path so admin streaming is opt-in rather than exposed by default.
      *
-     * Enforcement: with `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set
-     * (`1`/`true`/`on`/`yes`/`enabled`), a raw master token in the
-     * `?token=` query parameter is rejected — the query string is exactly
-     * where it leaks. The `Authorization` header path still takes the master
-     * token: browsers can't set it on a WS upgrade, so it never rides a URL.
+     * Enforcement is ON by default: a raw master token in the `?token=` query
+     * parameter is rejected — the query string is exactly where it leaks (access
+     * logs / history / `Referer`). Set `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` to
+     * `0`/`false`/`off`/`no`/`disabled` to opt back out for a legacy client. The
+     * `Authorization` header path still takes the master token: browsers can't
+     * set it on a WS upgrade, so it never rides a URL.
      */
     private async isAdminSocket(request: Request): Promise<boolean> {
         const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN?: string };
@@ -8772,7 +8840,7 @@ abstract class ShardDO {
         // `suppliedWsToken` prefers the header; the token came from the query
         // string only when no bearer header was present.
         const fromQuery = extractBearerToken(request.headers.get("authorization")) === undefined;
-        const requireEphemeral = REQUIRE_EPHEMERAL_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
+        const requireEphemeral = !ALLOW_MASTER_WS_TOKEN_ENV_VALUES.has((env.LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN ?? "").trim().toLowerCase());
 
         if (fromQuery && requireEphemeral) {
             return false;

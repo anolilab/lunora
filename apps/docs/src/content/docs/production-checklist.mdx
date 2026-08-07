@@ -55,19 +55,19 @@ data export/import, migrations, the Studio, scheduled-job admin.
 - [ ] It is stored only in your secret manager/CI — never in `wrangler.jsonc`
       `vars` or the repo. Rotating it also invalidates every outstanding
       ephemeral WS sub-token, so rotation is your kill switch.
-- [ ] **Enforce ephemeral WS tokens.** A browser WebSocket cannot set an
+- [ ] **Ephemeral WS tokens stay enforced.** A browser WebSocket cannot set an
       `Authorization` header, so admin sockets authenticate via `?token=` —
       which lands in access logs and browser history. Instead of the raw
       master token, the worker mints a short-lived (60s) HMAC-signed sub-token
       via `POST /_lunora/admin/ws-token` (itself gated by the master token in
-      the `Authorization` header). Turn enforcement on with the
-      `requireEphemeralWsToken: true` worker option, or per deployment with
-      the `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` env var (`1` / `true` / `on` /
-      `yes` / `enabled`). Once on, the WS admin gate — worker and Durable
-      Objects both — rejects the raw master token in `?token=`; only minted
-      sub-tokens (or the master token in the `Authorization` header, which
-      never leaks via URLs) authorize. The Studio mints sub-tokens itself, so
-      enable this once every studio your deployment uses is current.
+      the `Authorization` header). Enforcement is **on by default**: the WS
+      admin gate — worker and Durable Objects both — rejects the raw master
+      token in `?token=`; only minted sub-tokens (or the master token in the
+      `Authorization` header, which never leaks via URLs) authorize. The Studio
+      mints sub-tokens itself. Only a legacy client that still puts the master
+      token in the URL needs the opt-out (`requireEphemeralWsToken: false`, or
+      `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set to `0` / `false` / `off` / `no` /
+      `disabled`) — verify it is _not_ set in your deployment.
 
 ## Rate limiting and abuse
 

@@ -7,20 +7,19 @@
  * What it does, at runtime:
  *
  * 1. **Reads** — wraps the row-returning readers (`findMany` / `findFirst` /
- * `findFirstOrThrow` / `get` / `query` / `rankPage`). For every **top-level**
- * row of a masked table, each declared column is rewritten by its strategy
- * (`"redact"` → `null`, `"hash"` → a stable non-reversible token, or a custom
- * `MaskFn`). The stored row is never touched — only the value handed back.
+ * `findFirstOrThrow` / `get` / `query` / `rankPage`). For every row of a masked
+ * table, each declared column is rewritten by its strategy (`"redact"` → `null`,
+ * `"hash"` → a stable non-reversible token, or a custom `MaskFn`). The stored row
+ * is never touched — only the value handed back.
  *
- * **Limitation — nested `with` relations are NOT masked.** Masking rewrites the
- * rows of the table named in the call (`ctx.db.posts.findMany(...)` masks
- * `posts`). Rows pulled in as a relation via `with` are hydrated below the
- * `ctx.db` facade by `@lunora/do`'s relation fetcher, on a path this middleware
- * never sees — so `ctx.db.posts.findMany({ with: { author: true } })` returns
- * each `author` in the clear even if `users` is masked. This mirrors RLS, whose
- * row filter likewise does not descend into `with`-hydrated children. If a
- * relation can surface PII, mask it at its own read site or gate the relation
- * with `rls()` rather than relying on the parent's mask.
+ * **`with` relations are masked too.** Rows pulled in as a relation are hydrated
+ * below the `ctx.db` facade by the relation loader, on a path this middleware
+ * never sees, so the mask is threaded down as a `relationMask` hook the loader
+ * applies per hop with that hop's TARGET table — exactly how `rls()` threads
+ * `relationBaseWhere`. `ctx.db.posts.findMany({ with: { author: true } })`
+ * therefore masks each `author` by the `users` policy, at any nesting depth;
+ * without it, chaining `with` reached masked columns on tables the caller could
+ * not even name directly.
  *
  * 2. **Analytical reductions fail closed** — `aggregate` / `groupBy` over a
  * masked column throw `LunoraError("MASK_UNSUPPORTED")`: a group key *is* the
@@ -104,6 +103,8 @@ interface QueryArgs {
     cursor?: null | string;
     limit?: number;
     orderBy?: ReadonlyArray<Record<string, unknown>>;
+    /** Per-target-table mask applied to `with`-hydrated children — mirrors `@lunora/shard-engine`'s `RelationMask`. */
+    relationMask?: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
     where?: unknown;
     with?: Record<string, unknown>;
 }
@@ -358,6 +359,27 @@ const wrapDatabase = <Context>(
     // re-narrowing `base.<method>` inside the nested closure.
     const baseRankBefore = base.rankBefore;
     const baseRankPageRows = base.rankPageRows;
+
+    /**
+     * The per-relation-hop mask, attached to every `with`-bearing read the way
+     * `rls()` attaches `relationBaseWhere`. This middleware sits ABOVE `ctx.db`,
+     * so it only ever sees the rows of the table named in the call — children
+     * pulled in by `with` are hydrated below it by the relation loader and would
+     * come back in the clear, letting `findMany("posts", { with: { author: true } })`
+     * read a masked `users.email` that a direct `users` read would have hidden
+     * (and, chained, reach tables the caller can't name at all). The loader calls
+     * this per hop with the hop's TARGET table, at any nesting depth.
+     */
+    const relationMask = (table: string, rows: Record<string, unknown>[]): Record<string, unknown>[] => {
+        const columns = perTable.get(table);
+
+        return columns ? rows.map((row) => maskRow(row, columns, context)) : rows;
+    };
+
+    /** Attach {@link relationMask} to a read's args, preserving the caller's own. */
+    const withRelationMask = (args?: QueryArgs): QueryArgs => {
+        return { ...args, relationMask };
+    };
 
     /**
      * SECURITY (position oracle on the index DECLARATION path): `assertIndexFieldsAllowed`
@@ -769,7 +791,7 @@ const wrapDatabase = <Context>(
             assertWhereAllowed(tableName, args?.baseWhere, "findFirst");
             assertOrderByAllowed(tableName, args?.orderBy, "findFirst");
 
-            const row = await base.findFirst(tableName, args);
+            const row = await base.findFirst(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
 
             return row && columns ? maskRow(row, columns, context) : row;
@@ -780,7 +802,7 @@ const wrapDatabase = <Context>(
             assertWhereAllowed(tableName, args?.baseWhere, "findFirstOrThrow");
             assertOrderByAllowed(tableName, args?.orderBy, "findFirstOrThrow");
 
-            const row = await base.findFirstOrThrow(tableName, args);
+            const row = await base.findFirstOrThrow(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
 
             return columns ? maskRow(row, columns, context) : row;
@@ -791,7 +813,7 @@ const wrapDatabase = <Context>(
             assertWhereAllowed(tableName, args?.baseWhere, "findMany");
             assertOrderByAllowed(tableName, args?.orderBy, "findMany");
 
-            const page = await base.findMany(tableName, args);
+            const page = await base.findMany(tableName, withRelationMask(args));
             const columns = perTable.get(tableName);
 
             return columns ? maskPage(page, columns, context) : page;

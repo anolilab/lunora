@@ -30,9 +30,11 @@ import type {
     AggregateResult,
     AggregateTally,
     ColumnMetaLike,
+    CrossShardReadArgs,
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    QueryPage,
     RankIndexDefinitionLike,
     RankPage,
     RankResult,
@@ -178,8 +180,11 @@ interface SqlCtxDbOptions {
      * RLS). Absent it, loading such a relation throws a clear "not supported"
      * error (legacy behaviour). The forward direction (shard-local parent →
      * global child) and same-backend relations never touch this.
+     *
+     * Takes {@link CrossShardReadArgs}, not `QueryArgs`: the hop is JSON, so the
+     * RLS filters are handed over as data (see that type's docblock).
      */
-    crossShardReader?: DatabaseWriterLike["findMany"];
+    crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
     /**
      * The SQL dialect that shapes every statement (identifier quoting, value
@@ -1875,6 +1880,40 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         );
     };
 
+    /**
+     * SECURITY (RLS across the fan-out): the cross-shard hop is a JSON envelope,
+     * so the two carriers the relation loader uses to enforce the CHILD table's
+     * read policy can't ride along as-is — and dropping them silently returns
+     * every child row for the FK, since the serving shard reads through its RAW
+     * ctx-db. Convert both to data (see {@link CrossShardReadArgs}):
+     *
+     * - `baseWhere` (this hop's policy filter) is ANDed into `where`.
+     * - `relationBaseWhere` (a function, for NESTED `with` levels) is projected
+     *   into a table → filter map. Projecting every schema table is cheaper than
+     *   walking the `with` tree and can't miss a hop; `readBase` is memoized
+     *   upstream, and tables with no restricting policy simply don't appear.
+     */
+    const toCrossShardArgs = (childArgs: Parameters<DatabaseWriterLike["findMany"]>[1]): CrossShardReadArgs => {
+        const relationPolicies: Record<string, WhereInput> = {};
+
+        if (childArgs?.relationBaseWhere) {
+            for (const table of Object.keys(schema.tables)) {
+                const policy = childArgs.relationBaseWhere(table);
+
+                if (policy !== undefined) {
+                    relationPolicies[table] = policy;
+                }
+            }
+        }
+
+        return {
+            orderBy: childArgs?.orderBy,
+            relationPolicies,
+            where: mergeWhere(childArgs?.baseWhere, childArgs?.where),
+            with: childArgs?.with,
+        };
+    };
+
     // Backend-routed child fetch for the relation pre-resolver, available to the
     // aggregate/count/groupBy paths (the `findMany` method aliases this for its
     // nested `with` load). Mutually recursive with `writer`, so it reads
@@ -1885,7 +1924,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return writer.findMany(childTable, childArgs);
         }
 
-        return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+        return crossShardReader ? crossShardReader(childTable, toCrossShardArgs(childArgs)) : crossBackendUnsupported(childTable);
     };
 
     /**
@@ -2312,8 +2351,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
             // backend-routed child fetch before compiling. `relationBaseWhere` is
             // threaded through so a child table's RLS read filter applies on the
-            // hop (the `with`-load `resolveWith` calls below omit it — a separate
-            // pre-existing gap; the pre-resolver does not depend on that).
+            // hop — as it is on the `with`-load `resolveWith` calls below.
             predicate = await resolveRelationPredicates(predicate, {
                 fetcher: relationFetcher,
                 maxRelationKeys,
@@ -2353,6 +2391,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         fetcher: relationFetcher,
                         groupedCounter: relationGroupedCounter,
                         parents: documents,
+                        relationBaseWhere: args.relationBaseWhere,
+                        relationMask: args.relationMask,
                         schema,
                         tableName,
                         with: args.with,
@@ -2368,7 +2408,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ fetcher: relationFetcher, groupedCounter: relationGroupedCounter, parents: page, schema, tableName, with: args.with });
+                await resolveWith({
+                    fetcher: relationFetcher,
+                    groupedCounter: relationGroupedCounter,
+                    parents: page,
+                    relationBaseWhere: args.relationBaseWhere,
+                    relationMask: args.relationMask,
+                    schema,
+                    tableName,
+                    with: args.with,
+                });
             }
 
             return {

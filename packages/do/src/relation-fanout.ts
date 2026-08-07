@@ -22,7 +22,7 @@ import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
  * @param schema The generated schema (for the table + `shardMode` lookup).
  * @param database The request's schema-aware ctx-db writer (built by the subclass).
  * @param functionPath The reserved path — `${RELATION_FUNCTION_PREFIX}read` or `:count`.
- * @param args The fan-out args: `{ table, where?, orderBy?, with? }`.
+ * @param args The fan-out args (`CrossShardReadArgs` + `table`): `{ table, where?, orderBy?, with?, relationPolicies? }`.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { serveRelationFanout }`), per the repo's no-default-mixing convention
 export const serveRelationFanout = async (
@@ -50,10 +50,22 @@ export const serveRelationFanout = async (
         return database.count(table, where);
     }
 
+    // SECURITY: `database` is the RAW ctx-db — it applies no read policy of its
+    // own. The caller's policy for THIS hop is already folded into `where`; the
+    // policies for the nested `with` hops arrive as the `relationPolicies` map and
+    // are rebuilt here into the `relationBaseWhere` the relation loader threads
+    // down each level. Skipping this returns children the caller cannot read.
+    const relationPolicies = (args["relationPolicies"] ?? {}) as Record<string, QueryArgs["where"]>;
+
     // `orderBy` / `where` / `with` arrive JSON-serialized through the fan-out
     // envelope (their compile-time types are erased), so cast the reconstructed
     // args to the writer's argument type.
-    const result = await database.findMany(table, { orderBy: args["orderBy"], where, with: args["with"] } as QueryArgs);
+    const result = await database.findMany(table, {
+        orderBy: args["orderBy"],
+        relationBaseWhere: (relationTable: string) => relationPolicies[relationTable],
+        where,
+        with: args["with"],
+    } as QueryArgs);
 
     return result.page;
 };

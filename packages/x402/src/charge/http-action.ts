@@ -21,6 +21,10 @@
  * `@lunora/server`. The middleware (which fetches facilitator support on first
  * use) is built lazily and memoised across requests; a failed initialisation is
  * not cached, so a transient facilitator outage retries on the next request.
+ *
+ * Settlement runs BEFORE the handler (`createChargeMiddleware`'s default), so a
+ * payment that passes `verify` but fails `/settle` — an underfunded wallet, a
+ * facilitator refusal — never reaches the handler's side effects.
  */
 import type { X402ChargeConfig } from "../config";
 import type { ChargeMiddleware } from "./middleware";

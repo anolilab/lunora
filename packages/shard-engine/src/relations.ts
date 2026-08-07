@@ -91,7 +91,14 @@ const distinctValues = (rows: Record<string, unknown>[], field: string): unknown
  * `Doc[]`, `_count` → merged into `parent._count`.
  */
 const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
-    const { groupedCounter, fetcher, parents, relationBaseWhere, schema, tableName, with: withInput } = options;
+    const { groupedCounter, fetcher, parents, relationBaseWhere, relationMask, schema, tableName, with: withInput } = options;
+
+    /**
+     * Apply the column mask for a hop's TARGET table. Masking lives above
+     * `ctx.db` and never sees these rows otherwise — see `RelationMask`. Runs
+     * before `projectChildren` so a `select` narrows the already-masked row.
+     */
+    const masked = (table: string, rows: Record<string, unknown>[]): Record<string, unknown>[] => relationMask?.(table, rows) ?? rows;
 
     if (parents.length === 0) {
         return;
@@ -141,12 +148,13 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         const { page } = await fetcher(relation.table, {
             baseWhere: relationBaseWhere?.(relation.table),
             relationBaseWhere,
+            relationMask,
             where: { [relation.references]: { in: fkValues } },
             with: nested.with,
         });
         const byReference = new Map<unknown, Record<string, unknown>>();
 
-        for (const child of page) {
+        for (const child of masked(relation.table, page)) {
             byReference.set(child[relation.references], child);
         }
 
@@ -177,13 +185,14 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             baseWhere: relationBaseWhere?.(relation.table),
             orderBy: nested.orderBy,
             relationBaseWhere,
+            relationMask,
             where,
             with: nested.with,
         });
 
         const groups = new Map<unknown, Record<string, unknown>[]>();
 
-        for (const child of page) {
+        for (const child of masked(relation.table, page)) {
             const key = child[relation.field];
             const group = groups.get(key);
 

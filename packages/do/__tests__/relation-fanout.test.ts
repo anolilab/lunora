@@ -52,6 +52,29 @@ describe("serveRelationFanout", () => {
         expect(Array.isArray(result)).toBe(true);
     });
 
+    it("rebuilds `relationBaseWhere` from `relationPolicies` so NESTED `with` hops stay RLS-filtered", async () => {
+        expect.assertions(2);
+
+        // `database` here is the RAW ctx-db — it applies no read policy of its own.
+        // The nested hops' policies arrive as data and must be turned back into the
+        // `relationBaseWhere` the relation loader threads down each level, or a
+        // deep `with` chain reads children the caller has no policy over.
+        const findMany = vi.fn<DatabaseWriterLike["findMany"]>(async () => pageOf([]));
+        const db = stubWriter({ count: async () => 0, findMany });
+
+        await serveRelationFanout(schema, db, READ, {
+            relationPolicies: { local: { ownerId: "u1" } },
+            table: "local",
+            where: { globalId: { in: ["g1"] } },
+            with: { owner: true },
+        });
+
+        const relationBaseWhere = findMany.mock.calls[0]?.[1]?.relationBaseWhere;
+
+        expect(relationBaseWhere?.("local")).toEqual({ ownerId: "u1" });
+        expect(relationBaseWhere?.("unpoliced")).toBeUndefined();
+    });
+
     it("serves `:count` as a bare number, forwarding the where filter", async () => {
         expect.assertions(2);
 
