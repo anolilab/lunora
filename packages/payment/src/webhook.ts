@@ -4,6 +4,7 @@
  * Verification runs over the **raw, unparsed request body** — never re-serialize JSON before
  * checking the signature. Uses WebCrypto (`crypto.subtle`), available in both workerd and Node.
  */
+import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
 import { LunoraPaymentError } from "./errors";
 
 const encoder = new TextEncoder();
@@ -25,22 +26,17 @@ const hmacSha256Base64 = async (keyBytes: BufferSource, payload: string): Promis
 
 /**
  * Constant-time string comparison to avoid leaking byte positions via timing.
+ *
+ * Re-exported from `shared/constant-time-equal` rather than defined here. The
+ * copy that used to live at this spot returned early on a length mismatch, so
+ * an attacker learned the expected signature's LENGTH from the response time —
+ * the exact divergence that shared file was created to stop, and which it
+ * records having already fixed once in the relay hub. It also compared by code
+ * POINT, making timing depend on surrogate boundaries; the canonical one
+ * compares per UTF-16 code unit.
  * @experimental
  */
-export const constantTimeEqual = (a: string, b: string): boolean => {
-    if (a.length !== b.length) {
-        return false;
-    }
-
-    let mismatch = 0;
-
-    for (let index = 0; index < a.length; index += 1) {
-        // eslint-disable-next-line no-bitwise -- constant-time accumulation is the point
-        mismatch |= (a.codePointAt(index) ?? 0) ^ (b.codePointAt(index) ?? 0);
-    }
-
-    return mismatch === 0;
-};
+export const constantTimeEqual: (a: string, b: string) => boolean = sharedConstantTimeEqual;
 
 /**
  * `hmacSha256Hex` is part of the experimental `@lunora/payment` API and may change without a major version bump.
