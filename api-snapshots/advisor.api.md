@@ -685,6 +685,17 @@ interface AdvisorSqlInterpolation {
 }
 ```
 
+### `AdvisorStaleMigrationImport` (interface)
+
+```ts
+interface AdvisorStaleMigrationImport {
+    file: string;
+    line: number;
+    moduleSpecifier: string;
+    platform: "convex" | "firebase" | "supabase";
+}
+```
+
 ### `AdvisorStorageKeyAccess` (interface)
 
 ```ts

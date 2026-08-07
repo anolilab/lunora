@@ -4,7 +4,7 @@
  * reshape which would lose information errors rather than truncating.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -725,6 +725,36 @@ describe("storage transfer with a resumable checkpoint", () => {
         expect(worker.uploads).toStrictEqual([sha256Hex("only")]);
     });
 
+    it("refuses a storage-dir entry that resolves outside it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
+        const storage = join(workDir, "bucket");
+        const outside = join(workDir, "outside.txt");
+
+        mkdirSync(storage, { recursive: true });
+        writeFileSync(outside, "not yours", "utf8");
+        symlinkSync(outside, join(storage, "escape.txt"));
+
+        const worker = storageWorker();
+
+        await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            from: "firebase",
+            logger: capturingLogger().logger,
+            storageDir: storage,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        // Whether it is skipped or refused, the bytes outside the directory must
+        // never reach the bucket.
+        expect(worker.uploads).toStrictEqual([]);
+    });
+
     it("reports a mapped path the transfer never saw instead of guessing at it", async () => {
         expect.assertions(3);
 
@@ -909,5 +939,137 @@ describe("--scan for the foreign sources", () => {
         });
 
         expect(JSON.parse(readFileSync(join(workDir, "lunora", "import-supabase.json"), "utf8")).tables.t.types.at).toBe("timestamp-iso");
+    });
+});
+
+describe("the live Supabase storage path", () => {
+    beforeEach(() => {
+        workDir = mkdtempSync(join(tmpdir(), "lunora-supabase-storage-"));
+    });
+
+    afterEach(() => {
+        rmSync(workDir, { force: true, recursive: true });
+        delete process.env["SUPABASE_URL"];
+        delete process.env["SUPABASE_SERVICE_ROLE_KEY"];
+    });
+
+    /** A Supabase project with two buckets, one of them holding a nested folder. */
+    const supabaseProject = () => {
+        const requests: { auth?: string; method: string; url: string }[] = [];
+        const uploads: string[] = [];
+        const json = (value: unknown) => {
+            return { arrayBuffer: async () => new ArrayBuffer(0), body: null, json: async () => value, ok: true, status: 200, text: async () => "" };
+        };
+
+        const fetchImpl: StreamingFetchLike = async (input, init) => {
+            const url = new URL(input);
+            const method = init?.method ?? "GET";
+
+            requests.push({ auth: init?.headers?.["authorization"], method, url: input });
+
+            if (url.pathname === "/storage/v1/bucket") {
+                return json([{ name: "avatars" }]);
+            }
+
+            if (url.pathname.startsWith("/storage/v1/object/list/")) {
+                const { prefix } = JSON.parse(String(init?.body ?? "{}")) as { prefix: string };
+
+                // One level at a time: a folder placeholder has a null `id`.
+                if (prefix === "") {
+                    return json([
+                        { id: "1", metadata: { mimetype: "image/png", size: 3 }, name: "top.png" },
+                        { id: null, name: "nested" },
+                    ]);
+                }
+
+                return json(prefix === "nested" ? [{ id: "2", metadata: { mimetype: "image/jpeg", size: 3 }, name: "deep.jpg" }] : []);
+            }
+
+            if (url.hostname === "project.supabase.co" && url.pathname.startsWith("/storage/v1/object/")) {
+                return {
+                    arrayBuffer: async () => new TextEncoder().encode("img").buffer,
+                    body: null,
+                    json: async () => {
+                        return {};
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            }
+
+            if (url.pathname === "/_lunora/admin/storage" && method === "PUT") {
+                uploads.push(url.searchParams.get("key") as string);
+
+                return json({ key: url.searchParams.get("key"), sha256: url.searchParams.get("expectedSha256") });
+            }
+
+            if (url.pathname === "/_lunora/admin/storage") {
+                return json({ objects: [], truncated: false });
+            }
+
+            if (url.pathname === "/_lunora/admin/import") {
+                return json({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+            }
+
+            throw new Error(`unexpected ${method} ${input}`);
+        };
+
+        return { fetchImpl, requests, uploads };
+    };
+
+    it("walks every bucket and recurses into folders", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({ "t.csv": "id\nx1\n" });
+
+        process.env["SUPABASE_URL"] = "https://project.supabase.co";
+        process.env["SUPABASE_SERVICE_ROLE_KEY"] = "service-key";
+
+        const project = supabaseProject();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: project.fetchImpl,
+            file: root,
+            from: "supabase",
+            logger: capturingLogger().logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(0);
+        // Both objects move — the nested one only if the folder placeholder was
+        // followed, since the list endpoint returns one level at a time.
+        expect(project.uploads).toHaveLength(2);
+        // The key never carries the credential; it travels as a header only.
+        expect(project.requests.every((request) => !request.url.includes("service-key"))).toBe(true);
+    });
+
+    it("refuses a cleartext SUPABASE_URL rather than sending the key over http", async () => {
+        expect.assertions(2);
+
+        const root = writeDump({ "t.csv": "id\nx1\n" });
+
+        // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the cleartext URL IS the thing under test
+        process.env["SUPABASE_URL"] = "http://project.supabase.co";
+        process.env["SUPABASE_SERVICE_ROLE_KEY"] = "service-key";
+
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: supabaseProject().fetchImpl,
+            file: root,
+            from: "supabase",
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.error.join("\n")).toContain("must be https");
     });
 });

@@ -19,7 +19,11 @@ const importCommand: Command = {
         }),
     name: "import",
     options: [
-        { description: "Source reader for a dump that cannot be detected: supabase | firebase (Convex and NDJSON are auto-detected)", name: "from", type: String },
+        {
+            description: "Source reader for a dump that cannot be detected: supabase | firebase (Convex and NDJSON are auto-detected)",
+            name: "from",
+            type: String,
+        },
         { description: "Wrap each bare doc as `{table:<name>,doc:...}`", name: "table", type: String },
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Also migrate Convex `_storage` blobs (verified upload)", name: "with-storage", type: Boolean },

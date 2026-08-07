@@ -280,6 +280,7 @@ export type { AdvisorShape } from "./shapes";
 export type { AdvisorShardTraffic } from "./shard-traffic";
 export type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 export type { AdvisorSqlInterpolation } from "./sql-interpolation";
+export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
 export type { AdvisorTableSample } from "./table-samples";
@@ -295,7 +296,6 @@ export type { AdvisorWranglerVariable } from "./wrangler-variables";
  * broken schema's errors surface above the performance advisories.
  */
 export const STATIC_LINTS: ReadonlyArray<Lint> = [
-    migrationStaleImport,
     indexReferencesUnknownField,
     relationReferencesUnknownTable,
     relationReferencesUnknownField,
@@ -391,6 +391,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     notifySendOutsideAction,
     notifyMissingPushConfig,
     plaintextSecretInWranglerVariables,
+    migrationStaleImport,
 ];
 
 /**

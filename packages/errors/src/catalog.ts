@@ -199,10 +199,6 @@ export const ERROR_CATALOG = {
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
     SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },
-    STORAGE_DELETE_NOT_CONFIGURED: { status: 400, title: "Storage delete not configured" },
-    STORAGE_NOT_CONFIGURED: { status: 400, title: "Storage not configured" },
-    STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
-    STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
     STORAGE_CHECKSUM_MISMATCH: {
         hint: [
             "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",
@@ -212,6 +208,10 @@ export const ERROR_CATALOG = {
         status: 400,
         title: "Storage checksum mismatch",
     },
+    STORAGE_DELETE_NOT_CONFIGURED: { status: 400, title: "Storage delete not configured" },
+    STORAGE_NOT_CONFIGURED: { status: 400, title: "Storage not configured" },
+    STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
+    STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
     VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },
     VECTOR_QUERY_UNSUPPORTED: { status: 400, title: "Vector index querying not enabled" },
     WORKFLOWS_NOT_CONFIGURED: { status: 501, title: "Workflows not configured" },

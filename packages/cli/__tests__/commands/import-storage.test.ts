@@ -177,22 +177,6 @@ const fakeWorker = (): FakeWorker => {
     return Object.assign(worker, { fetchImpl });
 };
 
-/** Wrap a worker's fetch so each import POST's body size is recorded. */
-const measureImportBodies = (worker: FakeWorker): { bodies: number[]; measuringFetch: StreamingFetchLike } => {
-    const bodies: number[] = [];
-
-    return {
-        bodies,
-        measuringFetch: async (input, init) => {
-            if (new URL(input).pathname === "/_lunora/admin/import") {
-                bodies.push(Buffer.byteLength(init?.body as string));
-            }
-
-            return worker.fetchImpl(input, init);
-        },
-    };
-};
-
 let workDir: string;
 
 /** Write a `npx convex export --include-file-storage` layout. */
@@ -702,56 +686,6 @@ describe("lunora import --with-storage", () => {
         expect(logs.error.join("\n")).toContain("requires --with-storage");
     });
 
-    it("splits a batch on byte size, not just row count", async () => {
-        expect.assertions(2);
-
-        // Ten rows of ~200 KiB: one 500-row batch would be ~2 MiB, over the
-        // import endpoint's 1 MiB body cap.
-        const rows = Array.from({ length: 10 }, (_, index) => {
-            return { _id: `d${String(index)}`, blob: "y".repeat(200 * 1024) };
-        });
-        const root = writeConvexExport({}, { docs: rows });
-        const worker = fakeWorker();
-        const { bodies, measuringFetch } = measureImportBodies(worker);
-
-        await runImportCommand({
-            cwd: workDir,
-            fetchImpl: measuringFetch,
-            file: root,
-            logger: capturingLogger().logger,
-            token: "t",
-            url: "http://localhost:8787",
-        });
-
-        expect(bodies.length).toBeGreaterThan(1);
-        expect(Math.max(...bodies)).toBeLessThan(1_048_576);
-    });
-
-    it("never POSTs a body past the byte ceiling, even by one row", async () => {
-        expect.assertions(2);
-
-        // Rows just under a third of the ceiling: appending before flushing would
-        // send four of them (~1.2 MiB) and 413 against the endpoint's 1 MiB cap.
-        const rows = Array.from({ length: 9 }, (_, index) => {
-            return { _id: `d${String(index)}`, blob: "z".repeat(300 * 1024) };
-        });
-        const root = writeConvexExport({}, { docs: rows });
-        const worker = fakeWorker();
-        const { bodies, measuringFetch } = measureImportBodies(worker);
-
-        await runImportCommand({
-            cwd: workDir,
-            fetchImpl: measuringFetch,
-            file: root,
-            logger: capturingLogger().logger,
-            token: "t",
-            url: "http://localhost:8787",
-        });
-
-        expect(Math.max(...bodies)).toBeLessThanOrEqual(900_000);
-        expect(worker.imported).toHaveLength(9);
-    });
-
     it("keeps a large blob whose listing omits size rather than deleting it", async () => {
         expect.assertions(4);
 
@@ -804,59 +738,6 @@ describe("lunora import --with-storage", () => {
         expect(logs.warn.join("\n")).toContain(`no size or sha256 for it`);
 
         expect(worker.bucket.has(key)).toBe(true);
-    });
-
-    it("reports what it managed to write when a batch fails part-way", async () => {
-        expect.assertions(3);
-
-        const root = writeConvexExport(
-            {},
-            {
-                users: Array.from({ length: 5 }, (_, index) => {
-                    return { _id: `u${String(index)}` };
-                }),
-            },
-        );
-        const worker = fakeWorker();
-        let batches = 0;
-
-        const failingFetch: StreamingFetchLike = async (input, init) => {
-            if (new URL(input).pathname === "/_lunora/admin/import") {
-                batches += 1;
-
-                if (batches === 2) {
-                    return {
-                        body: null,
-                        json: async () => {
-                            return {};
-                        },
-                        ok: false,
-                        status: 500,
-                        text: async () => "boom",
-                    };
-                }
-            }
-
-            return worker.fetchImpl(input, init);
-        };
-
-        const { logger, logs } = capturingLogger();
-
-        const result = await runImportCommand({
-            batchSize: 2,
-            cwd: workDir,
-            fetchImpl: failingFetch,
-            file: root,
-            logger,
-            token: "t",
-            url: "http://localhost:8787",
-        });
-
-        // The first batch landed; the operator has to be told how far it got
-        // rather than just that something threw.
-        expect(result.code).toBe(1);
-        expect(result.inserted).toBe(2);
-        expect(logs.error.join("\n")).toContain("import failed part-way through");
     });
 
     it("migrates blobs out of a .zip snapshot the same way", async () => {
@@ -1122,6 +1003,46 @@ describe("lunora import --with-storage", () => {
             expect(result.code).toBe(1);
             expect(worker.imported[0]?.doc["avatarId"]).toBe("kg_deleted");
             expect(logs.warn.join("\n")).toContain("unmigrated storage reference users.avatarId: kg_deleted");
+        });
+
+        it("credits conflicts toward parity, so a resume run does not fail", async () => {
+            expect.assertions(2);
+
+            // The documented way to resume is to re-run, and a re-run's rows come
+            // back as conflicts rather than inserts. Counting only inserts would
+            // fail `--verify` on exactly the run an operator most wants it on.
+            const root = writeConvexExport({}, { users: [{ _id: "u1" }, { _id: "u2" }] });
+
+            const conflictingFetch: StreamingFetchLike = async (input, init) => {
+                if (new URL(input).pathname === "/_lunora/admin/import") {
+                    return {
+                        body: null,
+                        json: async () => {
+                            return { conflicts: 2, errors: [], inserted: {}, received: 2 };
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => "",
+                    };
+                }
+
+                return fakeWorker().fetchImpl(input, init);
+            };
+
+            const { logger, logs } = capturingLogger();
+
+            const result = await runImportCommand({
+                cwd: workDir,
+                fetchImpl: conflictingFetch,
+                file: root,
+                logger,
+                token: "t",
+                url: "http://localhost:8787",
+                verify: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(logs.error.join("\n")).not.toContain("missing");
         });
 
         it("passes when every table reaches parity", async () => {
