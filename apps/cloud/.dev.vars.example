@@ -14,6 +14,12 @@ AUTH_SECRET=replace-with-openssl-rand-hex-32
 # create D1/R2 and upload tenant Workers into the dispatch namespace.
 CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 
+# Per-org "Cloudflare costs" tab (Billable Usage API): each BYO org connects its
+# OWN Cloudflare account + a token scoped to "Billing Read" from the console's
+# Cloudflare costs tab. That token is encrypted at the edge with
+# SECRET_ENCRYPTION_KEY (below) before storage, so no extra env var is needed —
+# only that SECRET_ENCRYPTION_KEY is set, which the summary read reuses to decrypt.
+
 # Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
 # Generate with: openssl rand -hex 32
 GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32

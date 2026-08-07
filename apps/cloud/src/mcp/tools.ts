@@ -18,12 +18,20 @@ const TOOLABLE_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", 
 /**
  * Paths that must NEVER be exposed as tools regardless of annotation — the
  * belt to the opt-in's suspenders. `/v1/secrets` writes tenant secrets,
+ * `/v1/cloudflare-billing` writes a Cloudflare Billing-Read token,
  * `/v1/admin` proxies into a tenant, `/v1/invitations/send` mints invite tokens,
  * `/v1/logs/tail` holds the tail secret, and `/v1/mcp` is the surface itself
  * (a tool that re-enters the surface would be a scope-escape vector — the same
  * reason Openship hard-denies `tokens`/`auth`/`mcp`).
  */
-export const MCP_DENY_PATHS: ReadonlySet<string> = new Set(["/v1/admin", "/v1/invitations/send", "/v1/logs/tail", "/v1/mcp", "/v1/secrets"]);
+export const MCP_DENY_PATHS: ReadonlySet<string> = new Set([
+    "/v1/admin",
+    "/v1/cloudflare-billing",
+    "/v1/invitations/send",
+    "/v1/logs/tail",
+    "/v1/mcp",
+    "/v1/secrets",
+]);
 
 /** An MCP tool descriptor derived from a route. */
 export interface McpTool {
@@ -47,10 +55,12 @@ export interface McpToolRoute<Handler> {
  * `spec.mcp`, are bearer-callable, and are not hard-denied. Deny + auth checks
  * win over the opt-in, so a mistaken `mcp` block on a sensitive route is inert.
  */
-export const mcpToolRoutes = <Handler>(routes: readonly RegisteredRoute<Handler>[]): McpToolRoute<Handler>[] =>
+export const mcpToolRoutes = <Handler>(routes: ReadonlyArray<RegisteredRoute<Handler>>): McpToolRoute<Handler>[] =>
     routes
         .filter((route) => route.spec.mcp !== undefined && TOOLABLE_AUTH.has(route.spec.auth) && !MCP_DENY_PATHS.has(route.path))
-        .map((route) => ({
-            route,
-            tool: { description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path },
-        }));
+        .map((route) => {
+            return {
+                route,
+                tool: { description: route.spec.mcp?.description ?? "", method: route.method, name: toolName(route.path), path: route.path },
+            };
+        });
