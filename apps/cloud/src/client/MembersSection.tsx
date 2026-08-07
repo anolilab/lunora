@@ -79,7 +79,7 @@ export const MembersSection = ({ organizationId, preloaded }: MembersSectionProp
 
                             void (async () => {
                                 try {
-                                    await addMember.mutate({ organizationId, userId });
+                                    await addMember.mutate({ organizationId, role: "member", userId });
                                     setUserId("");
                                 } catch (error_: unknown) {
                                     setError(error_ instanceof Error ? error_.message : "add failed");
