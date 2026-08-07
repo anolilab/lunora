@@ -415,6 +415,20 @@ Name the path columns in the mapping so they get rewritten:
     visible to every other process on the machine via the process table.
 </Callout>
 
+A named column is matched against whichever spelling your app stored, so all
+three of these resolve to the same migrated object:
+
+| Stored value                                                        | Where it comes from                                  |
+| ------------------------------------------------------------------- | ---------------------------------------------------- |
+| `avatars/u1.png`                                                    | bucket-qualified, what `storage.list()` returns      |
+| `u1.png`                                                            | bucket-relative, from a client that knows its bucket |
+| `https://<ref>.supabase.co/storage/v1/object/public/avatars/u1.png` | `getPublicUrl()` / `createSignedUrl()`               |
+
+The one case that stays unresolved is a bare filename two buckets both carry
+(`logo.png` in `avatars` and in `brand`). Guessing there would rewrite half your
+rows at the wrong object, so the importer reports it and you qualify the value
+instead.
+
 Objects land under content-hash keys, so identical files dedupe and a re-run is
 cheap. **The transfer is resumable**: every object is checkpointed as it
 completes, so if the run dies at object 40,000 of 50,000, re-running the same
