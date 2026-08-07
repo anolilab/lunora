@@ -822,9 +822,32 @@ describe("auth import", () => {
             image: "https://x/a.png",
             name: "Ada",
         });
-        expect(account?.doc).toStrictEqual({ _id: "u1:github", accountId: "gh-99", id: "u1:github", providerId: "github", userId: "u1" });
+        // Keyed on the provider account id too: one user can hold two identities
+        // at the same provider, and `user:provider` alone collides.
+        expect(account?.doc).toStrictEqual({ _id: "u1:github:gh-99", accountId: "gh-99", id: "u1:github:gh-99", providerId: "github", userId: "u1" });
         // The bcrypt hash is in the dump and must not reach the target.
         expect(JSON.stringify(imported)).not.toContain("$2a$10$");
+    });
+
+    it("keeps two identities at the same provider distinct", async () => {
+        expect.assertions(2);
+
+        // Keying an account on `user:provider` alone collapses these two into
+        // one id — the second silently replacing the first, or the import
+        // failing on a duplicate.
+        const root = writeDump({
+            "auth.identities.csv": "user_id,provider,provider_id\nu1,github,gh-99\nu1,github,gh-100\n",
+            "auth.users.csv": "id,email,created_at\nu1,a@b.com,2024-01-01 00:00:00+00\n",
+            "posts.csv": "id,title\np1,hello\n",
+        });
+
+        writeMapping("supabase", { auth: { file: "auth.users.csv", identitiesFile: "auth.identities.csv" } });
+
+        const { imported } = await runImport(root, "supabase");
+        const accountIds = imported.filter((row) => row.table === "account").map((row) => (row.doc as { _id: string })._id);
+
+        expect(accountIds).toStrictEqual(["u1:github:gh-99", "u1:github:gh-100"]);
+        expect(new Set(accountIds).size).toBe(2);
     });
 
     it("maps a Firebase auth:export dump, dropping the password provider", async () => {

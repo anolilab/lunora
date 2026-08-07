@@ -165,8 +165,19 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
         return;
     }
 
-    for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream })) {
-        yield raw;
+    const lines = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream });
+
+    try {
+        for await (const raw of lines) {
+            yield raw;
+        }
+    } finally {
+        // A consumer that stops early — `break`, a throw, or an import that
+        // fails on row 12 of a million — leaves the readline interface and the
+        // ZIP entry stream open otherwise, holding the archive's file handle
+        // for the rest of the process.
+        lines.close();
+        stream.destroy();
     }
 };
 

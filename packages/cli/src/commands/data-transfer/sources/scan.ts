@@ -6,10 +6,11 @@
  * may still be free text — so the file is written for the operator to review,
  * and a mapping they have already confirmed is never overwritten.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { parse } from "csv-parse/sync";
+import { parse } from "csv-parse";
 
 import type { Logger } from "../../../util/logger";
 import type { DumpFile } from "./dump-directory";
@@ -63,18 +64,49 @@ const inferReshape = (values: ReadonlyArray<string>): ReshapeKind | undefined =>
     return undefined;
 };
 
-/** Column → inferred reshape for one CSV file. */
-const scanCsvTable = async (file: string): Promise<Record<string, ReshapeKind>> => {
-    const rows: Record<string, string>[] = parse(await readFile(file, "utf8"), { columns: true, skipEmptyLines: true, toLine: SCAN_ROW_LIMIT + 1 });
-    const byColumn = new Map<string, string[]>();
+/**
+ * Accumulate one row's non-empty values per column, in place.
+ *
+ * Rebuilding the array per value (`[...previous, value]`) made a sample of N
+ * rows cost O(N²) copies.
+ */
+const collectSampleValues = (row: Record<string, string>, byColumn: Map<string, string[]>): void => {
+    for (const [column, value] of Object.entries(row)) {
+        if (value.length === 0) {
+            continue;
+        }
 
-    for (const row of rows) {
-        for (const [column, value] of Object.entries(row)) {
-            if (value.length > 0) {
-                byColumn.set(column, [...(byColumn.get(column) ?? []), value]);
-            }
+        const values = byColumn.get(column);
+
+        if (values === undefined) {
+            byColumn.set(column, [value]);
+        } else {
+            values.push(value);
         }
     }
+};
+
+/** Column → inferred reshape for one CSV file. */
+const scanCsvTable = async (file: string): Promise<Record<string, ReshapeKind>> => {
+    const byColumn = new Map<string, string[]>();
+    // Streamed and stopped at the sample size: `readFile` pulled a multi-GB dump
+    // into memory to look at 200 rows. `toLine` bounds what the parser EMITS, not
+    // what gets read.
+    const parser = createReadStream(file).pipe(parse({ columns: true, skipEmptyLines: true, toLine: SCAN_ROW_LIMIT + 1 }));
+    let scanned = 0;
+
+    for await (const row of parser as AsyncIterable<Record<string, string>>) {
+        collectSampleValues(row, byColumn);
+        scanned += 1;
+
+        if (scanned >= SCAN_ROW_LIMIT) {
+            break;
+        }
+    }
+
+    // `break` leaves the file handle open otherwise: the sample is a prefix of a
+    // dump that can be far larger, so the rest of the read must be abandoned.
+    parser.destroy();
 
     const types: Record<string, ReshapeKind> = {};
 

@@ -86,6 +86,13 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     }
 
     if (value.timestampValue !== undefined) {
+        // Truncates to milliseconds, and Firestore stores microseconds. That is
+        // deliberate rather than overlooked: the target column is a Lunora
+        // timestamp, which IS milliseconds, and returning the RFC-3339 string
+        // for the sub-millisecond rows would make the column's type depend on
+        // its data — number for most rows, string for a few — which no schema
+        // can describe. An app that needs the original precision should carry it
+        // in its own string column.
         const parsed = Date.parse(value.timestampValue);
 
         if (Number.isNaN(parsed)) {

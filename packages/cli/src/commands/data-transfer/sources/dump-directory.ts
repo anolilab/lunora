@@ -71,6 +71,22 @@ const listDumpFiles = async (
         throw new LunoraError("INTERNAL", `${directory} ${options.emptyMessage}`);
     }
 
+    // A mapping entry names a table the operator expects to migrate. If its file
+    // is absent from the directory — or present but filtered out, e.g. the wrong
+    // extension — dropping it silently means that table simply never arrives,
+    // and `--verify` still passes because it compares what WAS imported.
+    const resolved = new Set(found.map((entry) => basename(entry.file)));
+    const unresolved = [...claimed].filter(([file]) => !resolved.has(file));
+
+    if (unresolved.length > 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${directory}: the mapping names ${String(unresolved.length)} file(s) that are not importable from this directory — ` +
+                `${unresolved.map(([file, table]) => `\`${file}\` (table \`${table}\`)`).join(", ")}. ` +
+                `Check the name and that the file is one this source reads.`,
+        );
+    }
+
     return found.toSorted((a, b) => a.table.localeCompare(b.table));
 };
 

@@ -174,10 +174,16 @@ const fromSupabaseUser = (row: SupabaseAuthUser, identities: ReadonlyArray<Recor
         const provider = typeof identity["provider"] === "string" ? identity["provider"] : "unknown";
         const providerAccountId = typeof identity["provider_id"] === "string" ? identity["provider_id"] : id;
 
+        // The provider account id is part of the key: a user CAN hold two
+        // identities at the same provider, and keying on `user:provider` alone
+        // makes the second collide with the first — one silently replacing the
+        // other, or the import failing on a duplicate id.
+        const accountKey = `${id}:${provider}:${providerAccountId}`;
+
         return {
-            _id: `${id}:${provider}`,
+            _id: accountKey,
             accountId: providerAccountId,
-            id: `${id}:${provider}`,
+            id: accountKey,
             providerId: provider,
             userId: id,
         };
@@ -222,11 +228,15 @@ const fromFirebaseUser = (row: FirebaseAuthUser): AuthRows => {
         .filter((info) => typeof info.providerId === "string" && info.providerId !== "password")
         .map((info) => {
             const provider = info.providerId as string;
+            const providerAccountId = info.rawId ?? info.federatedId ?? id;
+            // Same reason as the Supabase mapper: `user:provider` alone is not
+            // unique across two identities at one provider.
+            const accountKey = `${id}:${provider}:${providerAccountId}`;
 
             return {
-                _id: `${id}:${provider}`,
-                accountId: info.rawId ?? info.federatedId ?? id,
-                id: `${id}:${provider}`,
+                _id: accountKey,
+                accountId: providerAccountId,
+                id: accountKey,
                 providerId: provider,
                 userId: id,
             };

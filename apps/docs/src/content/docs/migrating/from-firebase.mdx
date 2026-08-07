@@ -309,12 +309,19 @@ Every Firestore value kind is handled:
 | `stringValue`, `booleanValue` | string, boolean                                     |
 | `integerValue`                | number — or a string when it exceeds the safe range |
 | `doubleValue`                 | number                                              |
-| `timestampValue`              | epoch milliseconds                                  |
+| `timestampValue`              | epoch milliseconds — see the precision note below   |
 | `bytesValue`                  | base64 string                                       |
 | `geoPointValue`               | `{ latitude, longitude }`                           |
 | `referenceValue`              | the target document's id                            |
 | `arrayValue`, `mapValue`      | array, object — decoded recursively                 |
 | `nullValue`                   | `null`                                              |
+
+<Callout type="info">
+    Firestore stores timestamps to **microsecond** precision; a Lunora timestamp column is epoch **milliseconds**, so the last three digits are dropped. That is
+    lossy and deliberate — emitting the RFC-3339 string for the rows that have sub-millisecond digits would make the column number for most rows and string for
+    a few, which no schema describes. If the sub-millisecond part is load-bearing for you (ordering writes that land inside the same millisecond), carry the
+    original string in its own column before you migrate.
+</Callout>
 
 <Callout type="info">
     `integerValue` arrives as a *string* in Firestore's encoding precisely because it can exceed what a JS number holds. The importer keeps it as a string when
