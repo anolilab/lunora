@@ -3,8 +3,8 @@
  * for, and that every storage reference resolved.
  */
 import type { Logger } from "../../util/logger";
-import type { StorageRemapReport, UnresolvedStorageReference } from "./storage-mapping";
 import { IMPORT_CONVEX_MAPPING_FILE } from "./storage-mapping";
+import type { StorageRemapReport, UnresolvedStorageReference } from "./storage-remap";
 
 /** How many unresolved storage references to name individually before summarising. */
 const UNRESOLVED_REPORT_LIMIT = 20;

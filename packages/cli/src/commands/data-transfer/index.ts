@@ -8,6 +8,6 @@
  */
 export type { ExportCommandOptions, ExportCommandResult } from "./export";
 export { runExportCommand } from "./export";
-export type { ImportCommandOptions, ImportCommandResult } from "./import";
+export type { ImportCommandOptions, ImportCommandResult, ImportSummary } from "./import";
 export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand } from "./import";
 export type { StreamingFetchLike } from "./shared";

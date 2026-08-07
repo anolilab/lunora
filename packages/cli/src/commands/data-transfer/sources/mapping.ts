@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../../util/logger";
+import { assertMappingObject, assertOptionalString, assertOptionalStringArray, isPlainObject } from "../mapping-shapes";
 import type { ReshapeKind } from "./reshape";
 import { isReshapeKind, RESHAPE_KINDS } from "./reshape";
 
@@ -41,23 +42,11 @@ interface ImportSourceMapping {
     tables?: Record<string, TableMapping>;
 }
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
-
-const parseTableMapping = (raw: unknown, where: string): TableMapping => {
-    if (!isPlainObject(raw)) {
-        throw new LunoraError("INTERNAL", `${where}: expected an object`);
-    }
-
-    for (const key of ["file", "idColumn"] as const) {
-        if (raw[key] !== undefined && typeof raw[key] !== "string") {
-            throw new LunoraError("INTERNAL", `${where}.${key} must be a string`);
-        }
-    }
-
-    if (raw["storageColumns"] !== undefined && (!Array.isArray(raw["storageColumns"]) || raw["storageColumns"].some((entry) => typeof entry !== "string"))) {
-        throw new LunoraError("INTERNAL", `${where}.storageColumns must be an array of column names`);
-    }
-
+const parseTableMapping = (rawEntry: unknown, where: string): TableMapping => {
+    const raw = assertMappingObject(rawEntry, where);
+    const file = assertOptionalString(raw, "file", where);
+    const idColumn = assertOptionalString(raw, "idColumn", where);
+    const storageColumns = assertOptionalStringArray(raw, "storageColumns", where);
     const { types } = raw;
 
     if (types !== undefined) {
@@ -75,12 +64,7 @@ const parseTableMapping = (raw: unknown, where: string): TableMapping => {
         }
     }
 
-    return {
-        file: raw["file"] as string | undefined,
-        idColumn: raw["idColumn"] as string | undefined,
-        storageColumns: raw["storageColumns"] as string[] | undefined,
-        types: types as Record<string, ReshapeKind> | undefined,
-    };
+    return { file, idColumn, storageColumns, types: types as Record<string, ReshapeKind> | undefined };
 };
 
 /** Validate the optional `auth` block. */
@@ -93,10 +77,8 @@ const assertAuthMapping = (auth: unknown, mappingPath: string): void => {
         throw new LunoraError("INTERNAL", `${mappingPath}: \`auth\` must be an object`);
     }
 
-    for (const key of ["file", "identitiesFile"] as const) {
-        if (auth[key] !== undefined && typeof auth[key] !== "string") {
-            throw new LunoraError("INTERNAL", `${mappingPath}: \`auth.${key}\` must be a string`);
-        }
+    for (const key of ["file", "identitiesFile"]) {
+        assertOptionalString(auth, key, `${mappingPath}: auth`);
     }
 };
 
@@ -122,24 +104,14 @@ const parseTables = (tables: unknown, mappingPath: string): Record<string, Table
  * corruption the reshape rule exists to prevent. Only a *missing* file is
  * optional.
  */
-const parseImportSourceMapping = (raw: unknown, mappingPath: string): ImportSourceMapping => {
-    if (!isPlainObject(raw)) {
-        throw new LunoraError("INTERNAL", `${mappingPath}: expected a JSON object`);
-    }
-
-    if (raw["keyPrefix"] !== undefined && typeof raw["keyPrefix"] !== "string") {
-        throw new LunoraError("INTERNAL", `${mappingPath}: \`keyPrefix\` must be a string`);
-    }
-
+const parseImportSourceMapping = (rawMapping: unknown, mappingPath: string): ImportSourceMapping => {
+    const raw = assertMappingObject(rawMapping, mappingPath);
+    const keyPrefix = assertOptionalString(raw, "keyPrefix", mappingPath);
     const { auth, tables } = raw;
 
     assertAuthMapping(auth, mappingPath);
 
-    return {
-        auth: auth as ImportSourceMapping["auth"],
-        keyPrefix: raw["keyPrefix"],
-        tables: parseTables(tables, mappingPath),
-    };
+    return { auth: auth as ImportSourceMapping["auth"], keyPrefix, tables: parseTables(tables, mappingPath) };
 };
 
 /** Where a source's mapping file lives inside a project. */

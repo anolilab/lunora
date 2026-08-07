@@ -280,7 +280,7 @@ interface ImportCommandOptions {
 
 ```ts
 interface ImportCommandResult {
-    body: unknown;
+    body: ImportSummary | undefined;
     code: number;
     inserted: number;
 }

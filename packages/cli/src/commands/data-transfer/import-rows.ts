@@ -7,10 +7,20 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { StorageRemapReport } from "./storage-mapping";
-import { remapStorageReferences } from "./storage-mapping";
+import type { StorageRemapReport } from "./storage-remap";
+import { remapStorageReferences } from "./storage-remap";
 
 interface RowTransformConfig {
+    /**
+     * A foreign source's path rewrite, applied to the same parsed document as
+     * the Convex storage-id rewrite.
+     *
+     * It is a hook rather than a second transform wrapped around this one so a
+     * row is parsed and serialised exactly once: the wrapper form re-parsed
+     * every line this function had just serialised, on the one path (a foreign
+     * import with `--with-storage`) that already moves the most data.
+     */
+    remapDocument?: (document: Record<string, unknown>, table: string) => Record<string, unknown>;
     /** Accumulates what the storage rewrite found across the whole run. */
     report: StorageRemapReport;
     /** Columns the mapping file says hold storage ids. */
@@ -26,7 +36,7 @@ interface RowTransformConfig {
  * line, which the caller skips.
  */
 const createRowTransformer = (config: RowTransformConfig): ((line: string, lineNumber: number) => string | undefined) => {
-    const { report, storageColumns, storageIdMap, table } = config;
+    const { remapDocument, report, storageColumns, storageIdMap, table } = config;
 
     const wrapBareDocument = (trimmed: string, lineNumber: number): string => {
         // `--table` wraps each bare doc — the source is `{...}\n{...}\n`, not
@@ -47,7 +57,7 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
         return JSON.stringify({ doc: parsedDocument, table });
     };
 
-    const remapEnvelope = (trimmed: string, lineNumber: number, migrated: Map<string, string>): string => {
+    const remapEnvelope = (trimmed: string, lineNumber: number): string => {
         const parsed = JSON.parse(trimmed) as Record<string, unknown>;
 
         if (typeof parsed["table"] !== "string") {
@@ -55,14 +65,20 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
         }
 
         if (parsed["doc"] !== null && typeof parsed["doc"] === "object" && !Array.isArray(parsed["doc"])) {
-            const remap = remapStorageReferences(parsed["doc"] as Record<string, unknown>, migrated, parsed["table"], storageColumns);
+            let document = parsed["doc"] as Record<string, unknown>;
+
+            if (storageIdMap !== undefined) {
+                const remap = remapStorageReferences(document, storageIdMap, parsed["table"], storageColumns);
+
+                document = remap.document;
+                report.rewritten += remap.rewritten;
+                report.ambiguous.push(...remap.ambiguous);
+                report.unmigrated.push(...remap.unmigrated);
+            }
 
             // Rebuild from the parsed envelope so any field beyond
             // `{ table, doc }` survives the rewrite.
-            parsed["doc"] = remap.document;
-            report.rewritten += remap.rewritten;
-            report.ambiguous.push(...remap.ambiguous);
-            report.unmigrated.push(...remap.unmigrated);
+            parsed["doc"] = remapDocument === undefined ? document : remapDocument(document, parsed["table"]);
         }
 
         return JSON.stringify(parsed);
@@ -79,9 +95,10 @@ const createRowTransformer = (config: RowTransformConfig): ((line: string, lineN
             return wrapBareDocument(trimmed, lineNumber);
         }
 
-        // Every envelope is parsed when a storage map exists — a storage id can
-        // sit in a plain column, which no substring of the line announces.
-        return storageIdMap === undefined ? trimmed : remapEnvelope(trimmed, lineNumber, storageIdMap);
+        // Every envelope is parsed when a rewrite is configured — a storage id or
+        // an object path can sit in a plain column, which no substring of the
+        // line announces. With neither, the line goes through untouched.
+        return storageIdMap === undefined && remapDocument === undefined ? trimmed : remapEnvelope(trimmed, lineNumber);
     };
 };
 

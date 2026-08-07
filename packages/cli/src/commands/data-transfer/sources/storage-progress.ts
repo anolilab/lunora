@@ -18,15 +18,15 @@ import { dirname, join } from "node:path";
 
 import type { Logger } from "../../../util/logger";
 
-/** One completed transfer. `source` is the provider-side path; `key` is where it landed in R2. */
+/** One completed transfer: the provider-side `path` and the R2 `key` it landed at. */
 interface TransferredObject {
     key: string;
+    path: string;
     size: number;
-    source: string;
 }
 
-/** Where a source's checkpoint lives. Deliberately dot-prefixed: it is a resume artifact, not config. */
-const progressFileFor = (source: string): string => join("lunora", `.import-storage-${source}.ndjson`);
+/** Where a provider's checkpoint lives. Deliberately dot-prefixed: it is a resume artifact, not config. */
+const progressFileFor = (provider: string): string => join("lunora", `.import-storage-${provider}.ndjson`);
 
 /**
  * Read the checkpoint, returning what has already been transferred.
@@ -36,12 +36,12 @@ const progressFileFor = (source: string): string => join("lunora", `.import-stor
  * fatal: it can only be the torn tail of a killed process, and the cost of
  * skipping it is re-transferring one object.
  */
-const readTransferProgress = async (cwd: string, source: string, logger: Logger): Promise<Map<string, TransferredObject>> => {
+const readTransferProgress = async (cwd: string, provider: string, logger: Logger): Promise<Map<string, TransferredObject>> => {
     const done = new Map<string, TransferredObject>();
     let content: string;
 
     try {
-        content = await readFile(join(cwd, progressFileFor(source)), "utf8");
+        content = await readFile(join(cwd, progressFileFor(provider)), "utf8");
     } catch (error: unknown) {
         if ((error as { code?: string }).code === "ENOENT") {
             return done;
@@ -62,8 +62,8 @@ const readTransferProgress = async (cwd: string, source: string, logger: Logger)
         try {
             const entry = JSON.parse(trimmed) as TransferredObject;
 
-            if (typeof entry.source === "string" && typeof entry.key === "string") {
-                done.set(entry.source, entry);
+            if (typeof entry.path === "string" && typeof entry.key === "string") {
+                done.set(entry.path, entry);
             } else {
                 skipped += 1;
             }
@@ -83,31 +83,12 @@ const readTransferProgress = async (cwd: string, source: string, logger: Logger)
 };
 
 /** Record one completed transfer. Appended immediately, so the checkpoint never trails the work by more than one object. */
-const recordTransfer = async (cwd: string, source: string, entry: TransferredObject): Promise<void> => {
-    const path = join(cwd, progressFileFor(source));
+const recordTransfer = async (cwd: string, provider: string, entry: TransferredObject): Promise<void> => {
+    const file = join(cwd, progressFileFor(provider));
 
-    await mkdir(dirname(path), { recursive: true });
-    await appendFile(path, `${JSON.stringify(entry)}\n`, "utf8");
-};
-
-/**
- * Report progress at a readable cadence.
- *
- * A line per object drowns the run; a line only at the end tells an operator
- * nothing while a multi-hour transfer is in flight. Every 25 objects, plus the
- * last, is enough to see it moving and to estimate what is left.
- */
-const createProgressReporter = (total: number, logger: Logger): ((done: number) => void) => {
-    const every = total > 500 ? 100 : 25;
-
-    return (done: number): void => {
-        if (done === total || done % every === 0) {
-            const percent = total === 0 ? 100 : Math.round((done / total) * 100);
-
-            logger.info(`transferred ${String(done)}/${String(total)} object(s) (${String(percent)}%)`);
-        }
-    };
+    await mkdir(dirname(file), { recursive: true });
+    await appendFile(file, `${JSON.stringify(entry)}\n`, "utf8");
 };
 
 export type { TransferredObject };
-export { createProgressReporter, progressFileFor, readTransferProgress, recordTransfer };
+export { progressFileFor, readTransferProgress, recordTransfer };

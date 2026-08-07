@@ -13,7 +13,7 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Logger } from "../../util/logger";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
-import type { ImportBatcher, ImportTotals } from "./import-batcher";
+import type { ImportBatcher, ImportRowError, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
@@ -26,10 +26,11 @@ import { scanFirebaseDump, scanSupabaseDump } from "./sources/scan";
 import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
 import { migrateStorageBlobs } from "./storage-blobs";
-import type { ImportConvexMapping, StorageRemapReport } from "./storage-mapping";
+import type { ImportConvexMapping } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
-
-const LEADING_SLASH_RE = /^\/+/;
+import type { StoragePathIndex } from "./storage-path-index";
+import { indexTransferredPaths, resolveStoragePath } from "./storage-path-index";
+import type { StorageRemapReport } from "./storage-remap";
 
 /** Rows per HTTP request when importing. Convex uses ~500; same here. */
 const DEFAULT_IMPORT_BATCH_SIZE = 500;
@@ -100,8 +101,30 @@ interface ImportCommandOptions {
     yes?: boolean;
 }
 
+/**
+ * The JSON summary a run prints and returns — the same object either way, so a
+ * caller reading `body.conflicts` does not have to cast its way there.
+ *
+ * `undefined` on every path that imports nothing: a rejected source, a failed
+ * storage phase, or `--scan` (whose product is the mapping file it writes, not
+ * a return value).
+ */
+interface ImportSummary {
+    conflicts: number;
+    errors: ImportRowError[];
+    inserted: Record<string, number>;
+    received: number;
+    storage?: {
+        ambiguous: StorageRemapReport["ambiguous"];
+        blobs: number;
+        rewritten: number;
+        unmigrated: StorageRemapReport["unmigrated"];
+    };
+    warnings?: string[];
+}
+
 interface ImportCommandResult {
-    body: unknown;
+    body: ImportSummary | undefined;
     code: number;
     /** Total inserted rows across batches. */
     inserted: number;
@@ -181,7 +204,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
  * The machine-readable run summary. The storage block is present only when blobs
  * were migrated, so a plain import's output shape is unchanged.
  */
-const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string> | undefined, report: StorageRemapReport): Record<string, unknown> => {
+const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string> | undefined, report: StorageRemapReport): ImportSummary => {
     return {
         conflicts: totals.conflicts,
         errors: totals.errors,
@@ -310,7 +333,7 @@ const runForeignStorageTransfer = async (
 const remapStoragePaths = (
     document_: Record<string, unknown>,
     table: string,
-    transferred: Map<string, string>,
+    transferred: StoragePathIndex,
     source: Extract<ImportSource, { kind: "firebase" | "supabase" }>,
     unresolved: Set<string>,
 ): Record<string, unknown> => {
@@ -329,7 +352,7 @@ const remapStoragePaths = (
             continue;
         }
 
-        const key = transferred.get(value) ?? transferred.get(value.replace(LEADING_SLASH_RE, ""));
+        const key = resolveStoragePath(value, transferred);
 
         if (key === undefined) {
             unresolved.add(`${table}.${column}: ${value}`);
@@ -342,12 +365,13 @@ const remapStoragePaths = (
 };
 
 /**
- * The line→row transform for a run, with the foreign-source path rewrite layered
- * on top of the Convex storage-reference rewrite.
+ * The line→row transform for a run, with the foreign-source path rewrite
+ * supplied to the row transformer as a hook.
  *
- * They are separate passes because they answer different questions: one rewrites
- * a Convex storage id to a content-hash key, the other rewrites a provider-side
- * object path to one. A run only ever needs one of them.
+ * The two rewrites answer different questions — one turns a Convex storage id
+ * into a content-hash key, the other turns a provider-side object path into one
+ * — and a run only ever needs one of them. They share a hook rather than
+ * stacking as two transforms so a row is parsed and serialised once.
  */
 const createSourceRowTransformer = (config: {
     report: StorageRemapReport;
@@ -358,31 +382,24 @@ const createSourceRowTransformer = (config: {
     transferredPaths?: Map<string, string>;
     unresolvedPaths: Set<string>;
 }): ((line: string, lineNumber: number) => string | undefined) => {
-    const toWireRow = createRowTransformer({
+    const foreignSource = config.source.kind === "supabase" || config.source.kind === "firebase" ? config.source : undefined;
+    const { transferredPaths } = config;
+
+    // Indexed once per run, not once per row: the alternate spellings a column
+    // may hold are a property of the transfer, and rebuilding them per document
+    // would make the rewrite quadratic in the object count.
+    const pathIndex = transferredPaths === undefined || foreignSource === undefined ? undefined : indexTransferredPaths(transferredPaths);
+
+    return createRowTransformer({
+        remapDocument:
+            pathIndex === undefined || foreignSource === undefined
+                ? undefined
+                : (document, table): Record<string, unknown> => remapStoragePaths(document, table, pathIndex, foreignSource, config.unresolvedPaths),
         report: config.report,
         storageColumns: config.storageColumns,
         storageIdMap: config.storageIdMap,
         table: config.table,
     });
-
-    const foreignSource = config.source.kind === "supabase" || config.source.kind === "firebase" ? config.source : undefined;
-    const { transferredPaths } = config;
-
-    if (transferredPaths === undefined || foreignSource === undefined) {
-        return toWireRow;
-    }
-
-    return (line: string, lineNumber: number): string | undefined => {
-        const row = toWireRow(line, lineNumber);
-
-        if (row === undefined) {
-            return undefined;
-        }
-
-        const parsed = JSON.parse(row) as { doc: Record<string, unknown>; table: string };
-
-        return JSON.stringify({ ...parsed, doc: remapStoragePaths(parsed.doc, parsed.table, transferredPaths, foreignSource, config.unresolvedPaths) });
-    };
 };
 
 /**
@@ -560,7 +577,9 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     if (options.scan === true) {
         const scanned = await runScan(source, cwd, options.logger);
 
-        return { body: scanned, code: scanned === undefined ? 1 : 0, inserted: 0 };
+        // The scan's product is the mapping file it wrote; there is no import
+        // summary to hand back.
+        return { body: undefined, code: scanned === undefined ? 1 : 0, inserted: 0 };
     }
 
     const request = await resolveImportRequest(options);
@@ -634,5 +653,5 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
     return { body, code: failed ? 1 : 0, inserted: insertedTotal };
 };
 
-export type { ImportCommandOptions, ImportCommandResult };
+export type { ImportCommandOptions, ImportCommandResult, ImportSummary };
 export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand };

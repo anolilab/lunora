@@ -33,36 +33,47 @@ interface Sink {
     imported: { doc: Record<string, unknown>; table: string }[];
 }
 
-/** A worker stand-in that records every row the import posts. */
-const sink = (): Sink => {
+/** A 200 carrying `value` as JSON, in the shape the CLI's fetch wrapper reads. */
+const jsonResponse = (value: unknown) => {
+    return { arrayBuffer: async () => new ArrayBuffer(0), body: null, json: async () => value, ok: true, status: 200, text: async () => "" };
+};
+
+/**
+ * The `/_lunora/admin/import` half of a worker stand-in: record every posted row
+ * and answer with the tally the importer's parity check reads.
+ *
+ * Shared by all three fakes below, which differ only in what else they serve.
+ */
+const importRecorder = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
 
     return {
-        fetchImpl: async (input, init) => {
+        handle: (body: string | Uint8Array | undefined) => {
             const inserted: Record<string, number> = {};
 
-            if (new URL(input).pathname === "/_lunora/admin/import") {
-                for (const line of String(init?.body ?? "")
-                    .split("\n")
-                    .filter((entry) => entry.trim().length > 0)) {
-                    const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
+            for (const line of (typeof body === "string" ? body : new TextDecoder().decode(body)).split("\n").filter((entry) => entry.trim().length > 0)) {
+                const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
 
-                    imported.push(row);
-                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
-                }
+                imported.push(row);
+                inserted[row.table] = (inserted[row.table] ?? 0) + 1;
             }
 
-            return {
-                body: null,
-                json: async () => {
-                    return { conflicts: 0, errors: [], inserted, received: imported.length };
-                },
-                ok: true,
-                status: 200,
-                text: async () => "",
-            };
+            return jsonResponse({ conflicts: 0, errors: [], inserted, received: imported.length });
         },
         imported,
+    };
+};
+
+/** A worker stand-in that records every row the import posts. */
+const sink = (): Sink => {
+    const recorder = importRecorder();
+
+    return {
+        fetchImpl: async (input, init) =>
+            new URL(input).pathname === "/_lunora/admin/import"
+                ? recorder.handle(init?.body)
+                : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+        imported: recorder.imported,
     };
 };
 
@@ -486,35 +497,19 @@ describe("storage transfer with a resumable checkpoint", () => {
     /** A worker that stores uploads, plus a counter so re-runs can be told apart. */
     const storageWorker = () => {
         const bucket = new Map<string, { sha256: string; size: number }>();
-        const imported: { doc: Record<string, unknown>; table: string }[] = [];
+        const recorder = importRecorder();
         const uploads: string[] = [];
         let failAfterUploads = Number.POSITIVE_INFINITY;
-
-        const json = (value: unknown) => {
-            return { arrayBuffer: async () => new ArrayBuffer(0), body: null, json: async () => value, ok: true, status: 200, text: async () => "" };
-        };
-
         const fetchImpl: StreamingFetchLike = async (input, init) => {
             const url = new URL(input);
             const method = init?.method ?? "GET";
 
             if (url.pathname === "/_lunora/admin/import") {
-                const inserted: Record<string, number> = {};
-
-                for (const line of String(init?.body ?? "")
-                    .split("\n")
-                    .filter((entry) => entry.trim().length > 0)) {
-                    const row = JSON.parse(line) as { doc: Record<string, unknown>; table: string };
-
-                    imported.push(row);
-                    inserted[row.table] = (inserted[row.table] ?? 0) + 1;
-                }
-
-                return json({ conflicts: 0, errors: [], inserted, received: imported.length });
+                return recorder.handle(init?.body);
             }
 
             if (url.pathname === "/_lunora/admin/storage" && method === "GET") {
-                return json({
+                return jsonResponse({
                     objects: [...bucket.entries()].map(([key, o]) => {
                         return { key, ...o };
                     }),
@@ -542,7 +537,7 @@ describe("storage transfer with a resumable checkpoint", () => {
                 uploads.push(key);
                 bucket.set(key, { sha256: sha256Hex(bytes), size: bytes.length });
 
-                return json({ key, sha256: sha256Hex(bytes) });
+                return jsonResponse({ key, sha256: sha256Hex(bytes) });
             }
 
             throw new Error(`unexpected ${method} ${input}`);
@@ -551,7 +546,7 @@ describe("storage transfer with a resumable checkpoint", () => {
         return {
             bucket,
             fetchImpl,
-            imported,
+            imported: recorder.imported,
             failAfter: (count: number) => {
                 failAfterUploads = count;
             },
@@ -590,7 +585,7 @@ describe("storage transfer with a resumable checkpoint", () => {
     });
 
     it("checkpoints each object, and a resumed run re-uploads none of them", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const root = writeDump({ "t.json": JSON.stringify({ x1: {} }) });
         const storage = join(workDir, "bucket");
@@ -649,6 +644,9 @@ describe("storage transfer with a resumable checkpoint", () => {
         // to move the two the failed run never reached.
         expect(checkpoint).toHaveLength(3);
         expect(second.uploads).toHaveLength(2);
+        // The resume key is the `path` field. Renaming it without renaming the
+        // reader turns every checkpoint into a full re-transfer, silently.
+        expect(JSON.parse(checkpoint[0] as string)).toHaveProperty("path");
     });
 
     it("re-transfers when the checkpoint claims objects the target does not hold", async () => {
@@ -705,7 +703,7 @@ describe("storage transfer with a resumable checkpoint", () => {
         writeFileSync(join(storage, "a.txt"), "only", "utf8");
         mkdirSync(join(workDir, "lunora"), { recursive: true });
         // Exactly what a process killed mid-append leaves behind.
-        writeFileSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"), '{"source":"a.txt","key":"x","si', "utf8");
+        writeFileSync(join(workDir, "lunora", ".import-storage-firebase.ndjson"), '{"path":"a.txt","key":"x","si', "utf8");
 
         const worker = storageWorker();
 
@@ -957,10 +955,6 @@ describe("the live Supabase storage path", () => {
     const supabaseProject = () => {
         const requests: { auth?: string; method: string; url: string }[] = [];
         const uploads: string[] = [];
-        const json = (value: unknown) => {
-            return { arrayBuffer: async () => new ArrayBuffer(0), body: null, json: async () => value, ok: true, status: 200, text: async () => "" };
-        };
-
         const fetchImpl: StreamingFetchLike = async (input, init) => {
             const url = new URL(input);
             const method = init?.method ?? "GET";
@@ -968,7 +962,7 @@ describe("the live Supabase storage path", () => {
             requests.push({ auth: init?.headers?.["authorization"], method, url: input });
 
             if (url.pathname === "/storage/v1/bucket") {
-                return json([{ name: "avatars" }]);
+                return jsonResponse([{ name: "avatars" }]);
             }
 
             if (url.pathname.startsWith("/storage/v1/object/list/")) {
@@ -976,13 +970,13 @@ describe("the live Supabase storage path", () => {
 
                 // One level at a time: a folder placeholder has a null `id`.
                 if (prefix === "") {
-                    return json([
+                    return jsonResponse([
                         { id: "1", metadata: { mimetype: "image/png", size: 3 }, name: "top.png" },
                         { id: null, name: "nested" },
                     ]);
                 }
 
-                return json(prefix === "nested" ? [{ id: "2", metadata: { mimetype: "image/jpeg", size: 3 }, name: "deep.jpg" }] : []);
+                return jsonResponse(prefix === "nested" ? [{ id: "2", metadata: { mimetype: "image/jpeg", size: 3 }, name: "deep.jpg" }] : []);
             }
 
             if (url.hostname === "project.supabase.co" && url.pathname.startsWith("/storage/v1/object/")) {
@@ -1001,15 +995,15 @@ describe("the live Supabase storage path", () => {
             if (url.pathname === "/_lunora/admin/storage" && method === "PUT") {
                 uploads.push(url.searchParams.get("key") as string);
 
-                return json({ key: url.searchParams.get("key"), sha256: url.searchParams.get("expectedSha256") });
+                return jsonResponse({ key: url.searchParams.get("key"), sha256: url.searchParams.get("expectedSha256") });
             }
 
             if (url.pathname === "/_lunora/admin/storage") {
-                return json({ objects: [], truncated: false });
+                return jsonResponse({ objects: [], truncated: false });
             }
 
             if (url.pathname === "/_lunora/admin/import") {
-                return json({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+                return jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 });
             }
 
             throw new Error(`unexpected ${method} ${input}`);

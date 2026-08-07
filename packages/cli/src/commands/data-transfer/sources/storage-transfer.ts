@@ -22,7 +22,7 @@ import type { Logger } from "../../../util/logger";
 import type { StreamingFetchLike } from "../shared";
 import type { BlobUploadContext, StorageMetadataRow } from "../storage-blobs";
 import { listStorageObjects, uploadStorageBlob } from "../storage-blobs";
-import { createProgressReporter, progressFileFor, readTransferProgress, recordTransfer } from "./storage-progress";
+import { progressFileFor, readTransferProgress, recordTransfer } from "./storage-progress";
 
 /** One object waiting to move, with its bytes fetched lazily so a skipped object costs no download. */
 interface SourceObject {
@@ -229,9 +229,28 @@ const moveOneObject = async (
         await uploadStorageBlob(context, bytes, metadata, options.keyPrefix, logger);
     }
 
-    await recordTransfer(options.cwd, options.source, { key, size: bytes.length, source: entry.path });
+    await recordTransfer(options.cwd, options.source, { key, path: entry.path, size: bytes.length });
 
     return key;
+};
+
+/**
+ * Report progress at a readable cadence.
+ *
+ * A line per object drowns the run; a line only at the end tells an operator
+ * nothing while a multi-hour transfer is in flight. Every 25 objects, plus the
+ * last, is enough to see it moving and to estimate what is left.
+ */
+const createProgressReporter = (total: number, logger: Logger): ((done: number) => void) => {
+    const every = total > 500 ? 100 : 25;
+
+    return (done: number): void => {
+        if (done === total || done % every === 0) {
+            const percent = total === 0 ? 100 : Math.round((done / total) * 100);
+
+            logger.info(`transferred ${String(done)}/${String(total)} object(s) (${String(percent)}%)`);
+        }
+    };
 };
 
 /**
