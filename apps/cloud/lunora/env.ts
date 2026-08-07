@@ -18,6 +18,14 @@ export const env = defineEnv({
     CLOUDFLARE_API_TOKEN: v.optional(v.string()),
     /** Bearer token for R2 SQL (archived-span read-back). Absent → the archive read no-ops. A secret. */
     R2_SQL_TOKEN: v.optional(v.string()),
+
+    /**
+     * 32-byte hex master key for envelope encryption (§7). Shared with the edge
+     * `/v1/secrets` + `/v1/cloudflare-billing` routes; `cloudflareBilling.summary`
+     * reads it to *decrypt* a BYO org's stored Billing-Read token before the
+     * Billable-Usage read. Absent → the costs read no-ops to a "not configured" view.
+     */
+    SECRET_ENCRYPTION_KEY: v.optional(v.string()),
     /** R2 bucket (warehouse) name backing the span archive's Iceberg table. */
     TELEMETRY_BUCKET_NAME: v.optional(v.string()),
     /** AE dataset the tenant `ctx.metrics.*` measurements land in (`/v1/metrics`). Defaults to `TELEMETRY`. */
