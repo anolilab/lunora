@@ -15,6 +15,7 @@
 
 - **Workflows**: pause/restart not implemented (visulima has no equivalent); `create({ id })` is honoured via a durable alias row rather than passed to the engine, which mints its own run ids; `terminate` is not a barrier, so an in-flight activation overwrites the tombstone; `ctx.run` fails (no Node HTTP server); `ctx.parallel` join can't interleave in one trigger. Restart durability is closed — `store` is required and `createNodeWorkflowStore` is a SQLite `WorkflowStore`
 - **Object Storage**: no multipart upload; no presigned URLs; `createNodeR2Bucket` is fs-backed (not production-durable)
+- **Queues**: `createNodeQueueHost` is a durable SQLite table with the full batch/ack/retry/dead-letter contract, driven by `poll()` — there is no timer, because there is no dev server to own one, and `mode: "pull"` queues are written but not consumed. SQLite's single writer is the ceiling: fine for one process, wrong for several. Pluggable drivers are planned in `plans/306-pluggable-queue-drivers.md`
 
 ### Why the R2 layout is one file, not a sidecar tree
 

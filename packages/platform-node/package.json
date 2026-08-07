@@ -63,6 +63,7 @@
         "@lunora/d1": "1.0.0-alpha.56",
         "@lunora/errors": "1.0.0-alpha.12",
         "@lunora/platform": "1.0.0-alpha.3",
+        "@lunora/queue": "1.0.0-alpha.20",
         "@lunora/sql-store": "1.0.0-alpha.58",
         "@lunora/workflow": "1.0.0-alpha.17",
         "@visulima/workflow": "catalog:workflow",

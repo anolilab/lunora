@@ -135,11 +135,12 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  *
  * What remains genuinely absent is everything a single Node process cannot
  * distribute: placement across nodes, failover, and most Cloudflare-specific
- * product bindings (Vectorize, Workers AI, Queues, Containers, Browser
- * Rendering, Analytics Engine, Secrets Store, Hyperdrive). Workflows and object
- * storage are the two that CAN be emulated locally — `defineWorkflow` handlers
- * compile onto the `@visulima/workflow` engine and R2 becomes a filesystem
- * bucket — so those two are rated `"emulated"`; the rest of the Cloudflare
+ * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
+ * Analytics Engine, Secrets Store, Hyperdrive). Workflows, object storage and
+ * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
+ * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
+ * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
+ * semantics — so those three are rated `"emulated"`; the rest of the Cloudflare
  * products most `ctx.*` surfaces are built on are rated `"unsupported"` here
  * rather than left undeclared — see `gateAgainstMatrix` in `@lunora/codegen`,
  * whose fail-closed gate (plan 229) treats an undeclared feature as unsupported
@@ -176,7 +177,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "@lunora/runtime's query coordinator over the in-process shard registry; listShardKeys is seeded from the shard files on disk, and answers every shard rather than only those holding the table (a correct superset, at the cost of visiting shards with nothing to say)",
         },
-        queues: { level: "unsupported", note: "No Cloudflare Queues equivalent implemented" },
+        queues: {
+            level: "emulated",
+            note: 'createNodeQueueHost (@lunora/platform-node) — a QueueBindingLike producer per declared queue over a durable _lunora_queue_messages table, and a batched consumer feeding the same dispatchQueueBatch the Cloudflare host uses. delaySeconds (capped at 12h), all four content types, maxBatchSize/maxBatchTimeout assembly, per-message ack/retry with workerd\'s implicit-ack-on-return and retry-on-throw, maxRetries into a declared deadLetterQueue (or parked in place, never dropped), and a visibility window so a crash mid-handler redelivers. Delivery is driven by poll(); there is no timer, because this host has no dev server to own one. mode: "pull" queues are written but not consumed — nothing here serves the HTTP pull endpoint',
+        },
         workflows: {
             level: "emulated",
             note: "createNodeWorkflowHost (@lunora/platform-node) compiles defineWorkflow handlers onto the @visulima/workflow engine (createRuntime): step/sleep/waitForEvent are durable + replay-safe, status maps to complete/errored/waiting/terminated, create({ id }) is honoured through a durable alias row (so ctx.spawn resolves and a retried create is one run), and runs survive a restart when backed by createNodeWorkflowStore (a SQLite WorkflowStore; the store is required, so no caller silently gets in-process-only state). Gaps: no pause/restart; terminate is not a barrier, so an activation already in flight overwrites the tombstone; ctx.run dispatches to an endpoint no Node HTTP server serves; ctx.parallel's synchronous join cannot interleave within one trigger activation",

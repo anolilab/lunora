@@ -3715,6 +3715,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../queue
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store

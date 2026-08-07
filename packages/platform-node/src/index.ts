@@ -34,6 +34,8 @@ export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodePlatform, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
+export type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
+export { createNodeQueueHost } from "./node-queue-host";
 export type { NodeR2BucketOptions } from "./node-r2-bucket";
 export { createNodeR2Bucket } from "./node-r2-bucket";
 export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";

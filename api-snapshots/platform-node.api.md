@@ -61,6 +61,38 @@ interface NodePlatform {
 type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 ```
 
+### `NodeQueueHost` (interface)
+
+```ts
+interface NodeQueueHost<Queues extends Record<string, {
+    isLunoraQueue: true;
+}>> {
+    readonly bindings: {
+        [K in keyof Queues]: QueueBindingLike;
+    };
+    deadLettered: (queue: string) => {
+        attempts: number;
+        body: unknown;
+        id: string;
+    }[];
+    readonly env: Record<string, unknown>;
+    poll: (now?: number) => Promise<number>;
+}
+```
+
+### `NodeQueueHostOptions` (interface)
+
+```ts
+interface NodeQueueHostOptions<Queues extends Record<string, {
+    isLunoraQueue: true;
+}>> {
+    env?: Record<string, unknown>;
+    onBatch: (batch: MessageBatchLike) => Promise<void> | void;
+    queues: Queues;
+    visibilityTimeoutMs?: number;
+}
+```
+
 ### `NodeR2BucketOptions` (interface)
 
 ```ts
@@ -210,6 +242,14 @@ const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalSto
 
 ```ts
 const createNodePlatform: (options?: NodePlatformOptions) => NodePlatform;
+```
+
+### `createNodeQueueHost` (const)
+
+```ts
+const createNodeQueueHost: <Queues extends Record<string, {
+    isLunoraQueue: true;
+}>>(database: Database.Database, options: NodeQueueHostOptions<Queues>) => NodeQueueHost<Queues>;
 ```
 
 ### `createNodeR2Bucket` (const)
