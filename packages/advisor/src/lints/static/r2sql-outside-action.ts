@@ -40,19 +40,13 @@ const r2sqlOutsideAction: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const call of context.r2sqlCalls) {
-            findings.push(
-                emit(r2sqlOutsideAction, {
-                    cacheKey: `r2sql_outside_action:${call.file}:${call.line.toString()}:${call.callee}`,
-                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — R2 SQL's \`ctx.r2sql\` is non-deterministic and non-reactive, so it is available only in actions. Move the external query into an \`action\` and project the result into a Lunora table if a query/mutation needs it.`,
-                    metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
-                }),
-            );
-        }
-
-        return findings;
+        return context.r2sqlCalls.map((call) =>
+            emit(r2sqlOutsideAction, {
+                cacheKey: `r2sql_outside_action:${call.file}:${call.line.toString()}:${call.callee}`,
+                detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — R2 SQL's \`ctx.r2sql\` is non-deterministic and non-reactive, so it is available only in actions. Move the external query into an \`action\` and project the result into a Lunora table if a query/mutation needs it.`,
+                metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
+            }),
+        );
     },
     source: "static",
     title: "R2 SQL `ctx.r2sql` used outside an action",

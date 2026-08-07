@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
 import { useRef, useState } from "react";
 
-import { useMirroredRef } from "../../../hooks/use-mirrored-ref";
+import useMirroredRef from "../../../hooks/use-mirrored-ref";
 import type { FacetResult } from "../../../lib/admin";
 import { errorMessage, fireAndForget } from "../../../lib/internal";
 

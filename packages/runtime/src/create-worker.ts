@@ -7,6 +7,7 @@ import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { otlpRandomHex } from "../../../shared/otlp";
 import { relayName } from "../../../shared/relay-name";
@@ -24,7 +25,7 @@ import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
-import { collectKnownTables, streamExportRows } from "./export-stream";
+import { streamExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
 import { buildHealthRoutes, d1Probe, durableObjectProbe, presenceProbe } from "./health-routes";
@@ -36,6 +37,7 @@ import type { KvIntrospector } from "./kv-admin-routes";
 import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv-admin-routes";
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
+import { assertMethod } from "./method-guard";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
@@ -1966,13 +1968,32 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
         return undefined;
     }
 
-    for (const [key, value] of Object.entries(env)) {
-        if (value === namespace) {
-            return key;
+    return Object.entries(env).find(([, value]) => value === namespace)?.[0];
+};
+
+/** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers. */
+const shardRpcRequest = (functionPath: string, args: Record<string, unknown>, headers: Record<string, string>): Request =>
+    new Request("https://shard.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers, method: "POST" });
+
+/** The server-minted identity trio the DOs trust verbatim on an upgrade. */
+const IDENTITY_HEADER_NAMES = ["x-lunora-userid", "x-lunora-identity", "x-lunora-identity-exp"] as const;
+
+/**
+ * SECURITY: strip any client-supplied copy of the identity trio from an upgrade
+ * clone, then re-set the server-minted values off `resolveForwardContext`'s
+ * headers — an absent resolved value stays stripped, so an anonymous caller can
+ * never smuggle a forged `x-lunora-userid` through to the DO.
+ */
+const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, string>): void => {
+    for (const name of IDENTITY_HEADER_NAMES) {
+        headers.delete(name);
+
+        const value = forwardedHeaders[name];
+
+        if (value !== undefined) {
+            headers.set(name, value);
         }
     }
-
-    return undefined;
 };
 
 /**
@@ -1984,8 +2005,8 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
 
 /**
  * Verify an HMAC-SHA-256 (base64url, unpadded) signature over `body` against
- * `secret`. Mirrors `@lunora/scheduler`'s `signDispatch` and `@lunora/storage`'s
- * signed-URL HMAC pattern (WebCrypto `crypto.subtle`). We re-derive the expected
+ * `secret`. Mirrors `@lunora/scheduler`'s `signDispatch` via the shared
+ * `signCanonical` (same envelope, one implementation). We re-derive the expected
  * signature and constant-time compare the encoded strings so a forged or absent
  * signature can never authenticate a dispatch.
  */
@@ -1994,19 +2015,7 @@ const verifyHmacSignature = async (secret: string, body: string, suppliedSignatu
         return false;
     }
 
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-    const bytes = new Uint8Array(signature);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    const expected = btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-
-    return constantTimeEqual(expected, suppliedSignature);
+    return constantTimeEqual(await signCanonical(secret, body), suppliedSignature);
 };
 
 const checkAdminAuth = (request: Request, expected: string | undefined): boolean => {
@@ -2294,6 +2303,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         );
     };
 
+    /**
+     * Per-shard authorization, shared by the RPC, WebSocket-upgrade, and
+     * server-dispatch paths: run `authorizeShard` when configured (403
+     * `FORBIDDEN_SHARD` on deny); otherwise a non-default shard is
+     * default-denied via {@link guardUnauthenticatedShardAccess}. `guard: false`
+     * skips that fallback — system dispatch (a scheduler/cron job) may target
+     * any shard when no gate is configured.
+     */
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, guard = true): Promise<void> => {
+        if (options.authorizeShard) {
+            const allowed = await options.authorizeShard(identity, shardKey);
+
+            if (!allowed) {
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+            }
+        } else if (guard && shardKey !== defaultShard) {
+            guardUnauthenticatedShardAccess("shard");
+        }
+    };
+
     // The cross-shard orchestration (`migrate` / `rank` / `rankpage` /
     // `shard-traffic`) + single-shard `pitr` handlers live in a sibling module;
     // they reach the admin gate, coordinator, shard namespace, and forward
@@ -2320,14 +2349,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
     ): Promise<Response> => {
-        if (options.authorizeShard) {
-            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
-            const allowed = await options.authorizeShard(null, shardKey);
-
-            if (!allowed) {
-                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-            }
-        }
+        // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
+        await assertShardAuthorized(null, shardKey, false);
 
         // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
         // shard may run `internal` functions (scheduled/cron jobs are typically
@@ -2361,13 +2384,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             headers["x-lunora-mutation-id"] = mutationId;
         }
 
-        const forwarded = new Request("https://shard.internal/rpc", {
-            body: JSON.stringify({ args, functionPath }),
-            headers,
-            method: "POST",
-        });
-
-        return forwardToShard(shardDO, shardKey, forwarded);
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
 
     /**
@@ -2375,7 +2392,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `create()` it with `args` as its `params`. A missing/malformed binding is a
      * hard failure (the job can't run) surfaced as a 500, so the caller's
      * invocation fails rather than silently no-op'ing. Shared by cron-fire
-     * ({@link startCronWorkflow}) and one-shot scheduler dispatch
+     * ({@link runOneCronJob}) and one-shot scheduler dispatch
      * ({@link handleSchedulerDispatch}); `label` names the caller in the error.
      */
     const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string): Promise<void> => {
@@ -2404,14 +2421,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Start the durable workflow a cron job targets. Thin wrapper over
-     * {@link startWorkflowInstance} carrying the cron job's `args` + a job-named
-     * error label.
-     */
-    const startCronWorkflow = async (binding: string, job: CronJobDispatch, env: unknown): Promise<void> =>
-        startWorkflowInstance(binding, job.args ?? {}, env, `cron job "${job.name}"`);
-
-    /**
      * Run one code-defined cron job: start its durable workflow instance, or
      * dispatch its function to the shard (a non-2xx response is a failure).
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
@@ -2419,7 +2428,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      */
     const runOneCronJob = async (job: CronJobDispatch, env: unknown): Promise<void> => {
         if (job.workflow) {
-            await startCronWorkflow(job.workflow, job, env);
+            await startWorkflowInstance(job.workflow, job.args ?? {}, env, `cron job "${job.name}"`);
 
             return;
         }
@@ -2478,9 +2487,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
-        if (request.method !== "POST") {
-            throw new LunoraError("cron-jobs run endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "cron-jobs run");
 
         if (!options.cronJobs) {
             throw new LunoraError("cron-jobs run endpoint requires a `cronJobs` map on the worker", { code: "CRON_JOBS_NOT_CONFIGURED", status: 400 });
@@ -2550,9 +2557,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * propagated.
      */
     const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "Scheduler dispatch");
 
         // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
         // these exact bytes, so we must verify before re-encoding/parsing.
@@ -2777,7 +2782,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         assertAdmin: assertAdminAuthorized,
         exportCursorStore: options.exportCursorStore,
         exportSinks: options.exportSinks,
-        knownTables: () => collectKnownTables(options.resolveTableSharding),
+        // The runtime carries no schema, so it cannot enumerate tables itself;
+        // callers pass explicit `tables` (the CLI always does) and this seam
+        // stays for a host that can.
+        knownTables: () => [],
         queryCoordinator: options.queryCoordinator,
         requireAdminOption,
         resolveForwardContext: resolveAdminForwardContext,
@@ -3053,8 +3061,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
 
-            const forwarded = new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args, functionPath }),
+            const forwarded = shardRpcRequest(
+                functionPath,
+                args,
                 // `x-lunora-system` marks this a trusted server-initiated dispatch, so
                 // the shard will run `internal` functions — exactly as on the
                 // scheduler path above, and for the same reason.
@@ -3077,9 +3086,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // copies `x-lunora-system` off the inbound request, so a client cannot
                 // forge it. The external client path (`/_lunora/rpc`, and SSR loaders
                 // that go through it) never passes here and stays gated.
-                headers: { ...headers, "x-lunora-system": "1" },
-                method: "POST",
-            });
+                { ...headers, "x-lunora-system": "1" },
+            );
 
             const response = await forwardToShard(shardDO, defaultShard, forwarded);
             const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
@@ -3181,15 +3189,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
-        if (options.authorizeShard) {
-            const allowed = await options.authorizeShard(identity, shardKey);
-
-            if (!allowed) {
-                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-            }
-        } else if (shardKey !== defaultShard) {
-            guardUnauthenticatedShardAccess("shard");
-        }
+        await assertShardAuthorized(identity, shardKey);
 
         // Clone the upgrade request, attaching only the resolved identity headers.
         // The original headers — crucially `Upgrade: websocket` — are preserved so
@@ -3217,21 +3217,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 upgradeHeaders.delete(name);
             }
         }
-        const forwardedUserId = forwardedHeaders["x-lunora-userid"];
-        const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
-        const forwardedExp = forwardedHeaders["x-lunora-identity-exp"];
 
-        if (forwardedUserId !== undefined) {
-            upgradeHeaders.set("x-lunora-userid", forwardedUserId);
-        }
-
-        if (forwardedIdentity !== undefined) {
-            upgradeHeaders.set("x-lunora-identity", forwardedIdentity);
-        }
-
-        if (forwardedExp !== undefined) {
-            upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
-        }
+        setIdentityHeaders(upgradeHeaders, forwardedHeaders);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
@@ -3329,28 +3316,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // SECURITY: `x-lunora-userid` / `x-lunora-identity` are server-minted and
-        // trusted verbatim by the DO. Strip any client-supplied copies from the
-        // clone unconditionally before re-setting the resolved values — otherwise a
-        // caller could forge an identity the anonymous path never overwrites.
+        // trusted verbatim by the DO — `setIdentityHeaders` strips any
+        // client-supplied copies before re-setting the resolved values.
         const upgradeHeaders = new Headers(request.headers);
-        upgradeHeaders.delete("x-lunora-userid");
-        upgradeHeaders.delete("x-lunora-identity");
-        upgradeHeaders.delete("x-lunora-identity-exp");
-        const forwardedUserId = forwardedHeaders["x-lunora-userid"];
-        const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
-        const forwardedExp = forwardedHeaders["x-lunora-identity-exp"];
 
-        if (forwardedUserId !== undefined) {
-            upgradeHeaders.set("x-lunora-userid", forwardedUserId);
-        }
-
-        if (forwardedIdentity !== undefined) {
-            upgradeHeaders.set("x-lunora-identity", forwardedIdentity);
-        }
-
-        if (forwardedExp !== undefined) {
-            upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
-        }
+        setIdentityHeaders(upgradeHeaders, forwardedHeaders);
 
         return forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders }));
     };
@@ -3439,18 +3409,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return;
         }
 
-        if (options.authorizeShard) {
-            const shardKeyForAuth = envelope.shardKey ?? defaultShard;
-            const allowed = await options.authorizeShard(identity, shardKeyForAuth);
-
-            if (!allowed) {
-                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
-            }
-        } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
-            // No per-shard gate and the caller named a non-default shard:
-            // default-denied unless unauthenticated shard access is opted in.
-            guardUnauthenticatedShardAccess("shard");
-        }
+        // No per-shard gate and the caller named a non-default shard:
+        // default-denied unless unauthenticated shard access is opted in.
+        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard);
     };
 
     /**
@@ -3500,11 +3461,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         injectTraceContext(trace, outgoingHeaders);
 
         // Re-emit the RPC body to the shard at its `/rpc` route.
-        const forwarded = new Request(`https://shard.internal/rpc`, {
-            body: JSON.stringify({ args, functionPath }),
-            headers: outgoingHeaders,
-            method: "POST",
-        });
+        const forwarded = shardRpcRequest(functionPath, args, outgoingHeaders);
 
         try {
             const response = await forwardToShard(shardDO, shardKey, forwarded);
@@ -3589,9 +3546,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "RPC");
 
         const envelope = await parseEnvelope(request);
 
@@ -3726,9 +3681,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * (see plan 088 §fence — incompatible with DO hibernation).
      */
     const handleBatchRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("RPC batch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "RPC batch");
 
         // `readJsonBodyWithLimit` now rejects a non-object body (`null` / an array /
         // a bare scalar) itself, matching what this handler used to check by hand.
@@ -4285,13 +4238,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return;
             }
 
-            const recordRequest = new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: { outcome }, functionPath: RECORD_AUTH_EVENT_OP }),
-                headers: { authorization: `Bearer ${adminBearer}`, "content-type": "application/json" },
-                method: "POST",
-            });
-
-            await forwardToShard(shardDO, defaultShard, recordRequest);
+            await forwardToShard(
+                shardDO,
+                defaultShard,
+                shardRpcRequest(RECORD_AUTH_EVENT_OP, { outcome }, { authorization: `Bearer ${adminBearer}`, "content-type": "application/json" }),
+            );
         } catch {
             // Best-effort: a recording failure must be silent and must never
             // affect the auth response that already went out.
@@ -4400,9 +4351,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // verify statelessly and rotating `LUNORA_ADMIN_TOKEN` invalidates every
         // outstanding sub-token. `no-store` keeps the token out of caches.
         [ADMIN_WS_TOKEN_PATH]: async (request) => {
-            if (request.method !== "POST") {
-                throw new LunoraError("ws-token endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-            }
+            assertMethod(request, "POST", "ws-token");
 
             assertAdminAuthorized(request);
 

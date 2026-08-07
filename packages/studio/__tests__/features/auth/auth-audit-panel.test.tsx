@@ -2,7 +2,7 @@ import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { AuthAuditPanel } from "../../../src/features/auth/auth-audit-panel";
+import AuthAuditPanel from "../../../src/features/auth/auth-audit-panel";
 import type { AuthAuditEntry } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";

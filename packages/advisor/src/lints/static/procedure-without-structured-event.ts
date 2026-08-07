@@ -30,24 +30,16 @@ const procedureWithoutStructuredEvent: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.procedureProtections) {
-            // `undefined` means the feeder could not read the body — don't nag.
-            if (procedure.visibility !== "public" || procedure.kind === "query" || procedure.emitsEvent !== false) {
-                continue;
-            }
-
-            findings.push(
+        // `emitsEvent === undefined` means the feeder could not read the body — don't nag.
+        return context.procedureProtections
+            .filter((procedure) => procedure.visibility === "public" && procedure.kind !== "query" && procedure.emitsEvent === false)
+            .map((procedure) =>
                 emit(procedureWithoutStructuredEvent, {
                     cacheKey: `procedure_without_structured_event:${procedure.file}:${procedure.exportName}`,
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) emits no structured event. Add a \`ctx.log\` line or a \`ctx.span\` so a failure carries its request context.`,
                     metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Public write emits no structured event",

@@ -30,3 +30,21 @@ export const runDrizzle = <Row = Record<string, unknown>>(exec: SqlExec, query: 
 
     return runSql<Row>(exec, text, ...params);
 };
+
+/** A string value or SQL NULL for an absent column. */
+export const orNull = (value: string | undefined): null | string =>
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for an absent column.
+    value ?? null;
+
+/** Parse a JSON TEXT column back to its value, tolerating null/garbage (returns undefined). */
+export const decodeJsonColumn = (value: null | string | undefined): unknown => {
+    if (value === null || value === undefined || value === "") {
+        return undefined;
+    }
+
+    try {
+        return JSON.parse(value) as unknown;
+    } catch {
+        return undefined;
+    }
+};

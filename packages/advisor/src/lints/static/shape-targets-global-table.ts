@@ -1,4 +1,5 @@
 import emit from "../../finding";
+import type { AdvisorShape } from "../../shapes";
 import type { Lint } from "../../types";
 
 /**
@@ -39,23 +40,16 @@ const shapeTargetsGlobalTable: Lint = {
         }
 
         const globalTables = new Set(context.schema.tables.filter((table) => table.shardKind === "global").map((table) => table.name));
-        const findings = [];
 
-        for (const shape of context.shapes) {
-            if (shape.table === undefined || !globalTables.has(shape.table)) {
-                continue;
-            }
-
-            findings.push(
+        return context.shapes
+            .filter((shape): shape is AdvisorShape & { table: string } => shape.table !== undefined && globalTables.has(shape.table))
+            .map((shape) =>
                 emit(shapeTargetsGlobalTable, {
                     cacheKey: `shape_targets_global_table:${shape.exportName}`,
                     detail: `Shape \`${shape.exportName}\` (${shape.file}) replicates from the \`.global()\` table \`${shape.table}\`. It is served through the cross-shard global tier — poll-refreshed and latency-tiered, not poke-live.`,
                     metadata: { exportName: shape.exportName, file: shape.file, table: shape.table },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Shape replicates from a global (cross-shard) table",

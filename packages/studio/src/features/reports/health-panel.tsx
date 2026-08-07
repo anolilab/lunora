@@ -15,7 +15,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { loadRecentShards } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
-import { HealthDigest } from "./health-digest";
+import HealthDigest from "./health-digest";
 import { shardsToAggregate } from "./metrics-aggregate";
 import type { ShardSloResult, SloTotals } from "./slo-aggregate";
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate";

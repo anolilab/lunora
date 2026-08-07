@@ -27,6 +27,7 @@
  * choice, never a default.
  */
 
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { IdentityResolver } from "./identity-resolvers";
 
 /**
@@ -208,17 +209,8 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
         // first so the re-insert moves it to the back — the eviction loop reads
         // insertion order as recency.
         cache.delete(key);
+        evictOldestEntry(cache, maxEntries);
         cache.set(key, { expiresAt: now + ttlMs, value: pending });
-
-        while (cache.size > maxEntries) {
-            const oldest = cache.keys().next();
-
-            if (oldest.done === true) {
-                break;
-            }
-
-            cache.delete(oldest.value);
-        }
 
         return pending;
     };

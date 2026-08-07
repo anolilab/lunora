@@ -34,14 +34,9 @@
  */
 import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
-import type { Permission, Role, StorageOperation, StorageRule, StorageRuleContext, StorageRulesOptions } from "./types";
-
-/** The minimal `ctx.auth` shape the middleware reads — a structural subset that the full AuthState satisfies. Tolerant of older auth states (mirrors RLS's `AuthLike`). */
-type StorageAuthLike = {
-    getIdentity?: () => Promise<Record<string, unknown> | null>;
-    roles?: ReadonlyArray<string>;
-    userId?: null | string;
-};
+import type { AuthLike } from "../rls/middleware";
+import { indexRolePermissions, resolvePolicyAuth } from "../rls/middleware";
+import type { StorageOperation, StorageRule, StorageRuleContext, StorageRulesOptions } from "./types";
 
 /** The wrappable subset of `ctx.storage`. Methods absent on a read-only storage are simply not wrapped. */
 interface WrappableStorage {
@@ -59,28 +54,9 @@ interface WrappableStorage {
 }
 
 interface StorageContextIn {
-    auth?: StorageAuthLike;
+    auth?: AuthLike;
     storage?: unknown;
 }
-
-const permissionName = (permission: Permission | string): string => (typeof permission === "string" ? permission : permission.name);
-
-/** Map each role to the set of permission names it grants, for the `can(...)` lookup. */
-const indexRolePermissions = (roles: ReadonlyArray<Role> = []): Map<string, Set<string>> => {
-    const byRole = new Map<string, Set<string>>();
-
-    for (const role of roles) {
-        const granted = new Set<string>();
-
-        for (const permission of role.permissions ?? []) {
-            granted.add(permissionName(permission));
-        }
-
-        byRole.set(role.name, granted);
-    }
-
-    return byRole;
-};
 
 /** A rule governs a key when its prefix is absent (whole bucket) or the key sits under it. */
 const prefixMatches = (prefix: string | undefined, key: string): boolean => prefix === undefined || key.startsWith(prefix);
@@ -135,26 +111,7 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
     const rolePermissions = indexRolePermissions(options.roles);
 
     return async ({ ctx, next }) => {
-        const auth: StorageAuthLike = ctx.auth ?? {};
-        // eslint-disable-next-line unicorn/no-null -- StorageRuleContext.auth.identity carries `null` for the anonymous/no-resolver case
-        const identity = (await auth.getIdentity?.()) ?? null;
-        const roles = auth.roles ?? [];
-
-        const granted = new Set<string>();
-
-        for (const roleName of roles) {
-            for (const name of rolePermissions.get(roleName) ?? []) {
-                granted.add(name);
-            }
-        }
-
-        const authContext: StorageRuleContext<Context>["auth"] = {
-            can: (permission) => granted.has(permissionName(permission)),
-            identity,
-            roles,
-            // eslint-disable-next-line unicorn/no-null -- StorageRuleContext.auth.userId is a public `null | string` type
-            userId: auth.userId ?? null,
-        };
+        const authContext: StorageRuleContext<Context>["auth"] = await resolvePolicyAuth(ctx.auth ?? {}, rolePermissions);
 
         /**
          * Throw `FORBIDDEN` unless no rule governs `(op, bucketName)` or a matching

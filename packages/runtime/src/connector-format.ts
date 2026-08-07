@@ -91,10 +91,13 @@ const DEFAULT_PRIMARY_KEY = "_id";
  * map to override per table, used to fill the `schema` block.
  */
 const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, string> | string = DEFAULT_PRIMARY_KEY): FivetranResponse => {
-    const insert: Record<string, Record<string, unknown>[]> = {};
-    const update: Record<string, Record<string, unknown>[]> = {};
-    const remove: Record<string, Record<string, unknown>[]> = {};
-    const schema: Record<string, { primary_key: string[] }> = {};
+    // Null-prototype accumulators: `change.table` is connector input, so a
+    // proto-string table name (`__proto__`, `constructor`) must not reach
+    // Object.prototype's setters — write it as an own property instead.
+    const insert = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const update = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const remove = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const schema = Object.create(null) as Record<string, { primary_key: string[] }>;
 
     const pkFor = (table: string): string => (typeof primaryKey === "string" ? primaryKey : (primaryKey[table] ?? DEFAULT_PRIMARY_KEY));
 
@@ -121,7 +124,10 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
         } else if (change.op === "update") {
             bucketFor(update, change.table).push(change.doc);
         } else {
-            // `insert` and `upsert` both map to Fivetran's upsert-on-PK `insert`.
+            // `insert`, `upsert`, and any op outside the Fivetran verbs (a
+            // connector that has drifted from the schema) all land in `insert` —
+            // Fivetran upserts on primary key, so the row still lands and a sync
+            // never hard-fails on one unknown op.
             bucketFor(insert, change.table).push(change.doc);
         }
     }

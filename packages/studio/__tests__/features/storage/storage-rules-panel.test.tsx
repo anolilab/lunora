@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { StorageRulesPanel } from "../../../src/features/storage/storage-rules-panel";
+import StorageRulesPanel from "../../../src/features/storage/storage-rules-panel";
 import type { StorageRulesResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";

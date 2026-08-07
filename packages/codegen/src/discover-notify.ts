@@ -2,9 +2,10 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "@lunora/advisor";
-import type { CallExpression, Expression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { defaultExportExpression, handlerOf } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 
 /** The only file a `@lunora/notify` provider may be declared in — mirrors `lunora/flags.ts`. */
@@ -15,38 +16,6 @@ const NOTIFY_SEND_METHODS = new Set(["chat", "inApp", "send", "webhook"]);
 
 /** `ctx.push.<method>` sends the lint records — the two device-push delivery calls (register/list/unregister are store ops, not sends). */
 const PUSH_SEND_METHODS = new Set(["broadcast", "send"]);
-
-/**
- * The handler function of a query/mutation registration — its terminal-builder
- * argument or the `handler:` property of the bare-factory object literal. Returns
- * `undefined` when the handler isn't a statically recognisable function
- * expression. Mirrors `discoverR2sqlCalls` / `discoverNondeterministicCalls`.
- */
-const handlerOf = (call: CallExpression, receiver: TsNode | undefined): TsNode | undefined => {
-    // Builder terminal: the handler is the terminal call's first argument.
-    if (receiver) {
-        const handler = call.getArguments()[0];
-
-        return handler && (Node.isArrowFunction(handler) || Node.isFunctionExpression(handler)) ? handler : undefined;
-    }
-
-    // Bare factory: pull the `handler:` property off the first object-literal argument.
-    const first = call.getArguments()[0];
-
-    if (!first || !Node.isObjectLiteralExpression(first)) {
-        return undefined;
-    }
-
-    const handlerProperty = first.getProperty("handler");
-
-    if (!handlerProperty || !Node.isPropertyAssignment(handlerProperty)) {
-        return undefined;
-    }
-
-    const initializer = handlerProperty.getInitializer();
-
-    return initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer)) ? initializer : undefined;
-};
 
 /** One resolved handler with its attribution (kind kept broad so the push-usage scan can include actions). */
 interface ResolvedProcedure {
@@ -209,29 +178,6 @@ const projectUsesPush = (project: Project, lunoraDirectory: string): boolean => 
     }
 
     return false;
-};
-
-/** Resolve the `export default` expression, following one `const x = …; export default x` indirection. Mirrors `discoverFlags`. */
-const defaultExportExpression = (source: SourceFile): Expression | undefined => {
-    const assignment = source.getExportAssignment((declaration) => !declaration.isExportEquals());
-
-    if (!assignment) {
-        return undefined;
-    }
-
-    const expression = assignment.getExpression();
-
-    if (!Node.isIdentifier(expression)) {
-        return expression;
-    }
-
-    const declaration = expression.getSymbol()?.getValueDeclaration();
-
-    if (declaration && Node.isVariableDeclaration(declaration)) {
-        return declaration.getInitializer();
-    }
-
-    return expression;
 };
 
 /**

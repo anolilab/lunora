@@ -28,6 +28,7 @@
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { SqlExec } from "./ctx-db";
+import { runSql } from "./do-exec";
 
 /** Reserved table name. Auto-hidden from the data browser by the `__lunora` prefix. */
 const SCHEMA_HISTORY_TABLE = "__lunora_schema_history";
@@ -61,11 +62,16 @@ interface RawVersionRow {
     snapshot_json?: unknown;
 }
 
-/** Indirection that lets us call `exec` without typing the literal the secret-scan hook flags. */
-const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...parameters: unknown[]): { toArray: () => Row[] } =>
-    sql.exec(query, ...parameters) as unknown as { toArray: () => Row[] };
-
 const TABLE = quoteIdentifier(SCHEMA_HISTORY_TABLE);
+
+/** Decode a `SELECT` row onto the ledger shape (the detail read adds `snapshotJson` itself). */
+const toVersionRow = (row: RawVersionRow): SchemaVersionRow => {
+    return {
+        appliedAt: typeof row.applied_at === "number" ? row.applied_at : 0,
+        hash: typeof row.hash === "string" ? row.hash : "",
+        seq: typeof row.seq === "number" ? row.seq : 0,
+    };
+};
 
 /** Create the ledger table. Idempotent; safe on every cold start. */
 const ensureSchemaHistoryTable = (sql: SqlExec): void => {
@@ -143,13 +149,7 @@ const readSchemaHistory = (sql: SqlExec): SchemaVersionRow[] => {
 
         return runSql<RawVersionRow>(sql, `SELECT hash, seq, applied_at FROM ${TABLE} ORDER BY seq DESC`)
             .toArray()
-            .map((row) => {
-                return {
-                    appliedAt: typeof row.applied_at === "number" ? row.applied_at : 0,
-                    hash: typeof row.hash === "string" ? row.hash : "",
-                    seq: typeof row.seq === "number" ? row.seq : 0,
-                };
-            });
+            .map((row) => toVersionRow(row));
     } catch {
         return [];
     }
@@ -166,12 +166,7 @@ const readSchemaVersion = (sql: SqlExec, hash: string): SchemaVersionRow | undef
             return undefined;
         }
 
-        return {
-            appliedAt: typeof row.applied_at === "number" ? row.applied_at : 0,
-            hash: typeof row.hash === "string" ? row.hash : "",
-            seq: typeof row.seq === "number" ? row.seq : 0,
-            snapshotJson: typeof row.snapshot_json === "string" ? row.snapshot_json : "",
-        };
+        return { ...toVersionRow(row), snapshotJson: typeof row.snapshot_json === "string" ? row.snapshot_json : "" };
     } catch {
         return undefined;
     }

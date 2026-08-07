@@ -132,4 +132,4 @@ const runPostCodegenHook = async (options: {
 };
 
 export type { PostCodegenHookResult };
-export { POST_CODEGEN_SCRIPT, runPostCodegenHook };
+export { runPostCodegenHook };

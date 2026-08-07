@@ -16,6 +16,7 @@
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
@@ -49,22 +50,25 @@ const decodeDocJson = (raw: string): Record<string, unknown> => decodeWire(JSON.
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
 const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
 
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
-
-const jsonPath = (field: string): string => {
-    // Internal columns live alongside the doc; expose them via the
-    // dedicated stored column so SQLite can hit the regular index lookup
-    // path instead of decoding JSON.
+/**
+ * Shared body of {@link jsonPath} / {@link qualifiedJsonPath}; `prefix` is `""`
+ * or a quoted `"table".` qualifier. Internal columns live alongside the doc;
+ * expose them via the dedicated stored column so SQLite can hit the regular
+ * index lookup path instead of decoding JSON.
+ */
+const documentPath = (prefix: string, field: string): string => {
     if (field === "_id" || field === "id") {
-        return "id";
+        return `${prefix}id`;
     }
 
     if (field === "_creationTime") {
-        return "_creationTime";
+        return `${prefix}_creationTime`;
     }
 
-    return `json_extract(${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
+    return `json_extract(${prefix}${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
 };
+
+const jsonPath = (field: string): string => documentPath("", field);
 
 /**
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
@@ -81,19 +85,7 @@ const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
  * the child side its alias, so neither binds to the wrong scope on a
  * self-relation. Mirrors `jsonPath`'s `_id`/`id`/`_creationTime` column mapping.
  */
-const qualifiedJsonPath = (table: string, field: string): string => {
-    const qualified = quoteIdentifier(table);
-
-    if (field === "_id" || field === "id") {
-        return `${qualified}.id`;
-    }
-
-    if (field === "_creationTime") {
-        return `${qualified}._creationTime`;
-    }
-
-    return `json_extract(${qualified}.${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
-};
+const qualifiedJsonPath = (table: string, field: string): string => documentPath(`${quoteIdentifier(table)}.`, field);
 
 /** Table-qualified twin of {@link jsonPathSql} for EXISTS correlation refs. */
 const qualifiedJsonPathSql = (table: string, field: string): SQL => dsql.raw(qualifiedJsonPath(table, field));
@@ -223,7 +215,7 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     return available;
 };
 
-export { serializeSqlValue } from "./serialize-sql";
+export { quoteIdentifier } from "../../../shared/quote-identifier";
 export {
     AGG_COUNT,
     AGG_KEY,
@@ -239,8 +231,9 @@ export {
     jsonPathSql,
     qualifiedJsonPath,
     qualifiedJsonPathSql,
-    quoteIdentifier,
     rowToDocument,
     tableColumns,
     tryRowToDocument,
 };
+
+export { serializeSqlValue } from "./serialize-sql";

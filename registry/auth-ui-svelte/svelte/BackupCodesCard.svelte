@@ -11,7 +11,7 @@
     import AuthCard from "./AuthCard.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SubmitButton from "./SubmitButton.svelte";
 
@@ -40,19 +40,7 @@
             }}
         >
             <FormBanner error={$form.formError} success={$form.successMessage} />
-            <Field
-                autoComplete="current-password"
-                field={$form.fields.password}
-                label={t.currentPasswordLabel}
-                name="password"
-                onBlur={() => {
-                    actions.blur("password");
-                }}
-                onChange={(value) => {
-                    actions.setField("password", value);
-                }}
-                type="password"
-            />
+            <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.currentPasswordLabel} type="password" />
             <SubmitButton pending={$form.status === "submitting"}>{t.backupCodesRegenerate}</SubmitButton>
         </form>
         {#if codes.length > 0}

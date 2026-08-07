@@ -7,7 +7,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ExportMenu } from "../data/grid-features";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
-import { SqlResultTable } from "./sql-result-table";
+import SqlResultTable from "./sql-result-table";
 import type { ResultTab } from "./sql-tabs";
 
 /** One result-pane tab's classes, selected or not. */
@@ -162,4 +162,4 @@ const SqlResultsPane = ({
     );
 };
 
-export { SqlResultsPane };
+export default SqlResultsPane;

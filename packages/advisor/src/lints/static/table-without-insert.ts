@@ -37,25 +37,17 @@ const tableWithoutInsert: Lint = {
 
         const insertedTables = new Set(context.inserts.filter((write) => write.table !== "").map((write) => write.table));
 
-        const findings = [];
-
-        for (const table of context.schema.tables) {
-            // Skip tables that already insert, and those explicitly acknowledged
-            // as written outside Lunora via `.externallyManaged()`.
-            if (insertedTables.has(table.name) || table.externallyManaged === true) {
-                continue;
-            }
-
-            findings.push(
+        // Skip tables that already insert, and those explicitly acknowledged
+        // as written outside Lunora via `.externallyManaged()`.
+        return context.schema.tables
+            .filter((table) => !insertedTables.has(table.name) && table.externallyManaged !== true)
+            .map((table) =>
                 emit(tableWithoutInsert, {
                     cacheKey: `table_without_insert:${table.name}`,
                     detail: `No function calls \`ctx.db.insert("${table.name}", …)\` — table "${table.name}" has no discovered insert path.`,
                     metadata: { table: table.name },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Table has no insert path",

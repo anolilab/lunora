@@ -139,28 +139,25 @@ interface R2UploadStorageOptions {
 // `@visulima/storage-client`'s `UploadError` surfaces `status` + `code`.
 const TUS_RESUMABLE = "1.0.0";
 
-const denyResponse = (protocol: UploadProtocol): Response => {
+const errorResponse = (protocol: UploadProtocol, status: number, error: { code: string; message: string; name: string }): Response => {
     const headers: Record<string, string> = { "content-type": "application/json" };
 
     if (protocol === "tus") {
         headers["Tus-Resumable"] = TUS_RESUMABLE;
     }
 
-    return Response.json({ error: { code: "FORBIDDEN", message: "Upload denied by authorization policy", name: "ForbiddenError" } }, { headers, status: 403 });
+    return Response.json({ error }, { headers, status });
 };
 
-const tooLargeResponse = (protocol: UploadProtocol): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
+const denyResponse = (protocol: UploadProtocol): Response =>
+    errorResponse(protocol, 403, { code: "FORBIDDEN", message: "Upload denied by authorization policy", name: "ForbiddenError" });
 
-    if (protocol === "tus") {
-        headers["Tus-Resumable"] = TUS_RESUMABLE;
-    }
-
-    return Response.json(
-        { error: { code: "REQUEST_ENTITY_TOO_LARGE", message: "Upload exceeds the configured maxFileSize", name: "RequestEntityTooLargeError" } },
-        { headers, status: 413 },
-    );
-};
+const tooLargeResponse = (protocol: UploadProtocol): Response =>
+    errorResponse(protocol, 413, {
+        code: "REQUEST_ENTITY_TOO_LARGE",
+        message: "Upload exceeds the configured maxFileSize",
+        name: "RequestEntityTooLargeError",
+    });
 
 /**
  * Best-effort declared upload size read off the request, checked against

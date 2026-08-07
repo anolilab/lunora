@@ -813,6 +813,13 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         }
     };
 
+    /** Pass-through `.then` callback: notify subscription listeners after a successful top-level mutation entry. */
+    const notifyAfter = <R>(result: R): R => {
+        notifyMutationListeners();
+
+        return result;
+    };
+
     // The fake scheduler is created once per harness (not per makeHarness view).
     // The top-level dispatch and mutationContext are not available yet at
     // construction time, so we use thunks to resolve them lazily.
@@ -834,37 +841,19 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // runtime would — a composed call reuses the outer dispatch's span).
     const dispatchSpan = createRecordingSpan();
 
+    /** Guard for the lazily-wired scheduler references: fail loudly if a sweep runs before harness construction completed. */
+    const requireReference = <T>(value: T | undefined, name: string): T => {
+        if (value === undefined) {
+            throw new LunoraError("INTERNAL", `[fake-scheduler] ${name} not yet available — scheduler.advance called before harness construction completed`);
+        }
+
+        return value;
+    };
+
     const { controls: schedulerControls, scheduler: fakeScheduler } = createFakeScheduler(
-        () => {
-            if (scheduledDispatchRef === undefined) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    "[fake-scheduler] dispatch not yet available — scheduler.advance called before harness construction completed",
-                );
-            }
-
-            return scheduledDispatchRef;
-        },
-        () => {
-            if (mutationContextRef === undefined) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    "[fake-scheduler] mutationContext not yet available — scheduler.advance called before harness construction completed",
-                );
-            }
-
-            return mutationContextRef;
-        },
-        () => {
-            if (actionContextRef === undefined) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    "[fake-scheduler] actionContext not yet available — scheduler.advance called before harness construction completed",
-                );
-            }
-
-            return actionContextRef;
-        },
+        () => requireReference(scheduledDispatchRef, "dispatch"),
+        () => requireReference(mutationContextRef, "mutationContext"),
+        () => requireReference(actionContextRef, "actionContext"),
         () => functionRegistryMap,
         harnessNow,
     );
@@ -1008,11 +997,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
         scheduledDispatchRef ??= (kind, reference, context, args) => {
             if (kind === "mutation") {
-                return runInMutationTransaction(() => runRegistered("mutation", reference as never, context, args, true)).then((result) => {
-                    notifyMutationListeners();
-
-                    return result;
-                });
+                return runInMutationTransaction(() => runRegistered("mutation", reference as never, context, args, true)).then(notifyAfter);
             }
 
             return runInternal("action", reference, context, args);
@@ -1027,19 +1012,11 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         }) as TestHarness["query"];
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            if (registeredFunctionKind(referenceOrInline)) {
-                return runInMutationTransaction(() => runRegistered("mutation", referenceOrInline as never, mutationContext, args, false)).then((result) => {
-                    notifyMutationListeners();
+            const body = registeredFunctionKind(referenceOrInline)
+                ? (): Promise<unknown> => runRegistered("mutation", referenceOrInline as never, mutationContext, args, false)
+                : (): unknown => (referenceOrInline as InlineMutationFunction<unknown>)(mutationContext);
 
-                    return result;
-                });
-            }
-
-            return runInMutationTransaction(() => (referenceOrInline as InlineMutationFunction<unknown>)(mutationContext)).then((result) => {
-                notifyMutationListeners();
-
-                return result;
-            });
+            return runInMutationTransaction(body).then(notifyAfter);
         }) as TestHarness["mutation"];
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
@@ -1057,12 +1034,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             close: closeDatabase,
             mutation,
             query,
-            run: (function_) =>
-                runInMutationTransaction(() => function_(rawMutationContext)).then((result) => {
-                    notifyMutationListeners();
-
-                    return result;
-                }),
+            run: (function_) => runInMutationTransaction(() => function_(rawMutationContext)).then(notifyAfter),
             scheduler: schedulerControls,
             subscribe,
             wideEvent: () => dispatchSpan.recorded,

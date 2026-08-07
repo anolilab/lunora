@@ -1,58 +1,9 @@
-import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { propertyInitializer, readTargetOf } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { RelationLoadIR } from "./ir";
-
-/**
- * List reads whose options object accepts a `with` relation-hydration map. Only
- * `findMany` / `findFirst` / `findFirstOrThrow` take that options object — `get`
- * is id-only and the fluent `query(...)` reader has no `with` — so both are
- * excluded (see `@lunora/server`'s `mask/middleware` note that `with` relations
- * are hydrated unmasked).
- */
-const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany"]);
-
-/**
- * The `(table, options)` a `ctx.db` list read addresses, or `undefined` when the
- * call isn't one. Matched by receiver **shape** (not import origin), fail-closed,
- * in both surface forms Lunora exposes. Facade form
- * `ctx.db.<table>.findMany(options?)` — the form real app code writes — puts the
- * table in the receiver's property name and the options object at argument 0.
- * Table-arg form `ctx.db.findMany("table", options?)` puts the table in the
- * string-literal argument 0 and the options object at argument 1. `table` is `""`
- * when the table-arg form's first argument isn't a string literal (a dynamic
- * table — not resolvable against the schema's relations).
- */
-const readTargetOf = (call: CallExpression): { options: TsNode | undefined; table: string } | undefined => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !READ_METHODS.has(callee.getName())) {
-        return undefined;
-    }
-
-    const receiver = callee.getExpression();
-
-    // Table-arg form: the receiver is `ctx.db` (property named `db`) or a bare `db`.
-    if ((Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db")) {
-        const first = call.getArguments()[0];
-
-        return { options: call.getArguments()[1], table: first && Node.isStringLiteral(first) ? first.getLiteralText() : "" };
-    }
-
-    // Facade form: the receiver is `ctx.db.<table>` (or `db.<table>`) — its inner
-    // expression is the `db` accessor and its own name is the table.
-    if (Node.isPropertyAccessExpression(receiver)) {
-        const inner = receiver.getExpression();
-        const onDatabase = (Node.isPropertyAccessExpression(inner) && inner.getName() === "db") || (Node.isIdentifier(inner) && inner.getText() === "db");
-
-        if (onDatabase) {
-            return { options: call.getArguments()[0], table: receiver.getName() };
-        }
-    }
-
-    return undefined;
-};
 
 /** The relation accessor names declared by a `with: { … }` object literal (`{ author: true }`, `{ author }`, `{ author() {} }`) — the keys matched against the schema's relation names. Spreads/computed keys yield nothing. */
 const relationNamesOf = (withValue: TsNode | undefined): string[] => {
@@ -74,17 +25,6 @@ const relationNamesOf = (withValue: TsNode | undefined): string[] => {
     }
 
     return names;
-};
-
-/** The initializer expression of a named property on an options object literal, or `undefined` when absent / not a plain assignment. */
-const optionValue = (options: TsNode | undefined, key: string): TsNode | undefined => {
-    if (!options || !Node.isObjectLiteralExpression(options)) {
-        return undefined;
-    }
-
-    const property = options.getProperty(key);
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
 };
 
 /**
@@ -117,7 +57,7 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
             continue;
         }
 
-        const relations = relationNamesOf(optionValue(target.options, "with"));
+        const relations = relationNamesOf(propertyInitializer(target.options, "with"));
 
         if (relations.length === 0) {
             continue;

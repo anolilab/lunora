@@ -133,38 +133,38 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
 };
 
 /**
- * Read a JSON request body under a byte cap (defaults to the authoritative
- * {@link MAX_BODY_BYTES}). Pass a larger `limit` for endpoints whose payloads
- * legitimately exceed 1 MiB (e.g. KV values, which Cloudflare caps at 25 MiB).
- *
- * Mirrors `parseExportBody`/`parseMigrateRequest`: drains the body through the
- * byte-budgeted reader (so a chunked / Content-Length-stripped payload can't
- * slip past the cap) and maps a 413 through unchanged while turning any other
- * parse failure into a 400. Returns `{}` for an empty body.
- *
- * The return type promises `Record<string, unknown>`, but `JSON.parse` alone
- * cannot deliver that — `null`, `[1, 2]`, and a bare scalar all parse cleanly
- * and would previously satisfy the `as` cast, letting a caller downstream
- * dereference a property on a value that was never an object (a 500, not the
- * 400 the malformed request deserves). Reject anything that isn't a plain,
- * non-null, non-array object here, once — every caller inherits the guard
- * instead of re-deriving it (see `handleBatchRpc`, which used to run the same
- * check by hand after its own parse).
+ * Drain + parse a JSON body under the byte cap (defaults to the authoritative
+ * {@link MAX_BODY_BYTES}; pass a larger `limit` for endpoints whose payloads
+ * legitimately exceed 1 MiB), tolerating an empty body (`{}`) and a non-object
+ * root (callers that accept one default it themselves). `label` names the
+ * endpoint in the 400 (`"<label> body must be valid JSON"`); a 413 from the
+ * reader passes through unchanged. {@link readJsonBodyWithLimit} is this plus
+ * the plain-object guard.
  */
-const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<Record<string, unknown>> => {
-    let body: unknown;
-
+const readLooseJsonBody = async (request: Request, label: string, limit: number = MAX_BODY_BYTES): Promise<unknown> => {
     try {
         const text = await readBodyTextWithLimit(request, limit);
 
-        body = text === "" ? {} : JSON.parse(text);
+        return text === "" ? {} : JSON.parse(text);
     } catch (error) {
         if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new LunoraError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError(`${label} body must be valid JSON`, { code: "BAD_REQUEST", status: 400 });
     }
+};
+
+/**
+ * Read a JSON request body under a byte cap — {@link readLooseJsonBody} plus the
+ * plain-object guard. `null`, `[1, 2]`, and a bare scalar all parse cleanly, and
+ * a caller dereferencing a property on one would 500 where the malformed request
+ * deserves a 400 — so anything that isn't a plain, non-null, non-array object is
+ * rejected here, once, and every caller inherits the guard instead of
+ * re-deriving it.
+ */
+const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<Record<string, unknown>> => {
+    const body = await readLooseJsonBody(request, "Request", limit);
 
     if (!isPlainObject(body)) {
         throw new LunoraError("Request body must be an object", { code: "BAD_REQUEST", status: 400 });
@@ -173,4 +173,4 @@ const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_
     return body;
 };
 
-export { isPlainObject, MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit };
+export { isPlainObject, MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, readLooseJsonBody };

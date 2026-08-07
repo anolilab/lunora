@@ -9,6 +9,7 @@
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
@@ -106,9 +107,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     const { assertAdmin, options, parsePaging, queryParameter, requireAdminOption } = deps;
 
     const handleFunctionsList = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Functions");
 
         const registry = requireAdminOption(request, options.functions, {
             code: "FUNCTIONS_NOT_CONFIGURED",
@@ -132,9 +131,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleCronJobs = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Cron-jobs");
 
         const registry = requireAdminOption(request, options.cronJobs, {
             code: "CRON_JOBS_NOT_CONFIGURED",
@@ -163,9 +160,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleOpenApi = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "OpenAPI");
 
         assertAdmin(request);
 
@@ -175,9 +170,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleOpenRpc = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "OpenRPC");
 
         assertAdmin(request);
 
@@ -185,9 +178,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalTables = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-tables");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",
@@ -198,9 +189,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalTablePage = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-table");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",
@@ -220,9 +209,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalFacet = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-facet endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-facet");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",

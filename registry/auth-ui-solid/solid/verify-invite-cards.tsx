@@ -4,16 +4,10 @@ import { For, Show } from "solid-js";
 import { queryParameter } from "../core/browser-location";
 import { createAcceptInvitationController, createUserInvitationsController } from "../core/invitations";
 import { createResendVerificationController, createVerifyEmailController } from "../core/verify-email";
-import { AuthCard, Field, FormBanner, Skeleton, SubmitButton } from "./primitives";
+import { FormField, onSubmit } from "./form";
+import { AuthCard, FormBanner, Skeleton, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { createController } from "./use-controller";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: Event): void => {
-        event.preventDefault();
-        void action();
-    };
 
 /**
  * The page the verification link lands on. It consumes the token on mount and
@@ -59,19 +53,7 @@ const ResendVerificationCard = (): JSX.Element => {
         <AuthCard title={t.verifyEmail}>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <Field
-                    autoComplete="email"
-                    field={state.fields.email}
-                    label={t.emailLabel}
-                    name="email"
-                    onBlur={() => {
-                        actions.blur("email");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("email", value);
-                    }}
-                    type="email"
-                />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.verifyEmailResend}</SubmitButton>
             </form>
         </AuthCard>

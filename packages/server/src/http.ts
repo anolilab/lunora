@@ -439,6 +439,20 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
+ * Headers on every SSE response. SSE responses must stay uncacheable so proxies
+ * don't buffer or coalesce live frames — `cacheControl()` is intentionally
+ * ignored for stream() routes, and `cacheTag`/`vary` are also omitted because
+ * they only make sense alongside a cacheable response. `x-accel-buffering`
+ * hints to proxies (including Cloudflare's own buffering layer) that this
+ * response must not be coalesced.
+ */
+const SSE_HEADERS: Record<string, string> = {
+    "cache-control": "no-cache, no-transform",
+    "content-type": "text/event-stream; charset=utf-8",
+    "x-accel-buffering": "no",
+};
+
+/**
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
  * named events only for the terminal sentinels (`complete`, `error`).
@@ -477,25 +491,12 @@ const buildStreamHandler =
         const encoder = new TextEncoder();
         const ac = new AbortController();
 
-        // Already disconnected before we even started — return a closed stream
+        // Already disconnected before we even started — return an empty body
         // and never construct the pump or run the user handler.
         if (request.signal.aborted) {
             ac.abort();
 
-            return new Response(
-                new ReadableStream<Uint8Array>({
-                    start: (controller) => {
-                        controller.close();
-                    },
-                }),
-                {
-                    headers: {
-                        "cache-control": "no-cache, no-transform",
-                        "content-type": "text/event-stream; charset=utf-8",
-                        "x-accel-buffering": "no",
-                    },
-                },
-            );
+            return new Response("", { headers: SSE_HEADERS });
         }
 
         const onAbort = (): void => {
@@ -546,19 +547,7 @@ const buildStreamHandler =
             },
         });
 
-        const headers: Record<string, string> = {
-            // SSE responses must stay uncacheable so proxies don't buffer or
-            // coalesce live frames. `cacheControl()` is intentionally ignored
-            // for stream() routes; `cacheTag`/`vary` are also omitted because
-            // they only make sense alongside a cacheable response.
-            "cache-control": "no-cache, no-transform",
-            "content-type": "text/event-stream; charset=utf-8",
-            // Hint to proxies (including Cloudflare's own buffering layer)
-            // that this response must not be coalesced.
-            "x-accel-buffering": "no",
-        };
-
-        return new Response(stream, { headers });
+        return new Response(stream, { headers: SSE_HEADERS });
     };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
@@ -672,18 +661,7 @@ const toHttpEtag = (etag: string): string => {
  * handler can guard a request-derived header value before writing it — the fix the
  * `http_action_response_header_injection` advisor lint points to.
  */
-const isSafeHeaderValue = (value: string): boolean => {
-    for (let index = 0; index < value.length; index += 1) {
-        const code = value.codePointAt(index);
-
-        // CR (13), LF (10), NUL (0).
-        if (code === 13 || code === 10 || code === 0) {
-            return false;
-        }
-    }
-
-    return true;
-};
+const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
 /**
  * Outcome of parsing a `Range` header. `kind: "full"` → no/ignorable range

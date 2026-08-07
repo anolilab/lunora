@@ -2,7 +2,7 @@ import type { AdvisorMap, Coverage, Grade, ProcedureScore } from "@lunora/adviso
 import { scoreAdvisor } from "@lunora/advisor";
 import type { ReactElement } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";

@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement, RefObject } from "react";
 import { useT } from "../../i18n/i18n-context";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
-import { SqlAssistantBar } from "./sql-assistant-bar";
+import SqlAssistantBar from "./sql-assistant-bar";
 import type { SqlAutocomplete } from "./sql-autocomplete-ui";
 import { AutocompletePopover } from "./sql-autocomplete-ui";
 import type { SqlDiagnostic } from "./sql-diagnostics";
@@ -114,4 +114,4 @@ const SqlEditorPane = ({
     );
 };
 
-export { SqlEditorPane };
+export default SqlEditorPane;

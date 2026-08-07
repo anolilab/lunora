@@ -28,20 +28,18 @@ const auth = (explicitClient?: ReturnType<typeof getLunoraClient>): AuthStore =>
 
     const token = readable<string | null>(client.getAuthToken(), (set) => {
         set(client.getAuthToken());
-        const unsub = client.onAuthTokenChange((next) => {
+
+        return client.onAuthTokenChange((next) => {
             set(next);
         });
-
-        return unsub;
     });
 
     const user = readable<User | null>(store.getUser(), (set) => {
         set(store.getUser());
-        const unsub = store.subscribe(() => {
+
+        return store.subscribe(() => {
             set(store.getUser());
         });
-
-        return unsub;
     });
 
     const setToken = (next: string | null): void => {

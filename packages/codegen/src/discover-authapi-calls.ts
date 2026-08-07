@@ -1,9 +1,7 @@
-import { relative, sep } from "node:path";
-
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, TS_EXTENSION_RE } from "./discover-ast";
+import { enclosingExportName, lunoraRelativePath } from "./discover-ast";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { AuthApiCallIR } from "./ir";
 
@@ -85,7 +83,7 @@ const discoverAuthApiCalls = (project: Project, lunoraDirectory: string): AuthAp
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(lunoraDirectory, filePath).replace(TS_EXTENSION_RE, "").split(sep).join("/");
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             if (!isAuthApiCall(call)) {

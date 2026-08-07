@@ -59,6 +59,15 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
     runOnce(options, lunoraDirectory, "startup");
 
+    const unavailable = (cause: string): CodegenWatcherHandle => {
+        options.logger.warn(`codegen watch unavailable (${cause}) — schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`);
+
+        return {
+            close: () => {},
+            watchAvailable: false,
+        };
+    };
+
     let timer: NodeJS.Timeout | undefined;
     let watcher: FSWatcher | undefined;
 
@@ -67,15 +76,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // via an async `error` event that can't flip the synchronously-returned flag. Check
     // up front so the degraded state is deterministic regardless of platform.
     if (!existsSync(watchDirectory)) {
-        options.logger.warn(
-            `codegen watch unavailable (no such directory: ${watchDirectory}) — ` +
-                `schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`,
-        );
-
-        return {
-            close: () => {},
-            watchAvailable: false,
-        };
+        return unavailable(`no such directory: ${watchDirectory}`);
     }
 
     try {
@@ -94,15 +95,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             }, debounceMs);
         });
     } catch (error: unknown) {
-        options.logger.warn(
-            `codegen watch unavailable (${error instanceof Error ? error.message : String(error)}) — ` +
-                `schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`,
-        );
-
-        return {
-            close: () => {},
-            watchAvailable: false,
-        };
+        return unavailable(error instanceof Error ? error.message : String(error));
     }
 
     // At this point the catch block has returned early, so `watcher` was

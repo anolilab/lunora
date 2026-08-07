@@ -102,16 +102,6 @@ const isAutoComposable = (context: LunoraPluginContext): boolean => {
 };
 
 /**
- * Whether the `virtual:lunora/worker` virtual entry should be resolved. This is
- * intentionally independent of `options.cloudflare`: `cloudflare: false` means
- * "don't add the Cloudflare Vite plugin a second time" (the user added it
- * themselves, e.g. to control plugin ordering), NOT "disable the composed worker
- * entry". The worker virtual must be resolvable whenever the CF integration is
- * present — whether Lunora added it or the user did.
- */
-const isWorkerVirtualActive = (context: LunoraPluginContext): boolean => isAutoComposable(context);
-
-/**
  * Whether the project depends on the unscoped `lunorash` umbrella. When it does,
  * the composed worker must import the runtime through the umbrella subpath
  * (`lunorash/runtime`) rather than the bare `@lunora/runtime`: a umbrella-only
@@ -239,7 +229,7 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
 
     return {
         load(id) {
-            if (id === RESOLVED_LUNORA_WORKER_ID && isWorkerVirtualActive(context) && context.framework !== undefined) {
+            if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
                 // `@cloudflare/vite-plugin` names the browser environment "client"
                 // and the worker environment after the worker; emit the stub there
                 // and the real entry everywhere else (worker/SSR). Vite 8 always
@@ -267,7 +257,7 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
         },
         name: "lunora:framework-compose",
         resolveId(id) {
-            if (id === LUNORA_WORKER_VIRTUAL_ID && isWorkerVirtualActive(context)) {
+            if (id === LUNORA_WORKER_VIRTUAL_ID && isAutoComposable(context)) {
                 return RESOLVED_LUNORA_WORKER_ID;
             }
 

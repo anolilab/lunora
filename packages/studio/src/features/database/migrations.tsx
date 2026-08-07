@@ -3,7 +3,7 @@ import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";

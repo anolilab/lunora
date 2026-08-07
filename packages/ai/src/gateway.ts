@@ -20,18 +20,6 @@ const readEnv = (env: Record<string, unknown>, key: string): string | undefined 
 };
 
 /**
- * Which surface resolved the gateway. The two paths handle the auth token
- * differently: a bring-your-own AI SDK provider sends it as the
- * `cf-aig-authorization` header (`ResolvedAiGateway.headers`), but the Workers AI
- * **binding** routes through the gateway using the account's own credentials and
- * its native `gateway` option (Cloudflare `GatewayOptions`) has **no** field to
- * carry an authorization token — so a token set for the binding path cannot be
- * delivered and is warned about instead of silently dropped.
- * @experimental
- */
-export type AiGatewayConsumer = "byo-provider" | "workers-ai-binding";
-
-/**
  * One-shot guard: the Workers-AI-binding auth-token warning fires at most once
  * per isolate, so a hot dispatch path routing every call through the gateway
  * doesn't flood the log with the same line.
@@ -73,6 +61,18 @@ const encodeMetadata = (metadata: AiGatewayMetadata | undefined): string | undef
 
     return fields === undefined ? undefined : JSON.stringify(fields);
 };
+
+/**
+ * Which surface resolved the gateway. The two paths handle the auth token
+ * differently: a bring-your-own AI SDK provider sends it as the
+ * `cf-aig-authorization` header (`ResolvedAiGateway.headers`), but the Workers AI
+ * **binding** routes through the gateway using the account's own credentials and
+ * its native `gateway` option (Cloudflare `GatewayOptions`) has **no** field to
+ * carry an authorization token — so a token set for the binding path cannot be
+ * delivered and is warned about instead of silently dropped.
+ * @experimental
+ */
+export type AiGatewayConsumer = "byo-provider" | "workers-ai-binding";
 
 /**
  * Correlation metadata folded into the `cf-aig-metadata` request header so a

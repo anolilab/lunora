@@ -1,6 +1,3 @@
-import { lstatSync, readdirSync } from "node:fs";
-import { extname, join, relative, sep } from "node:path";
-
 import type {
     ArrowFunction,
     CallExpression,
@@ -15,6 +12,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-ast";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "./ir";
 import { isServerSurfaceModule } from "./module-specifiers";
 import { parseObjectShape, parseValidator } from "./parse-validator";
@@ -49,13 +47,6 @@ const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
  * non-identifier property name (e.g. `"a; b"`) verbatim into `_generated/*`.
  */
 const renderExpandedPropertyKey = (propertyName: string): string => (IDENTIFIER_RE.test(propertyName) ? propertyName : JSON.stringify(propertyName));
-
-/** Strips a trailing `.ts` extension from a relative source path. */
-const TS_EXTENSION_RE = /\.ts$/u;
-
-/** Lunora-relative module path for a source file: dir-relative, POSIX separators, no `.ts`. */
-const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =>
-    relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
 /**
  * Internal factory names exported from `@lunora/server`, mapped to the kind
@@ -1022,52 +1013,6 @@ const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: str
 };
 
 /**
- * Recursively collect `.ts` files under a lunora source directory, skipping
- * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
- * migration discovery so both walk the same file set.
- *
- * Uses `lstatSync` (never `statSync`) so symlinked entries are classified by the
- * link itself, not its target: a directory symlink pointing at an ancestor (e.g.
- * `lunora/loop -> ..`) is therefore not descended into, breaking the symlink-cycle
- * infinite-recursion / build-hang that `statSync` (which follows links) would hit.
- */
-const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], root: string = directory): string[] => {
-    let entries: string[];
-
-    try {
-        entries = readdirSync(directory);
-    } catch {
-        return accumulator;
-    }
-
-    for (const entry of entries) {
-        const full = join(directory, entry);
-        const info = lstatSync(full);
-
-        if (info.isDirectory()) {
-            if (entry === "_generated" || entry === "node_modules") {
-                continue;
-            }
-
-            listLunoraSourceFiles(full, accumulator, root);
-        } else if (info.isFile() && extname(entry) === ".ts") {
-            // Skip ONLY the top-level `lunora/schema.ts` — it is loaded separately
-            // by `discoverSchema`. A nested `lunora/<feature>/schema.ts` is an
-            // ordinary source file that can carry query/mutation/migration
-            // registrations, so it must be discovered (the `directory === root`
-            // guard fires at depth 0 only, where `directory` is the passed root).
-            if (entry === "schema.ts" && directory === root) {
-                continue;
-            }
-
-            accumulator.push(full);
-        }
-    }
-
-    return accumulator;
-};
-
-/**
  * Classify a top-level `export const x = …` initializer call as a Lunora
  * registration, or `undefined` when it isn't one. Handles both the bare-factory
  * form (`query({...})` / `internalQuery({...})`) and the builder terminal
@@ -1363,9 +1308,9 @@ export {
     discoverFunctions,
     inlineHandler,
     isDatabaseAccessor,
-    listLunoraSourceFiles,
-    lunoraRelativePath,
     procedureHandler,
     resolveStandardSchemaType,
     unwrapHandlerReturn,
 };
+
+export { listLunoraSourceFiles, lunoraRelativePath } from "./discover-ast";

@@ -107,8 +107,7 @@ const MAX_SCHEDULED_FOR_MS = 999_999_999_999_999;
 const TIME_PAD = 15;
 const padTime = (n: number): string => String(n).padStart(TIME_PAD, "0");
 
-const generateId = (): string => {
-    const bytes = crypto.getRandomValues(new Uint8Array(12));
+const base64url = (bytes: Uint8Array): string => {
     let binary = "";
 
     for (const byte of bytes) {
@@ -117,6 +116,8 @@ const generateId = (): string => {
 
     return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 };
+
+const generateId = (): string => base64url(crypto.getRandomValues(new Uint8Array(12)));
 
 interface ScheduleRequestBody {
     args: Record<string, unknown>;
@@ -861,14 +862,8 @@ class SchedulerDO {
         const encoder = new TextEncoder();
         const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
         const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-        const bytes = new Uint8Array(signature);
-        let binary = "";
 
-        for (const byte of bytes) {
-            binary += String.fromCodePoint(byte);
-        }
-
-        return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        return base64url(new Uint8Array(signature));
     }
 
     /**

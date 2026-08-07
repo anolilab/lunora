@@ -34,6 +34,7 @@
  * wrangler before it is added here degrades to a name instead of vanishing.
  */
 import type { WranglerConfigShape } from "./wrangler-to-alchemy";
+import { sqliteClasses } from "./wrangler-to-alchemy";
 
 /** Schema version of the emitted document, so a consumer can gate on shape changes. */
 const BINDING_MANIFEST_VERSION = 1;
@@ -153,19 +154,6 @@ interface ManifestConfigShape extends WranglerConfigShape {
     workflows?: ReadonlyArray<{ binding?: string; class_name?: string; name?: string }>;
 }
 
-/** Every DO class declared with SQLite storage, across all migration entries. */
-const sqliteClassNames = (config: ManifestConfigShape): ReadonlySet<string> => {
-    const names = new Set<string>();
-
-    for (const migration of config.migrations ?? []) {
-        for (const className of migration.new_sqlite_classes ?? []) {
-            names.add(className);
-        }
-    }
-
-    return names;
-};
-
 /** Drop keys whose value is `undefined` so the emitted JSON carries no empty fields. */
 const compact = (requirement: BindingRequirement): BindingRequirement =>
     Object.fromEntries(Object.entries(requirement).filter(([, value]) => value !== undefined)) as unknown as BindingRequirement;
@@ -257,7 +245,7 @@ const collectArrayBindings = (config: ManifestConfigShape, unnamed: string[]): B
 
 /** Durable Objects — the only section whose storage mode is declared elsewhere (`migrations`). */
 const collectDurableObjectBindings = (config: ManifestConfigShape, unnamed: string[]): BindingRequirement[] => {
-    const sqlite = sqliteClassNames(config);
+    const sqlite = sqliteClasses(config);
     const out: BindingRequirement[] = [];
 
     for (const entry of config.durable_objects?.bindings ?? []) {

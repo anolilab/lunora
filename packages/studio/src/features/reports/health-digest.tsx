@@ -106,4 +106,4 @@ const HealthDigest = ({
     );
 };
 
-export { HealthDigest };
+export default HealthDigest;

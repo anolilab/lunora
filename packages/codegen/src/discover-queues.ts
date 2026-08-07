@@ -7,6 +7,7 @@ import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, P
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { stringPropertyFor } from "./discover-ast";
 import type { QueueIR } from "./ir";
 
 /** The only file queues may be declared in — mirrors `lunora/workflows.ts`. */
@@ -41,16 +42,7 @@ const isDefineQueue = (identifier: Identifier): boolean => {
 };
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
-const stringProperty = (expression: Expression, exportName: string, property: string): string => {
-    if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
-        return expression.getLiteralValue();
-    }
-
-    throw diagnosticAt(
-        expression,
-        `queue "${exportName}": \`${property}\` must be a static string literal — it is deploy configuration codegen writes into wrangler.jsonc`,
-    );
-};
+const stringProperty = stringPropertyFor("queue");
 
 /** Read a property's numeric-literal value, or throw a located diagnostic. */
 const numberProperty = (expression: Expression, exportName: string, property: string): number => {

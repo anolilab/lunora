@@ -21,17 +21,11 @@ export interface QueuedSend {
  * the queue body must carry only the pre-rendered html/text and scalar fields.
  */
 export const toQueuedPayload = (options: SendOptions): QueuedSend => {
-    return {
-        bcc: options.bcc,
-        cc: options.cc,
-        from: options.from,
-        headers: options.headers,
-        html: options.html,
-        replyTo: options.replyTo,
-        subject: options.subject,
-        text: options.text,
-        to: options.to,
-    };
+    const queued = { ...options };
+
+    delete queued.react;
+
+    return queued;
 };
 
 /**

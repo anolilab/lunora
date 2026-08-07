@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BindingsOverview } from "../../../src/features/home/bindings-overview";
+import BindingsOverview from "../../../src/features/home/bindings-overview";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 

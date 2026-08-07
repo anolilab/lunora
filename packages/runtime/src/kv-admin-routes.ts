@@ -7,6 +7,7 @@
  * this module imports no runtime values from `create-worker`.
  */
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
 const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
@@ -130,17 +131,13 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
     };
 
     const handleKvNamespaces = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("KV-namespaces endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "KV-namespaces");
 
         return ok({ namespaces: await gate(request).listNamespaces() });
     };
 
     const handleKvKeys = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("KV-keys endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "KV-keys");
 
         const introspector = gate(request);
         const url = new URL(request.url);

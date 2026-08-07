@@ -386,17 +386,7 @@ export const paginatedQuery = <F extends FunctionReference>(
 ): PaginatedQueryResult<PageItemOf<F>> => {
     const core = usePaginatedCore<F>(reference, args, options);
 
-    const results = computed<PageItemOf<F>[]>(() => {
-        const items: PageItemOf<F>[] = [];
-
-        for (const result of core.pageResults()) {
-            if (result) {
-                items.push(...result.page);
-            }
-        }
-
-        return items;
-    });
+    const results = computed<PageItemOf<F>[]>(() => core.pageResults().flatMap((result) => result?.page ?? []));
 
     const isLoading = computed<boolean>(() => {
         const statusValue = core.status();
@@ -433,17 +423,7 @@ export const infiniteQuery = <F extends FunctionReference>(
     const { initialNumItems } = options;
     const core = usePaginatedCore<F>(reference, args, options);
 
-    const pages = computed<PageItemOf<F>[][]>(() => {
-        const resultArrays: PageItemOf<F>[][] = [];
-
-        for (const page of core.pageResults()) {
-            if (page) {
-                resultArrays.push(page.page);
-            }
-        }
-
-        return resultArrays;
-    });
+    const pages = computed<PageItemOf<F>[][]>(() => core.pageResults().flatMap((page) => (page ? [page.page] : [])));
 
     const isLoading = computed<boolean>(() => core.status() === "LoadingFirstPage");
     const hasNextPage = computed<boolean>(() => core.status() === "CanLoadMore");

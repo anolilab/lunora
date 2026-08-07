@@ -339,4 +339,4 @@ const DataBrowserPage = ({
     </div>
 );
 
-export { DataBrowserPage };
+export default DataBrowserPage;

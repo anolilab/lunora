@@ -127,4 +127,19 @@ describe("wranglerToAlchemy", () => {
 
         expect(wranglerToAlchemy(BASE).source).not.toContain("bindings:");
     });
+
+    it("emits each var binding exactly once (regression: alpha emitted vars twice)", () => {
+        expect.assertions(1);
+
+        // Alpha had both an inline `Object.entries(config.vars)` loop and a
+        // `collectVariables(config, bindings)` call, so every var landed on the
+        // worker twice. The dedupe must not regress — a duplicate binding key is
+        // a Worker deploy error.
+        const { source } = wranglerToAlchemy({ ...BASE, vars: { PUBLIC_URL: "https://example.com", SECRET_KEY: "s3cr3t" } });
+
+        const countPublicUrl = (source.match(/PUBLIC_URL:/g) ?? []).length;
+        const countSecretKey = (source.match(/SECRET_KEY:/g) ?? []).length;
+
+        expect([countPublicUrl, countSecretKey]).toStrictEqual([1, 1]);
+    });
 });

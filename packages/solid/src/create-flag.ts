@@ -4,6 +4,8 @@ import { createEffect, createSignal, on, onCleanup } from "solid-js";
 
 import { stableStringify } from "../../../shared/stable-key";
 import { useLunora } from "./context";
+import type { MaybeAccessor } from "./create-agent";
+import { resolveMaybe } from "./create-agent";
 
 /**
  * The reserved runtime path the generated flag-subscription read override
@@ -19,9 +21,6 @@ type FlagContext = Record<string, unknown>;
 
 /** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
 type FlagValue = boolean | number | string | { [key: string]: unknown } | unknown[] | null;
-
-/** A plain value or a Solid accessor of it — matching `createQuery`'s reactive-args contract. */
-type MaybeAccessor<T> = Accessor<T> | T;
 
 /** Wire args the generated flag-subscription read override reads: the key, its value kind, the fallback, and the targeting context. */
 interface FlagSubscribeArgs extends Record<string, unknown> {
@@ -44,8 +43,6 @@ const flagKind = (value: unknown): FlagSubscribeArgs["type"] => {
 
 /** A typed reference to the reserved flags channel so `client.subscribe` infers its args/return. */
 const flagsReference = { __lunoraRef: FLAGS_EVAL_PATH } as FunctionReference<"query", FlagSubscribeArgs, FlagValue>;
-
-const resolveMaybe = <T>(value: MaybeAccessor<T>): T => (typeof value === "function" ? (value as Accessor<T>)() : value);
 
 /** Serialize the optional targeting context into a stable effect key (`""` when absent). */
 const serializeContext = (context: FlagContext | undefined): string => (context === undefined ? "" : stableStringify(context));

@@ -6,18 +6,13 @@ import { isFlowEnabled } from "../core/flow-gate";
 import { createPhoneSignInController } from "../core/phone-number";
 import { createUsernameSignInController } from "../core/username";
 import { EmailOtpCard, ForgotPasswordCard, MagicLinkCard, ResetPasswordCard, ResetPasswordOtpCard, SignInCard, SignUpCard, TwoFactorCard } from "./auth-cards";
+import { FormField } from "./form";
+import { onSubmit } from "./on-submit";
 import { DeviceAuthorizationCard } from "./plugin-cards";
-import { AuthCard, Field, FormBanner, SubmitButton } from "./primitives";
+import { AuthCard, FormBanner, SubmitButton } from "./primitives";
 import { useAuthUI } from "./provider";
 import { useController } from "./use-controller";
 import { AcceptInvitationCard, VerifyEmailCard } from "./verify-invite-cards";
-
-const onSubmit =
-    (action: () => unknown) =>
-    (event: { preventDefault: () => void }): void => {
-        event.preventDefault();
-        void action();
-    };
 
 /** Sign in with a username instead of an email. */
 const UsernameSignInCard = (): ReactElement | null => {
@@ -33,31 +28,8 @@ const UsernameSignInCard = (): ReactElement | null => {
         <AuthCard title={t.signIn}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="username"
-                    field={state.fields.username}
-                    label={t.usernameLabel}
-                    name="username"
-                    onBlur={() => {
-                        actions.blur("username");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("username", value);
-                    }}
-                />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="username" field="username" label={t.usernameLabel} state={state} />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
             </form>
         </AuthCard>
@@ -78,31 +50,8 @@ const PhoneSignInCard = (): ReactElement | null => {
         <AuthCard title={t.signIn}>
             <form className="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <Field
-                    autoComplete="tel"
-                    field={state.fields.phoneNumber}
-                    label={t.phoneLabel}
-                    name="phoneNumber"
-                    onBlur={() => {
-                        actions.blur("phoneNumber");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("phoneNumber", value);
-                    }}
-                />
-                <Field
-                    autoComplete="current-password"
-                    field={state.fields.password}
-                    label={t.passwordLabel}
-                    name="password"
-                    onBlur={() => {
-                        actions.blur("password");
-                    }}
-                    onChange={(value) => {
-                        actions.setField("password", value);
-                    }}
-                    type="password"
-                />
+                <FormField actions={actions} autoComplete="tel" field="phoneNumber" label={t.phoneLabel} state={state} />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
             </form>
         </AuthCard>

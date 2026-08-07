@@ -159,10 +159,6 @@ const collectDurableObjects = (
             ),
         );
     }
-
-    for (const [key, value] of Object.entries(config.vars ?? {})) {
-        bindings.push(bindingEntry(key, literal(String(value))));
-    }
 };
 
 /** Plain `vars` ride onto the worker as literal bindings. */
@@ -299,4 +295,4 @@ const wranglerToAlchemy = (config: WranglerConfigShape): AlchemyTranslation => {
 };
 
 export type { AlchemyTranslation, WranglerConfigShape };
-export { wranglerToAlchemy };
+export { sqliteClasses, wranglerToAlchemy };

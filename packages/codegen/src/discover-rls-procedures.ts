@@ -1,6 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node } from "ts-morph";
 
+import { stringPropertyOf, tablesAccessedIn } from "./discover-ast";
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { RlsMetadataIR, RlsPolicyIR, RlsProcedureIR, RlsRoleIR } from "./ir";
 
@@ -144,62 +145,6 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
  */
 const WRITE_METHODS = new Set(["delete", "deleteMany", "insert", "insertMany", "patch", "patchMany", "replace"]);
 
-/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call. */
-const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean => {
-    const callee = call.getExpression();
-
-    if (!Node.isPropertyAccessExpression(callee) || !methodSet.has(callee.getName())) {
-        return false;
-    }
-
-    const receiver = callee.getExpression();
-
-    if (Node.isPropertyAccessExpression(receiver)) {
-        return receiver.getName() === "db";
-    }
-
-    return Node.isIdentifier(receiver) && receiver.getText() === "db";
-};
-
-/**
- * String-literal first argument of a `ctx.db.<method>("table", ...)` call, or
- * `""` when the argument is not a string literal (dynamic table — not lintable).
- */
-const tableArgumentOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[0];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
-};
-
-/**
- * Discover the set of tables read and written inside the lexical scope of an
- * ancestor `VariableDeclaration` (the exported procedure binding). We descend
- * from the declaration rather than from the terminal call so we also capture
- * reads/writes in helper closures defined inside the function body.
- */
-const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWritten: string[] } => {
-    const tablesRead = new Set<string>();
-    const tablesWritten = new Set<string>();
-
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (isDatabaseCall(call, READ_METHODS)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesRead.add(table);
-            }
-        } else if (isDatabaseCall(call, WRITE_METHODS)) {
-            const table = tableArgumentOf(call);
-
-            if (table !== "") {
-                tablesWritten.add(table);
-            }
-        }
-    }
-
-    return { tablesRead: [...tablesRead], tablesWritten: [...tablesWritten] };
-};
-
 // ---------------------------------------------------------------------------
 // Top-level discovery
 // ---------------------------------------------------------------------------
@@ -238,7 +183,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     // Only the builder form (`c.use(...).query(...)`) can carry
     // `.use(rls(...))`; a bare factory has no chain → never uses RLS.
     const chain = classified.receiver ? rlsFromBuilderChain(classified.receiver) : { rlsTables: [], usesRls: false };
-    const { tablesRead, tablesWritten } = tablesAccessedIn(declaration);
+    const { tablesRead, tablesWritten } = tablesAccessedIn(declaration, READ_METHODS, WRITE_METHODS);
 
     return {
         exportName: declaration.getName(),
@@ -278,23 +223,6 @@ const discoverRlsProcedures = (project: Project, lunoraDirectory: string): RlsPr
 
 /** The operations `definePolicy({ on })` accepts; anything else is ignored as malformed. */
 const POLICY_OPERATIONS = new Set<RlsPolicyIR["on"]>(["delete", "insert", "read", "update"]);
-
-/** Read a string-literal property from an object literal, or `undefined` when absent/non-literal. */
-const stringPropertyOf = (object: TsNode, name: string): string | undefined => {
-    if (!Node.isObjectLiteralExpression(object)) {
-        return undefined;
-    }
-
-    const property = object.getProperty(name);
-
-    if (!property || !Node.isPropertyAssignment(property)) {
-        return undefined;
-    }
-
-    const initializer = property.getInitializer();
-
-    return initializer && Node.isStringLiteral(initializer) ? initializer.getLiteralText() : undefined;
-};
 
 /**
  * Extract `{ table, on }` from each object-literal element of an `rls(policies)`

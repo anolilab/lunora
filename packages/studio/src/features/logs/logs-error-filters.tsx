@@ -118,4 +118,4 @@ const LogsErrorFilters = ({
     );
 };
 
-export { LogsErrorFilters };
+export default LogsErrorFilters;

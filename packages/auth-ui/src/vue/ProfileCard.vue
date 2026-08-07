@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { createProfileController } from "../core/profile";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -20,14 +20,7 @@ const { actions, state } = useController((context) => createProfileController(co
     <AuthCard :headingLevel="2" :title="t.profile">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
-            <Field
-                :field="state.fields.name"
-                :label="t.nameLabel"
-                name="name"
-                autoComplete="name"
-                @blur="actions.blur('name')"
-                @change="actions.setField('name', $event)"
-            />
+            <FormField :actions="actions" field="name" :fields="state.fields" :label="t.nameLabel" autoComplete="name" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.saveChanges }}</SubmitButton>
         </form>
     </AuthCard>

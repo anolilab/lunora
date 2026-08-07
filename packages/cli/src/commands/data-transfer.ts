@@ -13,6 +13,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { readdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 
 import { LunoraError } from "@lunora/errors";
 
@@ -399,30 +400,12 @@ const convexExportTables = async (path: string): Promise<undefined | { file: str
 /** Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines. */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* wrapJsonlLines(file: string, table: string): AsyncGenerator<string> {
-    let pending = "";
+    for await (const raw of createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: createReadStream(file, { encoding: "utf8" }) })) {
+        const line = raw.trim();
 
-    for await (const chunk of createReadStream(file, { encoding: "utf8" })) {
-        pending += typeof chunk === "string" ? chunk : (chunk as Buffer).toString("utf8");
-
-        let newline = pending.indexOf("\n");
-
-        while (newline !== -1) {
-            const line = pending.slice(0, newline).trim();
-
-            pending = pending.slice(newline + 1);
-
-            if (line.length > 0) {
-                yield `${JSON.stringify({ doc: JSON.parse(line) as unknown, table })}\n`;
-            }
-
-            newline = pending.indexOf("\n");
+        if (line.length > 0) {
+            yield `${JSON.stringify({ doc: JSON.parse(line) as unknown, table })}\n`;
         }
-    }
-
-    const tail = pending.trim();
-
-    if (tail.length > 0) {
-        yield `${JSON.stringify({ doc: JSON.parse(tail) as unknown, table })}\n`;
     }
 }
 

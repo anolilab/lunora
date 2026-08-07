@@ -75,7 +75,7 @@ const upsertCard = (current: BindingGroup[], card: BindingGroup): BindingGroup[]
  * nothing when none are configured (or none have resolved yet). Every read is
  * best-effort — a failing list just omits its card rather than blanking the page.
  */
-export const BindingsOverview = (): null | ReactElement => {
+const BindingsOverview = (): null | ReactElement => {
     const client = useLunora();
     const features = useStudioFeatures();
     const t = useT();
@@ -155,3 +155,4 @@ export const BindingsOverview = (): null | ReactElement => {
         </section>
     );
 };
+export default BindingsOverview;

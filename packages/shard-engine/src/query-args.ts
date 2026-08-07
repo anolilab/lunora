@@ -106,12 +106,11 @@ const decodeCursor = (cursor: string): unknown[] => {
 };
 
 /**
- * Build the `where` tree that selects rows strictly after the cursor under the
- * given sort. For keys `[a ASC, b DESC]` (plus the id tiebreak) it expands to
- * the lexicographic seek `(a > ?) OR (a = ? AND b < ?) OR (a = ? AND b = ? AND id > ?)`,
- * letting the shared compiler render it per dialect.
+ * Shared lexicographic-seek builder behind {@link buildSeekWhere} /
+ * {@link buildSeekBeforeWhere}: one disjunct per pivot column, each ANDing the
+ * prefix equalities with the pivot comparison `operatorFor` chooses.
  */
-const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => {
+const buildSeek = (keys: OrderKey[], cursorValues: unknown[], operatorFor: (direction: SortDirection, isFinal: boolean) => string): WhereInput => {
     const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field)) ? keys : [...keys, { direction: "asc", field: TIEBREAK_FIELD }];
 
     const branches: WhereInput[] = [];
@@ -123,9 +122,9 @@ const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =
             conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
         }
 
-        const strictOperator = pivotColumn.direction === "desc" ? "lt" : "gt";
+        const operator = operatorFor(pivotColumn.direction, pivot === columns.length - 1);
 
-        conditions.push({ [pivotColumn.field]: { [strictOperator]: cursorValues[pivot] } });
+        conditions.push({ [pivotColumn.field]: { [operator]: cursorValues[pivot] } });
 
         // Wrap multi-condition branches so each disjunct is explicitly grouped
         // rather than leaning on SQL's AND-over-OR precedence.
@@ -136,6 +135,15 @@ const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =
 
     return { OR: branches };
 };
+
+/**
+ * Build the `where` tree that selects rows strictly after the cursor under the
+ * given sort. For keys `[a ASC, b DESC]` (plus the id tiebreak) it expands to
+ * the lexicographic seek `(a > ?) OR (a = ? AND b < ?) OR (a = ? AND b = ? AND id > ?)`,
+ * letting the shared compiler render it per dialect.
+ */
+const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput =>
+    buildSeek(keys, cursorValues, (direction) => (direction === "desc" ? "lt" : "gt"));
 
 /**
  * The per-column comparator {@link buildSeekBeforeWhere} emits: every column
@@ -162,34 +170,7 @@ const seekBeforeOperator = (direction: SortDirection, isFinal: boolean): string 
  * the page it terminates. Reactive pagination uses this for a page's fixed end
  * cursor; the shared compiler renders it per dialect.
  */
-const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => {
-    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field)) ? keys : [...keys, { direction: "asc", field: TIEBREAK_FIELD }];
-
-    const branches: WhereInput[] = [];
-
-    for (const [pivot, pivotColumn] of columns.entries()) {
-        const conditions: WhereInput[] = [];
-
-        for (const [prefix, prefixColumn] of columns.slice(0, pivot).entries()) {
-            conditions.push({ [prefixColumn.field]: { eq: cursorValues[prefix] } });
-        }
-
-        const isFinal = pivot === columns.length - 1;
-        // The terminal id tiebreak is inclusive (`lte`/`gte`) so the boundary
-        // row is part of `(start, end]`; every earlier column is strictly past
-        // the cursor in the opposite direction from {@link buildSeekWhere}
-        // (asc → `lt`, desc → `gt`).
-        const operator = seekBeforeOperator(pivotColumn.direction, isFinal);
-
-        conditions.push({ [pivotColumn.field]: { [operator]: cursorValues[pivot] } });
-
-        const [first] = conditions;
-
-        branches.push(conditions.length === 1 && first !== undefined ? first : { AND: conditions });
-    }
-
-    return { OR: branches };
-};
+const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, seekBeforeOperator);
 
 /** System fields a `select` projection always retains so cursors + by-id reuse keep working. */
 const SELECT_SYSTEM_FIELDS = ["_id", "_creationTime"] as const;

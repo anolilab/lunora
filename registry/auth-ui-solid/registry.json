@@ -73,6 +73,7 @@
         { "from": "solid/auth-cards.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/auth-cards.tsx" },
         { "from": "solid/auth-view.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/auth-view.tsx" },
         { "from": "solid/extras.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/extras.tsx" },
+        { "from": "solid/form.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/form.tsx" },
         { "from": "solid/index.ts", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/index.ts" },
         { "from": "solid/oauth-provider.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/oauth-provider.tsx" },
         { "from": "solid/organization.tsx", "merge": "create-or-skip", "to": "lunora/auth-ui/solid/organization.tsx" },

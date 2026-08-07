@@ -3,7 +3,7 @@ import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Alert } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";

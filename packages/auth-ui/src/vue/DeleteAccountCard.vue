@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { createDeleteAccountController } from "../core/delete-account";
 import AuthCard from "./AuthCard.vue";
-import Field from "./Field.vue";
+import FormField from "./FormField.vue";
 import FormBanner from "./FormBanner.vue";
 import { useAuthUI } from "./provider";
 import SubmitButton from "./SubmitButton.vue";
@@ -15,15 +15,7 @@ const { actions, state } = useController(createDeleteAccountController);
     <AuthCard :title="t.deleteAccount" :description="t.deleteAccountWarning" :headingLevel="2">
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" />
-            <Field
-                :field="state.fields.password"
-                :label="t.passwordLabel"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                @blur="actions.blur('password')"
-                @change="actions.setField('password', $event)"
-            />
+            <FormField :actions="actions" field="password" :fields="state.fields" :label="t.passwordLabel" type="password" autoComplete="current-password" />
             <SubmitButton :pending="state.status === 'submitting'">{{ t.deleteAccount }}</SubmitButton>
         </form>
     </AuthCard>

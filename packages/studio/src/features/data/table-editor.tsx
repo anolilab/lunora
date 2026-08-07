@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
-import { useMirroredRef } from "../../hooks/use-mirrored-ref";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";

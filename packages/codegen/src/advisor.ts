@@ -239,62 +239,17 @@ interface LintSchemaOptions {
  * const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }));
  * ```
  */
-const toAdvisorContext = (options: LintSchemaOptions): LintContext =>
-    ({
-        adminRoutes: options.adminRoutes,
-        aiRawRuns: options.aiRawRuns,
-        aiToolSideEffects: options.aiToolSideEffects,
-        argumentDerivedFetches: options.argumentDerivedFetches,
-        argValidators: options.argumentValidators,
-        authApiCalls: options.authApiCalls,
-        authConfigs: options.authConfigs,
-        browserUrlAccesses: options.browserUrlAccesses,
-        configCalls: options.configCalls,
-        containerKeyAccesses: options.containerKeyAccesses,
-        containerOverrides: options.containerOverrides,
-        containers: options.containers,
-        exportSinks: options.exportSinks,
-        failOpenGuards: options.failOpenGuards,
-        flagSecurityDefaults: options.flagSecurityDefaults,
-        geoIndexUsages: options.geoIndexUsages,
-        httpActionGuards: options.httpActionGuards,
-        httpHeaderWrites: options.httpHeaderWrites,
-        identityClaimReads: options.identityClaimReads,
-        imageDeliveryUrlAccesses: options.imageDeliveryUrlAccesses,
-        inserts: options.inserts,
-        kvKeyAccesses: options.kvKeyAccesses,
-        mailRecipientAccesses: options.mailRecipientAccesses,
-        maskProcedures: options.maskProcedures,
-        maskStrategies: options.maskStrategies,
-        mutatorWrites: options.mutatorWrites,
-        nondeterministicCalls: options.nondeterministicCalls,
-        normalizeIdAuthorizations: options.normalizeIdAuthorizations,
-        notifyCalls: options.notifyCalls,
-        notifyConfig: options.notifyConfig,
-        ownerFieldWrites: options.ownerFieldWrites,
-        paymentWebhooks: options.paymentWebhooks,
-        privilegedDispatches: options.privilegedDispatches,
-        procedureProtections: options.procedureProtections,
-        queries: options.queries ?? [],
-        queues: options.queues,
-        r2sqlCalls: options.r2sqlCalls,
-        ratelimitKeySelectors: options.ratelimitKeySelectors,
-        rawRowReturns: options.rawRowReturns,
-        relationLoads: options.relationLoads,
-        rlsProcedures: options.rlsProcedures,
-        schema: toAdvisorSchema(options.schema),
-        secretLiterals: options.secretLiterals,
-        shapes: options.shapes === undefined ? undefined : toAdvisorShapes(options.shapes),
-        softDeleteReads: options.softDeleteReads,
-        sqlInterpolations: options.sqlInterpolations,
-        storageKeyAccesses: options.storageKeyAccesses,
-        storageUploads: options.storageUploads,
-        unrestrictedWhereBranches: options.unrestrictedWhereBranches,
-        vectorNamespaceAccesses: options.vectorNamespaceAccesses,
-        workflowCalls: options.workflowCalls,
-        workflows: options.workflows,
-        wranglerVariables: options.wranglerVariables,
-    }) satisfies LintContext;
+const toAdvisorContext = (options: LintSchemaOptions): LintContext => {
+    const { argumentValidators, queries, schema, shapes, ...rest } = options;
+
+    return {
+        ...rest,
+        argValidators: argumentValidators,
+        queries: queries ?? [],
+        schema: toAdvisorSchema(schema),
+        shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
+    } satisfies LintContext;
+};
 
 /**
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls

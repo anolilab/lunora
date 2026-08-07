@@ -2,14 +2,16 @@ import type { Identifier, Node as TsNode } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 /**
- * True when `identifier` is a *value* reference to the handler's `args` binding —
- * the taint root shared by every Wave 3 argument-taint feeder. Excludes the
- * trailing `.args` of a member access and the key of an explicit `{ args: … }`
- * property, which name a different `args` and carry no taint; a `{ args }`
- * shorthand IS a value reference and is kept.
+ * True when `identifier` is a *value* reference to the binding named `name` —
+ * the taint-root check shared by every Wave 3 feeder, whether the root is the
+ * fixed `args`/`ctx` binding or an `httpAction` handler's freely-named request
+ * parameter (`request` / `req` / `r`). Excludes the trailing `.<name>` of a
+ * member access and the key of an explicit `{ <name>: … }` property, which name
+ * a different `<name>` and carry no taint; a `{ <name> }` shorthand IS a value
+ * reference and is kept.
  */
-const isArgsValueReference = (identifier: Identifier): boolean => {
-    if (identifier.getText() !== "args") {
+const isValueReference = (identifier: Identifier, name: string): boolean => {
+    if (identifier.getText() !== name) {
         return false;
     }
 
@@ -22,57 +24,17 @@ const isArgsValueReference = (identifier: Identifier): boolean => {
     return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
 };
 
-/**
- * True when `identifier` is a *value* reference to the handler's `ctx` binding —
- * the server-trusted root. Mirror of {@link isArgsValueReference}: excludes the
- * trailing `.ctx` of a member access and the key of an explicit `{ ctx: … }`
- * property; a `{ ctx }` shorthand IS a value reference and is kept.
- */
-const isContextValueReference = (identifier: Identifier): boolean => {
-    if (identifier.getText() !== "ctx") {
-        return false;
+/** True when `node` is, or textually contains, a value reference to the binding named `name`. */
+const referencesBinding = (node: TsNode, name: string): boolean => {
+    if (Node.isIdentifier(node)) {
+        return isValueReference(node, name);
     }
 
-    const parent = identifier.getParent();
-
-    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
-        return false;
-    }
-
-    return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
+    return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isValueReference(identifier, name));
 };
 
 /** True when `node` is, or textually contains, a value reference to the `ctx` binding. */
-const textuallyReferencesContext = (node: TsNode): boolean => {
-    if (Node.isIdentifier(node)) {
-        return isContextValueReference(node);
-    }
-
-    return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isContextValueReference(identifier));
-};
-
-/**
- * True when `identifier` is a *value* reference to an `httpAction` handler's
- * request parameter — the taint root the `args`/`ctx` helpers never reach, because
- * the request arrives as a positional parameter the user names freely
- * (`request` / `req` / `r`) rather than a fixed `args`/`ctx` binding. Mirror of
- * {@link isArgsValueReference} with a dynamic root name: excludes the trailing
- * `.<requestName>` of a member access and the key of an explicit
- * `{ <requestName>: … }` property; a `{ request }` shorthand IS a value reference.
- */
-const isRequestValueReference = (identifier: Identifier, requestName: string): boolean => {
-    if (identifier.getText() !== requestName) {
-        return false;
-    }
-
-    const parent = identifier.getParent();
-
-    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
-        return false;
-    }
-
-    return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
-};
+const textuallyReferencesContext = (node: TsNode): boolean => referencesBinding(node, "ctx");
 
 /**
  * The leftmost identifier of a member/element-access (and non-null) chain
@@ -111,13 +73,7 @@ export const calleeName = (expression: TsNode): string | undefined => {
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
-export const referencesArgs = (node: TsNode): boolean => {
-    if (Node.isIdentifier(node)) {
-        return isArgsValueReference(node);
-    }
-
-    return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isArgsValueReference(identifier));
-};
+export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
 /**
  * When `node` is a bare identifier bound by a `const key = args.key` in the enclosing
@@ -258,13 +214,7 @@ export const isScopedByContext = (node: TsNode): boolean => {
  * the `args`-rooted feeders can't see (an HTTP handler receives a raw `Request`,
  * not the validated `args` object).
  */
-export const referencesRequestInput = (node: TsNode, requestName: string): boolean => {
-    if (Node.isIdentifier(node)) {
-        return isRequestValueReference(node, requestName);
-    }
-
-    return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isRequestValueReference(identifier, requestName));
-};
+export const referencesRequestInput = (node: TsNode, requestName: string): boolean => referencesBinding(node, requestName);
 
 /**
  * True when `node` is derived from the `httpAction` request parameter — directly,

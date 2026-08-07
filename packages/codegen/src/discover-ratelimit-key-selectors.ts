@@ -1,35 +1,12 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
+import { Node } from "ts-morph";
 
 import { calleeName, enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import { collectCallRows, limitNameOf, propertyInitializer } from "./discover-ast";
 import type { RatelimitKeySelectorIR } from "./ir";
 
 /** The `@lunora/ratelimit` middleware factories whose third argument carries a `key` selector. */
 const RATELIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);
-
-/**
- * The initializer of a `key` property on `options`, or `undefined` when
- * `options` is not a direct object-literal argument, or has no `key` property
- * assignment. A shorthand `{ key }` is deliberately skipped — keeps the check
- * single-hop/low-FP, matching the other sink feeders.
- */
-const keyInitializer = (options: TsNode): TsNode | undefined => {
-    if (!Node.isObjectLiteralExpression(options)) {
-        return undefined;
-    }
-
-    const property = options.getProperty("key");
-
-    return property && Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
-};
-
-/** The string-literal value of a call's second (`name`) argument, or `""` when it isn't one. */
-const limitNameOf = (call: CallExpression): string => {
-    const argument = call.getArguments()[1];
-
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralValue() : "";
-};
 
 /**
  * The node {@link isArgumentDerived}/{@link isScopedByContext} should inspect for
@@ -61,7 +38,7 @@ const ratelimitKeySelectorInCall = (call: CallExpression, relativePath: string):
         return undefined;
     }
 
-    const key = keyInitializer(options);
+    const key = propertyInitializer(options, "key");
 
     if (!key) {
         return undefined;
@@ -82,21 +59,6 @@ const ratelimitKeySelectorInCall = (call: CallExpression, relativePath: string):
     return { callee, exportName: enclosingExportName(call), file: relativePath, limitName: limitNameOf(call), line: call.getStartLineNumber() };
 };
 
-/** Arg-derived, unscoped `rateLimit`/`dbRateLimit` key selectors in one source file. */
-const ratelimitKeySelectorsInSourceFile = (sourceFile: SourceFile, relativePath: string): RatelimitKeySelectorIR[] => {
-    const found: RatelimitKeySelectorIR[] = [];
-
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const selector = ratelimitKeySelectorInCall(call, relativePath);
-
-        if (selector) {
-            found.push(selector);
-        }
-    }
-
-    return found;
-};
-
 /**
  * Discover `rateLimit(limiter, name, { key, … })` / `dbRateLimit(config, name, {
  * key, … })` calls (`@lunora/ratelimit`) in `lunora/` whose `key` selector is
@@ -111,16 +73,7 @@ const ratelimitKeySelectorsInSourceFile = (sourceFile: SourceFile, relativePath:
  * direct object-literal third argument is inspected, and one finding is
  * produced per call.
  */
-const discoverRatelimitKeySelectors = (project: Project, lunoraDirectory: string): RatelimitKeySelectorIR[] => {
-    const selectors: RatelimitKeySelectorIR[] = [];
-
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-
-        selectors.push(...ratelimitKeySelectorsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
-    }
-
-    return selectors;
-};
+const discoverRatelimitKeySelectors = (project: Project, lunoraDirectory: string): RatelimitKeySelectorIR[] =>
+    collectCallRows(project, lunoraDirectory, ratelimitKeySelectorInCall);
 
 export default discoverRatelimitKeySelectors;

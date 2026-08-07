@@ -111,4 +111,4 @@ const describeAdminTokenSource = (source: AdminTokenSource | undefined): string 
 };
 
 export type { AdminTokenSource, ResolveAdminTokenInputs, ResolvedAdminToken };
-export { ADMIN_TOKEN_KEY, describeAdminTokenSource, resolveAdminBearer };
+export { describeAdminTokenSource, isLoopbackTarget, resolveAdminBearer };

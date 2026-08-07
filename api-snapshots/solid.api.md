@@ -156,7 +156,7 @@ interface CreateAgentChatOptions {
     send: FunctionReference<"mutation">;
     sendArgs?: Record<string, unknown>;
     stream?: AgentTokenStreamReference;
-    threadKey: MaybeAccessor$1<string>;
+    threadKey: MaybeAccessor<string>;
 }
 ```
 
@@ -182,7 +182,7 @@ interface CreateAgentOptions {
     cancel?: FunctionReference<"mutation">;
     run: FunctionReference<"mutation">;
     runArgs?: Record<string, unknown>;
-    threadKey: MaybeAccessor$1<string>;
+    threadKey: MaybeAccessor<string>;
 }
 ```
 
@@ -215,7 +215,7 @@ interface CreateAgentStateApi {
 ```ts
 interface CreateAgentStateOptions {
     api: CreateAgentStateApi;
-    threadKey: MaybeAccessor$1<string>;
+    threadKey: MaybeAccessor<string>;
 }
 ```
 
@@ -245,7 +245,7 @@ interface CreateAgentToolEventsOptions {
     api: CreateAgentToolEventsApi;
     limit?: number;
     stream?: AgentLiveStreamReference;
-    threadKey: MaybeAccessor$1<string>;
+    threadKey: MaybeAccessor<string>;
 }
 ```
 
@@ -398,7 +398,7 @@ interface CreateVoiceAgentOptions {
     interruptThreshold?: number;
     silenceDurationMs?: number;
     silenceThreshold?: number;
-    threadKey: MaybeAccessor$1<string>;
+    threadKey: MaybeAccessor<string>;
     voice: VoiceReference;
 }
 ```

@@ -14,7 +14,7 @@ import { defineHandler } from "../../util/command";
 import type { DetectedFramework, FrameworkDetection } from "../../util/detect-framework";
 import { detectFramework } from "../../util/detect-framework";
 import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
-import { detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import { addArgsFor, detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
@@ -47,7 +47,7 @@ import type { LintToolOfferDeps } from "./offer-lint-tools";
 import { offerLintTools } from "./offer-lint-tools";
 import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
-import { applyLunoraOverlay } from "./overlay/apply";
+import { applyLunoraOverlay, findExistingViteConfig, isLunoraDep } from "./overlay/apply";
 import generateProjectName from "./project-name";
 import { verifyRemoteTemplate } from "./verify";
 
@@ -199,9 +199,6 @@ interface InitCommandResult {
 
 const TEXT_EXTENSIONS = new Set([".gitignore", ".html", ".js", ".json", ".jsonc", ".md", ".mjs", ".ts", ".tsx"]);
 
-/** Ordered list of vite config filenames to probe during in-place init. */
-const VITE_CONFIG_CANDIDATES = ["vite.config.ts", "vite.config.mts", "vite.config.js", "vite.config.mjs"] as const;
-
 /** Minimal vite config written when none exists during in-place init. */
 const MINIMAL_VITE_CONFIG = `import { defineConfig } from "vite";
 import { lunora } from "@lunora/vite";
@@ -252,23 +249,6 @@ const isTextFile = (filePath: string): boolean => {
 
 const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
 
-/** A dependency published from this monorepo: the `lunorash` umbrella or any `@lunora/*` package. */
-const isLunoraDep = (name: string): boolean => name === "lunorash" || name.startsWith("@lunora/");
-
-/**
- * Rewrite the `@lunora/*` + `lunorash` dependency ranges in a template's
- * `package.json` to the CLI's release-channel dist-tag.
- *
- * Templates pin these at the `^0.0.0` placeholder so the monorepo's own tooling
- * stays version-agnostic, but that placeholder resolves to an empty stub package
- * on a consumer machine (and on a pre-release channel the `latest` tag is itself
- * a placeholder). Stamping each Lunora-scoped range to {@link resolveDistTag}
- * wires a scaffolded project to the same channel the running CLI shipped on —
- * the same fix `resolveDepRange` applies to registry-added deps. Non-Lunora deps
- * (react, vite, wrangler, …) are left untouched. Structural jsonc edits preserve
- * the file's formatting; a parse failure leaves the text unchanged.
- */
-
 /**
  * Resolve every `@lunora/*` + `lunorash` dependency declared across the template's
  * `package.json` files to the CONCRETE version its `distTag` currently points at
@@ -304,6 +284,19 @@ const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: stri
     return resolveTagVersions(names, distTag);
 };
 
+/**
+ * Rewrite the `@lunora/*` + `lunorash` dependency ranges in a template's
+ * `package.json` to the CLI's release-channel dist-tag.
+ *
+ * Templates pin these at the `^0.0.0` placeholder so the monorepo's own tooling
+ * stays version-agnostic, but that placeholder resolves to an empty stub package
+ * on a consumer machine (and on a pre-release channel the `latest` tag is itself
+ * a placeholder). Stamping each Lunora-scoped range to {@link resolveDistTag}
+ * wires a scaffolded project to the same channel the running CLI shipped on —
+ * the same fix `resolveDepRange` applies to registry-added deps. Non-Lunora deps
+ * (react, vite, wrangler, …) are left untouched. Structural jsonc edits preserve
+ * the file's formatting; a parse failure leaves the text unchanged.
+ */
 const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: ReadonlyMap<string, string>): string => {
     let parsed: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 
@@ -494,69 +487,60 @@ const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, targ
 
 /** The shell command that adds dependencies with `manager` (`pnpm add …`, `npm install …`, …). */
 const installCommand = (manager: PackageManager, packages: ReadonlyArray<string>): string => {
-    // npm spells "add a dependency" as `install`; pnpm/yarn/bun use `add`.
-    const verb = manager === "npm" ? "install" : "add";
+    const { args, command } = addArgsFor(manager, packages);
 
-    return `${manager} ${verb} ${packages.join(" ")}`;
+    return `${command} ${args.join(" ")}`;
+};
+
+/** Walk up from `startDirectory` until `matches` holds for a directory, or the filesystem root is reached. */
+const anyAncestor = (startDirectory: string, matches: (directory: string) => boolean): boolean => {
+    let directory = resolve(startDirectory);
+
+    for (;;) {
+        if (matches(directory)) {
+            return true;
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return false;
+        }
+
+        directory = parent;
+    }
+};
+
+/** A workspace root: a `pnpm-workspace.yaml`, or a `package.json` with a `workspaces` field. */
+const isWorkspaceRoot = (directory: string): boolean => {
+    if (existsSync(join(directory, PNPM_WORKSPACE_FILENAME))) {
+        return true;
+    }
+
+    const packagePath = join(directory, "package.json");
+
+    if (!existsSync(packagePath)) {
+        return false;
+    }
+
+    try {
+        return (JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown }).workspaces !== undefined;
+    } catch {
+        // Unreadable / invalid package.json — not a workspace root we can trust.
+        return false;
+    }
 };
 
 /**
- * Walk up from `startDirectory` looking for a workspace root — a `pnpm-workspace.yaml`
- * or a `package.json` with a `workspaces` field. Used to skip the dependency
+ * Whether `startDirectory` sits inside a workspace. Used to skip the dependency
  * install offer: a freshly-scaffolded package isn't listed in the workspace yet,
  * so installing from inside it won't resolve `workspace:` deps — the user must
  * install from the repo root after wiring it in.
  */
-const isInsideMonorepo = (startDirectory: string): boolean => {
-    let directory = resolve(startDirectory);
+const isInsideMonorepo = (startDirectory: string): boolean => anyAncestor(startDirectory, isWorkspaceRoot);
 
-    for (;;) {
-        if (existsSync(join(directory, "pnpm-workspace.yaml"))) {
-            return true;
-        }
-
-        const packagePath = join(directory, "package.json");
-
-        if (existsSync(packagePath)) {
-            try {
-                const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown };
-
-                if (parsed.workspaces !== undefined) {
-                    return true;
-                }
-            } catch {
-                // Unreadable / invalid package.json — not a workspace root we can trust.
-            }
-        }
-
-        const parent = dirname(directory);
-
-        if (parent === directory) {
-            return false;
-        }
-
-        directory = parent;
-    }
-};
-
-/** Walk up from `startDirectory` to see if it already sits inside a git work-tree (an ancestor has a `.git`). */
-const isInsideGitRepo = (startDirectory: string): boolean => {
-    let directory = resolve(startDirectory);
-
-    for (;;) {
-        if (existsSync(join(directory, ".git"))) {
-            return true;
-        }
-
-        const parent = dirname(directory);
-
-        if (parent === directory) {
-            return false;
-        }
-
-        directory = parent;
-    }
-};
+/** Whether `startDirectory` already sits inside a git work-tree (an ancestor has a `.git`). */
+const isInsideGitRepo = (startDirectory: string): boolean => anyAncestor(startDirectory, (directory) => existsSync(join(directory, ".git")));
 
 /**
  * After scaffolding, optionally `git init` the new project — create-astro's git
@@ -929,6 +913,13 @@ const scaffoldViteOverlay = async (options: {
     }
 };
 
+/** Failed in-place init result: log the I/O failure (`verb` = "read" / "write") and abort. */
+const inPlaceIoFailure = (verb: string, path: string, error: unknown, cwd: string, logger: Logger): InitCommandResult => {
+    logger.error(`init --in-place: could not ${verb} ${path}: ${error instanceof Error ? error.message : String(error)}`);
+
+    return { code: 1, files: [], target: cwd };
+};
+
 /**
  * Create a minimal vite.config.ts when no vite config exists in `cwd`.
  * Returns the InitCommandResult for the in-place path.
@@ -939,11 +930,7 @@ const createMinimalViteConfig = (cwd: string, logger: Logger): InitCommandResult
     try {
         writeFileSync(target, MINIMAL_VITE_CONFIG, "utf8");
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.error(`init --in-place: could not write ${target}: ${message}`);
-
-        return { code: 1, files: [], target: cwd };
+        return inPlaceIoFailure("write", target, error, cwd, logger);
     }
 
     logger.success(`created ${target} with lunora() plugin`);
@@ -961,11 +948,7 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
     try {
         source = readFileSync(viteConfigPath, "utf8");
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.error(`init --in-place: could not read ${viteConfigPath}: ${message}`);
-
-        return { code: 1, files: [], target: cwd };
+        return inPlaceIoFailure("read", viteConfigPath, error, cwd, logger);
     }
 
     const result = patchViteConfig(source);
@@ -979,11 +962,7 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
     try {
         writeFileSync(viteConfigPath, result.code, "utf8");
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.error(`init --in-place: could not write ${viteConfigPath}: ${message}`);
-
-        return { code: 1, files: [], target: cwd };
+        return inPlaceIoFailure("write", viteConfigPath, error, cwd, logger);
     }
 
     logger.success(`patched ${viteConfigPath} — added lunora() plugin`);
@@ -1073,19 +1052,6 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, manager: Package
     }
 
     logger.info("");
-};
-
-/** The Vite-config probe shared by the in-place path. Returns the first existing config, or undefined. */
-const findExistingViteConfig = (cwd: string): string | undefined => {
-    for (const candidate of VITE_CONFIG_CANDIDATES) {
-        const full = join(cwd, candidate);
-
-        if (existsSync(full)) {
-            return full;
-        }
-    }
-
-    return undefined;
 };
 
 /**
@@ -1331,14 +1297,14 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
 ];
 
-/** Comma-joined choice values for the non-interactive error hint. */
-/** create-vite overlay frameworks — passed via `--vite`. */
+/** create-vite overlay frameworks — passed via `--vite` (pipe-joined for the non-interactive error hint). */
 const OVERLAY_VALUES = Object.keys(ADAPTERS).join("|");
 
-/** Bespoke templates — passed via `-t`. */
-const TEMPLATE_VALUES = FRAMEWORK_CHOICES.filter((choice) => !isOverlayFramework(choice.value))
-    .map((choice) => choice.value)
-    .join("|");
+/** Bespoke template ids — every {@link FRAMEWORK_CHOICES} value that is not a create-vite overlay. */
+const TEMPLATE_IDS = FRAMEWORK_CHOICES.filter((choice) => !isOverlayFramework(choice.value)).map((choice) => choice.value);
+
+/** Bespoke templates — passed via `-t` (pipe-joined for the non-interactive error hint). */
+const TEMPLATE_VALUES = TEMPLATE_IDS.join("|");
 
 /** What to scaffold: a create-vite overlay framework, or a bespoke Lunora template. */
 type ScaffoldChoice = { framework: string; kind: "overlay" } | { kind: "template"; templateType: Template };
@@ -1558,11 +1524,6 @@ const resetScaffoldOnCancel = (cleanup: ScaffoldCleanup, logger: Logger): void =
     logger.info(`removed the partially-created project at ${target}`);
 };
 
-/**
- * `lunora init` entry: scaffold (in-place or a new directory), then — on success
- * — offer to add auth + email via the registry. The offer never affects the
- * scaffold's exit code.
- */
 /** Run the scaffold step itself: in-place config, a `--dry-run` no-op, or a fresh-directory scaffold. */
 const runScaffoldStep = async (
     options: InitCommandOptions,
@@ -1638,6 +1599,11 @@ const scaffoldCiPipeline = (options: InitCommandOptions, result: InitCommandResu
     }
 };
 
+/**
+ * `lunora init` entry: scaffold (in-place or a new directory), then — on success
+ * — offer to add auth + email via the registry. The offer never affects the
+ * scaffold's exit code.
+ */
 const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const cleanup: ScaffoldCleanup = {};
@@ -1680,17 +1646,7 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 };
 
 /** Narrow a raw `--template` value to a known {@link Template}. */
-const isTemplate = (value: unknown): value is Template =>
-    value === "analog" ||
-    value === "astro" ||
-    value === "expo" ||
-    value === "next" ||
-    value === "nuxt" ||
-    value === "react-router" ||
-    value === "standalone" ||
-    value === "sveltekit" ||
-    value === "tanstack-start-react" ||
-    value === "tanstack-start-solid";
+const isTemplate = (value: unknown): value is Template => typeof value === "string" && TEMPLATE_IDS.includes(value);
 
 /** Narrow the `--ci` value to a {@link CiProvider}, warning (and ignoring it) on an unknown provider. */
 const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider | undefined => {

@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { callDO, getDO } from "./do-client";
+import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 
 /**
@@ -34,15 +34,7 @@ import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptio
  * `step.sleep` / `step.waitForEvent`).
  */
 const createWorkpool = (options: WorkpoolOptions): Workpool => {
-    // Defensive runtime guards: required by the type, but JS callers can omit them.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-    if (!options.namespace) {
-        throw new LunoraError("INTERNAL", "@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
-    }
-
-    if (!options.originUrl) {
-        throw new LunoraError("INTERNAL", "@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
-    }
+    assertSchedulerOptions(options);
 
     if (!Number.isInteger(options.maxConcurrency) || options.maxConcurrency <= 0) {
         throw new LunoraError("INTERNAL", "@lunora/scheduler: `maxConcurrency` must be a positive integer");

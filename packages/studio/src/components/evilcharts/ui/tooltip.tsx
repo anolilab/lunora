@@ -32,7 +32,6 @@ const ChartTooltipContent = ({
     formatter,
     nameKey,
     labelKey,
-    selected,
     roundness = "lg",
     variant = "default",
 }: Omit<RechartsPrimitive.DefaultTooltipContentProps, "accessibilityLayer"> &
@@ -44,7 +43,6 @@ const ChartTooltipContent = ({
         labelKey?: string;
         nameKey?: string;
         roundness?: TooltipRoundness;
-        selected?: string | null;
         variant?: TooltipVariant;
     }): React.ReactElement => {
     const { config } = useChart();
@@ -109,7 +107,6 @@ const ChartTooltipContent = ({
                                 className={cn(
                                     "[&>svg]:text-muted-foreground flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5",
                                     indicator === "dot" && "items-center",
-                                    selected != null && selected !== item.dataKey && "opacity-30",
                                 )}
                                 // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- these rows are positional — the index IS the identity, because the underlying record carries no domain id (see the matching eslint-disable)
                                 key={index}

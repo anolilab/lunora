@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { NotificationsPanel } from "../../../src/features/notifications/notifications-panel";
+import NotificationsPanel from "../../../src/features/notifications/notifications-panel";
 import type { PushSubscriptionDevice } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";

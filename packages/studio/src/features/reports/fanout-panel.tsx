@@ -1,8 +1,8 @@
 import type { ReactElement } from "react";
 
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
-import { StatCard } from "../../components/stat-card";
+import StatCard from "../../components/stat-card";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";

@@ -9,7 +9,7 @@ import { errorMessage, fireAndForget } from "../lib/internal";
  * itself closes the modal only on success. Shared by every studio dialog that
  * submits a mutation (the auth org dialogs, the create-user dialog, …).
  */
-export const useAsyncSubmit = (): { busy: boolean; error: null | string; run: (action: () => Promise<void>) => void } => {
+const useAsyncSubmit = (): { busy: boolean; error: null | string; run: (action: () => Promise<void>) => void } => {
     const [busy, setBusy] = useState<boolean>(false);
     // eslint-disable-next-line unicorn/no-null -- error sentinel; consumers gate the message on `error !== null`
     const [error, setError] = useState<null | string>(null);
@@ -34,3 +34,4 @@ export const useAsyncSubmit = (): { busy: boolean; error: null | string; run: (a
 
     return { busy, error, run };
 };
+export default useAsyncSubmit;

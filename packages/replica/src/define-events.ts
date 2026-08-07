@@ -136,7 +136,7 @@ export const defineEvents = <TDefinition extends Record<string, Record<string, u
     for (const [namespace, events] of Object.entries(definition)) {
         const nsObject: Record<string, unknown> = {};
 
-        for (const [name] of Object.entries(events)) {
+        for (const name of Object.keys(events)) {
             const qualifiedType = `${prefix}${namespace}.${name}`;
 
             // Store the type mapping for _types

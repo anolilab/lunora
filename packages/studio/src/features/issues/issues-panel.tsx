@@ -13,7 +13,7 @@ import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
-import { useAsyncSubmit } from "../../hooks/use-async-submit";
+import useAsyncSubmit from "../../hooks/use-async-submit";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { ErrorIssue, ExplainIssueArgs, ExplainIssueResult, IssueSeverity, IssuesResult, IssueStatus } from "../../lib/admin";
@@ -421,7 +421,7 @@ const IssueRow = ({ busy, issue, rowError, runTriage, shardKey }: IssueRowProps)
  * Each row expands to a grounded catalog fix (offline, client-side) plus an
  * opt-in AI explanation grounded in that same fix — see {@link IssueRow}.
  */
-export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement => {
+const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement => {
     const t = useT();
     const client = useLunora();
 
@@ -569,3 +569,4 @@ export const IssuesPanel = ({ initialShardKey }: IssuesPanelProps): ReactElement
         </div>
     );
 };
+export default IssuesPanel;

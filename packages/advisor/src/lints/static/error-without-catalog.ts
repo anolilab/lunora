@@ -27,23 +27,15 @@ const errorWithoutCatalog: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const procedure of context.procedureProtections) {
-            if (procedure.throwsBareError !== true) {
-                continue;
-            }
-
-            findings.push(
+        return context.procedureProtections
+            .filter((procedure) => procedure.throwsBareError === true)
+            .map((procedure) =>
                 emit(errorWithoutCatalog, {
                     cacheKey: `error_without_catalog:${procedure.file}:${procedure.exportName}`,
                     detail: `${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) throws a bare \`new Error(...)\`. Use \`LunoraError\` with a catalog code so the client can branch on it and Studio can group it.`,
                     metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Bare Error thrown instead of a coded LunoraError",

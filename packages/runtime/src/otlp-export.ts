@@ -185,10 +185,14 @@ const otlpSpanBody = (event: SpanEvent): unknown => {
         traceId: event.traceId,
     };
 
+    // Coerce each span event/link attribute value to a wire-safe scalar before encoding.
+    const coercedAttributes = (bag: Record<string, unknown> | undefined): ReturnType<typeof encodeAttributes> =>
+        encodeAttributes(Object.fromEntries(Object.entries(bag ?? {}).map(([key, value]) => [key, coerceFieldValue(value)])));
+
     if (event.events !== undefined && event.events.length > 0) {
         span.events = event.events.map((point) => {
             return {
-                attributes: encodeAttributes(Object.fromEntries(Object.entries(point.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                attributes: coercedAttributes(point.attributes),
                 name: point.name,
                 timeUnixNano: otlpUnixNano(point.ts),
             };
@@ -198,7 +202,7 @@ const otlpSpanBody = (event: SpanEvent): unknown => {
     if (event.links !== undefined && event.links.length > 0) {
         span.links = event.links.map((link) => {
             return {
-                attributes: encodeAttributes(Object.fromEntries(Object.entries(link.attributes ?? {}).map(([key, value]) => [key, coerceFieldValue(value)]))),
+                attributes: coercedAttributes(link.attributes),
                 spanId: link.spanId,
                 traceId: link.traceId,
             };

@@ -41,23 +41,16 @@ const workflowUnused: Lint = {
         }
 
         const started = new Set(calls.map((call) => call.workflow));
-        const findings = [];
 
-        for (const workflow of context.workflows) {
-            if (started.has(workflow.exportName)) {
-                continue;
-            }
-
-            findings.push(
+        return context.workflows
+            .filter((workflow) => !started.has(workflow.exportName))
+            .map((workflow) =>
                 emit(workflowUnused, {
                     cacheKey: `workflow_unused:${workflow.exportName}`,
                     detail: `No function calls \`ctx.workflows.get("${workflow.exportName}")\` — workflow "${workflow.exportName}" is declared but never started in app code.`,
                     metadata: { workflow: workflow.exportName },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Workflow is never started",

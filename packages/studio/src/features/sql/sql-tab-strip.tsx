@@ -158,4 +158,4 @@ const SqlTabStrip = ({ model, onSelect }: { readonly model: SqlTabStripModel; re
     );
 };
 
-export { SqlTabStrip };
+export default SqlTabStrip;

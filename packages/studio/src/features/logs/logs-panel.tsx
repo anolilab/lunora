@@ -7,7 +7,7 @@ import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
 // shared with the runtime sinks and the dev-terminal formatter (see CLAUDE.md
 // `shared/` rules).
 import { formatLogFields } from "../../../../../shared/log-fields";
-import { ErrorAlert } from "../../components/error-alert";
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
@@ -20,8 +20,8 @@ import flooredRectObserver from "../../lib/virtual-rect";
 import { ArchiveFeed } from "./archive-feed";
 import type { BadgeVariant } from "./log-level-variant";
 import { LEVEL_VARIANT } from "./log-level-variant";
-import { LogsErrorFilters } from "./logs-error-filters";
-import { LogsRequestFilters } from "./logs-request-filters";
+import LogsErrorFilters from "./logs-error-filters";
+import LogsRequestFilters from "./logs-request-filters";
 import type { LogSummary, SummaryBucket } from "./logs-summary";
 import { LogsSummary } from "./logs-summary";
 import type { LogsView } from "./logs-view-bar";

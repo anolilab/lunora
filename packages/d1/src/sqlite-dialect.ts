@@ -33,9 +33,9 @@ const sqliteDialect: SqlDialect = {
         real: "REAL",
         text: "TEXT",
     },
-    columnType: (kind) => sqlAffinityForKind(kind),
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
+    columnType: sqlAffinityForKind,
+    decode: sqliteDecode,
+    encode: sqliteEncode,
     frameworkColumns: () => [
         { name: "id", type: "TEXT PRIMARY KEY" },
         { name: "_creationTime", type: "REAL NOT NULL" },

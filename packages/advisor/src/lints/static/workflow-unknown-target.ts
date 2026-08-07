@@ -29,24 +29,17 @@ const workflowUnknownTarget: Lint = {
         }
 
         const declared = new Set(context.workflows.map((workflow) => workflow.exportName));
-        const findings = [];
 
-        for (const call of context.workflowCalls) {
-            // Dynamic name — not statically resolvable, so not a confirmed typo.
-            if (call.workflow === "" || declared.has(call.workflow)) {
-                continue;
-            }
-
-            findings.push(
+        // A dynamic name (`""`) is not statically resolvable, so not a confirmed typo.
+        return context.workflowCalls
+            .filter((call) => call.workflow !== "" && !declared.has(call.workflow))
+            .map((call) =>
                 emit(workflowUnknownTarget, {
                     cacheKey: `workflow_unknown_target:${call.file}:${call.exportName}:${call.workflow}`,
                     detail: `\`ctx.workflows.get("${call.workflow}")\` in "${call.exportName}" (${call.file}) references workflow "${call.workflow}", which is not declared in lunora/workflows.ts.`,
                     metadata: { exportName: call.exportName, file: call.file, line: call.line, workflow: call.workflow },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Workflow call references unknown workflow",

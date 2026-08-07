@@ -39,4 +39,4 @@ const GlobalTablesEmptyState = (): ReactElement => {
     );
 };
 
-export { GlobalTablesEmptyState };
+export default GlobalTablesEmptyState;

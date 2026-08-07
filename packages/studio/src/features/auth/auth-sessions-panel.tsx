@@ -21,7 +21,7 @@ const SESSION_LIMIT = 200;
  * current without a reload button (paused while the tab is hidden).
  */
 
-export const AuthSessionsPanel = (): ReactElement => {
+const AuthSessionsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
@@ -102,3 +102,4 @@ export const AuthSessionsPanel = (): ReactElement => {
         </div>
     );
 };
+export default AuthSessionsPanel;

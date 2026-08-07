@@ -314,42 +314,31 @@ const readOnlyIds = new WeakMap<WebSocket, string>();
 let fallbackCounter = 0;
 
 /**
- * Whether `ws` carries the accept-time id tag — i.e. whether this host accepted
- * it. Guarded because `getTags` rejects a socket the runtime does not know.
+ * The socket's accept-time id tag, or `undefined` when it carries none (or the
+ * state has no `getTags`). Guarded because `getTags` rejects a socket the
+ * runtime does not know, and both callers (`handleFor`'s ownership test and
+ * `idFor`) are contract surface documented not to throw at such a socket.
  */
-const hasIdTag = (state: DurableObjectState, ws: WebSocket): boolean => {
+const idTagOf = (state: DurableObjectState, ws: WebSocket): string | undefined => {
     const { getTags } = state as { getTags?: (ws: WebSocket) => string[] };
 
     if (typeof getTags !== "function") {
-        return false;
+        return undefined;
     }
 
     try {
-        return getTags.call(state, ws).some((tag) => tag.startsWith(ID_TAG_PREFIX));
+        return getTags.call(state, ws).find((tag) => tag.startsWith(ID_TAG_PREFIX));
     } catch {
         // An unaccepted socket: not ours.
-        return false;
+        return undefined;
     }
 };
 
 const readSocketId = (state: DurableObjectState, ws: WebSocket): string => {
-    const { getTags } = state as { getTags?: (ws: WebSocket) => string[] };
+    const idTag = idTagOf(state, ws);
 
-    if (typeof getTags === "function") {
-        // Guarded like `hasIdTag`: `getTags` rejects a socket the runtime does not
-        // know, and `idFor` is public contract surface documented to return an id
-        // — not to throw at a caller holding a closed socket.
-        let idTag: string | undefined;
-
-        try {
-            idTag = getTags.call(state, ws).find((tag) => tag.startsWith(ID_TAG_PREFIX));
-        } catch {
-            idTag = undefined;
-        }
-
-        if (idTag !== undefined) {
-            return idTag.slice(ID_TAG_PREFIX.length);
-        }
+    if (idTag !== undefined) {
+        return idTag.slice(ID_TAG_PREFIX.length);
     }
 
     const existing = fallbackIds.get(ws);
@@ -525,10 +514,10 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
             // implement `getTags` still went through `accept`, which records a
             // fallback id.
             // `fallbackIds` first: it is an O(1) WeakMap hit for every socket this
-            // wake accepted, whereas `hasIdTag` is a `getTags` host call that
+            // wake accepted, whereas `idTagOf` is a `getTags` host call that
             // allocates an array on every inbound frame. Both are ownership
             // evidence, so the union is unchanged — only the cost order is.
-            if (fallbackIds.has(ws) || hasIdTag(state, ws)) {
+            if (fallbackIds.has(ws) || idTagOf(state, ws) !== undefined) {
                 return ws as SocketHandle;
             }
 

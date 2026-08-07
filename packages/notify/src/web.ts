@@ -114,12 +114,16 @@ const subscribeToPush = async (options: SubscribeToPushOptions): Promise<Seriali
     // `applicationServerKey` and every send to it fails with `403
     // VapidPkHashMismatch` forever — so drop the stale one and re-subscribe.
     const existing = await registration.pushManager.getSubscription();
+    let reusable: null | PushSubscription = null;
 
-    if (existing !== null && !matchesVapidKey(existing, options.vapidPublicKey)) {
-        await existing.unsubscribe();
+    if (existing !== null) {
+        if (matchesVapidKey(existing, options.vapidPublicKey)) {
+            reusable = existing;
+        } else {
+            await existing.unsubscribe();
+        }
     }
 
-    const reusable = existing !== null && matchesVapidKey(existing, options.vapidPublicKey) ? existing : null;
     const subscription =
         reusable ??
         (await registration.pushManager.subscribe({

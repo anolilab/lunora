@@ -27,7 +27,7 @@ type PanelDialog = null | { kind: "create" } | { kind: "delete"; org: Row } | { 
  * read) the panel shows an empty state rather than hitting endpoints, so the
  * dashboard adapts to whatever plugins the deployment turned on.
  */
-export const OrganizationsPanel = (): ReactElement => {
+const OrganizationsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
     const { config, ready } = useAuthConfig();
@@ -190,3 +190,4 @@ export const OrganizationsPanel = (): ReactElement => {
         </div>
     );
 };
+export default OrganizationsPanel;

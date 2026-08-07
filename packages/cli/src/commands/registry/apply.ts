@@ -508,4 +508,4 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     return confirmed;
 };
 
-export { applyBindings, applyDeps, applyEnvVariables, applyItemResources, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };
+export { applyDeps, applyItemResources, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };

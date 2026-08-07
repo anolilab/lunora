@@ -4,6 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SchemaEditorOverlay } from "../../../src/features/schema/schema-editor-overlay";
 import type { SchemaEditTable } from "../../../src/lib/schema-edit";
 
+// The overlay calls `useNavigate()` to jump to the migrations route on a
+// destructive edit. Its own tests don't assert on that navigation — they only
+// check the local handoff UI — so a no-op `useNavigate` keeps the component
+// mounting under a plain `render()` (no `RouterProvider` needed) instead of
+// emitting "useRouter must be used inside a <RouterProvider>" on every render.
+// The factory preserves the rest of the module.
+vi.mock(import("@tanstack/react-router"), async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+
+    return {
+        ...actual,
+        useNavigate: (): (() => Promise<void>) => () => Promise.resolve(),
+    };
+});
+
 const TABLE = (name: string): SchemaEditTable => {
     return { columns: [], global: false, indexes: [], name };
 };

@@ -344,4 +344,32 @@ describe("createWorker — health / readiness endpoints", () => {
         // Admin posture keeps the full operator-supplied name.
         expect(adminRaw).toContain("acme-prod-billing");
     });
+
+    it("treats an out-of-union probe kind like `both` checkers instead of breaking the registry", async () => {
+        expect.assertions(1);
+
+        let runs = 0;
+        const probe: HealthProbe = {
+            check: () => {
+                runs += 1;
+
+                return { healthy: true };
+            },
+            critical: false,
+            // A drifted/untyped `kind` must degrade to running both checkers, not
+            // be handed raw to the health registry as a checker type it doesn't
+            // know (which would silently drop the probe from the readiness gate).
+            kind: "custom" as HealthProbe["kind"],
+            name: "counter",
+        };
+
+        const worker = createWorker({ health: { probes: [probe] }, shardDO: reachableNamespace });
+
+        await worker.fetch(get("/_lunora/health"), {}, fakeContext);
+        await worker.fetch(get("/_lunora/health/ready"), {}, fakeContext);
+
+        // Aggregate always runs it; the readiness gate runs it too because the
+        // unknown kind resolved to both checker types.
+        expect(runs).toBe(2);
+    });
 });

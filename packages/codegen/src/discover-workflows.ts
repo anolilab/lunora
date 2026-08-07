@@ -3,10 +3,11 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
-import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
+import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { stringPropertyFor, unwrapToCallExpression } from "./discover-ast";
 import type { WorkflowIR, WorkflowStepIR } from "./ir";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
@@ -44,16 +45,7 @@ const isDefineWorkflow = (identifier: Identifier): boolean => {
 };
 
 /** Read a property's string-literal value, or throw a located diagnostic. */
-const stringProperty = (expression: Expression, exportName: string, property: string): string => {
-    if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
-        return expression.getLiteralValue();
-    }
-
-    throw diagnosticAt(
-        expression,
-        `workflow "${exportName}": \`${property}\` must be a static string literal — it is deploy configuration codegen writes into wrangler.jsonc`,
-    );
-};
+const stringProperty = stringPropertyFor("workflow");
 
 /**
  * True when a call expression is a native durable-step invocation —
@@ -202,23 +194,6 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
     }
 
     return ir;
-};
-
-/**
- * Unwrap `as`/`satisfies`/parenthesized wrappers around a call expression —
- * `defineWorkflow({...}) satisfies WorkflowDefinition`, `defineWorkflow({...}) as const`,
- * or `(defineWorkflow({...}))` — down to the inner `CallExpression`. Mirrors the
- * identical helper in `discover-agents.ts`. Returns `undefined` when the
- * (possibly wrapped) node isn't ultimately a call.
- */
-const unwrapToCallExpression = (node: Node | undefined): CallExpression | undefined => {
-    let current: Node | undefined = node;
-
-    while (current && (Node.isAsExpression(current) || Node.isSatisfiesExpression(current) || Node.isParenthesizedExpression(current))) {
-        current = current.getExpression();
-    }
-
-    return current && Node.isCallExpression(current) ? current : undefined;
 };
 
 /**

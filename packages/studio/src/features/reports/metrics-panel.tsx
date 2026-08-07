@@ -18,9 +18,9 @@ import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
-import { MetricsAggregateView } from "./metrics-aggregate-view";
-import { MetricsOverviewStats } from "./metrics-overview-stats";
-import { QueryInsightsRange } from "./query-insights-range";
+import MetricsAggregateView from "./metrics-aggregate-view";
+import MetricsOverviewStats from "./metrics-overview-stats";
+import QueryInsightsRange from "./query-insights-range";
 
 interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */

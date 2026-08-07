@@ -1,11 +1,25 @@
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SchemaViewer } from "../../../src/features/schema/schema-viewer";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+
+// The viewer mounts the editor overlay when `schemaEditable` is set, and the
+// overlay calls `useNavigate()` for the destructive-edit handoff. Only one
+// test below sets `schemaEditable`; the mock is harmless for the rest (they
+// never reach the overlay) and keeps the synchronous `render()` + `getByTestId`
+// pattern working without a `RouterProvider`.
+vi.mock(import("@tanstack/react-router"), async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+
+    return {
+        ...actual,
+        useNavigate: (): (() => Promise<void>) => () => Promise.resolve(),
+    };
+});
 
 const TABLES = [
     { name: "messages", rowCount: 3 },

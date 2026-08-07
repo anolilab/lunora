@@ -71,4 +71,4 @@ const LogsRequestFilters = ({
     );
 };
 
-export { LogsRequestFilters };
+export default LogsRequestFilters;

@@ -1,9 +1,8 @@
-import { relative, sep } from "node:path";
-
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
+import { lunoraRelativePath } from "./discover-ast";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { MigrationIR } from "./ir";
 import { isServerPackageModule } from "./module-specifiers";
@@ -17,9 +16,6 @@ import { isServerPackageModule } from "./module-specifiers";
  * (so `import { defineMigration as dm }` still resolves), and fall back to the
  * surface text when no symbol is available (no tsconfig wired up).
  */
-/** Strips a trailing `.ts` extension from a relative source path. */
-const TS_EXTENSION_RE = /\.ts$/u;
-
 const isDefineMigration = (identifier: Identifier): boolean => {
     const symbol = identifier.getSymbol();
 
@@ -131,7 +127,7 @@ const discoverMigrations = (project: Project, lunoraDirectory: string): Migratio
         // discoverFunctions may have already added these files to the project;
         // reuse the existing SourceFile rather than re-adding (which throws).
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const statement of source.getVariableStatements()) {
             if (!statement.isExported()) {

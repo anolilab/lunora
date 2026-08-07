@@ -96,7 +96,8 @@ export const createCollections = (client: LunoraClient) =>
 ```
 
 Build it once (it owns the outbox, so keep a single instance) and use it in your
-components:
+components. The collections it returns are the single source of truth per table —
+see [One source of truth per table](#one-source-of-truth-per-table):
 
 ```tsx
 import { useLiveQuery } from "@tanstack/react-db";
@@ -116,6 +117,33 @@ function Chat({ channelId }: { channelId: Id<"channels"> }) {
     return; /* … */
 }
 ```
+
+## One source of truth per table
+
+Each table's rows live in exactly one place: the collection `defineCollections`
+created for it. Keep a **single `db` instance** and never mirror a collection's
+rows into a parallel store of your own — a hand-rolled cache, a global store, or
+a second `createCollection`. The two can only diverge: an optimistic write, a
+rollback, or an incoming sync delta is applied to the Lunora collection, not to
+your copy.
+
+The failure is quiet. Code that reads the copy doesn't error — it reads **stale**
+rows. A derived index (a tree, a search index, an undo capture) built from the
+copy runs against data that no longer matches what the UI renders through
+`useLiveQuery`, so the symptom is "this command does nothing" or a confusing
+refusal, not a crash. When Lunora collections are the live read path, make them
+the _only_ read path:
+
+- Read through `db.collections.*` / `useLiveQuery` everywhere. Don't re-export
+  rows from your own store into code that is supposed to be Lunora-backed.
+- Don't copy a collection out to "cache" it — it already is the live, indexed
+  cache. Copy only for a concrete snapshot you pass by value (an export, a
+  payload).
+- When adopting Lunora over an existing store, delete the old read paths rather
+  than keeping both. Code left on the old path is precisely what silently misses
+  rows after a migration.
+- Build derived indexes from the same collection you render from, so an index and
+  the UI that consumes it can't disagree.
 
 ## Reads — live, indexed queries
 

@@ -458,6 +458,17 @@ const createRangeBuilder = (stage: QueryStage): IndexRangeBuilderLike => {
  */
 const scanCandidateWindow = (limit: number): number => Math.max(limit, MAX_SEARCH_SCAN);
 
+/** WHERE clauses shared by both search layouts: the staged `.eq()` filters plus the soft-delete scope. */
+const searchWhereClauses = (search: SearchStage, scopeCondition?: SQL): SQL[] => {
+    const clauses = search.filters.map((filter) => dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
+
+    if (scopeCondition) {
+        clauses.push(scopeCondition);
+    }
+
+    return clauses;
+};
+
 /**
  * Run a search via the FTS5 shadow table, scoring in SQL from the index's own
  * vocabulary view.
@@ -516,15 +527,7 @@ const searchViaFts = (
         dsql` AND `,
     )}`;
 
-    const whereClauses: SQL[] = [];
-
-    for (const filter of search.filters) {
-        whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
-    }
-
-    if (scopeCondition) {
-        whereClauses.push(scopeCondition);
-    }
+    const whereClauses = searchWhereClauses(search, scopeCondition);
 
     let query = dsql`SELECT m.id, m._creationTime, m.${dsql.identifier(DOC_COLUMN)}, s.${dsql.identifier("__score__")} AS ${dsql.identifier("__score__")} FROM (${scored}) s JOIN ${dsql.identifier(tableName)} m ON m.id = s.${dsql.identifier(FTS_ID_COLUMN)}`;
 
@@ -574,15 +577,7 @@ const searchViaScan = (
         return [];
     }
 
-    const whereClauses: SQL[] = [];
-
-    for (const filter of search.filters) {
-        whereClauses.push(dsql`${jsonPathSql(filter.field)} = ${serializeSqlValue(filter.value)}`);
-    }
-
-    if (scopeCondition) {
-        whereClauses.push(scopeCondition);
-    }
+    const whereClauses = searchWhereClauses(search, scopeCondition);
 
     let query = dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`;
 
@@ -742,9 +737,9 @@ const scoreGeoRow = (record: Record<string, unknown>, geo: GeoStage): { creation
  * range-scan the geohash companion for candidate rows, JOIN back to the
  * document table, then refine + order exactly in JS — Haversine distance
  * (nearest-first) for `.near()`, an inclusive box test (creation-time order)
- * for `.within()`. Unlimited and unsliced: {@link runGeoFetch} and
- * {@link runGeoFetchScored} both slice this same candidate set, so the query
- * + scoring logic lives in exactly one place.
+ * for `.within()`. Unlimited and unsliced: {@link runGeoFetchScored} slices
+ * this same candidate set, so the query + scoring logic lives in exactly one
+ * place.
  */
 const resolveGeoCandidates = (
     sql: SqlExec,
@@ -792,90 +787,18 @@ const resolveGeoCandidates = (
     return scored;
 };
 
-/**
- * Resolve a `withGeoIndex(...)` query into bare documents. `.take(n)` is
- * applied AFTER the refine.
- */
-const runGeoFetch = (
-    sql: SqlExec,
-    tableName: string,
-    geo: GeoStage,
+/** Keep entries whose document passes every staged `.filter()` predicate, stopping at `limit` survivors. */
+const takeMatching = <T>(
+    entries: T[],
+    filters: QueryStage["inMemoryFilters"],
     limit: number | undefined,
-    scopeCondition?: SQL,
-    /** Reports the candidate count BEFORE the limit slice — what the read materialized. */
-    onScanned: (count: number) => void = () => undefined,
-): Record<string, unknown>[] => {
-    const docs = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => entry.doc);
+    documentOf: (entry: T) => Record<string, unknown>,
+): T[] => {
+    const result: T[] = [];
 
-    // Every candidate was decoded and scored before the slice, so the meter must
-    // see all of them — `.take(1)` over a wide radius still materializes the
-    // whole covering set.
-    onScanned(docs.length);
-
-    return typeof limit === "number" ? docs.slice(0, Math.max(0, Math.floor(limit))) : docs;
-};
-
-/**
- * Same candidate set as {@link runGeoFetch}, but pairs each document with the
- * distance {@link scoreGeoRow} already computed to order it — see
- * {@link ScoredDocument}. `.near()` rows carry their haversine distance;
- * `.within()` rows carry `null` (a box match has no point-distance metric, and
- * `0` would misleadingly read as "exactly here").
- */
-const runGeoFetchScored = (
-    sql: SqlExec,
-    tableName: string,
-    geo: GeoStage,
-    limit: number | undefined,
-    scopeCondition?: SQL,
-    onScanned: (count: number) => void = () => undefined,
-): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
-    const isWithin = geo.within !== undefined;
-    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {
-        return {
-            // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
-            distanceMeters: isWithin ? null : entry.distance,
-            document: entry.doc,
-        };
-    });
-
-    onScanned(results.length);
-
-    return typeof limit === "number" ? results.slice(0, Math.max(0, Math.floor(limit))) : results;
-};
-
-/**
- * Run a staged geo query terminal: resolve the candidates via {@link runGeoFetch}
- * (letting SQL cap the result when there are no in-memory `.filter()` predicates),
- * then apply any predicates + the effective limit in memory. Mirrors the search
- * terminal's split so the reader's `runFetch` stays a thin dispatcher.
- */
-const runGeoTerminal = (
-    sql: SqlExec,
-    tableName: string,
-    stage: QueryStage,
-    scopeCondition: SQL | undefined,
-    limit: number | undefined,
-    onScanned: (count: number) => void = () => undefined,
-): Record<string, unknown>[] => {
-    const { geo } = stage;
-
-    if (!geo) {
-        throw new LunoraError("INTERNAL", "runGeoTerminal called without a staged geo query");
-    }
-
-    const filtered = stage.inMemoryFilters.length > 0;
-    const docs = runGeoFetch(sql, tableName, geo, filtered ? undefined : limit, scopeCondition, onScanned);
-
-    if (!filtered) {
-        return docs;
-    }
-
-    const result: Record<string, unknown>[] = [];
-
-    for (const record of docs) {
-        if (stage.inMemoryFilters.every((predicate) => predicate(record))) {
-            result.push(record);
+    for (const entry of entries) {
+        if (filters.every((predicate) => predicate(documentOf(entry)))) {
+            result.push(entry);
 
             if (typeof limit === "number" && result.length >= limit) {
                 break;
@@ -887,10 +810,46 @@ const runGeoTerminal = (
 };
 
 /**
- * Scored twin of {@link runGeoTerminal} — same in-memory-filter handling
- * (RLS pushes its policy down this exact way, so `.collectWithScores()` must
- * apply it too), but tests each predicate against `entry.document` and keeps
- * `distanceMeters` on the surviving rows instead of collapsing to bare docs.
+ * Resolve a `withGeoIndex(...)` query into scored candidates: each document
+ * paired with the distance {@link scoreGeoRow} already computed to order it —
+ * see {@link ScoredDocument}. `.near()` rows carry their haversine distance;
+ * `.within()` rows carry `null` (a box match has no point-distance metric, and
+ * `0` would misleadingly read as "exactly here"). `.take(n)` is applied AFTER
+ * the refine.
+ */
+const runGeoFetchScored = (
+    sql: SqlExec,
+    tableName: string,
+    geo: GeoStage,
+    limit: number | undefined,
+    scopeCondition?: SQL,
+    /** Reports the candidate count BEFORE the limit slice — what the read materialized. */
+    onScanned: (count: number) => void = () => undefined,
+): { distanceMeters: null | number; document: Record<string, unknown> }[] => {
+    const isWithin = geo.within !== undefined;
+    const results = resolveGeoCandidates(sql, tableName, geo, scopeCondition).map((entry) => {
+        return {
+            // eslint-disable-next-line unicorn/no-null -- documented `.within()` sentinel: a box match has no point-distance metric
+            distanceMeters: isWithin ? null : entry.distance,
+            document: entry.doc,
+        };
+    });
+
+    // Every candidate was decoded and scored before the slice, so the meter must
+    // see all of them — `.take(1)` over a wide radius still materializes the
+    // whole covering set.
+    onScanned(results.length);
+
+    return typeof limit === "number" ? results.slice(0, Math.max(0, Math.floor(limit))) : results;
+};
+
+/**
+ * Run a staged geo query terminal: resolve the candidates via
+ * {@link runGeoFetchScored} (letting SQL cap the result when there are no
+ * in-memory `.filter()` predicates), then apply any predicates + the effective
+ * limit in memory (RLS pushes its policy down this exact way, so
+ * `.collectWithScores()` must apply it too). Mirrors the search terminal's
+ * split so the reader's `runFetch` stays a thin dispatcher.
  */
 const runGeoTerminalScored = (
     sql: SqlExec,
@@ -909,24 +868,18 @@ const runGeoTerminalScored = (
     const filtered = stage.inMemoryFilters.length > 0;
     const entries = runGeoFetchScored(sql, tableName, geo, filtered ? undefined : limit, scopeCondition, onScanned);
 
-    if (!filtered) {
-        return entries;
-    }
-
-    const result: { distanceMeters: null | number; document: Record<string, unknown> }[] = [];
-
-    for (const entry of entries) {
-        if (stage.inMemoryFilters.every((predicate) => predicate(entry.document))) {
-            result.push(entry);
-
-            if (typeof limit === "number" && result.length >= limit) {
-                break;
-            }
-        }
-    }
-
-    return result;
+    return filtered ? takeMatching(entries, stage.inMemoryFilters, limit, (entry) => entry.document) : entries;
 };
+
+/** Bare-doc twin of {@link runGeoTerminalScored} — same candidate set, filter handling, and limit, with the scores mapped away. */
+const runGeoTerminal = (
+    sql: SqlExec,
+    tableName: string,
+    stage: QueryStage,
+    scopeCondition: SQL | undefined,
+    limit: number | undefined,
+    onScanned: (count: number) => void = () => undefined,
+): Record<string, unknown>[] => runGeoTerminalScored(sql, tableName, stage, scopeCondition, limit, onScanned).map((entry) => entry.document);
 
 /**
  * Run the plain (non-search, non-geo) fetch terminal: compile the staged
@@ -1318,21 +1271,9 @@ const buildReader = (
             return scored;
         }
 
-        const result: { document: Record<string, unknown>; score: number }[] = [];
-
         searchScanned = scored.length;
 
-        for (const entry of scored) {
-            if (stage.inMemoryFilters.every((predicate) => predicate(entry.document))) {
-                result.push(entry);
-
-                if (typeof limit === "number" && result.length >= limit) {
-                    break;
-                }
-            }
-        }
-
-        return result;
+        return takeMatching(scored, stage.inMemoryFilters, limit, (entry) => entry.document);
     };
 
     const runSearchFetch = (limit: number | undefined): Record<string, unknown>[] => runSearchFetchScored(limit).map((entry) => entry.document);
@@ -2065,14 +2006,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return globalDb;
     };
 
-    /**
-     * Fallback for *id-addressed* ops (`get`/`patch`/`replace`/`delete`): a bare
-     * id carries no table, so they probe this DO's local tables first; a global
-     * row's id never lives here, so on a local miss delegate to `globalDb` (which
-     * probes its D1 tables). Returns `undefined` when there's no global backend
-     * to fall back to, so the caller keeps its existing not-found behaviour.
-     */
-    const globalFallback = (): DatabaseWriterLike | undefined => globalDb;
+    // For *id-addressed* ops (`get`/`patch`/`replace`/`delete`): a bare id
+    // carries no table, so they probe this DO's local tables first; a global
+    // row's id never lives here, so on a local miss they fall back to
+    // `globalDb` (which probes its D1 tables) when one is wired.
 
     /**
      * Backend-routed `fetcher`/`groupedCounter` pair handed to {@link resolveWith}
@@ -2320,6 +2257,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * Shard-local table names, optionally narrowed to a facade-pinned table.
+     * When `expectedTable` is supplied (the `ctx.db.<table>.get/delete/...`
+     * by-id facade pins it), the probe below is scoped to that one table so a
+     * foreign id can never resolve cross-table — closing an IDOR where a
+     * branded `Id<"posts">` carrying another table's id would otherwise
+     * read/mutate that other table. An unknown/global `expectedTable` narrows
+     * the probe to nothing, so the global fallback handles it.
+     */
+    const nonGlobalTableNames = (expectedTable?: string): string[] =>
+        Object.entries(schema.tables)
+            .filter(([, definition]) => definition.shardMode?.kind !== "global")
+            .map(([tableName]) => tableName)
+            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+
+    /**
      * Locate a row by id and return both the owning table and the decoded
      * document in a single pass. The previous code base did this in two
      * steps — `tableNameFromId` (which probes every table with a SELECT
@@ -2338,17 +2290,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // tags each branch with its source table — a single round-trip
         // regardless of table count. `LIMIT 1` short-circuits once a branch
         // hits; ids are unique across tables so at most one branch matches.
-        //
-        // When `expectedTable` is supplied (the `ctx.db.<table>.get/delete/...`
-        // by-id facade pins it), the probe is scoped to that one table so a
-        // foreign id can never resolve cross-table — closing an IDOR where a
-        // branded `Id<"posts">` carrying another table's id would otherwise
-        // read/mutate that other table. An unknown/global `expectedTable`
-        // narrows the probe to nothing, so the global fallback handles it.
-        const nonGlobalTables = Object.entries(schema.tables)
-            .filter(([, definition]) => definition.shardMode?.kind !== "global")
-            .map(([tableName]) => tableName)
-            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+        const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
         if (nonGlobalTables.length === 0) {
             return undefined;
@@ -2412,10 +2354,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return resolved;
         }
 
-        const nonGlobalTables = Object.entries(schema.tables)
-            .filter(([, definition]) => definition.shardMode?.kind !== "global")
-            .map(([tableName]) => tableName)
-            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
+        const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
         if (nonGlobalTables.length === 0) {
             return resolved;
@@ -2661,7 +2600,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // the by-id facade pinned a (non-global) table, a global row is
                 // by definition a different table — skip the fallback so a
                 // non-global facade can't reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalFallback() : undefined;
+                const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
                     await global.delete(id, undefined, deleteOptions);
@@ -2808,7 +2747,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const chunkSize = Math.max(1, allOptions?.chunkSize ?? DEFAULT_BATCH_LIMIT);
             const deleteOptions = allOptions?.hard === undefined ? undefined : { hard: allOptions.hard };
             // A `.global()` row's id lives in D1, not this DO, so the by-id delete only
-            // reaches it through `globalFallback()` — which is gated on NO table being
+            // reaches it through the `globalDb` fallback — which is gated on NO table being
             // pinned (the IDOR guard: a non-global by-id facade must not reach a global
             // row). Pinning `tableName` here would therefore make every global delete a
             // silent no-op: the count would inflate, the rows would survive, and a table
@@ -2878,26 +2817,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async deleteWhere(tableName, where, batchOptions) {
-            const global = globalWriterFor(tableName, "deleteWhere");
-
-            let ids: string[];
-
-            if (global) {
-                // Global tables have no native batch primitive; resolve ids and
-                // route each delete through the DO's single-row pipeline, which
-                // forwards to the global writer.
-                const rows = await global.findMany(tableName, { where });
-                ids = rows.page.map((row) => String(row["_id"]));
-            } else {
-                if (!schema.tables[tableName]) {
-                    throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
-                }
-
-                // Resolve matching rows first. The mutation-span (if any) keeps
-                // the read and the subsequent deletes consistent.
-                const page = await writer.findMany(tableName, { where });
-                ids = page.page.map((row) => String(row["_id"]));
-            }
+            // Resolve matching rows first — a global table (no native batch
+            // primitive) through its D1 writer, a shard-local one through this
+            // writer's own `findMany` (which rejects an unknown table). The
+            // mutation-span (if any) keeps the read and the subsequent deletes
+            // consistent.
+            const source = globalWriterFor(tableName, "deleteWhere") ?? writer;
+            const page = await source.findMany(tableName, { where });
+            const ids = page.page.map((row) => String(row["_id"]));
 
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
 
@@ -3095,7 +3022,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // A global row's id never lives in this DO; fall back to D1 —
                 // but only when no table is pinned: a (non-global) by-id facade
                 // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalFallback() : undefined;
+                const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
                     return global.get(id);
@@ -3525,7 +3452,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // A global row's id never lives in this DO; fall back to D1 —
                 // but only when no table is pinned: a (non-global) by-id facade
                 // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalFallback() : undefined;
+                const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
                     await global.patch(id, patch);
@@ -3618,30 +3545,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async patchWhere(tableName, args, batchOptions) {
-            const global = globalWriterFor(tableName, "patchWhere");
-
-            let patches: { id: string; patch: Record<string, unknown> }[];
-
-            if (global) {
-                // Global tables have no native batch primitive; resolve ids and
-                // route each patch through the DO's single-row pipeline, which
-                // forwards to the global writer.
-                const rows = await global.findMany(tableName, { where: args.where });
-                patches = rows.page.map((row) => {
-                    return { id: String(row["_id"]), patch: args.patch };
-                });
-            } else {
-                if (!schema.tables[tableName]) {
-                    throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
-                }
-
-                // Resolve matching rows first. The mutation-span (if any) keeps
-                // the read and the subsequent patches consistent.
-                const page = await writer.findMany(tableName, { where: args.where });
-                patches = page.page.map((row) => {
-                    return { id: String(row["_id"]), patch: args.patch };
-                });
-            }
+            // Resolve matching rows first — a global table (no native batch
+            // primitive) through its D1 writer, a shard-local one through this
+            // writer's own `findMany` (which rejects an unknown table). The
+            // mutation-span (if any) keeps the read and the subsequent patches
+            // consistent.
+            const source = globalWriterFor(tableName, "patchWhere") ?? writer;
+            const page = await source.findMany(tableName, { where: args.where });
+            const patches = page.page.map((row) => {
+                return { id: String(row["_id"]), patch: args.patch };
+            });
 
             assertBatchLimit(patches.length, batchOptions?.limit, "patchWhere");
 
@@ -3902,7 +3815,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const located = locateRowById(id, expectedTable);
 
             if (!located) {
-                const global = expectedTable === undefined ? globalFallback() : undefined;
+                const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global?.restore) {
                     await global.restore(id);
@@ -3951,7 +3864,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // A global row's id never lives in this DO; fall back to D1 —
                 // but only when no table is pinned: a (non-global) by-id facade
                 // must never reach a `.global()` row (IDOR).
-                const global = expectedTable === undefined ? globalFallback() : undefined;
+                const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
                     await global.replace(id, document, undefined, replaceOptions);

@@ -296,14 +296,17 @@ const WS_KEEPALIVE_PONG = "lunora-pong";
  */
 const REQUIRE_EPHEMERAL_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
 
-/**
- * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
- * Structurally a subset of `@lunora/runtime`'s `ObservabilitySink`, so a user can
- * pass the SAME sink object to `createWorker` (which drives `onRpc`) and
- * `createShardDO` (which drives `onLog` from `ctx.log`). Typed structurally so
- * `@lunora/do` takes no dependency on `@lunora/runtime`; the event is the same
- * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
- */
+/** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
+const socketMap = <V>(store: WeakMap<ShardSocketLike, Map<string, V>>, ws: ShardSocketLike): Map<string, V> => {
+    let map = store.get(ws);
+
+    if (!map) {
+        map = new Map<string, V>();
+        store.set(ws, map);
+    }
+
+    return map;
+};
 
 /**
  * The sink surface the DO hands its three signals to: `ctx.log` lines, `ctx.trace`
@@ -547,16 +550,6 @@ interface SubscriptionOutcome {
     tables: Set<string>;
 }
 
-/**
- * A shape resolved to its concrete query plan, the return of the
- * {@link ShardDO.resolveShape} hook. The codegen subclass composes the shape's
- * own predicate with the caller's RLS read base-where into `effectiveWhere`
- * under the socket's verified identity (the client never supplies it), so the
- * membership query the poke protocol runs is RLS-correct by construction.
- *
- * `columns`, when present, projects each row-op's `value` to that subset (the
- * shape's declared column allow-list); absent ⇒ the full document is shipped.
- */
 /** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
 interface ShapeMemo {
     cursor: number;
@@ -1425,13 +1418,6 @@ abstract class ShardDO {
         this.armWebSocketKeepalive();
     }
 
-    /** SQLite handle scoped to this Durable Object. */
-
-    /**
-     * Worker-side fetch entry point. Handles WebSocket upgrades and the
-     * shard-local RPC endpoint forwarded by `@lunora/runtime`.
-     */
-
     /**
      * Worker-side fetch entry point. Delegates to the host-neutral
      * {@link ShardRunner}, which forwards to the Cloudflare implementation below.
@@ -1701,56 +1687,45 @@ abstract class ShardDO {
             const cursor = (rawExec as (...args: unknown[]) => unknown).call(rawSql, query, ...params);
             // We wrap `.toArray()` and `.one()` on the cursor to capture result
             // sizes synchronously without buffering the rows ourselves.
+            let wrapped = false;
 
             if (cursor !== null && typeof cursor === "object") {
                 const c = cursor as Record<string, unknown>;
 
-                if (typeof c["toArray"] === "function") {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
-                    const originalToArray = c["toArray"].bind(c);
+                const wrap = (name: "one" | "toArray", rowsOf: (value: unknown) => number): boolean => {
+                    const method = c[name];
 
-                    c["toArray"] = () => {
-                        const rows = (originalToArray as () => unknown[])();
-                        const durationMs = Date.now() - start;
+                    if (typeof method !== "function") {
+                        return false;
+                    }
 
-                        foldSample(query, durationMs, rows.length, 0);
+                    const original = method.bind(c) as () => unknown;
 
-                        return rows;
+                    c[name] = () => {
+                        const value = original();
+
+                        foldSample(query, Date.now() - start, rowsOf(value), 0);
+
+                        return value;
                     };
-                }
 
-                if (typeof c["one"] === "function") {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
-                    const originalOne = c["one"].bind(c);
+                    return true;
+                };
 
-                    c["one"] = () => {
-                        const row = (originalOne as () => unknown)();
-                        const durationMs = Date.now() - start;
+                const wrappedToArray = wrap("toArray", (rows) => (rows as unknown[]).length);
+                const wrappedOne = wrap("one", () => 1);
 
-                        foldSample(query, durationMs, 1, 0);
+                wrapped = wrappedToArray || wrappedOne;
+            }
 
-                        return row;
-                    };
-                }
-
-                // When neither `.toArray()` nor `.one()` will be called (e.g.
-                // DDL / DML that the caller discards without iterating), record
-                // a zero-rows sample immediately so the statement still appears
-                // in the leaderboard. The `toArray`/`one` overrides above take
-                // priority when they are used — they fold their own samples and
-                // the caller never reaches a point where this fallback fires
-                // again for the same execution.
-                if (typeof c["toArray"] !== "function" && typeof c["one"] !== "function") {
-                    const durationMs = Date.now() - start;
-
-                    foldSample(query, durationMs, 0, 0);
-                }
-            } else {
-                // Non-object return (shouldn't happen with workerd's SqlStorage
-                // but guard defensively).
-                const durationMs = Date.now() - start;
-
-                foldSample(query, durationMs, 0, 0);
+            // When neither `.toArray()` nor `.one()` will fold a sample — DDL /
+            // DML the caller discards without iterating, or a defensive guard
+            // against a non-object return — record a zero-rows sample immediately
+            // so the statement still appears in the leaderboard. The wrapped
+            // methods take priority when they are used: they fold their own
+            // samples and this fallback never fires for the same execution.
+            if (!wrapped) {
+                foldSample(query, Date.now() - start, 0, 0);
             }
 
             return cursor;
@@ -3611,19 +3586,17 @@ abstract class ShardDO {
      * per dispatch and assigns the result to `ctx.log`.
      */
     protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger {
-        const emit = (level: ContextLogLevel, args: unknown[]): void => {
-            const { fields, message } = parseLogArgs(args, boundFields);
+        const at =
+            (level: ContextLogLevel) =>
+            (...args: unknown[]): void => {
+                const { fields, message } = parseLogArgs(args, boundFields);
 
-            this.recordUserLog(functionPath, level, args, message, fields, sink);
-        };
+                this.recordUserLog(functionPath, level, args, message, fields, sink);
+            };
 
         return {
-            debug: (...args: unknown[]) => {
-                emit("debug", args);
-            },
-            error: (...args: unknown[]) => {
-                emit("error", args);
-            },
+            debug: at("debug"),
+            error: at("error"),
             event: (name: string, fields?: LogFields) => {
                 // The event NAME is the record's message, so a plain-text log
                 // viewer still shows something meaningful; the structured payload
@@ -3631,21 +3604,11 @@ abstract class ShardDO {
                 // record as a queryable event rather than prose.
                 this.recordUserLog(functionPath, "info", [name], name, boundFields ? { ...boundFields, ...fields } : fields, sink, name);
             },
-            fatal: (...args: unknown[]) => {
-                emit("fatal", args);
-            },
-            info: (...args: unknown[]) => {
-                emit("info", args);
-            },
-            log: (...args: unknown[]) => {
-                emit("log", args);
-            },
-            trace: (...args: unknown[]) => {
-                emit("trace", args);
-            },
-            warn: (...args: unknown[]) => {
-                emit("warn", args);
-            },
+            fatal: at("fatal"),
+            info: at("info"),
+            log: at("log"),
+            trace: at("trace"),
+            warn: at("warn"),
             with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
         };
     }
@@ -3781,43 +3744,37 @@ abstract class ShardDO {
     }
 
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
+        const spanKey = dispatchSpanKey(anchor);
+
         /**
-         * Lazy on purpose. `buildCtx` builds `ctx.span` for every dispatch, but
-         * most handlers never touch it — allocating a collector and a Map entry
-         * per request for them would put pure waste on the hot path, and would
-         * make `dispatchSpans.has(...)` useless as the "did this dispatch record a
-         * wide event?" signal the root-span gate depends on.
+         * The collector is LAZY on purpose. `buildCtx` builds `ctx.span` for every
+         * dispatch, but most handlers never touch it — allocating a collector and a
+         * Map entry per request for them would put pure waste on the hot path, and
+         * would make `dispatchSpans.has(...)` useless as the "did this dispatch
+         * record a wide event?" signal the root-span gate depends on.
          *
-         * The sink is captured here (rather than looked up at flush time) because
-         * the dispatch `finally` that emits the wide event has no ctx and so no
-         * way back to `config.observability`.
+         * The sink IS registered eagerly (when there is one — with no sink there is
+         * nothing to remember, and a dispatch that collects nothing should pay
+         * nothing; this was a measured hot-path cost). It is captured here rather
+         * than looked up at flush time because the dispatch `finally` that flushes
+         * a batching sink has no ctx and so no way back to `config.observability`.
          */
-        // The sink IS registered eagerly, unlike the collector. It is one small
-        // object per dispatch, and it is what the dispatch `finally` uses to flush
-        // a batching sink at the invocation boundary — a handler that never
-        // touched `ctx.span` still needs its buffered logs and spans shipped.
         this.lastTelemetrySink = sink ?? this.lastTelemetrySink;
 
-        // The sink is registered EAGERLY only when there is one — it is what the
-        // dispatch `finally` needs to flush a batching sink, and that lookup has no
-        // other route back to `config.observability`. With no sink there is nothing
-        // to remember, so the map is left alone entirely: a dispatch that collects
-        // nothing should pay nothing (this was a measured hot-path cost).
         if (sink !== undefined) {
             evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
-            this.dispatchSpans.set(dispatchSpanKey(anchor), this.dispatchSpans.get(dispatchSpanKey(anchor)) ?? { sink });
+            this.dispatchSpans.set(spanKey, this.dispatchSpans.get(spanKey) ?? { sink });
         }
 
         const collector = (): SpanCollector => {
             evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
 
-            const key = dispatchSpanKey(anchor);
-            const entry = this.dispatchSpans.get(key) ?? { sink };
+            const entry = this.dispatchSpans.get(spanKey) ?? { sink };
 
             // Raw `recordException` stacktraces/messages in dev only — matches
             // `makeTracer`'s `captureRaw` posture for the wide event's collector.
             entry.collector ??= createSpanCollector({ spanId: anchor.rootSpanId, traceId: anchor.traceId }, isDevEnvironment(this.env));
-            this.dispatchSpans.set(key, entry);
+            this.dispatchSpans.set(spanKey, entry);
 
             return entry.collector;
         };
@@ -4539,13 +4496,6 @@ abstract class ShardDO {
     }
 
     /**
-     * The alarm's actual work, split out so {@link ShardDO.alarm} is a one-line trace
-     * wrapper. An alarm drives `.global()` shape refreshes and external-source
-     * ingest with no client waiting on a response, which is exactly where a
-     * silent failure hides longest — so it gets a root span like any dispatch.
-     */
-
-    /**
      * Cloudflare-specific alarm implementation, injected into {@link ShardRunner}
      * as the host-specific handler while the engine is progressively extracted.
      */
@@ -4565,33 +4515,29 @@ abstract class ShardDO {
             globalShapesRemaining = 1;
         }
 
+        // A contained tier failure re-arms at the fixed floor (a conservative
+        // retry) rather than stranding its loop or spinning immediately.
+        const pollTier = async (tag: string, run: () => Promise<number | undefined>): Promise<number | undefined> => {
+            try {
+                return await run();
+            } catch (error) {
+                this.recordShapeError(tag, error);
+
+                return Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+            }
+        };
+
         // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
         // base hook returns `undefined` (dormant); the codegen subclass overrides
         // it to materialize each sourced table and report the earliest NEXT-DUE
-        // timestamp across every non-manual source. A contained failure re-arms
-        // at the fixed floor (a conservative retry) rather than stranding the
-        // ingest loop or spinning immediately.
-        let nextSourceDueAt: number | undefined;
-
-        try {
-            nextSourceDueAt = await this.pollExternalSources();
-        } catch (error) {
-            this.recordShapeError("source:poll", error);
-            nextSourceDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
+        // timestamp across every non-manual source.
+        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources());
 
         // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
         // returns `undefined` (no TTL tables); the codegen subclass overrides
         // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
-        // reports its next-due. A contained failure re-arms at the fixed floor.
-        let nextTtlDueAt: number | undefined;
-
-        try {
-            nextTtlDueAt = await this.pollTtlSweeps();
-        } catch (error) {
-            this.recordShapeError("ttl:sweep", error);
-            nextTtlDueAt = Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
-        }
+        // reports its next-due.
+        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps());
 
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
@@ -7265,12 +7211,7 @@ abstract class ShardDO {
             return;
         }
 
-        let cancellers = this.streamCancellers.get(ws);
-
-        if (!cancellers) {
-            cancellers = new Map();
-            this.streamCancellers.set(ws, cancellers);
-        }
+        const cancellers = socketMap(this.streamCancellers, ws);
 
         // Enforce the per-socket in-flight cap before allocating any state
         // for the new stream. A rejected stream never lands in the
@@ -8308,14 +8249,7 @@ abstract class ShardDO {
 
     /** Record a socket's latest global-shape membership snapshot in the in-memory cache (creating the per-socket map lazily). */
     private recordGlobalSnapshot(ws: ShardSocketLike, subId: string, snapshot: Map<string, string>): void {
-        let snapshots = this.globalShapeSnapshots.get(ws);
-
-        if (!snapshots) {
-            snapshots = new Map<string, Map<string, string>>();
-            this.globalShapeSnapshots.set(ws, snapshots);
-        }
-
-        snapshots.set(subId, snapshot);
+        socketMap(this.globalShapeSnapshots, ws).set(subId, snapshot);
     }
 
     /**
@@ -8590,14 +8524,7 @@ abstract class ShardDO {
 
     /** Record a shape's poke baseline cursor on a socket (creating the per-socket map lazily). */
     private recordShapeMemo(ws: ShardSocketLike, subId: string, cursor: number): void {
-        let memos = this.shapeMemos.get(ws);
-
-        if (!memos) {
-            memos = new Map<string, ShapeMemo>();
-            this.shapeMemos.set(ws, memos);
-        }
-
-        memos.set(subId, { cursor });
+        socketMap(this.shapeMemos, ws).set(subId, { cursor });
     }
 
     /**
@@ -8607,15 +8534,12 @@ abstract class ShardDO {
      * write-flush can diff against it.
      */
     private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome): void {
-        let memos = this.subMemos.get(ws);
-
-        if (!memos) {
-            memos = new Map<string, SubscriptionMemo>();
-            this.subMemos.set(ws, memos);
-        }
-
-        // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-        memos.set(subId, { lastJson: JSON.stringify(encodeWire(outcome.result ?? null)), ranges: outcome.ranges, tables: outcome.tables });
+        socketMap(this.subMemos, ws).set(subId, {
+            // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
+            lastJson: JSON.stringify(encodeWire(outcome.result ?? null)),
+            ranges: outcome.ranges,
+            tables: outcome.tables,
+        });
     }
 
     /**
@@ -8652,13 +8576,7 @@ abstract class ShardDO {
         epoch: string | undefined,
         clientWatermark: number | undefined,
     ): void {
-        let memos = this.subMemos.get(ws);
-
-        if (!memos) {
-            memos = new Map<string, SubscriptionMemo>();
-            this.subMemos.set(ws, memos);
-        }
-
+        const memos = socketMap(this.subMemos, ws);
         const cursorSuffix = cdcSuffix(cursor, epoch);
 
         // Wire-encode the result so a `bytes`/`bigint` column survives the frame

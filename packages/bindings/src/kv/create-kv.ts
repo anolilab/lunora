@@ -31,6 +31,28 @@ const TEXT_ENCODER = new TextEncoder();
 const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
 
 /**
+ * The NUL/`..`/length rules shared by keys and list prefixes. `.` and `..` are
+ * reserved by KV's list semantics and traversal; reject them as path components
+ * (not just substrings) so `a..b` is fine but `a/../b`, `../b`, `b/..`, `.` are
+ * rejected.
+ */
+const validateSegments = (value: string, kind: "key" | "prefix"): void => {
+    if (byteLength(value) > MAX_KEY_LENGTH) {
+        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+    }
+
+    if (value.includes("\0")) {
+        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} contains NUL byte`);
+    }
+
+    for (const segment of value.split("/")) {
+        if (segment === "." || segment === "..") {
+            throw new LunoraError("INTERNAL", `@lunora/bindings/kv: ${kind} contains a \`.\`/\`..\` path component`);
+        }
+    }
+};
+
+/**
  * Reject keys that escape their tenant prefix, contain a path-traversal
  * segment, or exceed KV's size ceiling. Mirrors `@lunora/storage`'s
  * `validateKey`. Used by every operation that takes a `key` so a malicious
@@ -45,24 +67,7 @@ const validateKey = (key: string): void => {
         throw new TypeError("@lunora/bindings/kv: key must be a non-empty string");
     }
 
-    if (byteLength(key) > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
-    }
-
-    if (key.includes("\0")) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/kv: key contains NUL byte");
-    }
-
-    // `.` and `..` are reserved by KV's list semantics and traversal; reject
-    // them as path components (not just substrings) so `a..b` is fine but
-    // `a/../b`, `../b`, `b/..`, `.` are rejected.
-    const segments = key.split("/");
-
-    for (const segment of segments) {
-        if (segment === "." || segment === "..") {
-            throw new LunoraError("INTERNAL", "@lunora/bindings/kv: key contains a `.`/`..` path component");
-        }
-    }
+    validateSegments(key, "key");
 };
 
 /**
@@ -72,24 +77,8 @@ const validateKey = (key: string): void => {
  * the same key-rejection contract as get/put/delete.
  */
 const validatePrefix = (prefix: string): void => {
-    if (prefix.length === 0) {
-        return;
-    }
-
-    if (byteLength(prefix) > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/kv: prefix exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
-    }
-
-    if (prefix.includes("\0")) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/kv: prefix contains NUL byte");
-    }
-
-    const segments = prefix.split("/");
-
-    for (const segment of segments) {
-        if (segment === "." || segment === "..") {
-            throw new LunoraError("INTERNAL", "@lunora/bindings/kv: prefix contains a `.`/`..` path component");
-        }
+    if (prefix.length > 0) {
+        validateSegments(prefix, "prefix");
     }
 };
 

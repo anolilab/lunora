@@ -17,7 +17,7 @@ import { cn } from "../lib/utils";
 import { createAdminWsTokenProvider } from "../lib/ws-token-provider";
 import type { StudioChrome, StudioProps } from "./studio";
 import { Studio } from "./studio";
-import { StudioLogin } from "./studio-login";
+import StudioLogin from "./studio-login";
 
 interface StudioAppProps {
     /**

@@ -38,4 +38,4 @@ const StatCard = ({
     </Card>
 );
 
-export { StatCard };
+export default StatCard;

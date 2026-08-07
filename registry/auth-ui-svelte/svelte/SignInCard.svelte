@@ -8,7 +8,7 @@
     import AuthLink from "./AuthLink.svelte";
     import { useAuthUI } from "./context";
     import { controllerStore } from "./controller-store";
-    import Field from "./Field.svelte";
+    import FormField from "./FormField.svelte";
     import FormBanner from "./FormBanner.svelte";
     import SocialButtons from "./SocialButtons.svelte";
     import SubmitButton from "./SubmitButton.svelte";
@@ -59,32 +59,8 @@
             }}
         >
             <FormBanner error={$form.formError} />
-            <Field
-                autoComplete="email"
-                field={$form.fields.email}
-                label={t.emailLabel}
-                name="email"
-                onBlur={() => {
-                    actions.blur("email");
-                }}
-                onChange={(value) => {
-                    actions.setField("email", value);
-                }}
-                type="email"
-            />
-            <Field
-                autoComplete="current-password"
-                field={$form.fields.password}
-                label={t.passwordLabel}
-                name="password"
-                onBlur={() => {
-                    actions.blur("password");
-                }}
-                onChange={(value) => {
-                    actions.setField("password", value);
-                }}
-                type="password"
-            />
+            <FormField {actions} autoComplete="email" field="email" fields={$form.fields} label={t.emailLabel} type="email" />
+            <FormField {actions} autoComplete="current-password" field="password" fields={$form.fields} label={t.passwordLabel} type="password" />
             <AuthLink href={forgotPasswordHref}>{t.forgotPasswordLink}</AuthLink>
             <SubmitButton pending={$form.status === "submitting"}>{t.signIn}</SubmitButton>
         </form>

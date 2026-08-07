@@ -371,21 +371,15 @@ const tableNameFromId = async (
         return cached;
     }
 
-    const candidates: string[] = [];
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        // Skip tables that don't live in D1 — `.shardBy()` is spread across
-        // many DOs and would never have a D1 row to find. The default root
-        // mode is also DO-side; we only need to probe `.global()` tables.
-        // (Schemas authored before the `.global()` flag existed don't set
-        // shardMode at all — preserve the legacy "probe every table" behaviour
-        // there so existing fixtures keep working.)
-        if (definition.shardMode !== undefined && definition.shardMode.kind !== "global") {
-            continue;
-        }
-
-        candidates.push(tableName);
-    }
+    // Skip tables that don't live in D1 — `.shardBy()` is spread across many
+    // DOs and would never have a D1 row to find. The default root mode is also
+    // DO-side; we only need to probe `.global()` tables. (Schemas authored
+    // before the `.global()` flag existed don't set shardMode at all — preserve
+    // the legacy "probe every table" behaviour there so existing fixtures keep
+    // working.)
+    const candidates = Object.entries(schema.tables)
+        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
+        .map(([tableName]) => tableName);
 
     // Fire every probe at once; the first non-empty result wins.
     const probes = await Promise.all(
@@ -448,6 +442,20 @@ const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Reco
  */
 /** Join AND-conditions into one SQL, parenthesizing only when there's more than one. */
 const andBranch = (conditions: SQL[]): SQL => (conditions.length === 1 ? (conditions[0] as SQL) : sql`(${sql.join(conditions, sql` AND `)})`);
+
+/** Comma-joined quoted identifier list (column lists, SELECT lists). */
+const identifierList = (names: ReadonlyArray<string>): SQL =>
+    sql.join(
+        names.map((name) => sql`${sql.identifier(name)}`),
+        sql`, `,
+    );
+
+/** Comma-joined bound-value list (`VALUES (…)` tuples, `IN (…)` lists). */
+const bindList = (values: ReadonlyArray<unknown>): SQL =>
+    sql.join(
+        values.map((value) => sql`${value}`),
+        sql`, `,
+    );
 
 const buildRankBeforeBranches = (
     engine: SqlDialect["name"],
@@ -562,14 +570,9 @@ const hydrateRankRows = async (
     }
 
     const fetched = await Promise.all(
-        chunks.map(async (chunk) => {
-            const list = sql.join(
-                chunk.map((value) => sql`${value}`),
-                sql`, `,
-            );
-
-            return queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} IN (${list})`);
-        }),
+        chunks.map(async (chunk) =>
+            queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} IN (${bindList(chunk)})`),
+        ),
     );
 
     const byId = new Map<string, Record<string, unknown>>();
@@ -971,14 +974,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         table: string;
         values: ReadonlyArray<unknown>;
     }): SQL => {
-        const columnList = sql.join(
-            config.columns.map((column) => sql`${sql.identifier(column)}`),
-            sql`, `,
-        );
-        const valueList = sql.join(
-            config.values.map((value) => sql`${value}`),
-            sql`, `,
-        );
+        const columnList = identifierList(config.columns);
+        const valueList = bindList(config.values);
         const excluded = (column: string): SQL => (dialect.name === "mysql" ? sql`VALUES(${sql.identifier(column)})` : sql`excluded.${sql.identifier(column)}`);
         // Postgres can't resolve a bare existing-row column in the SET RHS (it's in
         // both the target and `excluded` scopes) — qualify with the table name.
@@ -1254,54 +1251,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
-        if (op === "count") {
+        if (op === "count" || op === "sum" || op === "avg") {
             // Track the group keys we touched so an emptied group can be pruned
-            // (count steps both the removes and the adds key on a `by`-changing
-            // update; only the removes side can reach 0).
-            const touched = new Set<string>();
-
-            for (const [document, delta] of [
-                [removes, -1],
-                [adds, 1],
-            ] as const) {
-                if (!document) {
-                    continue;
-                }
-
-                const encoded = encodeAggregateKey(index.by ?? [], document);
-
-                touched.add(encoded);
-
-                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared connection
-                await queryRun(
-                    exec,
-                    dialect,
-                    upsertSql({
-                        columns: ["__key__", "__value__", "__count__"],
-                        conflictKey: "__key__",
-                        set: (excluded, current) => {
-                            return {
-                                __count__: sql`${current("__count__")} + ${excluded("__count__")}`,
-                                __value__: sql`${current("__value__")} + ${excluded("__value__")}`,
-                            };
-                        },
-                        table: aggTable,
-                        values: [encoded, delta, delta],
-                    }),
-                );
-            }
-
-            for (const encoded of touched) {
-                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared connection (see above).
-                await pruneEmptyGroup(aggTable, encoded);
-            }
-
-            return;
-        }
-
-        if (op === "sum" || op === "avg") {
-            // Same prune-after-step contract as count: a group whose last row
-            // left drops to `__count__ <= 0` and must be removed, not zeroed.
+            // (a `by`-changing update steps both the removes and the adds key;
+            // only the removes side can reach `__count__ <= 0`).
             const touched = new Set<string>();
 
             for (const [document, sign] of [
@@ -1312,7 +1265,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     continue;
                 }
 
-                const numeric = coerceAggregateNumber(document[field]);
+                // count steps `__value__` by ±1; sum/avg step it by the row's
+                // numeric field value (skipping rows without one).
+                const numeric = op === "count" ? 1 : coerceAggregateNumber(document[field]);
 
                 if (numeric === undefined) {
                     continue;
@@ -1332,7 +1287,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         set: (excluded, current) => {
                             return {
                                 __count__: sql`${current("__count__")} + ${excluded("__count__")}`,
-                                __value__: sql`COALESCE(${current("__value__")}, 0) + ${excluded("__value__")}`,
+                                // count's `__value__` is never NULL (seeded with the
+                                // delta); a sum/avg group seeded by a valueless row can
+                                // be, hence the COALESCE on that side only.
+                                __value__:
+                                    op === "count"
+                                        ? sql`${current("__value__")} + ${excluded("__value__")}`
+                                        : sql`COALESCE(${current("__value__")}, 0) + ${excluded("__value__")}`,
                             };
                         },
                         table: aggTable,
@@ -1342,7 +1303,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             for (const encoded of touched) {
-                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared D1 connection (see above).
+                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared connection (see above).
                 await pruneEmptyGroup(aggTable, encoded);
             }
 
@@ -1524,10 +1485,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)}`);
 
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const insertColumnList = sql.join(
-            ["__id__", "__partition__", ...sortColumns].map((column) => sql`${sql.identifier(column)}`),
-            sql`, `,
-        );
+        const insertColumnList = identifierList(["__id__", "__partition__", ...sortColumns]);
 
         // Collect the rank tuples during the keyset scan, then insert them
         // sequentially below (the scan callback can't itself await on the
@@ -1546,14 +1504,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             rankTuples.push([document["_id"], partitionKey, ...sortValues]);
         });
 
-        const inserts = rankTuples.map((tuple) => {
-            const valueList = sql.join(
-                tuple.map((value) => sql`${value}`),
-                sql`, `,
-            );
-
-            return sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${valueList})`;
-        });
+        const inserts = rankTuples.map((tuple) => sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList(tuple)})`);
 
         // One round trip for the whole backfill when the exec exposes `batch`
         // (rows are keyed by distinct `__id__`, so order across them doesn't
@@ -1650,20 +1601,17 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
 
                 const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-                const columnList = sql.join(
-                    ["__id__", "__partition__", ...sortColumns].map((column) => sql`${sql.identifier(column)}`),
-                    sql`, `,
-                );
+                const columnList = identifierList(["__id__", "__partition__", ...sortColumns]);
                 const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
                 const sortValues = index.sortBy.map((key) => serializeColumnValue(next[key.field] ?? null));
-                const valueList = sql.join(
-                    [id, partitionKey, ...sortValues].map((value) => sql`${value}`),
-                    sql`, `,
-                );
 
                 // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
-                await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(rankTable)} (${columnList}) VALUES (${valueList})`);
+                await queryRun(
+                    exec,
+                    dialect,
+                    sql`INSERT INTO ${sql.identifier(rankTable)} (${columnList}) VALUES (${bindList([id, partitionKey, ...sortValues])})`,
+                );
             }
         }
     };
@@ -1968,11 +1916,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * id resolves to `null` rather than shifting the result order.
      */
     const pointReads = createPointReadBatcher<Record<string, unknown>>(async (table, ids) => {
-        const list = sql.join(
-            ids.map((value) => sql`${value}`),
-            sql`, `,
-        );
-        const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} IN (${list})`);
+        const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} IN (${bindList(ids)})`);
         const byId = new Map<string, Record<string, unknown>>();
 
         for (const row of rows) {
@@ -2600,16 +2544,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await ensureRankBackfilledForTable(tableName);
 
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
-            const columnList = sql.join(
-                columns.map((column) => sql`${sql.identifier(column)}`),
-                sql`, `,
-            );
-            const valueList = sql.join(
-                values.map((value) => sql`${value}`),
-                sql`, `,
-            );
 
-            await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${columnList}) VALUES (${valueList})`);
+            await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${identifierList(columns)}) VALUES (${bindList(values)})`);
 
             // A caller-pinned id may collide with a stale cache entry from a
             // prior delete/re-insert in this ctx-db lifetime; point the cache
@@ -2995,7 +2931,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const rankTable = rankTableName(tableName, index.name);
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-            const selectList = sql.join([sql`${sql.identifier("__partition__")}`, ...sortColumns.map((column) => sql`${sql.identifier(column)}`)], sql`, `);
+            const selectList = identifierList(["__partition__", ...sortColumns]);
             const ownRows = await queryAll(
                 exec,
                 dialect,
@@ -3103,14 +3039,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const selectColumns = sql.join(
-                [
-                    sql`${sql.identifier(RANK_TIEBREAK)}`,
-                    sql`${sql.identifier("__partition__")}`,
-                    ...sortColumns.map((column) => sql`${sql.identifier(column)}`),
-                ],
-                sql`, `,
-            );
+            const selectColumns = identifierList([RANK_TIEBREAK, "__partition__", ...sortColumns]);
 
             let query = sql`SELECT ${selectColumns} FROM ${sql.identifier(rankTable)}`;
 
