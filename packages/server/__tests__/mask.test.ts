@@ -906,6 +906,36 @@ describe("mask — with-relation hops", () => {
     });
 });
 
+describe("mask — stacked middlewares", () => {
+    it("resolves a stacked policy in the SAME order for relation rows as for top-level rows", async () => {
+        expect.assertions(2);
+
+        // The chain is an onion: `.use(mask(A))` wraps ctx.db first, `.use(mask(B))`
+        // wraps that, so a top-level row comes back through A then B. The ARGS
+        // travel the other way (B attaches its hook, A sees it as `inner`), so a
+        // naive composition applies B then A and a stacked policy resolves
+        // differently on a parent than on its `with`-hydrated child.
+        const database = createFakeDatabase([{ _id: "p1", table: "posts", title: "Hello" }]);
+
+        const handler = lunora.query
+            // A redacts; B would hash. A-then-B on a redacted (null) value keeps null.
+            .use(maskForTest({ users: { email: "redact" } }))
+            .use(maskForTest({ users: { email: () => "HASHED" } }))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users", {}));
+
+        // Capture the composed hook off the args the inner writer received.
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const call = database.calls.find((entry) => entry.method === "findFirst");
+        const { relationMask } = call?.args as { relationMask: (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[] };
+
+        // A runs first (redact → null), then B maps that null to "HASHED".
+        expect(relationMask("users", [{ email: "a@b.c" }])).toEqual([{ email: "HASHED" }]);
+        // …and a table neither policy names is untouched by both.
+        expect(relationMask("posts", [{ title: "Hello" }])).toEqual([{ title: "Hello" }]);
+    });
+});
+
 describe("mask — value oracle via filter/sort fails closed (regression)", () => {
     it("findMany with a where on a masked column throws MASK_UNSUPPORTED", async () => {
         expect.assertions(2);

@@ -346,7 +346,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         track: async (input) => {
             await ensureAuthorized(input.referenceId);
 
-            const target = input.quantity ?? 1;
+            // `=== undefined`, not `??`. The two are equivalent to the TYPE (`number |
+            // undefined`), which is why the lint rule cannot tell them apart — but
+            // this is a trust boundary, and an untyped/JSON caller can send
+            // `quantity: null`. `??` would quietly turn that into the default 1
+            // instead of letting the check below reject it.
+            // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- deliberate: `??` would swallow a runtime `null` the type says can't happen
+            const target = input.quantity === undefined ? 1 : input.quantity;
 
             // A negative (or non-integer/non-finite) quantity is never a legitimate
             // meter reading, and it is not merely garbage-in: the ledger is summed

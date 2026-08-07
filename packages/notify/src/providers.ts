@@ -152,17 +152,26 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
         },
         isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
         send: async (payload) => {
-            // A multi-recipient `to` can mix kinds; our facade sends one target per
-            // call, so route on the first (single) target here. The endpoint IS the
-            // routing decision — present means web push, absent means FCM.
-            const target = Array.isArray(payload.to) ? payload.to[0] : payload.to;
-            const endpoint = webPushEndpoint(target);
+            // ROUTING is on the first target — the endpoint IS the decision, present
+            // means web push, absent means FCM — because `ctx.push`'s own fan-out
+            // (`deliver`) sends exactly one target per call.
+            //
+            // The SSRF re-check, though, must cover EVERY target: `notify.send()`
+            // hands a caller-shaped message straight to the engine, so a
+            // multi-recipient push `to` does reach this router, and the provider
+            // POSTs all of them. Guarding only `to[0]` would let every later entry
+            // walk past the rebinding check — the one place it is enforced.
+            const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
+            const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
-            if (endpoint !== undefined) {
-                await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
+            for (const endpoint of endpoints) {
+                if (endpoint !== undefined) {
+                    // eslint-disable-next-line no-await-in-loop -- verdicts are memoized per host, so a shared push origin costs one lookup for the whole array
+                    await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
+                }
             }
 
-            return pick(endpoint).send(payload);
+            return pick(endpoints[0]).send(payload);
         },
     };
 };

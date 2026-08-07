@@ -764,6 +764,39 @@ describe("web-push send-time DNS-rebinding guard", () => {
         expect(inner.sends).toHaveLength(0);
     });
 
+    it("checks EVERY target of a multi-recipient `to`, not just the first", async () => {
+        expect.hasAssertions();
+
+        // `notify.send()` hands a caller-shaped message straight to the engine, so a
+        // multi-recipient push `to` reaches this router and the provider POSTs all of
+        // them. Guarding only `to[0]` lets every later entry past the one place the
+        // rebinding check is enforced.
+        vi.stubGlobal("fetch", async (input: string) => {
+            const { searchParams } = new URL(input);
+            const isRebind = searchParams.get("name") === "169-254-169-254.sslip.io";
+            const type = Number(searchParams.get("type"));
+
+            return {
+                json: async () => {
+                    // eslint-disable-next-line sonarjs/no-hardcoded-ip -- fixtures asserting the guard classifies them; no connection is made
+                    return { Answer: type === 1 ? [{ data: isRebind ? "169.254.169.254" : "93.184.216.34", type: 1 }] : [] };
+                },
+                ok: true,
+            } as unknown as Response;
+        });
+
+        const inner = mockPushProvider();
+        const router = routingPushProvider({ webPush: inner.provider });
+        const sub = (host: string) => JSON.stringify({ endpoint: `https://${host}/p`, keys: { auth: "a", p256dh: "p" } });
+
+        await expect(
+            // A public first target hides a rebinding second one.
+            router.send({ body: "b", to: [sub("push.example"), sub("169-254-169-254.sslip.io")] }),
+        ).rejects.toThrow(/resolves to a private\/internal address/);
+
+        expect(inner.sends).toHaveLength(0);
+    });
+
     it("delivers when the host resolves public, and skips the check entirely under allowedPushOrigins", async () => {
         expect.hasAssertions();
 

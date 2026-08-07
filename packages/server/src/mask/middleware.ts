@@ -390,13 +390,23 @@ const wrapDatabase = <Context>(
      * wrappers, and the inner one's args already carry its own hook — replacing it
      * would silently drop that policy from every `with`-hydrated child while
      * top-level rows still got both, which is exactly the asymmetry that makes a
-     * masking bug hard to see. Applying both in sequence matches how the stacked
-     * wrappers already treat top-level rows.
+     * masking bug hard to see.
+     *
+     * ORDER MATTERS, and it is the reverse of what the nesting suggests. The
+     * middleware chain is an onion: `.use(mask(A))` wraps `ctx.db` first, then
+     * `.use(mask(B))` wraps THAT, so the handler holds B's writer. A top-level row
+     * therefore comes back through A's mask and then B's — A first. But the args
+     * travel the other way: B attaches its hook, then A sees it as `inner`. Running
+     * `relationMask(inner(rows))` here would apply B then A, so a relation row would
+     * resolve a stacked policy in the opposite order from a top-level one (an inner
+     * `"redact"` under an outer `"hash"` would yield `null` on the parent and a hash
+     * on the child). Applying THIS hook first and handing the result to `inner`
+     * restores A-then-B on both paths.
      */
     const withRelationMask = (args?: QueryArgs): QueryArgs => {
         const inner = args?.relationMask;
 
-        return { ...args, relationMask: inner === undefined ? relationMask : (table, rows) => relationMask(table, inner(table, rows)) };
+        return { ...args, relationMask: inner === undefined ? relationMask : (table, rows) => inner(table, relationMask(table, rows)) };
     };
 
     /**

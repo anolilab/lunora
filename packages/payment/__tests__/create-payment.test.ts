@@ -396,8 +396,8 @@ describe("createPayment — attach / check / track", () => {
         await expect(payment.check({ featureId: "api_calls", quantity: 71, referenceId: "user_1" })).resolves.toMatchObject({ allowed: false, balance: 70 });
     });
 
-    it("track rejects a negative / non-integer quantity (metered-limit bypass)", async () => {
-        expect.assertions(4);
+    it("track rejects a negative / non-integer / null quantity (metered-limit bypass)", async () => {
+        expect.assertions(5);
 
         const store = new MemoryPaymentStore();
 
@@ -416,6 +416,11 @@ describe("createPayment — attach / check / track", () => {
             code: "VALIDATION_ERROR",
         });
         await expect(payment.track({ featureId: "api_calls", quantity: Number.NaN, referenceId: "user_1" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+        });
+        // An untyped/JSON caller can send `null`; `??` would have quietly defaulted
+        // it to 1 instead of rejecting it at the boundary.
+        await expect(payment.track({ featureId: "api_calls", quantity: null as unknown as number, referenceId: "user_1" })).rejects.toMatchObject({
             code: "VALIDATION_ERROR",
         });
 
