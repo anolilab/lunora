@@ -1136,6 +1136,268 @@
         "x-lunora-function-kind": "query"
       }
     },
+    "/_lunora/rpc#cloudflare_billing:disconnect": {
+      "post": {
+        "description": "Invoke the `mutation` `cloudflare_billing:disconnect` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_billing:disconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_billing:disconnect",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: cloudflare_billing:disconnect",
+        "tags": [
+          "cloudflare_billing"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#cloudflare_billing:status": {
+      "post": {
+        "description": "Invoke the `query` `cloudflare_billing:status` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_billing:status",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_billing:status",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: cloudflare_billing:status",
+        "tags": [
+          "cloudflare_billing"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#cloudflare_billing:store": {
+      "post": {
+        "description": "Invoke the `mutation` `cloudflare_billing:store` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_billing:store",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "ciphertext": {},
+                      "cloudflareAccountId": {},
+                      "iv": {},
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "ciphertext",
+                      "cloudflareAccountId",
+                      "iv",
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_billing:store",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: cloudflare_billing:store",
+        "tags": [
+          "cloudflare_billing"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#cloudflare_billing:summary": {
+      "post": {
+        "description": "Invoke the `action` `cloudflare_billing:summary` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "cloudflare_billing:summary",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "organizationId": {
+                        "description": "Id<\"organizations\">",
+                        "type": "string",
+                        "x-lunora-table": "organizations"
+                      }
+                    },
+                    "required": [
+                      "organizationId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cloudflare_billing:summary",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "action: cloudflare_billing:summary",
+        "tags": [
+          "cloudflare_billing"
+        ],
+        "x-lunora-function-kind": "action"
+      }
+    },
     "/_lunora/rpc#dashboards:create": {
       "post": {
         "description": "Invoke the `mutation` `dashboards:create` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -6741,6 +7003,10 @@
     {
       "description": "Operations declared in `lunora/cells`.",
       "name": "cells"
+    },
+    {
+      "description": "Operations declared in `lunora/cloudflare_billing`.",
+      "name": "cloudflare_billing"
     },
     {
       "description": "Operations declared in `lunora/dashboards`.",

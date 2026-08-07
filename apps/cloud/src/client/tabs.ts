@@ -5,6 +5,7 @@ import {
     Analytics01Icon,
     Chart01Icon,
     Clock01Icon,
+    Coins01Icon,
     CreditCardIcon,
     File01Icon,
     Globe02Icon,
@@ -49,6 +50,7 @@ export const TABS = [
     { id: "alerts", label: "Alerts", to: "/orgs/$organizationId/alerts", group: "Observability", icon: Notification03Icon },
     { id: "invitations", label: "Invitations", to: "/orgs/$organizationId/invitations", group: "Team", icon: MailAdd01Icon },
     { id: "usage", label: "Usage", to: "/orgs/$organizationId/usage", group: "Account", icon: Analytics01Icon },
+    { id: "cloudflare-costs", label: "Cloudflare costs", to: "/orgs/$organizationId/cloudflare-costs", group: "Account", icon: Coins01Icon },
     { id: "billing", label: "Billing", to: "/orgs/$organizationId/billing", group: "Account", icon: CreditCardIcon },
     { id: "activity", label: "Activity", to: "/orgs/$organizationId/activity", group: "Account", icon: Activity01Icon },
 ] as const;
