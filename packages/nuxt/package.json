@@ -1,6 +1,6 @@
 {
     "name": "@lunora/nuxt",
-    "version": "1.0.0-alpha.60",
+    "version": "1.0.0-alpha.61",
     "description": "Nuxt module for Lunora — single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers",
     "keywords": [
         "cloudflare",
@@ -65,8 +65,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.41",
-        "@lunora/runtime": "1.0.0-alpha.54",
+        "@lunora/client": "1.0.0-alpha.42",
+        "@lunora/runtime": "1.0.0-alpha.55",
         "@nuxt/kit": "^4.5.0"
     },
     "devDependencies": {
