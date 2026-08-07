@@ -3117,13 +3117,13 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.14
+        specifier: 1.0.0-alpha.15
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.9
+        specifier: 1.0.0-alpha.10
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3342,7 +3342,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.14
+        specifier: 1.0.0-alpha.15
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -3741,8 +3741,8 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3
+        specifier: 1.0.0-alpha.10
+        version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -4664,7 +4664,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.14
+        specifier: 1.0.0-alpha.15
         version: link:../observability
       '@types/node':
         specifier: catalog:types
@@ -7887,10 +7887,6 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/platform-cloudflare@1.0.0-alpha.3':
-    resolution: {integrity: sha512-GamHgnRI6ZnIZ834LSU6u77kQZ7fplaRQEq0bbLzwmLZawLApbOa+rxE0I42rP73MC7dYHVtnTZIDz33C00EqA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -27835,11 +27831,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/platform-cloudflare@1.0.0-alpha.3':
-    dependencies:
-      '@lunora/errors': link:packages/errors
-      '@lunora/platform': link:packages/platform
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
