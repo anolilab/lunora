@@ -16,7 +16,8 @@
 import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import type { Readable } from "node:stream";
-import { createInflateRaw } from "node:zlib";
+import { Transform } from "node:stream";
+import { crc32, createInflateRaw } from "node:zlib";
 
 import type { IZipEntry } from "adm-zip";
 
@@ -55,6 +56,41 @@ const readDataRange = async (zipPath: string, offset: number): Promise<number> =
 };
 
 /**
+ * Pass bytes through unchanged while checking them against the entry's CRC-32.
+ *
+ * The archive already carries the checksum the writer computed; not comparing it
+ * means a corrupted or truncated entry imports as data, silently and with row
+ * counts that still match. `--verify` cannot catch that either — it compares
+ * counts, not contents.
+ *
+ * `zlib.crc32` is the same polynomial ZIP uses, so this is a comparison rather
+ * than a reimplementation.
+ */
+const checkCrc32 = (entry: IZipEntry): Transform => {
+    let running = 0;
+
+    return new Transform({
+        flush(done) {
+            if (running === entry.header.crc) {
+                done();
+
+                return;
+            }
+
+            done(
+                new Error(
+                    `${entry.entryName} failed its CRC check — the archive is corrupt or truncated (expected ${String(entry.header.crc)}, read ${String(running)})`,
+                ),
+            );
+        },
+        transform(chunk: Buffer, _encoding, done) {
+            running = crc32(chunk, running);
+            done(undefined, chunk);
+        },
+    });
+};
+
+/**
  * A `Readable` of one entry's decompressed bytes.
  *
  * Returns `undefined` for an empty entry, which has no byte range to read and
@@ -78,17 +114,26 @@ const openZipEntryStream = async (zipPath: string, entry: IZipEntry): Promise<Re
     const start = await readDataRange(zipPath, offset);
     const compressed = createReadStream(zipPath, { end: start + compressedSize - 1, start });
 
+    // Both paths are checksummed: STORED bytes are the entry's contents already,
+    // and DEFLATED ones are checked after inflating, which is what the CRC in the
+    // header describes.
     if (method === STORED) {
-        return compressed;
+        const stored = checkCrc32(entry);
+
+        compressed.on("error", (error) => stored.destroy(error));
+
+        return compressed.pipe(stored);
     }
 
     const inflate = createInflateRaw();
+    const verified = checkCrc32(entry);
 
     // `pipe` alone drops a read error on the floor: the inflater would simply
     // end, and a truncated table would import as a short one.
     compressed.on("error", (error) => inflate.destroy(error));
+    inflate.on("error", (error) => verified.destroy(error));
 
-    return compressed.pipe(inflate);
+    return compressed.pipe(inflate).pipe(verified);
 };
 
 export default openZipEntryStream;

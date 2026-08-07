@@ -64,6 +64,21 @@ describe("openZipEntryStream", () => {
         await expect(collect(await openZipEntryStream(path, zip.getEntry("t/documents.jsonl")!))).resolves.toBe(payload.toString("utf8"));
     });
 
+    it("rejects an entry whose bytes do not match its CRC", async () => {
+        expect.assertions(1);
+
+        // The archive carries the checksum its writer computed. Without the
+        // comparison a corrupted entry imports as data, with row counts that
+        // still match — so `--verify` reports nothing either.
+        const payload = Buffer.from("a\nb\nc\n");
+        const { path, zip } = await buildZip([["t/documents.jsonl", payload]]);
+        const entry = zip.getEntry("t/documents.jsonl")!;
+
+        entry.header.crc = entry.header.crc === 0 ? 1 : 0;
+
+        await expect(collect(await openZipEntryStream(path, entry))).rejects.toThrow(/failed its CRC check/u);
+    });
+
     it("streams a stored (uncompressed) entry", async () => {
         expect.assertions(1);
 
