@@ -1460,15 +1460,15 @@ interface PipelineLogSinkOptions {
 
 ```ts
 interface QueryCoordinator {
-    fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
-    orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
-    orchestrateCdcSync: (namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
-    orchestrateExport: (namespace: ShardNamespaceLike, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
-    orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
-    orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
-    orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
-    orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
-    orchestrateShardTraffic: (namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
+    fanOut: <T = unknown>(namespace: ShardNamespaceInput, request: FanOutRequest) => Promise<FanOutResult<T>>;
+    orchestrateApplyCdc: (namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
+    orchestrateCdcSync: (namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
+    orchestrateExport: (namespace: ShardNamespaceInput, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
+    orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+    orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
+    orchestrateRank: (namespace: ShardNamespaceInput, request: RankFanOutRequest) => Promise<RankFanOutResult>;
+    orchestrateRankPage: (namespace: ShardNamespaceInput, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
+    orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
 }
 ```
@@ -1856,18 +1856,23 @@ interface ShardMigrationOutcome {
 }
 ```
 
+### `ShardNamespaceInput` (type)
+
+```ts
+type ShardNamespaceInput = ShardDirectory | ShardNamespaceLike;
+```
+
 ### `ShardNamespaceLike` (interface)
 
 ```ts
 interface ShardNamespaceLike {
-    get?: (id: unknown) => {
+    get: (id: unknown) => {
         fetch: (request: Request) => Promise<Response>;
     };
     getByName?: (name: string) => {
         fetch: (request: Request) => Promise<Response>;
     };
-    idForName?: (name: string) => unknown;
-    idFromName?: (name: string) => unknown;
+    idFromName: (name: string) => unknown;
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
 ```
@@ -2433,7 +2438,7 @@ const resolveSecurity: (security: SecurityOptions | undefined, env?: Record<stri
 ### `resolveShard` (const)
 
 ```ts
-const resolveShard: (namespace: ShardNamespaceLike, shardKey: string) => ResolvedShard;
+const resolveShard: (namespace: ShardNamespaceInput, shardKey: string) => ResolvedShard;
 ```
 
 ### `restCacheHeaders` (const)

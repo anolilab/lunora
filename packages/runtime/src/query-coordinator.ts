@@ -23,7 +23,7 @@ import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
 import { LunoraError } from "./errors";
-import type { ShardNamespaceLike } from "./resolve-shard";
+import type { ShardNamespaceInput } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 
 /**
@@ -365,14 +365,14 @@ interface RankPageFanOutResult {
 }
 
 interface QueryCoordinator {
-    fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+    fanOut: <T = unknown>(namespace: ShardNamespaceInput, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
     /**
      * Fan the `__lunora_admin__:applyCdc` admin RPC out by forwarding each
      * pre-bucketed per-shard batch of CDC changes, rolling up the applied/failed
      * counts. The replay half of point-in-time recovery.
      */
-    orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
+    orchestrateApplyCdc: (namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:cdcSync` admin RPC out to every live shard,
@@ -380,7 +380,7 @@ interface QueryCoordinator {
      * Returns the per-shard change pages plus their new cursors so the caller
      * can checkpoint each shard independently — the streaming-export feed.
      */
-    orchestrateCdcSync: (namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
+    orchestrateCdcSync: (namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
 
     /**
      * Fan an export admin RPC out to every live shard, returning the
@@ -388,7 +388,7 @@ interface QueryCoordinator {
      * returns a JSON envelope (not a streaming body) so this method is the
      * collector — the worker assembles the NDJSON stream.
      */
-    orchestrateExport: (namespace: ShardNamespaceLike, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
+    orchestrateExport: (namespace: ShardNamespaceInput, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
 
     /**
      * Fan an import admin RPC out by routing each row to its owning shard. The
@@ -396,9 +396,9 @@ interface QueryCoordinator {
      * `shardBy(field)` are bucketed using that field's value as the shard key,
      * other tables fall back to the runtime's default `__root__` shard.
      */
-    orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+    orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
-    orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
+    orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:rankBefore` admin RPC out to every live shard of
@@ -406,7 +406,7 @@ interface QueryCoordinator {
      * global rank (`{position: Σbefore + 1, total: Σtotal}`). The cross-shard
      * `rank()` path for a partition that spans shards.
      */
-    orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
+    orchestrateRank: (namespace: ShardNamespaceInput, request: RankFanOutRequest) => Promise<RankFanOutResult>;
 
     /**
      * Page a ranked query across every live shard of a `.shardBy(...)` table.
@@ -418,7 +418,7 @@ interface QueryCoordinator {
      * consumed from it — pages never drop or duplicate a row at a shard
      * boundary. The cross-shard `rankPage()` path (PLAN5 §7.1 / PLAN2 #3).
      */
-    orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
+    orchestrateRankPage: (namespace: ShardNamespaceInput, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:getMetrics` admin RPC out to every live shard of
@@ -428,7 +428,7 @@ interface QueryCoordinator {
      * skew, so this fans the cheap metrics read out and returns the whole shard
      * set's request volumes (a failed shard surfaces as `requests: 0`).
      */
-    orchestrateShardTraffic: (namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
+    orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -1157,7 +1157,7 @@ const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     };
 };
 
-const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
+const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
     // AbortController lets the timeout branch tear the in-flight fetch down
@@ -1272,7 +1272,7 @@ const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<str
 };
 
 const runBoundedFanOut = async (
-    namespace: ShardNamespaceLike,
+    namespace: ShardNamespaceInput,
     keys: ReadonlyArray<string>,
     request: ShardRpcRequest,
     maxConcurrency: number,
@@ -1530,7 +1530,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     }
 
     return {
-        async fanOut<T>(namespace: ShardNamespaceLike, request: FanOutRequest): Promise<FanOutResult<T>> {
+        async fanOut<T>(namespace: ShardNamespaceInput, request: FanOutRequest): Promise<FanOutResult<T>> {
             const keys = await options.registry.listShardKeys(request.fanOut.table);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
@@ -1553,7 +1553,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 ok: okValues.length,
             };
         },
-        async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
+        async orchestrateExport(namespace: ShardNamespaceInput, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
@@ -1572,7 +1572,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpExport(results);
         },
-        async orchestrateCdcSync(namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
+        async orchestrateCdcSync(namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
             // Discover shards like export — the union of every requested table's
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
@@ -1599,7 +1599,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpCdcSync(results);
         },
-        async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
+        async orchestrateImport(namespace: ShardNamespaceInput, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
             // Each shard gets its own pre-bucketed batch — we can't reuse
             // `runBoundedFanOut` because that helper sends the same args to
             // every shard. The structure mirrors it: bounded `Promise.all`
@@ -1621,7 +1621,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpImport(outcomes);
         },
-        async orchestrateApplyCdc(namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
+        async orchestrateApplyCdc(namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
             // Per-shard pre-bucketed batches — same worker-loop shape as
             // orchestrateImport (each shard gets distinct args, so we can't use
             // runBoundedFanOut's same-args-to-all model).
@@ -1642,14 +1642,14 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpApplyCdc(outcomes);
         },
-        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
+        async orchestrateMigration(namespace: ShardNamespaceInput, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
         },
-        async orchestrateRank(namespace: ShardNamespaceLike, request: RankFanOutRequest): Promise<RankFanOutResult> {
+        async orchestrateRank(namespace: ShardNamespaceInput, request: RankFanOutRequest): Promise<RankFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             // Every shard receives the same explicit key tuple — the row's
@@ -1673,7 +1673,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpRank(results);
         },
-        async orchestrateRankPage(namespace: ShardNamespaceLike, request: RankPageFanOutRequest): Promise<RankPageFanOutResult> {
+        async orchestrateRankPage(namespace: ShardNamespaceInput, request: RankPageFanOutRequest): Promise<RankPageFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
             const take = Math.max(1, Math.min(1000, Math.floor(request.take ?? 100)));
             const requestedDirections = request.directions ?? [];
@@ -1758,7 +1758,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 shards: outcomes,
             };
         },
-        async orchestrateShardTraffic(namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest): Promise<ShardTrafficFanOutResult> {
+        async orchestrateShardTraffic(namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest): Promise<ShardTrafficFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             // Every shard receives the same (empty-args) `getMetrics` admin RPC;
