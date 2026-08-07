@@ -1,6 +1,6 @@
 {
     "name": "@lunora/client",
-    "version": "1.0.0-alpha.40",
+    "version": "1.0.0-alpha.41",
     "description": "Lunora browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue",
     "keywords": [
         "cloudflare",
@@ -85,15 +85,15 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.14",
+        "@lunora/errors": "1.0.0-alpha.15",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.68",
-        "@lunora/runtime": "1.0.0-alpha.53",
+        "@lunora/do": "1.0.0-alpha.70",
+        "@lunora/runtime": "1.0.0-alpha.54",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
