@@ -11,13 +11,17 @@
  * options it is constructed with, so there is nothing to reconcile.
  *
  * That makes `provision` a *reporting* step rather than a writing one, and the
- * report is the valuable part: an app that declares a queue or a container gets
- * told, once, at provision time, that this target cannot serve it — instead of
- * discovering it when `ctx.queues` is undefined at runtime. Workflows and
- * object storage are emulated on this target (`createNodeWorkflowHost` /
- * `createNodeR2Bucket` in `@lunora/platform-node`), so they are not warned
- * about here. The warnings mirror `NODE_CAPABILITIES` in `@lunora/platform`;
- * that matrix is what codegen gates on, and this is what the operator reads.
+ * report is the valuable part: an app that declares a container gets told, once,
+ * at provision time, that this target cannot serve it — instead of discovering
+ * it when `ctx.containers` is undefined at runtime. Workflows, object storage
+ * and queues are emulated on this target (`createNodeWorkflowHost` /
+ * `createNodeR2Bucket` / `createNodeQueueHost` in `@lunora/platform-node`), so
+ * they are not warned about here.
+ *
+ * The warnings mirror `NODE_CAPABILITIES` in `@lunora/platform`; that matrix is
+ * what codegen gates on, and this is what the operator reads. Keeping the two in
+ * step is the point — a warning left behind after its capability was implemented
+ * tells an operator a feature is unavailable while codegen emits its surface.
  *
  * `toolchain` is deliberately **absent**. `DriverToolchain` describes a vendor
  * CLI to shell out to — `wrangler deploy`, `wrangler tail`, `wrangler secret
@@ -39,10 +43,6 @@ import toResourceGraph from "../resource-graph";
  * than a silent omission.
  */
 const UNSUPPORTED: ReadonlyArray<{ detect: (graph: ResourceGraph) => boolean; warning: string }> = [
-    {
-        detect: (graph) => graph.queues.length > 0,
-        warning: "queues have no Node equivalent in @lunora/platform-node — ctx.queues will be unavailable",
-    },
     {
         detect: (graph) => graph.containers.length > 0,
         warning: "containers have no Node equivalent in @lunora/platform-node — ctx.containers will be unavailable",

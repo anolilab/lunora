@@ -13,10 +13,13 @@
  * need to guess at that shape.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { createNodeShardKvStore } from "./node-kv-store";
+import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
+import { createNodeQueueHost } from "./node-queue-host";
 import type { NodeSchedulerHostOptions } from "./node-scheduler-host";
 import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
@@ -26,7 +29,7 @@ import { createNodeShardRegistry } from "./node-shard-registry";
 import { createNodeSocketHost } from "./node-socket-host";
 
 /** Every contract this package provides, composed for one Node process. */
-export interface NodePlatform {
+export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>> {
     /** `using platform = createNodePlatform(...)` support — delegates to `close()`. */
     [Symbol.dispose]: () => void;
 
@@ -70,8 +73,18 @@ export interface NodePlatform {
 
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
+
+    /**
+     * The declared queues, or `undefined` when the caller declared none.
+     *
+     * Present only when `queues` is passed: with no declarations there is
+     * nothing to bind, and handing back an empty host would suggest `ctx.queues`
+     * works when no queue exists to send to.
+     */
+    queues?: NodeQueueHost<Queues>;
     /** Delayed jobs and crons, persisted to the same database and re-armed on construction. */
     scheduler: SchedulerHost;
+
     /** Single-writer execution, local SQL, transactions, durable alarms. */
     shard: ShardHost;
     /** Socket registry with mutable tags and SQLite-persisted attachments. */
@@ -87,16 +100,49 @@ export interface NodePlatform {
  * directory resolves for fan-out file-backed too, and `onAlarm` gives their
  * durable alarms somewhere to land.
  */
-export type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
+export type NodePlatformOptions<Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>> = {
+    /**
+     * Deliver one assembled queue batch — wire this to `dispatchQueueBatch`.
+     * Required alongside `queues`; without it the messages would be stored
+     * and never consumed.
+     */
+    onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
+    /** The app's `defineQueue` results, keyed by export name. Omit when the app declares no queues. */
+    queues?: Queues;
+} & NodeSchedulerHostOptions &
+    NodeShardHostOptions &
+    NodeShardRegistryOptions;
 
 /** Compose every contract this package provides over one `better-sqlite3` database. */
-export const createNodePlatform = (options: NodePlatformOptions = {}): NodePlatform => {
+export const createNodePlatform = <Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>>(
+    options: NodePlatformOptions<Queues> = {},
+): NodePlatform<Queues> => {
     const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
     const kv = createNodeShardKvStore(database);
     const registry = createNodeShardRegistry(options);
     const { directory } = registry;
     const { socket: sockets } = createNodeSocketHost(database);
     const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
+
+    // Composed here rather than left for a caller to assemble: `NODE_CAPABILITIES`
+    // rates queues `emulated`, and codegen emits the whole `ctx.queues` surface
+    // for anything not rated `unsupported`. A host that declares the capability
+    // and binds nothing is the one combination that fails at runtime with no
+    // diagnostic anywhere before it.
+    const queues =
+        options.queues === undefined
+            ? undefined
+            : createNodeQueueHost(database, {
+                  onBatch:
+                      options.onQueueBatch ??
+                      (() => {
+                          throw new LunoraError(
+                              "VALIDATION_ERROR",
+                              "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass dispatchQueueBatch from @lunora/queue",
+                          );
+                      }),
+                  queues: options.queues,
+              });
 
     const close = (): void => {
         // Scheduler timers first: `disposeShard` closes the connection, and a
@@ -108,5 +154,5 @@ export const createNodePlatform = (options: NodePlatformOptions = {}): NodePlatf
         registry.close();
     };
 
-    return { capabilities: NODE_CAPABILITIES, close, directory, drain, kv, scheduler, shard, sockets, [Symbol.dispose]: close };
+    return { capabilities: NODE_CAPABILITIES, close, directory, drain, kv, queues, scheduler, shard, sockets, [Symbol.dispose]: close };
 };

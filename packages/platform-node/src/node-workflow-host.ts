@@ -476,6 +476,18 @@ const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkf
             return instanceFor(existing.snapshot as string);
         }
 
+        // An id that already names a real run is refused rather than aliased
+        // over. The alias write is an upsert, so proceeding would replace that
+        // run's row with a pointer to a new one — the completed run then reads
+        // back as `unknown` and its output is gone, which is what the natural
+        // "retry the create with the id I was given" pattern would do.
+        if (existing !== undefined) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/platform-node: workflow create({ id: "${createOptions.id}" }) names an existing run — pass the id a previous create returned, or a fresh one`,
+            );
+        }
+
         const result = await runtime.trigger(definitionId, createOptions.params);
 
         await store.save({

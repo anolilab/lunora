@@ -6,7 +6,7 @@
 
 > **Executor instructions**: §4 records the decisions and the alternatives they
 > beat — read it before changing the contract in §3.2, or the same options get
-> re-litigated. The STOP conditions in §8 are the ones that mean the design is
+> re-litigated. The STOP conditions in §7 are the ones that mean the design is
 > wrong rather than incomplete.
 
 ## 0. Headline finding
@@ -77,7 +77,7 @@ signal only, not a recommendation.
 
 SQS is the closest of all — near enough 1:1 that it is the right second adapter
 for flushing out contract mistakes. Note its delay cap is **15 minutes** against
-Cloudflare's 12 hours (§8, risk 2).
+Cloudflare's 12 hours (§7, risk 1).
 
 #### Maps with work
 
@@ -85,21 +85,29 @@ Cloudflare's 12 hours (§8, risk 2).
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Postgres** | [`pg-boss`](https://pgboss.io/) (4.7M, MIT, `node >=22.12`)                                                                                                                                          | advertises batch work and "dead letter queues with redrive"; the exact option names were **not** confirmable from its published README (4,288 chars, no hits for `batchSize`/`deadLetter`/`startAfter`) — verify against [pgboss.io](https://pgboss.io/) before adapting. Alternative: raw [`SELECT … FOR UPDATE SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE), which gives full control at the cost of owning the schema |
 | **MySQL**    | —                                                                                                                                                                                                    | `SELECT … FOR UPDATE SKIP LOCKED` since 8.0; same shape as raw Postgres                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Kafka**    | [`@confluentinc/kafka-javascript`](https://www.npmjs.com/package/@confluentinc/kafka-javascript) (3.6M, active), [`kafkajs`](https://www.npmjs.com/package/kafkajs) (14M but last published 2023-02) | [`eachBatch`](https://kafka.js.org/docs/consuming#a-name-each-batch-a-eachbatch) gives the batch, but offsets have no per-message ack: a partial settle means committing the lowest un-acked offset and reprocessing the rest. See §9 Q2                                                                                                                                                                                                                                |
+| **Kafka**    | [`@confluentinc/kafka-javascript`](https://www.npmjs.com/package/@confluentinc/kafka-javascript) (3.6M, active), [`kafkajs`](https://www.npmjs.com/package/kafkajs) (14M but last published 2023-02) | [`eachBatch`](https://kafka.js.org/docs/consuming#a-name-each-batch-a-eachbatch) gives the batch, but offsets have no per-message ack: a partial settle means committing the lowest un-acked offset and reprocessing the rest. See §8 Q1                                                                                                                                                                                                                                |
 
 #### Job-shaped — the batch layer would have to be rebuilt
 
-| Library                                                                | Downloads | Why it does not fit                                                                                                                                                                                                 |
-| ---------------------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`bullmq`](https://docs.bullmq.io/)                                    | 31M       | one job per worker; no batch, lock rather than visibility window, DLQ is the failed set                                                                                                                             |
-| [`@openqueue/sdk`](https://github.com/quickbits-io/openqueue)          | small     | **the right idea** — a "world" abstraction with `world-bullmq` / `world-postgres` drivers; read it for the seam shape (§4.3). No batch delivery, no documented DLQ or visibility timeout, pre-1.0, CLI requires Bun |
-| [`@platformatic/job-queue`](https://github.com/platformatic/job-queue) | small     | no delay, no batch, no DLQ; requires a caller-supplied id, which defeats its own dedup when used as a message queue                                                                                                 |
-| [`@boringnode/queue`](https://github.com/boringnode/queue)             | 28k       | has delay (`.in('30s')`) and backoff strategies, but no batch, no DLQ, and `engines.node >= 24.0.0` against this repo's `^22.15.0 \|\| >=24.11.0`                                                                   |
-| [`glide-mq`](https://github.com/avifenesh/glide-mq)                    | small     | closest on features (batch, DLQ, delay, per-message ack) but requires a Valkey/Redis 7+ server plus a Rust NAPI binding; v0.15.4                                                                                    |
-| [`sidequest`](https://github.com/sidequestjs/sidequest)                | 8k        | no batch, and **LGPL-3.0-or-later** against this repo's FSL-1.1-Apache-2.0 — a licensing question, not a preference                                                                                                 |
-| [`liteque`](https://github.com/karakeep-app/liteque)                   | 9k        | SQLite-backed and peers on `better-sqlite3`, but no delay, no batch, no retry-with-delay; pulls `drizzle-orm` + `zod`                                                                                               |
-| [`plainjob`](https://www.npmjs.com/package/plainjob)                   | 1k        | `better-sqlite3` + `cron-parser` only, has `{ delay }` and cron — but **no retry at all**, no batch, no DLQ; v0.0.14, last published 2024-10                                                                        |
-| `bee-queue`, `@queuert/sqlite`, `better-queue-sqlite`, `bunqueue`      | —         | Redis-only, framework-coupled, unmaintained since 2022, or Bun-targeted                                                                                                                                             |
+Twelve were checked; all deliver one job to one handler. Three are worth naming:
+
+| Library                                                       | Why it is named                                                                                                                                                                              |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`bullmq`](https://docs.bullmq.io/) (31M)                     | the category exemplar — one job per worker, lock rather than visibility window, DLQ is the failed set                                                                                        |
+| [`@openqueue/sdk`](https://github.com/quickbits-io/openqueue) | **the right idea** — a "world" abstraction with `world-bullmq` / `world-postgres` drivers, read at source in §2.2. Still no batch delivery, no documented DLQ or visibility timeout, pre-1.0 |
+| [`sidequest`](https://github.com/sidequestjs/sidequest)       | **LGPL-3.0-or-later** against this repo's FSL-1.1-Apache-2.0 — a licensing blocker, not a technical one                                                                                      |
+
+The rest fail on the same line plus a second problem each:
+[`@platformatic/job-queue`](https://github.com/platformatic/job-queue) (no delay,
+no DLQ, requires a caller-supplied id),
+[`@boringnode/queue`](https://github.com/boringnode/queue) (`engines.node >= 24`
+against this repo's `^22.15.0 || >=24.11.0`),
+[`glide-mq`](https://github.com/avifenesh/glide-mq) (needs a Valkey server and a
+Rust NAPI binding), [`liteque`](https://github.com/karakeep-app/liteque) (no
+delay, no retry-with-delay, pulls `drizzle-orm`),
+[`plainjob`](https://www.npmjs.com/package/plainjob) (no retry at all, v0.0.14),
+and `bee-queue` / `@queuert/sqlite` / `better-queue-sqlite` / `bunqueue`
+(Redis-only, framework-coupled, unmaintained since 2022, or Bun-targeted).
 
 ## 2. Existing seams (do not reinvent)
 
@@ -144,11 +152,11 @@ capabilities:
 
 Subpath exports differ between the two precedents: `@lunora/payment` uses flat
 provider names (`./stripe`, `./polar`), `@lunora/replica` nests
-(`./adapters/better-sqlite3`). Payment's is the larger and newer; §10 follows it.
+(`./adapters/better-sqlite3`). Payment's is the larger and newer; §9 follows it.
 
 Disposal: the repo uses **synchronous `Symbol.dispose` delegating to a
 `close()`** (`packages/platform-node/src/node-platform.ts:31`), not
-`asyncDispose`. §10 diverges deliberately and says why.
+`asyncDispose`. §9 diverges deliberately and says why.
 
 ### 2.2 External prior art, read at source
 
@@ -163,7 +171,7 @@ Four things are worth taking, and one confirms a decision here:
   `validateWorld()`, which rejects a mismatched world with "upgrade the packages
   in lockstep" rather than failing at the first missing method. A third-party
   adapter compiled against an older contract is exactly the failure this
-  prevents, and §10 had no answer for it. **Adopt.**
+  prevents, and §9 had no answer for it. **Adopt.**
 - **Capabilities enforced before dispatch, not documented.**
   `assertCapability(transport, 'delay')` throws a typed
   `UnsupportedCapabilityError` naming the transport, and core calls it _before_
@@ -174,7 +182,7 @@ Four things are worth taking, and one confirms a decision here:
   flags that are not method-shaped (delay ceilings, partial settle).
 - **Migrations belong to the adapter that owns schema.** `WorldMigrations` —
   committed `steps` with checksums plus a `status()` probe — "present only on
-  worlds that own durable SQL state". §10 had nothing here, and both the SQLite
+  worlds that own durable SQL state". §9 had nothing here, and both the SQLite
   and Postgres adapters own a schema. **Adopt as an optional member.**
 - **Import-cleanliness is a stated constraint.** Their world module "pulls in no
   ioredis/bullmq — so `@openqueue/core/world` can be consumed by third-party
@@ -184,10 +192,7 @@ Four things are worth taking, and one confirms a decision here:
 
 **What confirms §4.2:** their delivery interface is
 `consume(queue, options): TransportConsumer` where `options.process(job)` takes
-**one job**. Having chosen subscribe/handle, the design cannot express a batch
-whose members settle separately — the same wall every job library hits (§0). It
-is the clearest available evidence that receive/settle is the right shape for
-this contract, from the project that went furthest in the other direction.
+**one job** — see §4.2.
 
 ## 3. The behavioural contract to preserve
 
@@ -248,29 +253,36 @@ the constraint, not an implementation detail.
 
 ### 4.3 A standalone package, not `@lunora/queue-adapters`
 
-**Chosen (proposed):** a `@visulima/*` package. Nothing in the contract is
+**Chosen:** a `@visulima/*` package. Nothing in the contract is
 Lunora-specific once it is stated as receive/settle; the Cloudflare host could
 consume it for local `wrangler dev` parity, and a third host gets queues free.
 
 **Over:** `@lunora/queue-adapters`, which keeps versioning in lockstep with the
-contract it serves at the cost of being un-reusable. **This is Q1 in §9 and it
-sets the dependency direction — settle it before the first adapter is written.**
+contract it serves at the cost of being un-reusable. The lockstep argument is
+real but weaker than it looks: `specVersion` (§9.1) already carries the
+compatibility signal that co-versioning would provide, and it works for
+third-party adapters too, which co-versioning does not.
+
+Dependency direction that follows: `@visulima/queue` depends on nothing of
+Lunora's, and `@lunora/platform-node` depends on it.
 
 ### 4.4 SQLite stays the reference
 
 **Over:** promoting SQS to reference. Rejected because the reference must run in
 CI with no credentials and no container.
 
-## 5. Workstreams
+## 5. Workstreams & phasing
 
-| WS     | Size | Work                                                                                                                                 |
-| ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **W1** | M    | Extract the engine from `createNodeQueueHost`; leave it a thin `QueueAdapter` over SQLite. Gate: its existing 9 tests pass unchanged |
-| **W2** | M    | The TCK — one suite every adapter must pass (§7 phase 1)                                                                             |
-| **W3** | M    | SQS adapter. Exercises the "native everything" end                                                                                   |
-| **W4** | L    | Postgres adapter. Exercises the "build it yourself" end, and is the first to need `migrations` (§10.1)                               |
-| **W5** | S    | Adapter selection in `@lunora/config`; capability rating per target                                                                  |
-| **W6** | M    | Pub/Sub, Service Bus, AMQP, JetStream — on demand, one PR each                                                                       |
+Ordered; each row's gate is what proves it landed.
+
+| WS     | Size | Work                                                                                      | Gate                                                                                                                 |
+| ------ | ---- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **W1** | M    | Extract the engine from `createNodeQueueHost`; leave it a thin `QueueAdapter` over SQLite | `node-queue-host.test.ts` green **unchanged**                                                                        |
+| **W2** | M    | The adapter TCK, plus the import-cleanliness assertion                                    | The SQLite adapter passes the TCK; a test asserts the contract entry point's import graph pulls in no backend client |
+| **W3** | M    | SQS adapter — the "native everything" end                                                 | Passes the TCK against [ElasticMQ](https://github.com/softwaremill/elasticmq) or LocalStack in CI                    |
+| **W4** | L    | Postgres adapter — the "build it yourself" end, and the first to need `migrations` (§9.1) | Passes the TCK against a container                                                                                   |
+| **W5** | S    | Adapter selection in `@lunora/config`; capability rating per target                       | An app selects an adapter and round-trips a message end to end                                                       |
+| **W6** | M    | Pub/Sub, Service Bus, AMQP, JetStream — on demand, one PR each                            | Each passes the TCK                                                                                                  |
 
 ## 6. Platform parity
 
@@ -282,17 +294,7 @@ The rating does not change. What changes is that the note must say which adapter
 is active, since "emulated" over SQS and over SQLite have very different
 operational envelopes. W5 owns that.
 
-## 7. Phasing & ordering
-
-| Phase | Work                     | Gate                                                                                                                                                                    |
-| ----- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | Answer Q1 (package home) | A decision recorded in §9 — nothing else starts first                                                                                                                   |
-| 1     | W1 + W2                  | `node-queue-host.test.ts` green **unchanged**; the SQLite adapter passes the TCK; and a test asserts the contract entry point's import graph pulls in no backend client |
-| 2     | W3                       | SQS adapter passes the TCK against [ElasticMQ](https://github.com/softwaremill/elasticmq) or LocalStack in CI                                                           |
-| 3     | W4                       | Postgres adapter passes the TCK against a container                                                                                                                     |
-| 4     | W5                       | An app selecting an adapter in config round-trips a message end to end                                                                                                  |
-
-## 8. Risks & STOP conditions
+## 7. Risks & STOP conditions
 
 - **STOP** if the TCK cannot be written so that all adapters pass it identically —
   that means the contract is under-specified, and shipping adapters against an
@@ -313,24 +315,22 @@ operational envelopes. W5 owns that.
   implementation issues one `UPDATE` per claimed message
   (`node-queue-host.ts:322-326`), which is the first thing that will show up.
 
-## 9. Open questions (answer during execution)
+## 8. Open questions (answer during execution)
 
-1. **Package home** — `@visulima/*` or `@lunora/queue-adapters`? Sets the
-   dependency direction; blocks phase 1.
-2. **Does Kafka belong at all?** Its offset model cannot express partial settle
+1. **Does Kafka belong at all?** Its offset model cannot express partial settle
    without reprocessing. Excluding it may be better than shipping an adapter that
    silently duplicates.
-3. **Pull-mode queues** (`mode: "pull"`) expect an HTTP endpoint an external
+2. **Pull-mode queues** (`mode: "pull"`) expect an HTTP endpoint an external
    worker polls. No adapter serves that. Runtime concern or adapter concern?
-4. **Does the engine own long delays** that exceed an adapter's native cap, or does
-   each adapter degrade and document? (Ties to §8 risk 1.)
+3. **Does the engine own long delays** that exceed an adapter's native cap, or does
+   each adapter degrade and document? (Ties to §7 risk 1.)
 
-## 10. Proposed API
+## 9. Proposed API
 
 Illustrative, not final — the contract in §3.1 is what binds. Shaped to match
 `PaymentAdapter` (§2.1), which solves the same problem for payment providers.
 
-### 10.1 The adapter contract
+### 9.1 The adapter contract
 
 **`QueueAdapter`, not `QueueDriver`** — in this repo `*Driver` already means a
 deploy target (`DeployDriver`), and this is a provider translator, which is what
@@ -353,7 +353,7 @@ export interface QueueProviderCapabilities {
     readonly durable: boolean;
     /**
      * Native delay ceiling in seconds. SQS is 900 against the contract's 43200;
-     * the engine holds the remainder itself (§9 Q4).
+     * the engine holds the remainder itself (§8 Q3).
      */
     readonly maxDelaySeconds: number;
     /** Largest batch `receive` can return. SQS caps at 10; SQLite is unbounded. */
@@ -409,6 +409,26 @@ export interface ClaimedMessage {
  * engine above (§4.1), so an adapter implements transport only.
  * @experimental
  */
+/** How a settled message was disposed of. */
+export type SettleOutcome = "ack" | "retry";
+
+/** Per-settle overrides. `delaySeconds` applies to `retry` only. */
+export interface SettleOptions {
+    delaySeconds?: number;
+}
+
+/** Producer options for one message. */
+export interface AdapterSendOptions {
+    contentType: QueueContentType;
+    /** 0..43200; an adapter whose `capabilities.maxDelaySeconds` is lower gets only what it can express (§8 Q3). */
+    delaySeconds?: number;
+}
+
+/** One entry in a batch send. */
+export interface AdapterSendRequest extends AdapterSendOptions {
+    body: Uint8Array;
+}
+
 export interface QueueAdapter {
     readonly capabilities: QueueProviderCapabilities;
 
@@ -479,7 +499,7 @@ graph; each lives behind its own subpath with the client as an optional peer.
 This is a gate in §7, not a convention — `@openqueue/sdk` states the same
 constraint for the same reason, and it is the kind that erodes silently.
 
-### 10.2 Building a host from an adapter
+### 9.2 Building a host from an adapter
 
 The engine takes an adapter and the declared queues, and returns what
 `createNodeQueueHost` returns today — so a host swaps backends without changing
@@ -505,7 +525,7 @@ await engine.bindings.emailQueue.send({ to: "a@example.com" }, { delaySeconds: 3
 await engine.poll();
 ```
 
-### 10.3 Swapping the backend
+### 9.3 Swapping the backend
 
 Only the adapter line changes. Subpaths are flat provider names, following
 `@lunora/payment`'s `./stripe` / `./polar` rather than `@lunora/replica`'s
@@ -523,7 +543,7 @@ import { postgresAdapter } from "@visulima/queue/postgres";
 const adapter = postgresAdapter({ pool, schema: "lunora_queue" });
 ```
 
-### 10.4 Conformance
+### 9.4 Conformance
 
 ```ts
 import { runQueueAdapterConformance } from "@visulima/queue/conformance";

@@ -75,6 +75,9 @@ const FOOTER_SIZE = 8;
 /** Matches `@lunora/storage`'s ceiling, so the two layers agree on what a key may be. */
 const MAX_KEY_LENGTH = 1024;
 
+/** The name limit every filesystem this runs on shares. Applied to the ESCAPED segment. */
+const MAX_SEGMENT_BYTES = 255;
+
 /** Per-object metadata, persisted in the object file's trailer. */
 interface NodeObjectMeta {
     customMetadata?: Record<string, string>;
@@ -89,6 +92,75 @@ interface NodeR2BucketOptions {
     /** The bucket directory — created on first write. Objects live here, one file per key. */
     directory: string;
 }
+
+/**
+ * Characters escaped in a path segment, and why each one folds:
+ *
+ * - `%` — the escape character itself, so the encoding stays reversible.
+ * - `A-Z` — a case-insensitive volume (APFS by default, so most dev machines,
+ * and NTFS) maps `A` and `a` to one file. Real R2 keeps them as two keys.
+ * - `:` — an NTFS alternate-data-stream separator; `x:y` writes a stream on `x`.
+ *
+ * Trailing `.` and space are handled separately: Windows strips them from a
+ * name, so `a.` and `a` collide, but only at the end of a segment.
+ */
+const ESCAPED_IN_SEGMENT = /[%A-Z:]/g;
+
+/** Percent-escape one path segment so distinct keys stay distinct files on every filesystem. */
+const encodeSegment = (segment: string): string => {
+    const escaped = segment.replaceAll(ESCAPED_IN_SEGMENT, (character) => `%${character.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}`);
+    const last = escaped.at(-1);
+
+    return last === "." || last === " " ? `${escaped.slice(0, -1)}%${last.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}` : escaped;
+};
+
+/**
+ * Inverse of {@link encodeSegment}, or `undefined` when the name is not
+ * something this bucket wrote.
+ *
+ * `decodeURIComponent` throws `URIError` on a stray `%` — and a bucket directory
+ * is a directory, so a hand-dropped file called `100%` is entirely possible.
+ * Throwing there took down the whole of `list()`, which contradicts the design
+ * one function over: `readTrailer` returns `undefined` for unrelated files
+ * precisely so they drop out of the page instead of failing it.
+ */
+const decodeSegment = (segment: string): string | undefined => {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Map an R2 key onto a path relative to the bucket directory.
+ *
+ * Lowercase keys — the overwhelming majority — pass through byte-identical, so
+ * the bucket directory stays browsable; only the segments that would otherwise
+ * fold pick up escapes.
+ */
+const encodeKey = (key: string): string =>
+    key
+        .split("/")
+        .map((segment) => encodeSegment(segment))
+        .join("/");
+
+/** Inverse of {@link encodeKey}, or `undefined` when any segment is undecodable. */
+const decodeKey = (relativePath: string): string | undefined => {
+    const segments: string[] = [];
+
+    for (const segment of relativePath.split("/")) {
+        const decoded = decodeSegment(segment);
+
+        if (decoded === undefined) {
+            return undefined;
+        }
+
+        segments.push(decoded);
+    }
+
+    return segments.join("/");
+};
 
 /**
  * Reject keys that would leave the bucket directory or collide inside it. Every
@@ -129,6 +201,18 @@ const validateKey = (key: string): void => {
     }
 
     for (const segment of key.split("/")) {
+        // Checked on the ENCODED segment, not the raw one. Escaping triples an
+        // uppercase character (`A` -> `%41`), so a key well inside the 1024-byte
+        // contract limit could still exceed the filesystem's 255-byte name limit
+        // and surface as a raw `ENAMETOOLONG` from `rename` — exactly what the
+        // ceiling above exists to prevent, one layer down.
+        if (Buffer.byteLength(encodeSegment(segment), "utf8") > MAX_SEGMENT_BYTES) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: R2 key segment "${segment}" exceeds ${String(MAX_SEGMENT_BYTES)} bytes once escaped for the filesystem`,
+            );
+        }
+
         if (segment === "" || segment === "." || segment === "..") {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key has an empty, \`.\` or \`..\` path segment ("${key}")`);
         }
@@ -142,50 +226,6 @@ const validateKey = (key: string): void => {
         }
     }
 };
-
-/**
- * Characters escaped in a path segment, and why each one folds:
- *
- * - `%` — the escape character itself, so the encoding stays reversible.
- * - `A-Z` — a case-insensitive volume (APFS by default, so most dev machines,
- * and NTFS) maps `A` and `a` to one file. Real R2 keeps them as two keys.
- * - `:` — an NTFS alternate-data-stream separator; `x:y` writes a stream on `x`.
- *
- * Trailing `.` and space are handled separately: Windows strips them from a
- * name, so `a.` and `a` collide, but only at the end of a segment.
- */
-const ESCAPED_IN_SEGMENT = /[%A-Z:]/g;
-
-/** Percent-escape one path segment so distinct keys stay distinct files on every filesystem. */
-const encodeSegment = (segment: string): string => {
-    const escaped = segment.replaceAll(ESCAPED_IN_SEGMENT, (character) => `%${character.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}`);
-    const last = escaped.at(-1);
-
-    return last === "." || last === " " ? `${escaped.slice(0, -1)}%${last.codePointAt(0)?.toString(16).padStart(2, "0").toUpperCase() ?? ""}` : escaped;
-};
-
-/** Inverse of {@link encodeSegment}. */
-const decodeSegment = (segment: string): string => decodeURIComponent(segment);
-
-/**
- * Map an R2 key onto a path relative to the bucket directory.
- *
- * Lowercase keys — the overwhelming majority — pass through byte-identical, so
- * the bucket directory stays browsable; only the segments that would otherwise
- * fold pick up escapes.
- */
-const encodeKey = (key: string): string =>
-    key
-        .split("/")
-        .map((segment) => encodeSegment(segment))
-        .join("/");
-
-/** Inverse of {@link encodeKey}. */
-const decodeKey = (relativePath: string): string =>
-    relativePath
-        .split("/")
-        .map((segment) => decodeSegment(segment))
-        .join("/");
 
 /** True when an `fs/promises` error is a missing path. */
 const isMissing = (error: unknown): boolean => error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -517,8 +557,14 @@ const walkObjects = async (directory: string): Promise<string[]> => {
                 promises.push(walk(join(currentPath, entry.name), relativePath));
             } else {
                 // Back to the key the caller wrote — the tree holds encoded
-                // segments, and `list` deals in keys.
-                keys.push(decodeKey(relativePath));
+                // segments, and `list` deals in keys. A name that does not decode
+                // was not written by this bucket, so it drops out the same way an
+                // unrelated file without a trailer does.
+                const key = decodeKey(relativePath);
+
+                if (key !== undefined) {
+                    keys.push(key);
+                }
             }
         }
 

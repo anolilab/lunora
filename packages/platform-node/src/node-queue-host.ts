@@ -4,21 +4,11 @@
  * batched consumer that hands `MessageBatchLike` to the same
  * `dispatchQueueBatch` the Cloudflare host uses.
  *
- * # Why a table rather than a queue library
- *
- * The contract is message-shaped, not job-shaped. A consumer receives a
- * **batch** (`maxBatchSize` messages, or fewer once `maxBatchTimeout` elapses)
- * and decides each message's fate individually — `ack()`, `retry({ delaySeconds })`,
- * or leaving it undecided, which is an implicit ack when the handler returns and
- * a retry when it throws. General-purpose job queues deliver one job to one
- * handler and take its return value; none of them expresses a batch whose
- * members can be settled separately, so wrapping one would mean reimplementing
- * the batch layer anyway on top of a store this package already has.
- *
  * `_lunora_queue_messages` lives on the same `better-sqlite3` connection as the
  * shard, KV, socket, scheduler and workflow tables, so a queue survives a
  * restart for the same reason those do, and `poll()` picks up messages whose
- * visibility elapsed while nothing was running.
+ * visibility elapsed while nothing was running. (Why a table rather than an
+ * existing queue library: `plans/306-pluggable-queue-drivers.md` §0 and §1.3.)
  *
  * # Delivery semantics
  *
@@ -118,6 +108,21 @@ const decodeBody = (stored: Buffer, contentType: string): unknown => {
     }
 };
 
+/**
+ * Decode a stored body, or surface the failure as a value rather than throwing.
+ *
+ * Used by the dead-letter listing, where one unreadable row must not take down
+ * the whole list — the parked rows are precisely the ones most likely to hold
+ * something malformed, and they are the ones an operator is trying to look at.
+ */
+const safeDecode = (row: { body: Buffer; content_type: string }): unknown => {
+    try {
+        return decodeBody(row.body, row.content_type);
+    } catch {
+        return undefined;
+    }
+};
+
 /** Clamp a caller-supplied delay to the range the contract documents. */
 const delayMs = (delaySeconds: number | undefined): number => {
     if (delaySeconds === undefined || !Number.isFinite(delaySeconds)) {
@@ -140,6 +145,19 @@ interface NodeQueueHostOptions<Queues extends Record<string, { isLunoraQueue: tr
     env?: Record<string, unknown>;
 
     /**
+     * The host's clock, in epoch ms. Producers and `poll()` share it, so a
+     * `delaySeconds` written by `send` is measured against the same reading
+     * `poll` compares it to. Defaults to `Date.now`.
+     *
+     * Injectable because otherwise the two diverge: a test that captures
+     * `Date.now()`, sends, and then polls at `captured + delay` misses by however
+     * many milliseconds elapsed in between — and the dead-letter re-enqueue,
+     * which stamps `enqueued_at` from the poll clock, mixes two clocks in one
+     * column.
+     */
+    now?: () => number;
+
+    /**
      * Deliver one assembled batch. Wire this to `dispatchQueueBatch` from
      * `@lunora/queue` — the host owns storage and batching, not routing, which is
      * the same split the Cloudflare host has.
@@ -150,6 +168,7 @@ interface NodeQueueHostOptions<Queues extends Record<string, { isLunoraQueue: tr
     onBatch: (batch: MessageBatchLike) => Promise<void> | void;
     /** The declared queues keyed by their `lunora/queues.ts` export name. */
     queues: Queues;
+
     /** How long a claimed batch stays invisible before redelivery. Defaults to 30s. */
     visibilityTimeoutMs?: number;
 }
@@ -158,8 +177,21 @@ interface NodeQueueHostOptions<Queues extends Record<string, { isLunoraQueue: tr
 interface NodeQueueHost<Queues extends Record<string, { isLunoraQueue: true }>> {
     /** Per-export-name `QueueBindingLike` — the map `ctx.queues` consumes. */
     readonly bindings: { [K in keyof Queues]: QueueBindingLike };
-    /** Messages parked after exhausting `maxRetries` with no dead-letter queue declared. */
-    deadLettered: (queue: string) => { attempts: number; body: unknown; id: string }[];
+
+    /**
+     * The parked messages — those that exhausted `maxRetries` with no
+     * `deadLetterQueue` declared.
+     *
+     * `list` + `requeue`, mirroring `SchedulerHost.deadLetter` rather than
+     * inspection alone: this host justifies parking with "a dropped message with
+     * no trace is the thing that makes a queue impossible to debug", and a trace
+     * you can read but not act on is only half of that.
+     */
+    deadLetters: {
+        list: (queue: string) => { attempts: number; body: unknown; id: string }[];
+        /** Return a parked message to its queue with `attempts` reset. `false` when no such message is parked. */
+        requeue: (id: string) => boolean;
+    };
     /** The caller's `env` plus one `QUEUE_<EXPORT>` binding per queue. */
     readonly env: Record<string, unknown>;
 
@@ -195,14 +227,30 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     const insert = database.prepare<[string, string, Buffer, string, number, number]>(
         "INSERT INTO _lunora_queue_messages (id, queue, body, content_type, visible_at, enqueued_at) VALUES (?, ?, ?, ?, ?, ?)",
     );
-    const claim = database.prepare<[string, number, number], MessageRow>(
-        `SELECT * FROM _lunora_queue_messages
-         WHERE queue = ? AND state = 'pending' AND visible_at <= ?
-         ORDER BY visible_at, enqueued_at LIMIT ?`,
+
+    /**
+     * Claim a batch in ONE statement: select, hide and count the delivery
+     * together, returning what was taken.
+     *
+     * A `SELECT` followed by a separate `UPDATE` is not enough. Within one
+     * process the two are safe — `better-sqlite3` is synchronous, so nothing
+     * interleaves between them — but two processes on one file both read the
+     * same pending rows before either hides them, and both deliver, each telling
+     * its handler `attempts: 1`. The consumer cannot even see that it happened.
+     * That is not hypothetical here: this table runs in WAL mode and the
+     * workflow store beside it exists for "two processes sharing one file".
+     */
+    const claimBatch = database.prepare<[number, string, number, number], MessageRow>(
+        `UPDATE _lunora_queue_messages
+         SET attempts = attempts + 1, visible_at = ?
+         WHERE id IN (
+             SELECT id FROM _lunora_queue_messages
+             WHERE queue = ? AND state = 'pending' AND visible_at <= ?
+             ORDER BY visible_at, enqueued_at LIMIT ?
+         )
+         RETURNING *`,
     );
-    // Claiming counts the delivery; rescheduling only moves the message. Doing
-    // both with one statement double-counted every retried attempt.
-    const claimOne = database.prepare<[number, string]>("UPDATE _lunora_queue_messages SET attempts = attempts + 1, visible_at = ? WHERE id = ?");
+    // Rescheduling only moves the message; the claim is what counts a delivery.
     const reschedule = database.prepare<[number, string]>("UPDATE _lunora_queue_messages SET visible_at = ? WHERE id = ?");
     const remove = database.prepare<[string]>("DELETE FROM _lunora_queue_messages WHERE id = ?");
     const park = database.prepare<[string]>("UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ?");
@@ -213,6 +261,9 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         "SELECT COUNT(*) AS n FROM _lunora_queue_messages WHERE queue = ? AND state = 'pending' AND visible_at <= ?",
     );
     const listDead = database.prepare<[string], MessageRow>("SELECT * FROM _lunora_queue_messages WHERE queue = ? AND state = 'dead' ORDER BY enqueued_at");
+    const revive = database.prepare<[number, string]>(
+        "UPDATE _lunora_queue_messages SET state = 'pending', attempts = 0, visible_at = ? WHERE id = ? AND state = 'dead'",
+    );
 
     const compiled: CompiledQueue[] = Object.entries(options.queues).map(([exportName, value]) => {
         if (!isQueueDefinition(value)) {
@@ -222,7 +273,38 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         return { definition: value, exportName, name: value.name ?? queueDefaultName(exportName) };
     });
 
+    const declared = new Set(compiled.map((queue) => queue.name));
+
+    // Checked once, at construction, because both failures are silent at runtime:
+    // a queue that dead-letters to itself re-enqueues with `attempts` reset and
+    // redelivers forever, and one that dead-letters to a name nothing declares
+    // writes a row on a queue no consumer polls — invisible to `poll()`, invisible
+    // to `deadLetters()`, and never reaped. Cloudflare rejects the self-reference
+    // at config time; this is the same check, at the only point this host has.
+    for (const queue of compiled) {
+        const target = queue.definition.deadLetterQueue;
+
+        if (target === undefined) {
+            continue;
+        }
+
+        if (target === queue.name) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: queue "${queue.name}" names itself as its own deadLetterQueue, which would redeliver forever`,
+            );
+        }
+
+        if (!declared.has(target)) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/platform-node: queue "${queue.name}" names deadLetterQueue "${target}", which no declared queue provides — its dead letters would be unreachable`,
+            );
+        }
+    }
+
     const visibilityTimeoutMs = options.visibilityTimeoutMs ?? DEFAULTS.visibilityTimeoutMs;
+    const clock = options.now ?? Date.now;
 
     const enqueue = (queueName: string, body: unknown, contentType: QueueContentType, delay: number, now: number): void => {
         insert.run(randomUUID(), queueName, encodeBody(body, contentType), contentType, now + delay, now);
@@ -238,9 +320,17 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
 
         const maxRetries = queue.definition.maxRetries ?? DEFAULTS.maxRetries;
 
-        // `attempts` was incremented when the batch was claimed, so it already
-        // counts the delivery that just failed.
-        if (row.attempts + 1 >= maxRetries) {
+        // `row.attempts` comes back from `claimBatch`'s `RETURNING`, so it is
+        // already the number of the delivery that just failed.
+        //
+        // Dead-letter once deliveries EXCEED `maxRetries`, because `maxRetries`
+        // counts retries *after* the initial delivery — the same
+        // `attempts > maxRetries` boundary `@lunora/queue`'s `dispatchQueueBatch`
+        // uses to set `deadLettered`. At `>=` the two disagreed: this host buried
+        // the message one delivery early, and every message it buried was
+        // captured `deadLettered: false`, so the Studio Queues panel could never
+        // show one.
+        if (row.attempts > maxRetries) {
             const deadLetter = queue.definition.deadLetterQueue;
 
             if (deadLetter === undefined) {
@@ -268,13 +358,13 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         const binding: QueueBindingLike = {
             // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async so a real binding can await the network; SQLite is synchronous
             send: async (message: unknown, sendOptions?: QueueSendOptions): Promise<unknown> => {
-                enqueue(queue.name, message, sendOptions?.contentType ?? "json", delayMs(sendOptions?.delaySeconds), Date.now());
+                enqueue(queue.name, message, sendOptions?.contentType ?? "json", delayMs(sendOptions?.delaySeconds), clock());
 
                 return undefined;
             },
             // eslint-disable-next-line @typescript-eslint/require-await -- see `send`
             sendBatch: async (messages: Iterable<MessageSendRequestLike>, batchOptions?: { delaySeconds?: number }): Promise<unknown> => {
-                const now = Date.now();
+                const now = clock();
                 const batchDelay = delayMs(batchOptions?.delaySeconds);
 
                 // One transaction: a half-written batch is the failure mode a
@@ -308,26 +398,26 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         // is not delivered one at a time; a full batch goes immediately.
         if (pending < maxBatchSize) {
             const oldest = oldestPending.get(queue.name, now)?.enqueued_at;
-            const timeoutMs = (queue.definition.maxBatchTimeout ?? DEFAULTS.maxBatchTimeoutSeconds) * 1000;
+            // Clamped to the 0-60 the contract documents; `maxBatchSize` was
+            // already clamped and this was not, so a negative value silently
+            // turned every batch into a single-message delivery.
+            const timeoutMs = Math.min(Math.max(0, queue.definition.maxBatchTimeout ?? DEFAULTS.maxBatchTimeoutSeconds), 60) * 1000;
 
             if (oldest !== undefined && now - oldest < timeoutMs) {
                 return false;
             }
         }
 
-        const rows = claim.all(queue.name, now, maxBatchSize);
+        // One statement, so the rows are hidden and counted in the same write
+        // that selects them — see `claimBatch`. `.immediate()` takes the write
+        // lock up front rather than upgrading mid-transaction, which is what
+        // makes the claim safe against a second process rather than merely
+        // against a second call in this one.
+        const rows = database.transaction(() => claimBatch.all(now + visibilityTimeoutMs, queue.name, now, maxBatchSize)).immediate();
 
         if (rows.length === 0) {
             return false;
         }
-
-        // Claimed: invisible for the visibility window and counted as delivered,
-        // so a crash inside the handler redelivers instead of losing the message.
-        database.transaction(() => {
-            for (const row of rows) {
-                claimOne.run(now + visibilityTimeoutMs, row.id);
-            }
-        })();
 
         const decided = new Map<string, { delaySeconds?: number; outcome: "ack" | "retry" }>();
 
@@ -336,7 +426,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
                 ack: () => {
                     decided.set(row.id, { outcome: "ack" });
                 },
-                attempts: row.attempts + 1,
+                attempts: row.attempts,
                 body: decodeBody(row.body, row.content_type),
                 id: row.id,
                 retry: (retryOptions?: { delaySeconds?: number }) => {
@@ -387,12 +477,15 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
 
     return {
         bindings: bindings as NodeQueueHost<Queues>["bindings"],
-        deadLettered: (queueName: string) =>
-            listDead.all(queueName).map((row) => {
-                return { attempts: row.attempts, body: decodeBody(row.body, row.content_type), id: row.id };
-            }),
+        deadLetters: {
+            list: (queueName: string) =>
+                listDead.all(queueName).map((row) => {
+                    return { attempts: row.attempts, body: safeDecode(row), id: row.id };
+                }),
+            requeue: (id: string) => revive.run(clock(), id).changes > 0,
+        },
         env,
-        poll: async (now = Date.now()): Promise<number> => {
+        poll: async (now = clock()): Promise<number> => {
             let delivered = 0;
 
             for (const queue of compiled) {

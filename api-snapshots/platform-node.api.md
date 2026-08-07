@@ -42,13 +42,16 @@ interface NodeGlobalStoreOptions {
 ### `NodePlatform` (interface)
 
 ```ts
-interface NodePlatform {
+interface NodePlatform<Queues extends Record<string, {
+    isLunoraQueue: true;
+}> = Record<string, never>> {
     [Symbol.dispose]: () => void;
     capabilities: PlatformCapabilities;
     close: () => void;
     directory: ShardDirectory;
     drain: () => Promise<void>;
     kv: ShardKvStore;
+    queues?: NodeQueueHost<Queues>;
     scheduler: SchedulerHost;
     shard: ShardHost;
     sockets: SocketHost;
@@ -58,7 +61,12 @@ interface NodePlatform {
 ### `NodePlatformOptions` (type)
 
 ```ts
-type NodePlatformOptions = NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
+type NodePlatformOptions<Queues extends Record<string, {
+    isLunoraQueue: true;
+}> = Record<string, never>> = {
+    onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
+    queues?: Queues;
+} & NodeSchedulerHostOptions & NodeShardHostOptions & NodeShardRegistryOptions;
 ```
 
 ### `NodeQueueHost` (interface)
@@ -70,11 +78,14 @@ interface NodeQueueHost<Queues extends Record<string, {
     readonly bindings: {
         [K in keyof Queues]: QueueBindingLike;
     };
-    deadLettered: (queue: string) => {
-        attempts: number;
-        body: unknown;
-        id: string;
-    }[];
+    deadLetters: {
+        list: (queue: string) => {
+            attempts: number;
+            body: unknown;
+            id: string;
+        }[];
+        requeue: (id: string) => boolean;
+    };
     readonly env: Record<string, unknown>;
     poll: (now?: number) => Promise<number>;
 }
@@ -87,6 +98,7 @@ interface NodeQueueHostOptions<Queues extends Record<string, {
     isLunoraQueue: true;
 }>> {
     env?: Record<string, unknown>;
+    now?: () => number;
     onBatch: (batch: MessageBatchLike) => Promise<void> | void;
     queues: Queues;
     visibilityTimeoutMs?: number;
@@ -241,7 +253,9 @@ const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalSto
 ### `createNodePlatform` (const)
 
 ```ts
-const createNodePlatform: (options?: NodePlatformOptions) => NodePlatform;
+const createNodePlatform: <Queues extends Record<string, {
+    isLunoraQueue: true;
+}> = Record<string, never>>(options?: NodePlatformOptions<Queues>) => NodePlatform<Queues>;
 ```
 
 ### `createNodeQueueHost` (const)

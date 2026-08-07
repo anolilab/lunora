@@ -280,6 +280,27 @@ describe("createNodeR2Bucket", () => {
         await expect(bucket.get("100%")).resolves.toBeNull();
     });
 
+    it("survives a file it cannot decode, and bounds the escaped segment", async () => {
+        expect.hasAssertions();
+
+        const bucket = freshBucket();
+
+        await bucket.put("real", "kept");
+        // A stray `%` is not a valid escape; `decodeURIComponent` throws on it,
+        // and a bucket directory is a directory people drop files into.
+        writeFileSync(join(dir, "100%"), "hand-written");
+
+        const listed = await bucket.list();
+
+        expect(listed.objects.map((object) => object.key)).toStrictEqual(["real"]);
+
+        // Escaping triples an uppercase character, so the raw 1024-byte ceiling
+        // is not enough to keep the filename inside the filesystem's limit.
+        await expect(bucket.put("A".repeat(200), "x")).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        // The same length in lowercase escapes to nothing and is fine.
+        await expect(bucket.put("a".repeat(200), "x")).resolves.toMatchObject({ size: 1 });
+    });
+
     it("leaves the previous version whole when a put fails mid-body", async () => {
         expect.hasAssertions();
 

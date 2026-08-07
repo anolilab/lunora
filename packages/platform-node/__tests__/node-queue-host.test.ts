@@ -202,28 +202,140 @@ describe("createNodeQueueHost", () => {
 
         const now = Date.now();
 
-        // maxRetries 2 → two deliveries each, then both exhaust.
+        // `maxRetries` counts retries AFTER the initial delivery, matching
+        // Cloudflare and `dispatchQueueBatch`'s `attempts > maxRetries` — so
+        // maxRetries 2 is three deliveries, not two.
         await host.poll(now);
         await host.poll(now + 1);
+        await host.poll(now + 2);
 
-        expect(deliveredTo.parked).toStrictEqual(["doomed", "doomed"]);
-        expect(deliveredTo.routed).toStrictEqual(["also-doomed", "also-doomed"]);
+        expect(deliveredTo.parked).toStrictEqual(["doomed", "doomed", "doomed"]);
+        expect(deliveredTo.routed).toStrictEqual(["also-doomed", "also-doomed", "also-doomed"]);
 
         // No dead-letter queue declared → parked in place, still inspectable
         // rather than silently dropped.
-        const dead = host.deadLettered("parked");
+        const dead = host.deadLetters.list("parked");
 
         expect(dead).toHaveLength(1);
         expect(dead[0]?.body).toBe("doomed");
-        expect(dead[0]?.attempts).toBe(2);
+        expect(dead[0]?.attempts).toBe(3);
 
         // Dead-letter queue declared → re-enqueued onto it as a real message, so
         // its consumer receives it the way it receives anything else.
-        await expect(host.poll(now + 2)).resolves.toBe(1);
+        await expect(host.poll(now + 3)).resolves.toBe(1);
         expect(deliveredTo.failures).toStrictEqual(["also-doomed"]);
 
         // And it is not parked on its own queue, because it was routed away.
-        expect(host.deadLettered("routed")).toStrictEqual([]);
+        expect(host.deadLetters.list("routed")).toStrictEqual([]);
+    });
+
+    it("redelivers a message whose consumer died mid-handler", async () => {
+        expect.hasAssertions();
+
+        directory = mkdtempSync(join(tmpdir(), "lunora-queue-"));
+
+        const path = join(directory, "queue.sqlite3");
+        const fragile = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, maxRetries: 5 });
+        const now = Date.now();
+
+        // A consumer that claims the batch and never settles it — the shape of a
+        // process that died holding the message. `onBatch` never resolves, so
+        // this host's `poll` never reaches its settle transaction.
+        const dying = new Database(path);
+        const dyingHost = createNodeQueueHost(dying, {
+            now: () => now,
+            onBatch: async () => {
+                // Never settles — the batch stays claimed for its visibility window.
+                await new Promise<void>(() => {});
+            },
+            queues: { fragile },
+            visibilityTimeoutMs: 10_000,
+        });
+
+        await dyingHost.bindings.fragile.send("survive me");
+
+        // Deliberately not awaited: it never settles.
+        dyingHost.poll(now).catch(() => undefined);
+
+        const survivor = new Database(path);
+        const attempts: number[] = [];
+        const survivorHost = createNodeQueueHost(survivor, {
+            now: () => now,
+            onBatch: (batch) => {
+                attempts.push(batch.messages[0]?.attempts ?? -1);
+            },
+            queues: { fragile },
+            visibilityTimeoutMs: 10_000,
+        });
+
+        // Still invisible: a redelivery inside the window would mean two
+        // consumers holding one message.
+        await expect(survivorHost.poll(now + 9999)).resolves.toBe(0);
+
+        // Past the window it comes back, counted as a second delivery — the
+        // guarantee the visibility timeout exists for.
+        await expect(survivorHost.poll(now + 10_000)).resolves.toBe(1);
+        expect(attempts).toStrictEqual([2]);
+
+        dying.close();
+        survivor.close();
+    });
+
+    it("counts maxRetries as retries after the first delivery", async () => {
+        expect.hasAssertions();
+
+        const once = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, maxRetries: 1 });
+        let deliveries = 0;
+        const host = createNodeQueueHost(freshDatabase(), {
+            onBatch: (batch) => {
+                deliveries += 1;
+                batch.retryAll();
+            },
+            queues: { once },
+        });
+
+        const now = Date.now();
+
+        await host.bindings.once.send("try twice");
+
+        await host.poll(now);
+        await host.poll(now + 1);
+        await host.poll(now + 2);
+
+        // maxRetries 1 = one initial delivery plus one retry. At `>=` this was
+        // a single delivery and the retry never happened at all.
+        expect(deliveries).toBe(2);
+        expect(host.deadLetters.list("once")).toHaveLength(1);
+    });
+
+    it("refuses a dead-letter queue that loops or that nothing declares", () => {
+        expect.assertions(2);
+
+        const loops = defineQueue({ deadLetterQueue: "loops", handler: () => undefined });
+        const nowhere = defineQueue({ deadLetterQueue: "not-declared", handler: () => undefined });
+
+        // Self-reference re-enqueues with `attempts` reset, so it redelivers forever.
+        expect(() => createNodeQueueHost(freshDatabase(), { onBatch: () => undefined, queues: { loops } })).toThrow(/its own deadLetterQueue/);
+
+        // An undeclared target writes a row nothing polls and nothing reaps.
+        expect(() => createNodeQueueHost(freshDatabase(), { onBatch: () => undefined, queues: { nowhere } })).toThrow(/no declared queue provides/);
+    });
+
+    it("clamps a delay beyond the 12-hour ceiling and rejects a mistyped body", async () => {
+        expect.hasAssertions();
+
+        const typed = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
+        const now = Date.now();
+        const host = createNodeQueueHost(freshDatabase(), { now: () => now, onBatch: () => undefined, queues: { typed } });
+
+        await host.bindings.typed.send("far future", { delaySeconds: 999_999 });
+
+        // Clamped to 43200s, not held for 999999s.
+        await expect(host.poll(now + 43_199_000)).resolves.toBe(0);
+        await expect(host.poll(now + 43_200_000)).resolves.toBe(1);
+
+        await expect(host.bindings.typed.send(42, { contentType: "text" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        await expect(host.bindings.typed.send("not bytes", { contentType: "bytes" })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     });
 
     it("round-trips every content type", async () => {

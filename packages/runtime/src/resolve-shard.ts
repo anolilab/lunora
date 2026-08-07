@@ -1,13 +1,15 @@
 import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
 import { resolveShard as resolveShardStub } from "@lunora/platform";
 
-/** The members {@link toDirectory} reads off either shape. */
+/**
+ * The Cloudflare-binding members {@link toDirectory} reads.
+ *
+ * Only the optional two: a `ShardDirectory` returns early, so everything past
+ * that point is a binding, where `get` and `idFromName` are required.
+ */
 type ShardNamespaceParts = {
-    get?: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
     getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
-    idForName?: (name: string) => unknown;
-    idFromName?: (name: string) => unknown;
-    jurisdiction?: (jurisdiction: never) => unknown;
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 };
 
 /**
@@ -40,18 +42,27 @@ const directoryCache = new WeakMap<object, ShardDirectory>();
  * shard at all, and silently substituting the raw name would route every key to
  * whatever object that string happens to address.
  */
-const derivedIdForName = (namespace: ShardNamespaceParts, name: string): unknown => {
-    const derive = namespace.idFromName ?? namespace.idForName;
 
-    if (typeof derive !== "function") {
-        throw new TypeError("@lunora/runtime: shard namespace exposes neither idFromName nor idForName, so a shard key cannot be resolved");
-    }
-
-    return derive.call(namespace, name);
-};
+/**
+ * `idFromName` is the one member only a Cloudflare binding has — the contract
+ * spells it `idForName` — so it is what separates the two arms of the input
+ * union. Narrowed on the *binding*, not the directory, because
+ * `DirectShardDirectory` declares `idForName` optionally and an `in` check
+ * cannot exclude it.
+ */
+const isCloudflareBinding = (input: ShardNamespaceInput): input is ShardNamespaceLike => typeof (input as ShardNamespaceLike).idFromName === "function";
 
 const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
-    const namespace = input as ShardNamespaceParts;
+    // A `ShardDirectory` is already the contract — adapting it would allocate a
+    // fresh object and three closures to re-derive `idForName` from `idForName`.
+    // Returning it also means everything below is a Cloudflare binding, where
+    // `get` and `idFromName` are required, which is what removes the cast and
+    // the all-optional projection this function used to need.
+    if (!isCloudflareBinding(input)) {
+        return input;
+    }
+
+    const namespace = input;
     const cached = directoryCache.get(input);
 
     if (cached !== undefined) {
@@ -60,15 +71,14 @@ const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
 
     const jurisdiction =
         typeof namespace.jurisdiction === "function"
-            ? (hint: ShardJurisdiction) => toDirectory((namespace.jurisdiction as (value: unknown) => ShardNamespaceInput)(hint))
+            ? (hint: ShardJurisdiction) =>
+                  toDirectory((namespace.jurisdiction as NonNullable<ShardNamespaceParts["jurisdiction"]>)(hint as DurableObjectJurisdiction))
             : undefined;
 
     const directory: ShardDirectory =
         typeof namespace.getByName === "function"
             ? {
-                  // Mirrors the namespace: a name-only registry has no `get` to
-                  // offer, and the direct branch never needs one.
-                  get: namespace.get === undefined ? undefined : (id) => (namespace.get as NonNullable<ShardNamespaceParts["get"]>)(id),
+                  get: (id) => namespace.get(id),
                   // Wrapped, NOT passed by reference: `DurableObjectNamespace`'s
                   // methods are native and require their own receiver, so handing
                   // the bare function to the contract calls it with the directory
@@ -76,22 +86,12 @@ const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
                   // Plain-object test doubles tolerate the detached reference,
                   // which is why only the workerd suites caught this.
                   getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceParts["getByName"]>)(name),
-                  idForName: (name) => derivedIdForName(namespace, name),
+                  idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               }
             : {
-                  // The two-step branch is the only path with no name lookup to
-                  // fall back on, so a namespace reaching here without `get`
-                  // cannot resolve anything — fail loudly rather than at the
-                  // first `undefined is not a function` inside a fan-out leg.
-                  get: (id) => {
-                      if (namespace.get === undefined) {
-                          throw new TypeError("@lunora/runtime: shard namespace exposes neither getByName nor get, so a shard key cannot be resolved");
-                      }
-
-                      return namespace.get(id);
-                  },
-                  idForName: (name) => derivedIdForName(namespace, name),
+                  get: (id) => namespace.get(id),
+                  idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               };
 
