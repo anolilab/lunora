@@ -685,6 +685,17 @@ interface AdvisorSqlInterpolation {
 }
 ```
 
+### `AdvisorStaleMigrationImport` (interface)
+
+```ts
+interface AdvisorStaleMigrationImport {
+    file: string;
+    line: number;
+    moduleSpecifier: string;
+    platform: "convex" | "firebase" | "supabase";
+}
+```
+
 ### `AdvisorStorageKeyAccess` (interface)
 
 ```ts
@@ -976,6 +987,7 @@ interface LintContext {
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
     softDeleteReads?: ReadonlyArray<AdvisorSoftDeleteRead>;
     sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
+    staleMigrationImports?: ReadonlyArray<AdvisorStaleMigrationImport>;
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableSamples?: ReadonlyArray<AdvisorTableSample>;

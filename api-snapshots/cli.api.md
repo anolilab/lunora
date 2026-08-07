@@ -262,9 +262,11 @@ interface ImportCommandOptions {
     cwd?: string;
     fetchImpl?: StreamingFetchLike;
     file: string;
+    from?: ImportSourceName;
     logger: Logger;
     prod?: boolean;
     scan?: boolean;
+    storageDir?: string;
     table?: string;
     token?: string;
     url?: string;
@@ -278,7 +280,7 @@ interface ImportCommandOptions {
 
 ```ts
 interface ImportCommandResult {
-    body: unknown;
+    body: ImportSummary | undefined;
     code: number;
     inserted: number;
 }
@@ -552,6 +554,7 @@ type StreamingFetchLike = (input: string, init?: {
     headers?: Record<string, string>;
     method?: string;
 }) => Promise<{
+    arrayBuffer?: () => Promise<ArrayBuffer>;
     body: ReadableStream<Uint8Array> | null;
     json: () => Promise<unknown>;
     ok: boolean;

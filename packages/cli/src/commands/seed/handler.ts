@@ -133,7 +133,7 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
             url: options.url,
         });
 
-        const conflicts = (result.body as { conflicts?: number } | undefined)?.conflicts ?? 0;
+        const conflicts = result.body?.conflicts ?? 0;
 
         if (conflicts > 0) {
             // Seeding is deterministic: a re-run with the same `--seed` regenerates

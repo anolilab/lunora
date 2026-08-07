@@ -87,6 +87,7 @@
         "@visulima/tui": "1.0.5",
         "adm-zip": "catalog:prod",
         "cfonts": "^3.3.1",
+        "csv-parse": "catalog:prod",
         "giget": "3.3.1",
         "jsonc-parser": "catalog:vite",
         "magic-string": "^1.1.0",

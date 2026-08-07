@@ -54,6 +54,7 @@ import type {
     ShapeIR,
     SoftDeleteReadIR,
     SqlInterpolationIR,
+    StaleMigrationImportIR,
     StorageKeyAccessIR,
     StorageUploadIR,
     TableIR,
@@ -215,6 +216,7 @@ interface LintSchemaOptions {
     shapes?: ReadonlyArray<ShapeIR>;
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>;
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>;
+    staleMigrationImports?: ReadonlyArray<StaleMigrationImportIR>;
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;

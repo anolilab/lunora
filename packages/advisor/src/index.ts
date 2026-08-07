@@ -61,6 +61,7 @@ import mailRecipientFromRequestInput from "./lints/static/mail-recipient-from-re
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on-pii";
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
+import migrationStaleImport from "./lints/static/migration-stale-import";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
@@ -279,6 +280,7 @@ export type { AdvisorShape } from "./shapes";
 export type { AdvisorShardTraffic } from "./shard-traffic";
 export type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 export type { AdvisorSqlInterpolation } from "./sql-interpolation";
+export type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
 export type { AdvisorTableSample } from "./table-samples";
@@ -389,6 +391,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     notifySendOutsideAction,
     notifyMissingPushConfig,
     plaintextSecretInWranglerVariables,
+    migrationStaleImport,
 ];
 
 /**

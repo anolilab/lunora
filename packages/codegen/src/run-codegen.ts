@@ -60,6 +60,7 @@ import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
 import discoverSoftDeleteReads from "./discover-soft-delete-reads";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
+import discoverStaleMigrationImports from "./discover-stale-migration-imports";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageUploads from "./discover-storage-uploads";
 import discoverUnregisteredProcedures from "./discover-unregistered-procedures";
@@ -518,6 +519,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
                   containers,
                   exportSinks: discoverExportSinks(project, lunoraDirectory),
+                  staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),
                   failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
                   flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
                   geoIndexUsages: discoverGeoIndexUsages(project, lunoraDirectory),

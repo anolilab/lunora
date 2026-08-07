@@ -301,8 +301,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     could not resolve is listed as a **dangling storage reference** and left
     untouched — it is reported, never guessed at.
 
-    A `snapshot.zip` from `npx convex export --path ./snapshot.zip` imports the
-    same way (`lunora import ./snapshot.zip --with-storage`). `--verify` checks
+    A `snapshot.zip` from `npx convex export --path ./snapshot.zip --include-file-storage` imports the
+    same way (`lunora import ./snapshot.zip --with-storage`), and streams its
+    tables out of the archive rather than unpacking them, so a large snapshot
+    imports the same whether it is an archive or a directory. `--verify` checks
     each table's inserted count against its source line count and fails on any
     dangling reference, exiting non-zero on a mismatch:
 

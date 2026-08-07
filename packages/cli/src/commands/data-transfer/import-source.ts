@@ -1,7 +1,7 @@
 /**
- * What `lunora import` was pointed at: a Convex export snapshot or a plain
- * NDJSON file — plus the reader that turns the former into the `{ table, doc }`
- * NDJSON the admin import endpoint accepts.
+ * What `lunora import` was pointed at — a Convex export snapshot, a Supabase CSV
+ * dump, a Firestore export, or a plain NDJSON file — plus the readers that turn
+ * each into the `{ table, doc }` NDJSON the admin import endpoint accepts.
  */
 import { stat } from "node:fs/promises";
 
@@ -9,24 +9,13 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
-import { listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
-import type { ImportCommandOptions } from "./import";
+import { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
+import type { DumpFile } from "./sources/dump-directory";
+import { listFirestoreCollections } from "./sources/firebase";
+import type { ImportSourceMapping } from "./sources/mapping";
+import { readImportSourceMapping } from "./sources/mapping";
+import { listSupabaseTables } from "./sources/supabase";
 import { readStorageMetadata } from "./storage-blobs";
-
-/**
- * Convex's own file table. Its rows describe stored BLOBS, not application
- * data — the bytes sit next to the JSONL as separate files and belong in R2,
- * so importing the rows alone would create dangling references.
- */
-const CONVEX_STORAGE_TABLE = "_storage";
-
-/**
- * Convex system tables are `_`-prefixed (`_storage`, `_scheduled_functions`,
- * `_modules`, …). None of them are application data, and none of them exist on
- * the target: streaming them in would create rows nothing reads, and `--verify`
- * would then demand row parity for a table the endpoint rejected.
- */
-const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
 
 /**
  * Stream one `documents.jsonl` as `{ table, doc }` NDJSON lines, tallying what
@@ -74,14 +63,15 @@ async function* wrapJsonlLines(snapshot: ConvexSnapshot, tableEntry: ConvexSnaps
  * Stream a Convex export snapshot as the `{ table, doc }` NDJSON the admin
  * import endpoint accepts.
  *
- * **No id remapping.** The reporter's migration assumed Convex `_id`s had to be
- * rewritten to freshly-minted Lunora ids, which forces a two-pass import
- * (insert with FKs nulled, then patch them back through an id map) to survive
- * self-referential cycles. That is unnecessary here: the admin import path
- * inserts with `allowExplicitId`, preserving `_id` verbatim, and `v.id()`
- * validates only that the value is a string. So every Convex id — including
- * every `v.id()` foreign key already pointing at one — carries across
- * unchanged, and a plain single-pass import is correct.
+ * **No id remapping.** Convex `_id`s are preserved verbatim: the admin import
+ * path inserts with `allowExplicitId`, and `v.id()` validates only that the
+ * value is a string. So every Convex id — including every `v.id()` foreign key
+ * already pointing at one — carries across unchanged, and a single-pass import
+ * is correct.
+ *
+ * The alternative, remapping to freshly-minted ids, forces two passes (insert
+ * with FKs nulled, then patch them back through an id map) to survive
+ * self-referential cycles. None of that is needed here.
  */
 // eslint-disable-next-line func-style -- a generator cannot be written as an arrow function; `function*` is the only form.
 async function* readConvexExport(
@@ -119,11 +109,93 @@ async function* readConvexExport(
 }
 
 /**
+ * The flags source resolution actually reads.
+ *
+ * Declared locally rather than imported from the command: taking
+ * `ImportCommandOptions` made this module depend on the whole flag surface and
+ * created an import cycle with `./import`, which imports the union below.
+ */
+interface ImportSourceOptions {
+    file: string;
+    from?: ImportSourceName;
+    logger: Logger;
+    scan?: boolean;
+    storageDir?: string;
+    table?: string;
+    verify?: boolean;
+    withStorage?: boolean;
+}
+
+/**
  * What the positional path turned out to be. A discriminated union rather than a
  * bag of optionals: the snapshot and its table list are always both present or
  * both absent, and only a union lets the caller establish that once.
  */
-type ImportSource = { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> } | { kind: "invalid" } | { kind: "ndjson" };
+type ImportSource =
+    | { kind: "convex"; snapshot: ConvexSnapshot; tables: ReadonlyArray<ConvexSnapshotTable> }
+    | { collections: ReadonlyArray<DumpFile>; kind: "firebase"; mapping?: ImportSourceMapping }
+    | { kind: "invalid" }
+    | { kind: "ndjson" }
+    | { kind: "supabase"; mapping?: ImportSourceMapping; tables: ReadonlyArray<DumpFile> };
+
+/**
+ * The sources `--from` accepts.
+ *
+ * Only the two that cannot be detected. A Convex snapshot announces itself (a
+ * directory of `<table>/documents.jsonl`, or a `.zip` of one) and anything else
+ * is NDJSON, so naming those would advertise a control this does not implement:
+ * `--from ndjson` against a Convex export would have to either refuse it or
+ * silently import it as Convex, and the second is what an unhonoured flag
+ * actually did.
+ */
+const IMPORT_SOURCE_NAMES = ["firebase", "supabase"] as const;
+
+type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
+
+/**
+ * Resolve an explicitly-requested `--from supabase` / `--from firebase` source.
+ *
+ * Both are directories of per-table files, and both read their mapping from the
+ * project rather than from the dump — the dump is the vendor's artefact, the
+ * mapping is the operator's statement about it.
+ */
+const resolveForeignSource = async (options: ImportSourceOptions, from: "firebase" | "supabase", cwd: string): Promise<ImportSource> => {
+    if (options.withStorage === true && from === "firebase" && options.storageDir === undefined) {
+        // Firebase Cloud Storage has no listing endpoint this CLI can reach
+        // without owning Google's auth, so the bucket arrives as a local
+        // directory. Accepting the flag on its own would migrate nothing.
+        options.logger.error("--with-storage on Firebase needs --storage-dir — download the bucket first with `gcloud storage cp -r gs://<bucket> <dir>`.");
+
+        return { kind: "invalid" };
+    }
+
+    if (options.table !== undefined) {
+        options.logger.error(`--table cannot be combined with --from ${from} — each row's table comes from its source file.`);
+
+        return { kind: "invalid" };
+    }
+
+    const mapping = await readImportSourceMapping(cwd, from, options.logger);
+
+    // Same rule the Convex path applies: verifying row counts while every
+    // storage reference still points at the platform being torn down is worse
+    // than not verifying, because it reports success over broken data.
+    const declaresStorageColumns = Object.values(mapping?.tables ?? {}).some((table) => (table.storageColumns ?? []).length > 0);
+
+    if (options.verify === true && options.withStorage !== true && declaresStorageColumns) {
+        options.logger.error(
+            `--verify with \`storageColumns\` declared requires --with-storage — otherwise every storage path stays unmigrated and only row counts would be checked.`,
+        );
+
+        return { kind: "invalid" };
+    }
+
+    if (from === "supabase") {
+        return { kind: "supabase", mapping, tables: await listSupabaseTables(options.file, mapping) };
+    }
+
+    return { collections: await listFirestoreCollections(options.file, mapping), kind: "firebase", mapping };
+};
 
 /**
  * Report any storage-aware flag passed against a source that cannot honour it.
@@ -138,7 +210,7 @@ type ImportSource = { kind: "convex"; snapshot: ConvexSnapshot; tables: Readonly
  * "--with-storage requires a Convex export" is a confusing way to learn you
  * typed the path wrong.
  */
-const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boolean> => {
+const rejectSnapshotFlags = async (options: ImportSourceOptions): Promise<boolean> => {
     const exists = await stat(options.file).then(
         () => true,
         () => false,
@@ -164,12 +236,57 @@ const rejectSnapshotFlags = async (options: ImportCommandOptions): Promise<boole
 };
 
 /**
+ * Refuse `--verify` when it could only ever check half the migration.
+ *
+ * Row counts over an export whose file references were never migrated is a
+ * clean bill of health over broken data — the worst possible output, because it
+ * is indistinguishable from a good one.
+ */
+const rejectUnverifiableStorage = async (
+    snapshot: ConvexSnapshot,
+    tables: ReadonlyArray<ConvexSnapshotTable>,
+    options: ImportSourceOptions,
+): Promise<boolean> => {
+    const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (storageTable === undefined) {
+        // No `_storage` at all means the export was taken WITHOUT
+        // `--include-file-storage`. That is the likeliest operator mistake,
+        // and it used to sail straight through: with no storage table the
+        // guard below never fired, no warning was printed, and every
+        // `{ $storage }` reference imported verbatim as a nested object that
+        // resolves to nothing — under a green "verify" line and exit 0.
+        options.logger.error(
+            "--verify cannot check file references: this export has no `_storage` table, so it was taken without `--include-file-storage`. Re-export with that flag and pass --with-storage, or drop --verify.",
+        );
+
+        return true;
+    }
+
+    const blobs = await readStorageMetadata(snapshot, storageTable, options.logger);
+
+    if (blobs.length > 0) {
+        options.logger.error(
+            `--verify on an export carrying ${String(blobs.length)} stored file(s) requires --with-storage — otherwise every file reference stays unmigrated and only row counts would be checked.`,
+        );
+
+        return true;
+    }
+
+    return false;
+};
+
+/**
  * Decide whether the positional path is a Convex export snapshot (directory or
  * `.zip`) or a plain NDJSON file, and check the flags are coherent with that
  * answer. Both halves live here because "what is this source" and "do these
  * flags mean anything for it" are the same question asked twice.
  */
-const resolveImportSource = async (options: ImportCommandOptions): Promise<ImportSource> => {
+const resolveImportSource = async (options: ImportSourceOptions, cwd: string): Promise<ImportSource> => {
+    if (options.from === "supabase" || options.from === "firebase") {
+        return resolveForeignSource(options, options.from, cwd);
+    }
+
     const snapshot = await resolveConvexSnapshot(options.file);
     const tables = snapshot === undefined ? undefined : await listConvexSnapshotTables(snapshot);
 
@@ -200,22 +317,14 @@ const resolveImportSource = async (options: ImportCommandOptions): Promise<Impor
     // The check reads the metadata rather than trusting the directory's presence:
     // `--include-file-storage` on an app with no files still emits an empty
     // `_storage/`, and blocking `--verify` over nothing would be noise.
-    const storageTable = tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
-
-    if (options.verify === true && options.withStorage !== true && storageTable !== undefined) {
-        const blobs = await readStorageMetadata(snapshot, storageTable, options.logger);
-
-        if (blobs.length > 0) {
-            options.logger.error(
-                `--verify on an export carrying ${String(blobs.length)} stored file(s) requires --with-storage — otherwise every file reference stays unmigrated and only row counts would be checked.`,
-            );
-
-            return { kind: "invalid" };
-        }
+    if (options.verify === true && options.withStorage !== true && (await rejectUnverifiableStorage(snapshot, tables, options))) {
+        return { kind: "invalid" };
     }
 
     return { kind: "convex", snapshot, tables };
 };
 
-export type { ImportSource };
-export { CONVEX_STORAGE_TABLE, isConvexSystemTable, readConvexExport, resolveImportSource };
+export type { ImportSource, ImportSourceName, ImportSourceOptions };
+export { IMPORT_SOURCE_NAMES, readConvexExport, resolveImportSource };
+
+export { CONVEX_STORAGE_TABLE, isConvexSystemTable } from "../convex-snapshot";

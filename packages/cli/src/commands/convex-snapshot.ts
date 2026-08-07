@@ -12,6 +12,23 @@ import { createInterface } from "node:readline";
 
 import AdmZip from "adm-zip";
 
+import openZipEntryStream from "./zip-entry-stream";
+
+/**
+ * Convex's own file table. Its rows describe stored BLOBS, not application
+ * data — the bytes sit next to the JSONL as separate files and belong in R2,
+ * so importing the rows alone would create dangling references.
+ */
+const CONVEX_STORAGE_TABLE = "_storage";
+
+/**
+ * Convex system tables are `_`-prefixed (`_storage`, `_scheduled_functions`,
+ * `_modules`, …). None of them are application data, and none of them exist on
+ * the target: streaming them in would create rows nothing reads, and `--verify`
+ * would then demand row parity for a table the endpoint rejected.
+ */
+const isConvexSystemTable = (table: string): boolean => table.startsWith("_");
+
 /** One `documents.jsonl` file in a Convex export snapshot. */
 interface ConvexSnapshotTable {
     /** Absolute file path (directory) or archive-relative entry (zip). */
@@ -132,11 +149,35 @@ const readSnapshotLines = async function* (snapshot: ConvexSnapshot, tableEntry:
         return;
     }
 
-    // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    const text = snapshot.zip.readAsText(tableEntry.file);
+    const entry = snapshot.zip.getEntry(tableEntry.file);
 
-    for (const line of text.split("\n")) {
-        yield line;
+    if (entry === null) {
+        throw new Error(`missing ${tableEntry.file} in archive`);
+    }
+
+    // Streamed rather than `readAsText`-ed: a table's `documents.jsonl` is
+    // unbounded, and inflating one whole into a string (then splitting it into
+    // an array of every line) is how a large snapshot runs the CLI out of
+    // memory on the ZIP path while the identical directory import succeeds.
+    const stream = await openZipEntryStream(snapshot.zipPath, entry);
+
+    if (stream === undefined) {
+        return;
+    }
+
+    const lines = createInterface({ crlfDelay: Number.POSITIVE_INFINITY, input: stream });
+
+    try {
+        for await (const raw of lines) {
+            yield raw;
+        }
+    } finally {
+        // A consumer that stops early — `break`, a throw, or an import that
+        // fails on row 12 of a million — leaves the readline interface and the
+        // ZIP entry stream open otherwise, holding the archive's file handle
+        // for the rest of the process.
+        lines.close();
+        stream.destroy();
     }
 };
 
@@ -172,15 +213,5 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
     return Buffer.from(blob);
 };
 
-/** Read a `documents.jsonl` as text (for `_storage` metadata and `--scan`). */
-const readSnapshotText = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<string> => {
-    if (snapshot.kind === "directory") {
-        return readFile(tableEntry.file, "utf8");
-    }
-
-    // eslint-disable-next-line unicorn/prefer-blob-reading-methods -- adm-zip's `readAsText` is not a Blob/FileReader API
-    return snapshot.zip.readAsText(tableEntry.file);
-};
-
 export type { ConvexSnapshot, ConvexSnapshotTable };
-export { listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, readSnapshotText, resolveConvexSnapshot };
+export { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, resolveConvexSnapshot };

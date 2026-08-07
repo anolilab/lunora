@@ -3,8 +3,8 @@
  * for, and that every storage reference resolved.
  */
 import type { Logger } from "../../util/logger";
-import type { StorageRemapReport, UnresolvedStorageReference } from "./storage-mapping";
 import { IMPORT_CONVEX_MAPPING_FILE } from "./storage-mapping";
+import type { StorageRemapReport, UnresolvedStorageReference } from "./storage-remap";
 
 /** How many unresolved storage references to name individually before summarising. */
 const UNRESOLVED_REPORT_LIMIT = 20;
@@ -125,4 +125,23 @@ const reportStorageOutcome = (logger: Logger, report: StorageRemapReport, verify
     return false;
 };
 
-export { checkRowParity, reportStorageOutcome };
+/**
+ * Report provider-side storage paths the transfer never moved.
+ *
+ * Left as-is in the document rather than guessed at: a path with no transferred
+ * object is either a stale row or a bucket the run did not cover, and only the
+ * operator can tell which.
+ */
+const reportUntransferredPaths = (logger: Logger, paths: ReadonlySet<string>, verify: boolean): boolean => {
+    for (const reference of [...paths].slice(0, UNRESOLVED_REPORT_LIMIT)) {
+        logger.warn(`storage path never transferred: ${reference} — left as-is`);
+    }
+
+    if (paths.size > UNRESOLVED_REPORT_LIMIT) {
+        logger.warn(`… and ${String(paths.size - UNRESOLVED_REPORT_LIMIT)} more untransferred storage paths`);
+    }
+
+    return verify && paths.size > 0;
+};
+
+export { checkRowParity, reportStorageOutcome, reportUntransferredPaths };
