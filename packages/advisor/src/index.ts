@@ -61,6 +61,7 @@ import mailRecipientFromRequestInput from "./lints/static/mail-recipient-from-re
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on-pii";
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
+import migrationStaleImport from "./lints/static/migration-stale-import";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
@@ -294,6 +295,7 @@ export type { AdvisorWranglerVariable } from "./wrangler-variables";
  * broken schema's errors surface above the performance advisories.
  */
 export const STATIC_LINTS: ReadonlyArray<Lint> = [
+    migrationStaleImport,
     indexReferencesUnknownField,
     relationReferencesUnknownTable,
     relationReferencesUnknownField,

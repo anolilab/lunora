@@ -47,6 +47,7 @@ import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
+import type { AdvisorStaleMigrationImport } from "./stale-migration-imports";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
@@ -608,6 +609,13 @@ export interface LintContext {
      * finds nothing.
      */
     sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
+
+    /**
+     * Imports of a migrated-away platform's SDK still present in `lunora/` source
+     * — the `migration_stale_import` input. Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    staleMigrationImports?: ReadonlyArray<AdvisorStaleMigrationImport>;
 
     /**
      * `ctx.storage.<bucket>.<method>(key, …)` calls whose R2 object key is derived

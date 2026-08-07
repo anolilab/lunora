@@ -1924,3 +1924,19 @@ export interface ProjectIR {
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
 }
+
+/**
+ * One import of a migrated-away platform's SDK still present in `lunora/`
+ * source. Structurally identical to the advisor's `AdvisorStaleMigrationImport`
+ * so it passes through the feeder without conversion.
+ */
+export interface StaleMigrationImportIR {
+    /** Source file relative to the lunora dir, no extension. */
+    file: string;
+    /** 1-based line of the import, or `0` when unknown. */
+    line: number;
+    /** The imported module, e.g. `@supabase/supabase-js`. */
+    moduleSpecifier: string;
+    /** Which migration guide covers this platform. */
+    platform: "convex" | "firebase" | "supabase";
+}
