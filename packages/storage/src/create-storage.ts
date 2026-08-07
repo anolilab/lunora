@@ -313,6 +313,11 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         const object = await options.bucket.put(key, putBody, {
             customMetadata: uploadOptions.customMetadata,
             httpMetadata: uploadOptions.contentType ? { contentType: uploadOptions.contentType } : undefined,
+            // Passing the digest makes R2 both verify the write and RECORD the
+            // checksum, which is what later makes `list()`/`head()` able to
+            // report it. Omitted, every integrity check downstream silently
+            // degrades to a size comparison.
+            ...(uploadOptions.sha256 === undefined ? {} : { sha256: uploadOptions.sha256 }),
         });
 
         // `httpEtag` is the quoted form for an HTTP `ETag` header; fall back to

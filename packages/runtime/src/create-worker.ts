@@ -232,6 +232,14 @@ interface StorageObject {
     etag: string;
     httpMetadata?: { contentType?: string };
     key: string;
+
+    /**
+     * Lowercase-hex SHA-256, when the object was written with one. R2 reports a
+     * checksum only if the writer supplied it, so this is absent for objects
+     * uploaded before that was wired up — consumers must treat "absent" as "not
+     * reported", never as "does not match".
+     */
+    sha256?: string;
     size: number;
 }
 
@@ -350,7 +358,7 @@ type StorageDeleteFunction = (key: string, options?: { bucket?: string }) => Pro
 type StorageUploadFunction = (
     key: string,
     body: ArrayBuffer,
-    options?: { bucket?: string; contentType?: string },
+    options?: { bucket?: string; contentType?: string; sha256?: string },
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
 
 /**

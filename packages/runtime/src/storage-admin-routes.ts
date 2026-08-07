@@ -174,7 +174,10 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
             }
         }
 
-        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
+        // Hand the digest we just computed to storage so R2 records it. Without
+        // that, a later `list()`/`head()` reports no checksum and every
+        // downstream integrity check degrades to comparing sizes.
+        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType, sha256 });
 
         // Echo the computed hash only when verification was requested — the
         // importer uses it to confirm the blob landed byte-identical.

@@ -57,6 +57,16 @@ export interface UploadOptions {
      * unbounded stream.
      */
     maxSize?: number;
+
+    /**
+     * SHA-256 of the body (hex or a 32-byte buffer), recorded with the object.
+     *
+     * R2 only reports a checksum it was given: without this, `list()`/`head()`
+     * return no `sha256` and any later integrity check degrades to comparing
+     * sizes. R2 also verifies the digest itself on write, so supplying it turns
+     * the upload into a checked one.
+     */
+    sha256?: ArrayBuffer | string;
 }
 
 export interface ListOptions {

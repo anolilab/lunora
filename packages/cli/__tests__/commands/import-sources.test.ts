@@ -202,6 +202,30 @@ describe("lunora import --from supabase", () => {
         expect(imported[0]?.doc["untouched"]).toBe("2024-01-02 03:04:05+00");
     });
 
+    it("keeps microsecond precision in `timestamp-iso`, and still rejects garbage", async () => {
+        expect.assertions(2);
+
+        const root = writeDump({ "t.csv": "id,at\nx1,2024-01-02 03:04:05.123456+00\n" });
+
+        writeMapping("supabase", { tables: { t: { types: { at: "timestamp-iso" } } } });
+
+        const { imported } = await runImport(root, "supabase");
+
+        // Round-tripping through `Date` would truncate to .123; Postgres's
+        // default precision is microseconds.
+        expect(imported[0]?.doc["at"]).toBe("2024-01-02T03:04:05.123456+00:00");
+
+        rmSync(join(workDir, "lunora"), { force: true, recursive: true });
+
+        const bad = writeDump({ "t.csv": "id,at\nx1,not-a-date\n" }, "bad");
+
+        writeMapping("supabase", { tables: { t: { types: { at: "timestamp-iso" } } } });
+
+        const { logs } = await runImport(bad, "supabase");
+
+        expect(logs.error.join("\n")).toContain("column `at`");
+    });
+
     describe("the reshape rule — lossy conversions error, they never truncate", () => {
         it("refuses an int8 past Number.MAX_SAFE_INTEGER declared as `number`", async () => {
             expect.assertions(3);

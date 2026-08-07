@@ -2002,6 +2002,7 @@ interface StorageObject {
         contentType?: string;
     };
     key: string;
+    sha256?: string;
     size: number;
 }
 ```

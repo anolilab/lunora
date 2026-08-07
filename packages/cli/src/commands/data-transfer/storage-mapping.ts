@@ -236,40 +236,19 @@ const parseScanLine = (line: string, table: string, lineNumber: number): Record<
     }
 };
 
-/**
- * Does this column hold a storage id anywhere under it?
- *
- * The walk has to go as deep as the rewrite does. `remapStorageReferences`
- * rewrites plain strings at any depth beneath a mapped column, so a scan that
- * only looked at the top level would never propose the column holding
- * `{ file: "<storageId>" }` — leaving the operator with a reference reported as
- * ambiguous and no candidate column to add for it.
- */
-const holdsStorageId = (value: unknown, storageIds: ReadonlySet<string>): boolean => {
-    if (typeof value === "string") {
-        return storageIds.has(value);
-    }
-
-    if (Array.isArray(value)) {
-        return value.some((entry) => holdsStorageId(entry, storageIds));
-    }
-
-    if (value !== null && typeof value === "object") {
-        // A `{ $storage: id }` object is rewritten automatically wherever it
-        // sits, so proposing its column would be noise — and would widen the
-        // plain-string rewrite to a column that never needed it.
-        if (typeof (value as Record<string, unknown>)["$storage"] === "string") {
-            return false;
-        }
-
-        return Object.values(value as Record<string, unknown>).some((entry) => holdsStorageId(entry, storageIds));
-    }
-
-    return false;
-};
-
 /** Columns of one table whose values match a storage id, in first-seen order. */
 const scanTableColumns = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, storageIds: ReadonlySet<string>): Promise<string[]> => {
+    // `--scan` IS the rewrite, run as a dry run. Handing `remapStorageReferences`
+    // an identity map and no `storageColumns` makes every plain string matching a
+    // storage id land in `ambiguous`, tagged with its top-level column — which is
+    // exactly the candidate list. `{ $storage }` objects rewrite silently and
+    // never appear, which is the special case a separate detector had to
+    // hand-code.
+    //
+    // Sharing the walk is the point: a detector that proposes columns the rewrite
+    // would not touch, or misses ones it would, is worse than no detector, and
+    // two implementations kept in step by a comment is how that happens.
+    const identity = new Map([...storageIds].map((id) => [id, id]));
     const columns: string[] = [];
     let lineNumber = 0;
 
@@ -282,8 +261,10 @@ const scanTableColumns = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnap
             continue;
         }
 
-        for (const [column, value] of Object.entries(parseScanLine(line, tableEntry.table, lineNumber))) {
-            if (holdsStorageId(value, storageIds) && !columns.includes(column)) {
+        const { ambiguous } = remapStorageReferences(parseScanLine(line, tableEntry.table, lineNumber), identity, tableEntry.table);
+
+        for (const { column } of ambiguous) {
+            if (!columns.includes(column)) {
                 columns.push(column);
             }
         }

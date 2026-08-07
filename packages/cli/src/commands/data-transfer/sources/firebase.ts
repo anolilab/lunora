@@ -145,9 +145,14 @@ const toDocument = (
     tableMapping: TableMapping | undefined,
     path: string,
 ): Record<string, unknown> => {
-    const wrapped = raw["fields"] !== undefined && typeof raw["fields"] === "object";
+    // `documents.list` omits `fields` entirely for a document that has none, so
+    // the presence of `name` is what identifies the wrapped form. Keying off
+    // `fields` sent an empty document down the bare branch, where `decodeValue`
+    // ran `"nullValue" in value` against the `name` string and threw
+    // "Cannot use 'in' operator" — unactionable for the operator.
+    const wrapped = typeof raw["name"] === "string" || (raw["fields"] !== undefined && typeof raw["fields"] === "object");
     const decoded = wrapped
-        ? decodeFields(raw["fields"] as Record<string, FirestoreValue>, path)
+        ? decodeFields((raw["fields"] ?? {}) as Record<string, FirestoreValue>, path)
         : decodeFields(raw as unknown as Record<string, FirestoreValue>, path);
 
     const name = raw["name"] ?? raw["__name__"];

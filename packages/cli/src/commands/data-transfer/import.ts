@@ -284,7 +284,17 @@ const runForeignStorageTransfer = async (
         end -= 1;
     }
 
-    const objects = await listSupabaseObjects({ serviceKey, url: url.slice(0, end) }, context.fetchImpl, options.logger);
+    const projectUrl = url.slice(0, end);
+
+    // The service-role key travels as a Bearer on every request. Over plain HTTP
+    // that is the whole credential in cleartext, so refuse rather than warn.
+    if (!projectUrl.startsWith("https://")) {
+        options.logger.error(`SUPABASE_URL must be https:// — refusing to send the service-role key over ${projectUrl.split(":")[0] ?? "an unknown scheme"}.`);
+
+        return undefined;
+    }
+
+    const objects = await listSupabaseObjects({ serviceKey, url: projectUrl }, context.fetchImpl, options.logger);
 
     return transferStorageObjects(context, objects, { cwd, keyPrefix, source: source.kind }, options.logger);
 };

@@ -283,7 +283,18 @@ const applyReshape = (column: string, kind: ReshapeKind, raw: string | null): un
         }
 
         case "timestamp-iso": {
-            return new Date(toEpochMs(column, kind, raw)).toISOString();
+            // Round-trip through `Date` would truncate to milliseconds, and
+            // Postgres's default precision is microseconds. When the source
+            // already carries a zone, normalise the separator and keep every
+            // digit; otherwise fall back to the parsed instant.
+            // Parse first, so an unparseable value still fails the run naming the
+            // column rather than passing through as text.
+            toEpochMs(column, kind, raw);
+
+            const normalized = raw.includes("T") ? raw : raw.replace(" ", "T");
+            const zoned = BARE_HOUR_OFFSET_RE.test(normalized) ? `${normalized}:00` : normalized;
+
+            return HAS_ZONE_RE.test(zoned) ? zoned : `${zoned}Z`;
         }
 
         case "timestamp-ms": {

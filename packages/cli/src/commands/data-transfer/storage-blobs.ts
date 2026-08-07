@@ -13,6 +13,17 @@ import { STORAGE_ENDPOINT_PATH, STORAGE_URL_ENDPOINT_PATH } from "./shared";
 /** Blob uploads in flight at once. Enough to hide round-trip latency, few enough to stay polite. */
 const BLOB_UPLOAD_CONCURRENCY = 8;
 
+/**
+ * Bytes allowed in flight across the whole upload window.
+ *
+ * A count alone multiplies against the per-blob ceiling: eight concurrent 32 MiB
+ * uploads is ~256 MiB of request bodies, and the worker holds roughly twice each
+ * body while it buffers and digests — against a 128 MB isolate limit shared by
+ * every concurrent request. Budgeting bytes as well as requests means a window
+ * of small blobs still runs eight wide, while large ones narrow it automatically.
+ */
+const BLOB_UPLOAD_MAX_INFLIGHT_BYTES = 24 * 1_048_576;
+
 /** Page size for the admin object listing — the route's own default is 100, which is a lot of round trips over a large bucket. */
 const STORAGE_LIST_PAGE_SIZE = 1000;
 
@@ -26,6 +37,26 @@ interface StorageMetadataRow {
 }
 
 const HEX_SHA256_RE = /^[\dA-F]{64}$/i;
+
+/**
+ * Can this string legally sit in an HTTP header value?
+ *
+ * Checked by code point rather than a regex literal: a CR/LF here otherwise
+ * reaches the HTTP client, which rejects it with an opaque "Invalid header
+ * value" instead of naming the offending metadata line the way every other
+ * field does.
+ */
+const isHeaderSafe = (value: string): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.codePointAt(index) ?? 0;
+
+        if (code < 0x20 || code === 0x7f) {
+            return false;
+        }
+    }
+
+    return true;
+};
 const BASE64_SHA256_RE = /^[\d+/A-Z]{43}=$/i;
 
 /**
@@ -71,6 +102,14 @@ const parseStorageMetadataRow = (line: string, where: string): StorageMetadataRo
 
     if (typeof storageDocument.size !== "number" || !Number.isInteger(storageDocument.size) || storageDocument.size < 0) {
         throw new LunoraError("INTERNAL", `${where}: \`size\` must be a non-negative integer`);
+    }
+
+    // `contentType` is the only metadata field that becomes a request header, so
+    // a CR/LF in it crashes the HTTP client with an opaque "Invalid header
+    // value" instead of naming the offending line the way every other field
+    // does.
+    if (storageDocument.contentType !== undefined && (typeof storageDocument.contentType !== "string" || !isHeaderSafe(storageDocument.contentType))) {
+        throw new LunoraError("INTERNAL", `${where}: \`contentType\` must be a string with no control characters`);
     }
 
     return {
@@ -155,7 +194,16 @@ const listStorageObjects = async (context: BlobUploadContext, prefix: string): P
         const json = (await response.json()) as { cursor?: string; objects?: StorageListObject[]; truncated?: boolean };
 
         objects.push(...(json.objects ?? []));
-        cursor = json.truncated === true ? json.cursor : undefined;
+
+        const next = json.truncated === true ? json.cursor : undefined;
+
+        // A host that reports "more" without advancing would loop forever;
+        // stopping is the safe answer, and the caller re-uploads at worst.
+        if (next !== undefined && next === cursor) {
+            throw new LunoraError("INTERNAL", "storage list did not advance its cursor — refusing to page forever");
+        }
+
+        cursor = next;
     } while (cursor !== undefined);
 
     return objects;
@@ -306,6 +354,37 @@ const uploadStorageBlob = async (
 };
 
 /**
+ * Split the pending blobs into windows bounded by BOTH a request count and a
+ * byte budget.
+ *
+ * The first blob of a window always goes in, even if it alone exceeds the byte
+ * budget — one upload has to be allowed to proceed, or a single large blob would
+ * stall the run forever.
+ */
+const uploadWindows = (pending: ReadonlyArray<StorageMetadataRow>): StorageMetadataRow[][] => {
+    const windows: StorageMetadataRow[][] = [];
+    let current: StorageMetadataRow[] = [];
+    let bytes = 0;
+
+    for (const row of pending) {
+        if (current.length > 0 && (current.length >= BLOB_UPLOAD_CONCURRENCY || bytes + row.size > BLOB_UPLOAD_MAX_INFLIGHT_BYTES)) {
+            windows.push(current);
+            current = [];
+            bytes = 0;
+        }
+
+        current.push(row);
+        bytes += row.size;
+    }
+
+    if (current.length > 0) {
+        windows.push(current);
+    }
+
+    return windows;
+};
+
+/**
  * Migrate Convex `_storage` blobs: read `_storage/documents.jsonl`, upload each
  * blob with sha256+size verification, and build the `storageId → key` map.
  * Fail-close on any mismatch or missing file.
@@ -358,9 +437,9 @@ const migrateStorageBlobs = async (
     // for hours. A window keeps that bounded without letting an export open
     // 50k sockets. `allSettled` per window preserves fail-close: no request
     // outlives the failure, and the first error is the one reported.
-    for (let index = 0; index < pending.length; index += BLOB_UPLOAD_CONCURRENCY) {
+    for (const window of uploadWindows(pending)) {
         // eslint-disable-next-line no-await-in-loop -- one window at a time is the point of the window
-        const settled = await Promise.allSettled(pending.slice(index, index + BLOB_UPLOAD_CONCURRENCY).map((row) => uploadOne(row)));
+        const settled = await Promise.allSettled(window.map((row) => uploadOne(row)));
         const failure = settled.find((outcome) => outcome.status === "rejected");
 
         if (failure !== undefined) {

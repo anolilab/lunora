@@ -366,6 +366,34 @@ describe("createWorker — storage admin upload", () => {
         expect(new TextDecoder().decode(storedBody)).toBe("hello");
     });
 
+    it("hands the computed digest to storage so R2 records it", async () => {
+        expect.assertions(2);
+
+        const uploadOptions: { sha256?: string }[] = [];
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string, _body: ArrayBuffer, options?: { sha256?: string }) => {
+            uploadOptions.push({ sha256: options?.sha256 });
+
+            return { key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+        const digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"; // sha256("hello")
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/storage?key=a.txt&expectedSha256=${digest}&expectedSize=5`, {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        // Without this, R2 reports no checksum on `list()`/`head()` and every
+        // downstream integrity check silently degrades to comparing sizes.
+        expect(uploadOptions[0]?.sha256).toBe(digest);
+    });
+
     it("accepts a case-variant expectedSha256 (comparison is case-insensitive)", async () => {
         expect.assertions(1);
 

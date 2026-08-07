@@ -166,6 +166,7 @@ interface UploadOptions {
     contentType?: string;
     customMetadata?: Record<string, string>;
     maxSize?: number;
+    sha256?: ArrayBuffer | string;
 }
 ```
 
