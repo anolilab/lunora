@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire } from "../../../shared/wire-codec";
 import type { AuditEntry } from "./audit-log";
@@ -1040,7 +1041,7 @@ const resolveColumnExpression = (column: string, physicalColumns: string[]): und
 
     return isPhysical
         ? { expression: quoteIdentifier(column), params: [] }
-        : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$."${column.replaceAll('"', '""')}"`] };
+        : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$.${jsonPathSegment(column)}`] };
 };
 
 /**
