@@ -162,4 +162,4 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
 };
 
 export type { BackupDestination, BackupManifestEntry, MaterializedSnapshot, SnapshotDigest };
-export { createDirectoryDestination, digestFile, isManifestEntry, MANIFEST_FILE };
+export { createDirectoryDestination, digestFile, isManifestEntry };

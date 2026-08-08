@@ -151,4 +151,4 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
 };
 
 export type { R2DestinationOptions };
-export { createR2Destination, DEFAULT_BACKUP_PREFIX, MANIFEST_SUFFIX };
+export { createR2Destination };
