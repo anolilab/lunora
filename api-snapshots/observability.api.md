@@ -425,6 +425,7 @@ interface LogEntry {
     level: LogLevel;
     message: string;
     timestamp: number;
+    traceId?: string;
 }
 ```
 
@@ -870,6 +871,8 @@ interface TraceSpan {
         message: string;
         type: string;
     };
+    events?: SpanEventPoint[];
+    kind?: OtlpSpanKind;
     name: string;
     offsetMs: number;
     ok: boolean;

@@ -90,7 +90,7 @@ const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_MET
  * without the tuple moving — and there if the studio copy drifts — so the
  * waterfall renderer can't silently fall behind the fold that feeds it.
  */
-const TRACE_SPAN_KEYS = ["attributes", "depth", "durationMs", "error", "name", "offsetMs", "ok", "parentSpanId", "spanId"] as const;
+const TRACE_SPAN_KEYS = ["attributes", "depth", "durationMs", "error", "events", "kind", "name", "offsetMs", "ok", "parentSpanId", "spanId"] as const;
 
 const TRACE_SPAN_KEY_GUARD: KeysMatch<keyof TraceSpan, (typeof TRACE_SPAN_KEYS)[number]> = true;
 

@@ -762,6 +762,14 @@ export interface LogEntry {
     level: LogLevel;
     message: string;
     timestamp: number;
+
+    /**
+     * Trace the line was emitted under. Present for lines emitted inside a
+     * dispatch; absent for container-lifecycle entries, hibernation-path errors,
+     * and any worker predating the field. What the Logs panel's "Trace" link and
+     * the Traces panel's correlated-logs section both key on.
+     */
+    traceId?: string;
 }
 
 /** Payload of a `__lunora_admin__:getLogs` call: the buffered entries, newest first. */
@@ -1042,6 +1050,20 @@ export interface TraceSpan {
         message: string;
         type: string;
     };
+
+    /**
+     * Timestamped occurrences inside the span — `span.addEvent(...)` /
+     * `span.recordException(...)`. A handled retry or a swallowed exception, which
+     * only makes sense against the span it happened in. Absent when none.
+     */
+    events?: {
+        attributes?: Record<string, unknown>;
+        name: string;
+        /** Epoch-ms the event was recorded. */
+        ts: number;
+    }[];
+    /** OTel `SpanKind`. Absent means `"internal"` — the overwhelming majority of `ctx.trace` spans. */
+    kind?: "client" | "consumer" | "internal" | "producer" | "server";
     /** Caller-supplied span name, e.g. `"stripe.charge"`. */
     name: string;
     /** Start of this span relative to the trace's start, in ms. Clamped at 0 server-side. */

@@ -395,6 +395,15 @@ hibernation. It is a development readout, not a trace store: for retention and
 cross-instance search, point [`otlpSink`](#otlpsink) at a real collector, where
 each span is exported as an OTLP `INTERNAL` span carrying its `parentSpanId`.
 
+Expanding a trace gives an elapsed-time ruler over the bars, a per-span detail
+block (span id, kind, the full attribute bag, the error, and any
+`span.addEvent` / `span.recordException` events), and the `ctx.log` lines the
+same dispatch emitted, joined by trace id. **Errors only** narrows the list to
+traces where something threw; the search box matches a span name or span id as
+well as the trace's own identifiers, so an id pasted from an error report finds
+the trace containing it. In the **Logs** panel, a line emitted inside a dispatch
+carries a **Trace** link that opens its waterfall on the shard it came from.
+
 ### Generation spans (AI)
 
 An AI model call is a span with the OpenTelemetry

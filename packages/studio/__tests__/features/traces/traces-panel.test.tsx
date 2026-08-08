@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
 import TracesPanel from "../../../src/features/traces/traces-panel";
-import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
+import type { LogEntry, TraceSpan, TraceSummary } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import { clearPendingTraceFilter, peekPendingTraceFilter, writePendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
@@ -92,11 +92,29 @@ const ZERO_TRACE: TraceSummary = {
     traceId: "trace-zero",
 };
 
-const createClient = (traces: TraceSummary[] = TRACES): MockClientHooks =>
+/**
+ * Log lines the panel joins to a waterfall by `traceId`. `trace-orphan` has no
+ * trace at all — the shape of a container-lifecycle line, which must never be
+ * bucketed under some unrelated waterfall.
+ */
+const LOG_ENTRIES: LogEntry[] = [
+    { functionPath: "messages:send", level: "info", message: "charged card", timestamp: 1_700_000_002_050, traceId: "trace-send" },
+    { fields: { orderId: "o-1" }, functionPath: "messages:send", level: "warn", message: "retrying", timestamp: 1_700_000_002_010, traceId: "trace-send" },
+    { functionPath: "messages:list", level: "info", message: "listed", timestamp: 1_700_000_001_000, traceId: "trace-list" },
+    { level: "info", message: "container started", timestamp: 1_700_000_000_500 },
+];
+
+const createClient = (traces: TraceSummary[] = TRACES, entries: LogEntry[] = LOG_ENTRIES): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.getTraces) {
                 return { traces };
+            }
+
+            // The panel joins the live log ring to the waterfalls; `getLogs` is
+            // newest-first, as the real admin read returns it.
+            if (reference === ADMIN_FUNCTIONS.getLogs) {
+                return { entries };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -233,6 +251,116 @@ describe("tracesPanel", () => {
         expect(indicators).toHaveLength(1);
         expect(message.textContent).toContain("card declined");
         expect(message.textContent).toContain("StripeError");
+    });
+
+    it("keeps a span's detail collapsed until its row is clicked, then shows the full attribute bag", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient()));
+
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-send"));
+        await screen.findAllByTestId("tr-span-row");
+
+        expect(screen.queryByTestId("tr-span-detail")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("tr-span-toggle-s1"));
+
+        const detail = await screen.findByTestId("tr-span-detail");
+
+        // The row's chip is truncated to a fixed-width cell; the detail is the
+        // only place the id and the whole attribute bag are legible.
+        expect(detail.textContent).toContain("s1");
+        expect(screen.getByTestId("tr-detail-attributes").textContent).toContain("o-1");
+    });
+
+    it("shows a span's kind and recorded events in its detail", async () => {
+        expect.assertions(2);
+
+        const traced: TraceSummary = {
+            ...TRACES[1],
+            spans: [
+                {
+                    ...LIST_SPANS[0],
+                    events: [{ attributes: { "exception.type": "TimeoutError" }, name: "exception", ts: 1_700_000_001_004 }],
+                    kind: "client",
+                },
+            ],
+        } as TraceSummary;
+
+        render(renderPanel(createClient([traced])));
+
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-list"));
+        fireEvent.click(await screen.findByTestId("tr-span-toggle-l0"));
+
+        const events = await screen.findByTestId("tr-detail-events");
+
+        expect(events.textContent).toContain("exception");
+        expect(events.textContent).toContain("TimeoutError");
+    });
+
+    it("shows the log lines the same dispatch emitted under the expanded trace", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient()));
+
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-send"));
+
+        const logs = await screen.findByTestId("tr-logs");
+        const rows = screen.getAllByTestId("tr-log-row");
+
+        // Only this trace's two lines: the other trace's line and the untraced
+        // container line must not be bucketed here.
+        expect(rows).toHaveLength(2);
+        expect(logs.textContent).toContain("charged card");
+        // `getLogs` is newest-first; a trace's own lines read as a narrative.
+        expect(rows[0]?.textContent).toContain("retrying");
+    });
+
+    it("omits the log section for a trace whose dispatch logged nothing", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(createClient(TRACES, [])));
+
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-send"));
+        await screen.findAllByTestId("tr-span-row");
+
+        expect(screen.queryByTestId("tr-logs")).toBeNull();
+    });
+
+    it("narrows the list to failed traces when 'Errors only' is checked", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient([TRACES[0] as TraceSummary, ERROR_TRACE])));
+
+        await screen.findByTestId("tr-row-trace-send");
+
+        fireEvent.click(screen.getByTestId("tr-only-errors"));
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("tr-row-trace-send")).toBeNull();
+        });
+
+        expect(screen.getByTestId("tr-row-trace-error")).toBeTruthy();
+    });
+
+    it("draws an elapsed-time ruler over the waterfall, and none for a zero-duration trace", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createClient()));
+
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-send"));
+
+        const ruler = await screen.findByTestId("tr-ruler");
+
+        expect(ruler.textContent).toContain("25ms");
+        expect(ruler.textContent).toContain("100ms");
+
+        render(renderPanel(createClient([ZERO_TRACE])));
+        fireEvent.click(await screen.findByTestId("tr-toggle-trace-zero"));
+        await screen.findAllByTestId("tr-span-bar");
+
+        // One ruler still on screen from the first render; the zero trace adds none.
+        expect(screen.getAllByTestId("tr-ruler")).toHaveLength(1);
     });
 
     it("renders visible bars for a zero-duration trace rather than NaN", async () => {

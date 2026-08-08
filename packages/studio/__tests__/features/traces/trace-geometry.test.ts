@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { filterTraces, formatSpanDuration, spanBar } from "../../../src/features/traces/trace-geometry";
+import { filterTraces, formatSpanDuration, spanBar, traceTicks } from "../../../src/features/traces/trace-geometry";
 import type { TraceSpan, TraceSummary } from "../../../src/lib/admin";
 
 const span = (overrides: Partial<TraceSpan> = {}): TraceSpan => {
@@ -101,6 +101,55 @@ describe("filterTraces", () => {
 
         expect(all).not.toBe(traces);
         expect(all).toEqual(traces);
+    });
+
+    it("matches on a nested span's name and id, not just the trace's own identifiers", () => {
+        expect.assertions(2);
+
+        // A span id pasted from an error report or a traceparent header should find
+        // the trace CONTAINING it — the trace is rarely named after the span you have.
+        const withSpans = [trace({ spans: [span(), span({ name: "stripe.charge", spanId: "ffff9999" })], traceId: "ccc333" })];
+
+        expect(filterTraces(withSpans, "stripe.charge")).toHaveLength(1);
+        expect(filterTraces(withSpans, "ffff9999")).toHaveLength(1);
+    });
+
+    it("keeps only failed traces when onlyErrors is set", () => {
+        expect.assertions(2);
+
+        const mixed = [trace({ ok: true, traceId: "ok1" }), trace({ ok: false, traceId: "bad1" })];
+
+        expect(filterTraces(mixed, "", true).map((t) => t.traceId)).toEqual(["bad1"]);
+        expect(filterTraces(mixed, "", false)).toHaveLength(2);
+    });
+
+    it("composes the error filter with the search term rather than replacing it", () => {
+        expect.assertions(1);
+
+        const mixed = [trace({ ok: false, rootName: "signIn", traceId: "bad1" }), trace({ ok: false, rootName: "listMessages", traceId: "bad2" })];
+
+        expect(filterTraces(mixed, "signin", true).map((t) => t.traceId)).toEqual(["bad1"]);
+    });
+});
+
+describe("traceTicks", () => {
+    it("spreads labelled gridlines across the trace, ending at its full duration", () => {
+        expect.assertions(2);
+
+        const ticks = traceTicks(100);
+
+        expect(ticks.map((tick) => tick.percent)).toEqual([25, 50, 75, 100]);
+        expect(ticks.map((tick) => tick.label)).toEqual(["25ms", "50ms", "75ms", "100ms"]);
+    });
+
+    it("draws no ruler for a duration spanBar would lay out full-width", () => {
+        expect.assertions(3);
+
+        // Same guard as `spanBar`: with no timeline, there is nothing to annotate,
+        // and evenly-spaced "0ms" labels would imply a resolution the trace lacks.
+        expect(traceTicks(0)).toEqual([]);
+        expect(traceTicks(-5)).toEqual([]);
+        expect(traceTicks(Number.NaN)).toEqual([]);
     });
 });
 

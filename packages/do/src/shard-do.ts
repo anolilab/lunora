@@ -3611,7 +3611,7 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
-        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts, traceId: event.traceId });
 
         try {
             emitLogEvent(event);
@@ -4486,6 +4486,10 @@ abstract class ShardDO {
                 level: "error",
                 message,
                 timestamp: Date.now(),
+                // The throw's own trace, so the Traces panel can show this line
+                // against the waterfall that failed — the whole point of opening
+                // a trace after seeing a red log row.
+                traceId: dispatchTrace.traceId,
             });
 
             // A fresh error row landed, but the failed dispatch's own writes (if

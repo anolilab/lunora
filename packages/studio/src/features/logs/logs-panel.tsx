@@ -1,3 +1,4 @@
+import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +16,9 @@ import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { LogEntry, LogLevel, RequestLogEntry, RequestLogQuery, RequestOutcome } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
+import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import flooredRectObserver from "../../lib/virtual-rect";
 import { ArchiveFeed } from "./archive-feed";
 import type { BadgeVariant } from "./log-level-variant";
@@ -55,6 +58,8 @@ interface LogRowProps {
     readonly index: number;
     /** react-virtual's ref-callback that measures the rendered row. */
     readonly measureRef: (node: HTMLDivElement | null) => void;
+    /** Open the Traces panel filtered to this line's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
     /** Pixel offset of this row from the top of the virtualized list. */
     readonly start: number;
 }
@@ -65,11 +70,19 @@ interface LogRowProps {
  * offset) is a `useMemo`-stable reference — keeping the hot map body free of
  * fresh inline objects.
  */
-const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement => {
+const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): ReactElement => {
+    const t = useT();
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
     // Rendered once; `""` (no fields, or an empty bag from a worker predating
     // field normalization) skips the chip entirely rather than showing a blank span.
     const fields = formatLogFields(entry.fields);
+    const { traceId } = entry;
+
+    const onTraceClick = (): void => {
+        if (traceId !== undefined) {
+            onOpenTrace(traceId);
+        }
+    };
 
     return (
         <div
@@ -95,6 +108,20 @@ const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement 
                     <span className="ml-2 text-muted-foreground" data-testid="lg-fields">
                         {fields}
                     </span>
+                )}
+            </span>
+            {/*
+             * The drill-down the two panels were missing: a line emitted inside a
+             * dispatch knows its trace, so it can hand you the waterfall it came
+             * from instead of leaving you to match timestamps by eye. Absent for
+             * lines with no ambient trace (container lifecycle, hibernation errors)
+             * and for any worker predating the buffered `traceId`.
+             */}
+            <span className="w-16 shrink-0 text-right" role="gridcell">
+                {traceId === undefined ? null : (
+                    <button className="text-primary underline-offset-2 hover:underline" data-testid="lg-trace-link" onClick={onTraceClick} type="button">
+                        {t("Trace")}
+                    </button>
                 )}
             </span>
         </div>
@@ -319,6 +346,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
+    const navigate = useNavigate();
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
     // Errors-view client-side filters: a level allow-set (empty = all levels), a
@@ -363,6 +391,14 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 
     const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
     const { error, errorSource, isLoading: activeLoading, liveError } = activeQuery;
+
+    // Hand a log line's trace to the Traces panel and navigate there — the same
+    // one-shot handoff the Metrics panel's exemplar link uses, carrying the shard
+    // so Traces reads the ring the line came from rather than the root's.
+    const openTrace = (traceId: string): void => {
+        writePendingTraceFilter({ shardKey: queryShardKey, traceId });
+        fireAndForget(navigate({ to: "/traces" }));
+    };
 
     // Coerce each view's resolved payload into its entries array (a one-shot read
     // or live push without an `entries` array yields `[]`); an unloaded gated
@@ -590,6 +626,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                                             index={virtualRow.index}
                                             key={virtualRow.key}
                                             measureRef={virtualizer.measureElement}
+                                            onOpenTrace={openTrace}
                                             start={virtualRow.start}
                                         />
                                     ),

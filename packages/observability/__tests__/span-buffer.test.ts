@@ -123,6 +123,34 @@ describe("foldTraces", () => {
         expect(DEFAULT_TRACE_LIMIT).toBeGreaterThan(0);
     });
 
+    it("carries a span's kind and recorded events through to the folded row", () => {
+        expect.assertions(2);
+
+        // Both are recorded by `ctx.trace` and were dropped by the fold, so a
+        // handled exception (`span.recordException`) reached the buffer and then
+        // vanished before anything could render it.
+        const { traces } = foldTraces([
+            span({
+                events: [{ attributes: { "exception.type": "TimeoutError" }, name: "exception", ts: 1002 }],
+                kind: "client",
+            }),
+        ]);
+
+        expect(traces[0]?.spans[0]?.kind).toBe("client");
+        expect(traces[0]?.spans[0]?.events).toStrictEqual([{ attributes: { "exception.type": "TimeoutError" }, name: "exception", ts: 1002 }]);
+    });
+
+    it("omits kind and events entirely for a span that recorded neither", () => {
+        expect.assertions(2);
+
+        // Absent rather than `undefined`-valued: these ride every admin `getTraces`
+        // payload, and the common `ctx.trace` span has neither.
+        const [row] = foldTraces([span()]).traces[0]?.spans ?? [];
+
+        expect(row).not.toHaveProperty("kind");
+        expect(row).not.toHaveProperty("events");
+    });
+
     it("still folds a trace whose root span is missing", () => {
         expect.assertions(2);
 
