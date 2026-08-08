@@ -1,7 +1,7 @@
 # Plan 313 — Put the long-term backup tier on object storage instead of someone's disk
 
 **Baseline:** `38ffc2ea7` (2026-08-08)
-**Status:** TODO
+**Status:** PHASES 0-1 + WS5 SHIPPED in #375 (12 commits, three thermo rounds). WS4 deliberately deviated from — see §10. WS6 docs shipped.
 **Priority:** P2 · **Effort:** M · **Risk:** MED · **Category:** data/durability
 
 > **Executor instructions**: almost everything this needs already exists — the
@@ -146,3 +146,54 @@ No new `ctx.*` surface. If phase 2 adds one, it states its own row here.
 - Is there an interaction with `pitr` worth surfacing — e.g. `backup create`
   recording the current PITR bookmark alongside the snapshot, so an operator can
   see which of the two tiers is the better restore point for a given moment?
+
+## 10. Execution record and one deviation (2026-08-08)
+
+Phases 0–1 shipped as designed: a `BackupDestination` seam with filesystem and R2
+implementations, `restore --verify`, and a `GET /_lunora/admin/storage/object`
+read route so a bucket restore does not depend on URL signing.
+
+**WS5 shipped too, outside the phasing it was given.** Reviewing both writers side
+by side surfaced that the scheduled backup recorded no checksum, so
+`restore --verify` refused precisely the snapshots nobody watches being taken.
+That is worth recording: the in-platform tier was the one that most needed the
+guarantee and the one that lacked it.
+
+### The deviation: retention is implicit, and §4.4 said it would not be
+
+§4.4 states _"Retention is explicit, not clever … **No silent deletion of
+anything**"_, and WS4 scopes _"prune as its own verb so it is never implicit"_.
+What shipped keeps `backupRetain` deleting inside every cron run. The writer
+check added in review makes that deletion **narrower**, not **explicit**.
+
+This is the single largest gap between the plan and the branch, and it is the
+area that produced the branch's worst defect — an early revision deleted
+operator-taken snapshots, because unifying the key layout (which is what makes
+`list --bucket` one history) also made the two writers indistinguishable to the
+existing prune. The feature and the bug were the same decision.
+
+Retention now matches on the cron expression, stamped as object custom metadata
+and read off the listing, so two deployments sharing a prefix keep the retention
+each configured and pre-marker sidecars are never pruned. That is safe. It is
+still not what §4.4 promised.
+
+**Left open deliberately**, as either a follow-up plan or a WS4 phase: a `prune`
+verb with a dry run, so the destructive step is something an operator invokes
+and can preview rather than a side effect of a backup succeeding.
+
+### Three rounds of review, and the pattern worth carrying forward
+
+Each round found something the previous had declared clean, and every one was in
+the remediation rather than the original work. The recurring defect was not stale
+comments — it was **a claim about a second party's behaviour that was never
+checked against the second party**: a guard documented as preventing an OOM it
+could not prevent (the export fan-out resolves every shard's rows before the
+first byte is encoded); an upload documented as checksum-verified above the size
+where the verified route stops being used; remediation text telling an operator
+to pass `createStorage(...).download` where the two signatures share no
+properties and the assignment does not compile.
+
+The tests that now guard these were written by asking what the _class_ would look
+like: a tier-parity test comparing `id` values and derived keys across both
+writers, and a retention test seeding a foreign deployment's snapshot under the
+shared prefix.
