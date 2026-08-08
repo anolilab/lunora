@@ -2033,27 +2033,7 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ## `lunorash/do`
 
-### `ADMIN_FUNCTIONS` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ADMIN_FUNCTION_PREFIX` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AGGREGATE_SQL_FUNCTION` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `AdvisorProcedure` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AdvisorProceduresResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AdvisoriesResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2065,99 +2045,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `AggregateOp` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AggregateOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AggregateResult` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AggregateTally` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ApplyOnDeleteOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AuditEntry` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `AuditLogResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `BroadcastDelta` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CDC_LOG_TABLE` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CacheEntry` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CapturedMailRow` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CdcChange` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `Clock` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ColumnMeta` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ColumnMetaLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ConflictError` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CountArgs` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CountRlsUnsupportedError` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `CtxDbOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `DATA_MIGRATION_STATE_TABLE` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `DEFAULT_MAX_RELATION_KEYS` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `DataMigrationDocument` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `DataMigrationLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `DataMigrationTransform` (type)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2165,27 +2053,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `DependencyTracker` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `DeployInfo` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `ExportRow` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ExportShardAdminArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ExportShardArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ExternalSourceDiffResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2193,67 +2061,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `FLAGS_FUNCTION_PREFIX` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FacetColumnOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FacetColumnResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FacetValue` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FieldOperators` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FlagEvaluation` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `FlagsResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FunctionCallStat` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `FunctionStatsResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GEO_DEFAULT_PRECISION` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GeoBoundingBox` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GeoFilterBuilderLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GeoIndexDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GeoPoint` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GroupByEntry` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `GroupByOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2261,39 +2069,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `IdGenerator` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ImportError` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ImportShardAdminArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ImportShardArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `ImportShardResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `IncrementalMaterializeResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `IndexDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `IndexKeyEntry` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `IndexRangeBuilderLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2305,31 +2081,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `MAIL_RETENTION` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MAIL_TABLE` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MAX_SQL_ROWS` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MaskColumnMetadata` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `MaskPoliciesResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MaterializeResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MigrationDirection` (type)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2337,87 +2089,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `MigrationStatus` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `MigrationStatusRow` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `MutationDelta` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `NestedWith` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `NotFoundError` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `NotUniqueError` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `OnDeleteActionLike` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `OrderByInput` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `OrderKey` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `PaginationOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `PitrBookmarkResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `PitrRestoreArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `PitrRestoreResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `PitrStorage` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `QueryArgs` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `QueryPage` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `QueueMetadata` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `QueuesResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RANK_TIEBREAK` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RELATION_FUNCTION_PREFIX` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RLS_UNWRAP_SYMBOL` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2429,103 +2105,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `RankDirection` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `RankIndexDefinitionLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `RankOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankPage` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankPageOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankPageRow` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankPageRowKey` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RankSortKeyLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ReactiveCache` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ReactiveCacheOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ReadHook` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ReadTablePageOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RecordMailInput` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RelationDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RenderedSql` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ResolveRelationPredicatesOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ResolveWithOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RestrictableQueryOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `RlsPoliciesResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RlsPolicyMetadata` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RlsRequiredError` (class)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RlsRoleMetadata` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RpcRequest` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `RunDataMigrationOptions` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2573,14 +2157,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `RunTriggersOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SCAN_DEP` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SESSION_DO_TTL_DEFAULT` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2589,35 +2165,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `SchedulableWorkflowReferenceLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ScheduledFunctionDoc` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SchedulerLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `SchemaLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SearchFilterBuilderLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SearchIndexDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SelectMatchingIdsOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ServerDefaultContextLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2628,22 +2180,6 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 ### `SessionRecord` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
-
-### `SettingEntry` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SettingKind` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SettingsResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ShapeSubscriptionQuery` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ShardDO` (class)
 
@@ -2669,43 +2205,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `SocketAttachment` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SortDirection` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SourceClientLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `SourceCursorLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SourceRefresh` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SqlConsoleResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SqlCursor` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SqlEngine` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SqlExec` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `StorageRuleMetadata` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2717,75 +2221,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `SubscriptionEnvelope` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SubscriptionOutcome` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `SubscriptionQuery` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemDatabaseReader` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemDoc` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemQuery` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemReaderOptions` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemReaderSchedulerLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `SystemReaderStorageLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `SystemTableName` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableColumnsResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableIndexInfo` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableIndexesResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableInfo` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TablePage` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TableReaderLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TablesColumnsResult` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2797,47 +2237,11 @@ Re-exported from `@lunora/do` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `TransactionSqlLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TriggerContextLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TriggerDefinitionLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TriggerEventLike` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TriggerOpLike` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TriggerTimingLike` (type)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `TtlSweepSpec` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `ValidatorLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `WhereInput` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `WhereSqlStrategy` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `WithInput` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2849,15 +2253,7 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
-### `WorkflowMetadata` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `WorkflowsResult` (interface)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `WriteEvent` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2865,91 +2261,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `aggregateSqlFunction` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `aggregateTableName` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `applyCdcChanges` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `applyOnDelete` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `applySelect` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `armRestore` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `assertFlatPredicate` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `assertReadonly` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `assertShapeShardable` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `assertValidClientId` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `backfillAggregateIndexes` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `backfillRankIndexes` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `backfillSearchIndexes` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `boundingBoxCenter` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `boundingBoxGeohashes` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `buildSeekWhere` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `clearCapturedMail` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `coerceAggregateNumber` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `compileWhereSql` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `containsRelationPredicate` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `coveringGeohashes` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `createDependencyTracker` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -2985,75 +2301,11 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
-### `createSystemReader` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
 
-### `decodeCursor` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `depKey` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `diffExternalSource` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `encodeAggregateKey` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `encodeCursor` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `encodeGeohash` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `encodePartitionKey` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `ensureMailTable` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `exportShardRows` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `exportShardTable` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `facetColumn` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `fanOutScalarCounts` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `foldAggregateTally` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `guardWriter` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `hasTrigger` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `haversineMeters` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -3061,71 +2313,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `isRelationPredicate` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `isSoftDeleted` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `isSourceDue` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `liftSourceId` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `listTables` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `matchesRankStaticWhere` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `matchesStaticWhere` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `materializeExternalRows` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `materializeExternalRowsIncremental` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `mergeWhere` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `normalizeCountArgument` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `normalizeIdStructurally` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `normalizeOrderKeys` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `parseExportShardArgs` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `parseImportShardArgs` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `planAggregateLookup` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `pointInBoundingBox` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -3137,75 +2325,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `rankTableName` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `reactiveCacheKey` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readAggregateValue` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readBookmark` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readCapturedMail` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readCdcChanges` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readExternalSourceBaseline` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readMigrationStatus` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `readTablePage` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `recordCapturedMail` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `renderSql` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `resolveRankPartition` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `resolveRelationPredicates` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `resolveWith` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `runDataMigration` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `runExternalSourceTick` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `runReadonlySql` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `runRowValidators` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
@@ -3213,67 +2333,11 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
-### `runTriggers` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectExpiredIds` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectExportTables` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectIndexForAggregate` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectIndexForCount` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectIndexForGroupBy` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `selectMatchingIds` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `serveRelationFanout` (const)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
-### `softDeleteScope` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `sortColumnName` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `stableStringify` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `stableWireKey` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
 ### `subscriptionListDeltas` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `throwingScheduler` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `trimCdcChanges` (const)
-
-Re-exported from `@lunora/shard-engine` — signature tracked at its source.
-
-### `validateImportRow` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
