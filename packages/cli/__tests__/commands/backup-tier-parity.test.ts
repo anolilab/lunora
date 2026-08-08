@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { BackupStore, QueryCoordinator, ShardNamespaceLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
+import { backupObjectKey, createWorker } from "@lunora/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
@@ -98,6 +98,11 @@ const backupStoreOver = (bucket: Bucket): BackupStore => {
     return {
         delete: async (key: string) => {
             bucket.delete(key);
+        },
+        get: async (key: string) => {
+            const stored = bucket.get(key);
+
+            return stored === undefined ? null : { text: async () => stored.toString("utf8") };
         },
         list: async (listOptions?: { prefix?: string }) => {
             return {
@@ -245,7 +250,7 @@ describe("backup tiers write the same thing", () => {
     });
 
     it("records the same manifest fields whichever tier wrote the snapshot", async () => {
-        expect.assertions(4);
+        expect.assertions(7);
 
         const bucket: Bucket = new Map();
         const worker = workerDoubleOver(bucket);
@@ -273,6 +278,18 @@ describe("backup tiers write the same thing", () => {
         // has to be there — a snapshot's provenance must not change what an
         // operator can learn about it.
         expect(Object.keys(cronManifest)).toStrictEqual(expect.arrayContaining(Object.keys(cliManifest)));
+
+        // Same fields is not the same as same format, and `restore <id>` matches
+        // on the *value* of `id`: a tier that wrote `run-42` there would pass a
+        // key-presence check and be unrestorable by anything an operator can
+        // read off `list`. Both ids are the ISO timestamp of the snapshot, and
+        // both keys are derived from it by the shared layout helper.
+        expect(cronManifest["id"]).toBe(new Date(CRON_TIME).toISOString());
+        expect(cliManifest["id"]).toBe(CLI_NOW().toISOString());
+        expect([cronManifest["file"], cliManifest["file"]]).toStrictEqual([
+            backupObjectKey("backups/", cronManifest["id"] as string),
+            backupObjectKey("backups/", cliManifest["id"] as string),
+        ]);
 
         // Including the digest. This is the assertion that was missing while the
         // unattended tier shipped unverifiable.

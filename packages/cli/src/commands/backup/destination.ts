@@ -7,6 +7,10 @@
  * encoding never learns where it is going: the export always streams NDJSON to
  * a local path, and the destination decides whether that path _is_ the backup
  * or a staging file on its way somewhere else.
+ *
+ * The layout itself — key, sidecar suffix, manifest fields, what an `id` is —
+ * comes from `@lunora/runtime`'s `backup-layout`, shared with the platform's
+ * scheduled backup because both write into the same bucket.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
@@ -14,31 +18,21 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
+import type { BackupManifestEntry } from "@lunora/runtime";
+import { backupObjectKey } from "@lunora/runtime";
 
-/** One recorded snapshot. `id` is the ISO timestamp; `file` locates it at its own destination. */
-interface BackupManifestEntry {
-    bytes: number;
-    createdAt: string;
-    file: string;
-    id: string;
-    rows: number;
-    /** Lowercase-hex SHA-256 of the snapshot, recorded when it was written. `restore --verify` checks the bytes against it. */
-    sha256?: string;
-    tables?: string;
+/** A snapshot made readable as a local file, plus how to let go of it. */
+interface MaterializedSnapshot {
+    /** Local path an import can read. */
+    path: string;
+    /** Drop any temporary copy made to produce {@link MaterializedSnapshot.path}. */
+    release: () => Promise<void>;
 }
 
 /** Byte length + checksum of a staged snapshot, computed once by `create` and handed to whichever destination stores it. */
 interface SnapshotDigest {
     bytes: number;
     sha256: string;
-}
-
-/** A snapshot made readable as a local file, plus whatever the destination itself knows about it. */
-interface MaterializedSnapshot {
-    /** Local path an import can read. */
-    path: string;
-    /** Drop any temporary copy made to produce {@link MaterializedSnapshot.path}. */
-    release: () => Promise<void>;
 }
 
 interface BackupDestination {
@@ -48,20 +42,26 @@ interface BackupDestination {
     readonly label: string;
     /** Every recorded snapshot, oldest first. */
     list: () => Promise<BackupManifestEntry[]>;
-    /** The `file` to record for a snapshot named `name` — a filename here, an object key in a bucket. */
-    locate: (name: string) => string;
+    /** Where a snapshot taken at `id` (an ISO timestamp) lives here — a file name, or an object key. */
+    locate: (id: string) => string;
 
     /**
-     * Make an existing snapshot readable as a local file. `fromManifest` says
-     * whether `file` came from a manifest entry (so it is relative to this
-     * destination) or straight from the command line (so it is a path/key the
-     * operator typed). `undefined` when there is nothing there.
+     * Make an existing snapshot readable as a local file. `entry` is its
+     * manifest record when `restore` matched one, in which case the snapshot is
+     * wherever this destination put it; with no entry, `target` is a path or key
+     * the operator named directly. `undefined` when there is nothing there.
      */
-    materialize: (file: string, fromManifest: boolean) => Promise<MaterializedSnapshot | undefined>;
+    materialize: (entry: BackupManifestEntry | undefined, target: string) => Promise<MaterializedSnapshot | undefined>;
     /** Add one snapshot to the index. Called only after {@link BackupDestination.commit} succeeded. */
     record: (entry: BackupManifestEntry) => Promise<void>;
-    /** Local path the export should stream its NDJSON to. */
-    stage: (name: string) => Promise<string>;
+
+    /**
+     * Somewhere local for the export to stream its NDJSON to. `release` drops
+     * whatever staging allocated — a temp directory for a remote destination,
+     * nothing for a local one — and `create` calls it however the run ends, so
+     * a failed export cannot leave a copy of production behind.
+     */
+    stage: (id: string) => Promise<MaterializedSnapshot>;
 }
 
 const MANIFEST_FILE = "manifest.json";
@@ -160,9 +160,9 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
         },
         label: directory,
         list: async () => readManifest(directory),
-        locate: (name) => name,
-        materialize: (file, fromManifest) => {
-            const path = fromManifest ? join(directory, file) : file;
+        locate: (id) => backupObjectKey("", id),
+        materialize: (entry, target) => {
+            const path = entry === undefined ? target : join(directory, entry.file);
 
             // The snapshot is already a local file — nothing to fetch and
             // nothing to clean up afterwards.
@@ -174,13 +174,17 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
             manifest.push(entry);
             await writeManifest(directory, manifest);
         },
-        stage: async (name) => {
+        stage: async (id) => {
             await mkdir(directory, { recursive: true });
 
-            return join(directory, name);
+            // The staged file IS the backup here, so releasing it must not
+            // delete anything — this path is inside the operator's directory.
+            return { path: join(directory, backupObjectKey("", id)), release: () => Promise.resolve() };
         },
     };
 };
 
-export type { BackupDestination, BackupManifestEntry, MaterializedSnapshot, SnapshotDigest };
+export type { BackupDestination, MaterializedSnapshot, SnapshotDigest };
 export { createDirectoryDestination, digestFile, isManifestEntry };
+
+export { type BackupManifestEntry } from "@lunora/runtime";

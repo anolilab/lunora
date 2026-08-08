@@ -103,49 +103,58 @@ interface BackupCommandResult {
  * that is not there.
  */
 const runBackupCreate = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
-    const timestamp = (options.now ?? (() => new Date()))().toISOString();
-    // Colons/periods are awkward in filenames and object keys alike; keep the raw id.
-    const name = `lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
-    const staged = await destination.stage(name);
+    const id = (options.now ?? (() => new Date()))().toISOString();
+    const staged = await destination.stage(id);
 
-    const result = await runExportCommand({
-        cwd: options.cwd,
-        fetchImpl: options.fetchImpl,
-        logger: options.logger,
-        out: staged,
-        prod: options.prod,
-        tables: options.tables,
-        token: options.token,
-        url: options.url,
-    });
+    // However this ends, staging goes with it. A remote destination stages into
+    // a temp directory, and every failure between here and `commit` — a 500
+    // mid-export, an unreadable file, a refused upload — used to leave a copy of
+    // production rows in it.
+    try {
+        const result = await runExportCommand({
+            cwd: options.cwd,
+            fetchImpl: options.fetchImpl,
+            logger: options.logger,
+            out: staged.path,
+            prod: options.prod,
+            tables: options.tables,
+            token: options.token,
+            url: options.url,
+        });
 
-    if (result.code !== 0) {
-        return { code: result.code };
+        if (result.code !== 0) {
+            return { code: result.code };
+        }
+
+        const file = destination.locate(id);
+        // Digest the snapshot once, here: the destination declares it on the way
+        // up (the admin upload route refuses a body that does not match) and the
+        // manifest records it for `restore --verify` on the way back down.
+        // `digest.bytes` is the file's own length — the export's byte counter
+        // counts what came off the wire, which is the same thing only as long as
+        // the response ends in a newline.
+        const digest = await digestFile(staged.path);
+
+        await destination.commit(file, staged.path, digest);
+
+        const entry: BackupManifestEntry = {
+            bytes: digest.bytes,
+            createdAt: id,
+            file,
+            id,
+            rows: result.rows,
+            sha256: digest.sha256,
+            tables: options.tables,
+        };
+
+        await destination.record(entry);
+
+        options.logger.success(`backup created: ${file} (${result.rows.toString()} rows, ${digest.bytes.toString()} bytes)`);
+
+        return { code: 0, entry };
+    } finally {
+        await staged.release();
     }
-
-    const file = destination.locate(name);
-    // Digest the snapshot once, here: the destination declares it on the way up
-    // (the admin upload route refuses a body that does not match) and the
-    // manifest records it for `restore --verify` on the way back down.
-    const digest = await digestFile(staged);
-
-    await destination.commit(file, staged, digest);
-
-    const entry: BackupManifestEntry = {
-        bytes: result.bytes,
-        createdAt: timestamp,
-        file,
-        id: timestamp,
-        rows: result.rows,
-        sha256: digest.sha256,
-        tables: options.tables,
-    };
-
-    await destination.record(entry);
-
-    options.logger.success(`backup created: ${file} (${result.rows.toString()} rows, ${result.bytes.toString()} bytes)`);
-
-    return { code: 0, entry };
 };
 
 /**
@@ -159,7 +168,7 @@ const verifySnapshot = async (path: string, entry: BackupManifestEntry | undefin
         logger.error(
             entry === undefined
                 ? "--verify needs a recorded checksum, and a snapshot restored by path/key has no manifest entry — restore it by its backup id instead"
-                : `--verify: backup ${entry.id} carries no recorded checksum (it predates checksums, or was written by the platform's scheduled backup)`,
+                : `--verify: backup ${entry.id} carries no recorded checksum — it was taken by a release before checksums existed`,
         );
 
         return { code: 1 };
@@ -207,7 +216,7 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
     // treat it as a direct path (absolute, or relative to cwd) / object key.
     const manifest = await destination.list();
     const matched = manifest.find((entry) => entry.id === target);
-    const snapshot = await destination.materialize(matched?.file ?? target, matched !== undefined);
+    const snapshot = await destination.materialize(matched, target);
 
     if (snapshot === undefined) {
         options.logger.error(`backup not found: ${target}`);

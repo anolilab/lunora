@@ -3,78 +3,71 @@
  *
  * The bucket binding on the worker is the authority — the CLI never holds R2
  * credentials, and nothing about the bucket is recorded in the manifest. Bytes
- * go up through the same checksum-verified `PUT /_lunora/admin/storage` the
- * blob importer uses (the worker digests the body and refuses to write on a
- * mismatch) and come back down through `GET /_lunora/admin/storage/object`,
- * both gated by the admin bearer that every other backup verb already carries.
+ * go up through the checksum-verified `PUT /_lunora/admin/storage` (the worker
+ * digests the body and refuses to write on a mismatch) and come back down
+ * through `GET /_lunora/admin/storage/object`, both gated by the admin bearer
+ * that every other backup verb already carries.
  *
  * The index is a `<key>.manifest.json` sidecar beside each snapshot rather than
  * one shared index object. That is the layout the platform's own scheduled
- * backup (`backupCron` / `backupStore` in `@lunora/runtime`) already writes, so
+ * backup writes (`@lunora/runtime`'s `scheduled-backup`), so
  * `lunora backup list --bucket` sees CLI-written and cron-written snapshots as
  * one history instead of two — and appending a snapshot never rewrites an
- * object another writer is also appending to.
+ * object another writer is also appending to. Both sides take the key, the
+ * suffix and the manifest shape from `@lunora/runtime`'s `backup-layout`.
  */
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { LunoraError } from "@lunora/errors";
+import type { BackupManifestEntry } from "@lunora/runtime";
+import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, isBackupManifestKey } from "@lunora/runtime";
 
 import type { Logger } from "../../util/logger";
 import type { BlobUploadContext } from "../data-transfer/storage-blobs";
-import { listStorageObjects, uploadStorageBlob } from "../data-transfer/storage-blobs";
-import type { BackupDestination, BackupManifestEntry } from "./destination";
+import { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, uploadStorageBlob } from "../data-transfer/storage-blobs";
+import type { BackupDestination } from "./destination";
 import { isManifestEntry } from "./destination";
 
 /** Admin route serving one object's bytes back (see `@lunora/runtime`'s storage admin routes). */
 const STORAGE_OBJECT_ENDPOINT_PATH = "/_lunora/admin/storage/object";
 const STORAGE_ENDPOINT_PATH = "/_lunora/admin/storage";
 
-/** Suffix of the per-snapshot manifest sidecar. Must match `@lunora/runtime`'s scheduled backup. */
-const MANIFEST_SUFFIX = ".manifest.json";
-
-/** Default key prefix — the same one the platform's scheduled backup writes under, so both land in one history. */
-const DEFAULT_BACKUP_PREFIX = "backups/";
-
-/**
- * Largest snapshot this destination will upload, because it uploads by value:
- * the admin upload route takes a whole body, and so does the signed-PUT
- * fallback above that route's 32 MiB cap, so the snapshot is read into memory
- * to send it. Refusing at a stated limit is the honest failure — the
- * alternative is an out-of-memory crash after a successful export, which tells
- * the operator nothing.
- *
- * Lifting it means teaching the upload path R2 multipart (and giving
- * `StreamingFetchLike` a stream body), not raising this number.
- */
-const MAX_BUCKET_SNAPSHOT_BYTES = 256 * 1_048_576;
+/** Sidecar reads in flight while listing. Enough to hide round-trip latency without opening a socket per snapshot. */
+const MANIFEST_READ_CONCURRENCY = 8;
 
 interface R2DestinationOptions {
     /** Where to reach the worker's admin storage routes, and which bucket to address (`context.bucket`). */
     context: BlobUploadContext;
     logger: Logger;
-    /** Key prefix backups live under. Defaults to {@link DEFAULT_BACKUP_PREFIX}. */
+    /** Key prefix backups live under. Defaults to `@lunora/runtime`'s `BACKUP_KEY_PREFIX`. */
     prefix?: string;
 }
 
+/**
+ * A prefix is a key prefix, not a directory, but everyone types it like one.
+ * Without this, `--prefix backups` yields `backupslunora-backup-…` — a key that
+ * works, sorts oddly, and does not match anything the scheduled backup wrote.
+ */
+const normalizePrefix = (prefix: string): string => (prefix === "" || prefix.endsWith("/") ? prefix : `${prefix}/`);
+
 const createR2Destination = (options: R2DestinationOptions): BackupDestination => {
     const { context, logger } = options;
-    const prefix = options.prefix ?? DEFAULT_BACKUP_PREFIX;
+    const prefix = normalizePrefix(options.prefix ?? BACKUP_KEY_PREFIX);
     const label = `bucket ${context.bucket ?? "(default)"} under ${prefix}`;
     // The bucket the whole destination addresses lives on the context, so the
     // upload helpers and these routes cannot end up naming different buckets.
-    const bucketParameter = context.bucket === undefined ? "" : `&bucket=${encodeURIComponent(context.bucket)}`;
+    const bucketParameter = bucketQuery(context);
+
+    const objectUrl = (key: string): string => `${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketParameter}`;
 
     /** Fetch one object's bytes as text — used for the small manifest sidecars. */
     const readObject = async (key: string): Promise<string> => {
-        const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketParameter}`, {
-            headers: { authorization: `Bearer ${context.token}` },
-            method: "GET",
-        });
+        const response = await context.fetchImpl(objectUrl(key), { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
 
         if (!response.ok) {
             const text = await response.text().catch(() => "<no body>");
@@ -85,46 +78,71 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
         return response.text();
     };
 
+    /** Read one sidecar, or `undefined` (with a warning) when it cannot be read or parsed. */
+    const readManifestEntry = async (key: string): Promise<BackupManifestEntry | undefined> => {
+        try {
+            const parsed: unknown = JSON.parse(await readObject(key));
+
+            if (isManifestEntry(parsed)) {
+                return parsed;
+            }
+
+            logger.warn(`backup: ignoring ${key} — not a backup manifest`);
+        } catch (error: unknown) {
+            logger.warn(`backup: ignoring ${key} — ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        return undefined;
+    };
+
     return {
         commit: async (file, stagedPath, digest) => {
-            try {
-                if (digest.bytes > MAX_BUCKET_SNAPSHOT_BYTES) {
-                    throw new LunoraError(
-                        "INTERNAL",
-                        `backup: the snapshot is ${String(digest.bytes)} bytes, above the ${String(MAX_BUCKET_SNAPSHOT_BYTES)}-byte limit for a bucket upload (it is sent as one body, so it has to fit in memory). Narrow it with \`--tables\`, or take it to a directory with \`--dir\` and move the file with \`wrangler r2 object put\`.`,
-                    );
-                }
-
-                // Read by value: see MAX_BUCKET_SNAPSHOT_BYTES.
-                const body = await readFile(stagedPath);
-
-                await uploadStorageBlob(
-                    context,
-                    file,
-                    body,
-                    { contentType: "application/x-ndjson", id: file, sha256: digest.sha256, size: digest.bytes },
-                    logger,
+            // Above the admin upload route's body cap, `uploadStorageBlob` falls
+            // back to a signed PUT: no server-side digest, and only available
+            // when the app configured URL signing at all. Neither is acceptable
+            // for the copy an operator restores from, so a backup that would
+            // take that path is refused instead — with the size named, because
+            // "no signed PUT URL could be minted" is not something an operator
+            // can act on.
+            if (digest.bytes > MAX_VERIFIED_UPLOAD_BYTES) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `backup: the snapshot is ${String(digest.bytes)} bytes, above the ${String(MAX_VERIFIED_UPLOAD_BYTES)}-byte limit for a checksum-verified upload — nothing was written. Narrow it with \`--tables\`, or write it to a directory with \`--dir\` and move the file yourself (\`wrangler r2 object put\`).`,
                 );
-            } finally {
-                await rm(dirname(stagedPath), { force: true, recursive: true });
             }
+
+            // Read by value: the upload route takes one body. That is what the
+            // limit above bounds.
+            const body = await readFile(stagedPath);
+
+            await uploadStorageBlob(context, file, body, { contentType: "application/x-ndjson", id: file, sha256: digest.sha256, size: digest.bytes }, logger);
         },
         label,
         list: async () => {
             const objects = await listStorageObjects(context, prefix);
-            const manifestKeys = objects.map((object_) => object_.key).filter((key) => key.endsWith(MANIFEST_SUFFIX));
-            const entries = await Promise.all(manifestKeys.map(async (key) => JSON.parse(await readObject(key)) as unknown));
+            const manifestKeys = objects.map((object_) => object_.key).filter((key) => isBackupManifestKey(key));
+            const entries: BackupManifestEntry[] = [];
+
+            // One read per snapshot, in windows. A damaged or unrelated sidecar
+            // is skipped with a warning rather than thrown: `restore` reads this
+            // list before it can reach a snapshot named directly, so throwing
+            // here would let one bad object block recovery of every good one —
+            // at the one moment that must not happen.
+            for (let index = 0; index < manifestKeys.length; index += MANIFEST_READ_CONCURRENCY) {
+                // eslint-disable-next-line no-await-in-loop -- one window of reads at a time
+                const window = await Promise.all(manifestKeys.slice(index, index + MANIFEST_READ_CONCURRENCY).map(async (key) => readManifestEntry(key)));
+
+                entries.push(...window.filter((entry): entry is BackupManifestEntry => entry !== undefined));
+            }
 
             // Oldest first, matching a directory manifest's append order. Ids are
             // ISO timestamps, so a lexicographic sort is a chronological one.
-            return entries.filter((entry): entry is BackupManifestEntry => isManifestEntry(entry)).toSorted((a, b) => a.id.localeCompare(b.id));
+            return entries.toSorted((a, b) => a.id.localeCompare(b.id));
         },
-        locate: (name) => `${prefix}${name}`,
-        materialize: async (file) => {
-            const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(file)}${bucketParameter}`, {
-                headers: { authorization: `Bearer ${context.token}` },
-                method: "GET",
-            });
+        locate: (id) => backupObjectKey(prefix, id),
+        materialize: async (entry, target) => {
+            const key = entry?.file ?? target;
+            const response = await context.fetchImpl(objectUrl(key), { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
 
             if (response.status === 404) {
                 return undefined;
@@ -133,14 +151,14 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
             if (!response.ok || response.body === null) {
                 const text = await response.text().catch(() => "<no body>");
 
-                throw new LunoraError("INTERNAL", `backup: could not download ${file} (HTTP ${String(response.status)}): ${text}`);
+                throw new LunoraError("INTERNAL", `backup: could not download ${key} (HTTP ${String(response.status)}): ${text}`);
             }
 
             // Stream to a temp file rather than buffering: a restore reads the
             // whole snapshot, and it is exactly the case where the snapshot is
             // large.
             const directory = await mkdtemp(join(tmpdir(), "lunora-backup-"));
-            const path = join(directory, file.split("/").at(-1) ?? "snapshot.ndjson");
+            const path = join(directory, key.split("/").at(-1) ?? "snapshot.ndjson");
 
             try {
                 await pipeline(Readable.from(response.body as AsyncIterable<Uint8Array>), createWriteStream(path));
@@ -156,7 +174,7 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
             return { path, release: async () => rm(directory, { force: true, recursive: true }) };
         },
         record: async (entry) => {
-            const key = `${entry.file}${MANIFEST_SUFFIX}`;
+            const key = backupManifestKey(entry.file);
             const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketParameter}`, {
                 body: `${JSON.stringify(entry, undefined, 2)}\n`,
                 headers: { authorization: `Bearer ${context.token}`, "content-type": "application/json" },
@@ -172,7 +190,11 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
                 );
             }
         },
-        stage: async (name) => join(await mkdtemp(join(tmpdir(), "lunora-backup-")), name),
+        stage: async (id) => {
+            const directory = await mkdtemp(join(tmpdir(), "lunora-backup-"));
+
+            return { path: join(directory, backupObjectKey("", id)), release: async () => rm(directory, { force: true, recursive: true }) };
+        },
     };
 };
 

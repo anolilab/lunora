@@ -348,15 +348,17 @@ describe("lunora backup --bucket", () => {
         expect(logs.some((line) => line.includes("STORAGE_CHECKSUM_MISMATCH"))).toBe(true);
     });
 
-    it("lists snapshots the platform's scheduled backup wrote, and cannot verify them", async () => {
+    it("lists snapshots written before checksums existed, and refuses to claim they verify", async () => {
         expect.assertions(3);
 
         const { logger, logs } = capturingLogger();
         const worker = createWorkerDouble();
         const cronKey = "backups/lunora-backup-2026-06-02T03-00-00-000Z.ndjson";
 
-        // The sidecar shape `@lunora/runtime`'s `backupCron` writes: no sha256,
-        // plus the trigger fields.
+        // A sidecar from a release before snapshots carried a checksum. The cron
+        // writes `sha256` now (see backup-tier-parity.test.ts); what has to keep
+        // working is that an older snapshot still lists, and still fails
+        // `--verify` rather than passing quietly.
         worker.bucket.set(cronKey, Buffer.from(NDJSON, "utf8"));
         worker.bucket.set(
             `${cronKey}.manifest.json`,
