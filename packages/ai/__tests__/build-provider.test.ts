@@ -42,6 +42,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("threads the binding through createWorkersAI", () => {
+        expect.assertions(2);
+
         const binding = fakeBinding();
 
         createAi({ binding });
@@ -51,6 +53,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("threads the AI Gateway config through createWorkersAI", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
         const gateway = { cacheTtl: 60, id: "my-gateway" };
 
@@ -60,6 +64,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("does not call createWorkersAI when a provider is supplied", () => {
+        expect.assertions(1);
+
         const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
 
         createAi({ provider });
@@ -68,6 +74,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("routes Workers AI through an env-configured AI Gateway (opt-in)", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "my-gateway" } });
@@ -78,6 +86,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("leaves the direct-provider path unchanged when env has no gateway vars", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({ binding, env: { SOME_OTHER: "x" } });
@@ -86,6 +96,8 @@ describe("provider construction from a binding", () => {
     });
 
     it("prefers an explicit gateway over the env-derived one", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
         const gateway = { cacheTtl: 60, id: "explicit-gateway" };
 
@@ -106,6 +118,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("folds functionPath + traceId into the env-derived gateway's metadata", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({
@@ -121,6 +135,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("sends only the defined metadata fields", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({
@@ -133,6 +149,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("omits gateway metadata entirely when no correlation field is defined", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({
@@ -147,6 +165,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("does not attach metadata when no gateway is configured (additive/opt-in)", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({ binding, env: { SOME_OTHER: "x" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
@@ -157,6 +177,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("folds metadata into an explicit gateway that carries none", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
 
         createAi({ binding, gateway: { cacheTtl: 60, id: "explicit" }, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
@@ -168,6 +190,8 @@ describe("gateway correlation metadata", () => {
     });
 
     it("preserves an explicit gateway's own metadata over the threaded correlation", () => {
+        expect.assertions(1);
+
         const binding = fakeBinding();
         const gateway = { id: "explicit", metadata: { tenant: "acme" } };
 

@@ -88,6 +88,7 @@ describe(resolveAiGateway, () => {
             // One-shot per isolate: a second binding-path resolution stays quiet so a
             // hot dispatch path doesn't flood the log.
             resolveAiGateway(env, undefined, "workers-ai-binding");
+
             expect(warn).toHaveBeenCalledTimes(1);
         } finally {
             warn.mockRestore();

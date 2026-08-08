@@ -35,7 +35,13 @@ vi.mock(import("ai"), async (importOriginal) => {
 
     return {
         ...actual,
-        embed: vi.fn(async ({ value }: { model: unknown; value: string }) => {
+        embed: vi.fn<
+            (options: { model: unknown; value: string }) => Promise<{
+                embedding: number[];
+                providerMetadata: { gateway: { cost: number } };
+                usage: { tokens: number };
+            }>
+        >(async ({ value }) => {
             // `usage` + `providerMetadata` mirror the real AI SDK embed result so
             // the post-hoc span path (token usage / gateway cost) is exercised;
             // callers that only read `embedding` are unaffected.
@@ -267,12 +273,15 @@ const pipeChunker = (text: string): ReadonlyArray<string> =>
 
 describe(defineRag, () => {
     it("rejects invalid configs", () => {
+        expect.assertions(3);
         expect(() => defineRag({ index: "" })).toThrow(LunoraError);
         expect(() => defineRag({ chunkOverlap: 1000, chunkSize: 1000, index: "docs" })).toThrow(/chunkOverlap/u);
         expect(() => defineRag({ index: "docs", topK: 0 })).toThrow(/topK/u);
     });
 
     it("chunks, embeds and upserts with deterministic ids and linking metadata", async () => {
+        expect.assertions(7);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -297,6 +306,8 @@ describe(defineRag, () => {
     });
 
     it("resolves the embedding model once, from the configured id", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
@@ -308,6 +319,8 @@ describe(defineRag, () => {
     });
 
     it("embeds via a direct AI SDK EmbeddingModel object without `ctx.ai` (bring-your-own, no env.AI)", async () => {
+        expect.assertions(4);
+
         const { store, vectors } = memoryVectors();
         // A hand-built context carrying ONLY `vectors` — no `ai`, so no `env.AI`
         // binding is provisioned. The bring-your-own model is used as-is.
@@ -329,6 +342,8 @@ describe(defineRag, () => {
     });
 
     it("throws a directed error for a model-id string when the context has no `ctx.ai`", async () => {
+        expect.assertions(1);
+
         const { vectors } = memoryVectors();
         const ctx: RagContext = { vectors };
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
@@ -337,6 +352,8 @@ describe(defineRag, () => {
     });
 
     it("retrieves ranked chunks with prompt-ready context and deduped sources", async () => {
+        expect.assertions(8);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -361,6 +378,8 @@ describe(defineRag, () => {
     });
 
     it("caps topK at 20 in metadata mode instead of tripping the Vectorize ceiling", async () => {
+        expect.assertions(3);
+
         const { queryCalls, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -374,6 +393,8 @@ describe(defineRag, () => {
     });
 
     it("scopes retrieval by namespace (tenant isolation)", async () => {
+        expect.assertions(1);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ index: "docs" });
@@ -388,6 +409,8 @@ describe(defineRag, () => {
     });
 
     it("namespaces chunk ids so tenants sharing a source id do not collide", async () => {
+        expect.assertions(6);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ chunk: pipeChunker, index: "docs" });
@@ -469,6 +492,8 @@ describe(defineRag, () => {
     });
 
     it("short-circuits re-indexing unchanged content via the stored hash", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -484,6 +509,8 @@ describe(defineRag, () => {
     });
 
     it("deletes stale trailing chunks when a re-indexed source shrinks", async () => {
+        expect.assertions(3);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -500,6 +527,8 @@ describe(defineRag, () => {
     });
 
     it("removes every chunk of a source without external bookkeeping", async () => {
+        expect.assertions(1);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -513,6 +542,8 @@ describe(defineRag, () => {
     });
 
     it("filters matches below minScore", async () => {
+        expect.assertions(1);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -527,6 +558,8 @@ describe(defineRag, () => {
     });
 
     it("multiplies importance into scores at rank time", async () => {
+        expect.assertions(5);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -546,6 +579,8 @@ describe(defineRag, () => {
     });
 
     it("stitches neighbouring chunks into matches via chunkContext", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -561,6 +596,8 @@ describe(defineRag, () => {
 
     describe("text-store mode", () => {
         it("keeps text out of metadata, queries with indexed projection, and hydrates by id", async () => {
+            expect.assertions(7);
+
             const { queryCalls, store, vectors } = memoryVectors();
             const { store: textStore, texts } = memoryTextStore();
             const ctx = fakeCtx(vectors);
@@ -582,6 +619,8 @@ describe(defineRag, () => {
         });
 
         it("drops matches whose text is missing from the store", async () => {
+            expect.assertions(2);
+
             const { vectors } = memoryVectors();
             const { store: textStore, texts } = memoryTextStore();
             const ctx = fakeCtx(vectors);
@@ -598,6 +637,8 @@ describe(defineRag, () => {
         });
 
         it("hydrates importance and caller metadata (otherwise inert under `returnMetadata: indexed`)", async () => {
+            expect.assertions(5);
+
             const { vectors } = memoryVectors();
             const { store: textStore } = memoryTextStore();
             const ctx = fakeCtx(vectors);
@@ -642,10 +683,12 @@ describe(defineRag, () => {
 
                     return {
                         ...result,
-                        matches: result.matches.map((match) => ({
-                            ...match,
-                            metadata: { ...(match.metadata ?? {}), __ragImportance: store.get(match.id)?.metadata?.["__ragImportance"] },
-                        })),
+                        matches: result.matches.map((match) => {
+                            return {
+                                ...match,
+                                metadata: { ...match.metadata, __ragImportance: store.get(match.id)?.metadata?.["__ragImportance"] },
+                            };
+                        }),
                     };
                 },
             };
@@ -665,6 +708,8 @@ describe(defineRag, () => {
         });
 
         it("propagates removals into the text store", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const { removed, store: textStore } = memoryTextStore();
             const ctx = fakeCtx(vectors);
@@ -679,6 +724,8 @@ describe(defineRag, () => {
     });
 
     it("warns once per index when used without a namespace, unless suppressed", async () => {
+        expect.assertions(1);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         try {
@@ -700,6 +747,8 @@ describe(defineRag, () => {
     });
 
     it("throws without a namespace when requireNamespace is set", async () => {
+        expect.assertions(5);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ index: "docs", requireNamespace: true });
@@ -715,6 +764,8 @@ describe(defineRag, () => {
     });
 
     it("indexes empty text as zero chunks", async () => {
+        expect.assertions(2);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -726,6 +777,8 @@ describe(defineRag, () => {
     });
 
     it("throws for empty text when allowEmptySources is false", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -736,11 +789,13 @@ describe(defineRag, () => {
     });
 
     it("fires onRetrieve callback after retrieval with match count", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
         const rag = docs(ctx);
-        const onRetrieve = vi.fn();
+        const onRetrieve = vi.fn<(info: { matches: number; query: string }) => void>();
 
         await rag.index({ id: "weather", text: "rain storm cloud" });
         await rag.retrieve("rain storm cloud", { onRetrieve, topK: 5 });
@@ -750,6 +805,8 @@ describe(defineRag, () => {
     });
 
     it("populates source weight from chunk importance", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -768,6 +825,8 @@ describe(defineRag, () => {
     });
 
     it("exposes retrieve as an AI SDK tool", async () => {
+        expect.assertions(2);
+
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -786,6 +845,8 @@ describe(defineRag, () => {
 
     describe("embedding-model versioning", () => {
         it("partitions the vector space by the version tag so a model swap can't return stale vectors", async () => {
+            expect.assertions(8);
+
             const { store, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const v1 = defineRag({ allowSharedNamespace: true, embeddingModelVersion: "bge-v1", index: "docs" })(ctx);
@@ -820,6 +881,8 @@ describe(defineRag, () => {
         });
 
         it("composes the version tag with the tenant namespace", async () => {
+            expect.assertions(4);
+
             const { queryCalls, store, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ embeddingModelVersion: "v2", index: "docs" })(ctx);
@@ -836,6 +899,7 @@ describe(defineRag, () => {
         });
 
         it("rejects an invalid version tag at config time", () => {
+            expect.assertions(2);
             expect(() => defineRag({ embeddingModelVersion: "has spaces", index: "docs" })).toThrow(LunoraError);
             expect(() => defineRag({ embeddingModelVersion: "x".repeat(41), index: "docs" })).toThrow(/embeddingModelVersion/u);
         });
@@ -843,6 +907,7 @@ describe(defineRag, () => {
 
     describe("guessMimeTypeFromExtension", () => {
         it("returns known MIME types", () => {
+            expect.assertions(6);
             expect(guessMimeTypeFromExtension(".pdf")).toBe("application/pdf");
             expect(guessMimeTypeFromExtension("pdf")).toBe("application/pdf");
             expect(guessMimeTypeFromExtension(".html")).toBe("text/html");
@@ -852,6 +917,7 @@ describe(defineRag, () => {
         });
 
         it("falls back to application/octet-stream for unknown extensions", () => {
+            expect.assertions(2);
             expect(guessMimeTypeFromExtension(".xyzzy")).toBe("application/octet-stream");
             expect(guessMimeTypeFromExtension("")).toBe("application/octet-stream");
         });
@@ -859,6 +925,8 @@ describe(defineRag, () => {
 
     describe("contentHash", () => {
         it("produces a consistent SHA-256 hex digest", async () => {
+            expect.assertions(2);
+
             const encoder = new TextEncoder();
             const hash = await contentHash(encoder.encode("hello rag world"));
 
@@ -871,6 +939,8 @@ describe(defineRag, () => {
         });
 
         it("produces different hashes for different inputs", async () => {
+            expect.assertions(1);
+
             const encoder = new TextEncoder();
             const hash1 = await contentHash(encoder.encode("alpha"));
             const hash2 = await contentHash(encoder.encode("beta"));
@@ -879,6 +949,8 @@ describe(defineRag, () => {
         });
 
         it("accepts both ArrayBuffer and Uint8Array", async () => {
+            expect.assertions(1);
+
             const encoder = new TextEncoder();
             const asBuffer = await contentHash(encoder.encode("test").buffer);
             const asView = await contentHash(encoder.encode("test"));
@@ -889,6 +961,8 @@ describe(defineRag, () => {
 
     describe("named filters", () => {
         it("resolves a named filter from config.filters", async () => {
+            expect.assertions(1);
+
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({
@@ -905,6 +979,8 @@ describe(defineRag, () => {
         });
 
         it("throws for unknown named filter", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ allowSharedNamespace: true, filters: { published: { filter: { status: "published" } } }, index: "docs" });
@@ -916,6 +992,8 @@ describe(defineRag, () => {
         });
 
         it("passes through a literal Record filter unchanged", async () => {
+            expect.assertions(1);
+
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -930,6 +1008,8 @@ describe(defineRag, () => {
 
     describe("hybrid search (lexical store)", () => {
         it("mirrors chunk text into the lexical store and fuses both legs via RRF", async () => {
+            expect.assertions(8);
+
             const { queryCalls, vectors } = memoryVectors();
             const lexical = recordingLexicalStore();
             const ctx = fakeCtx(vectors);
@@ -957,6 +1037,8 @@ describe(defineRag, () => {
         });
 
         it("recovers an exact-term chunk the vector leg ranks below topK", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore: bm25LexicalStore() });
@@ -975,6 +1057,8 @@ describe(defineRag, () => {
         });
 
         it("keeps a lexical-only hit under a cosine-scale minScore instead of comparing its BM25 score to it", async () => {
+            expect.assertions(2);
+
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
 
@@ -1005,6 +1089,8 @@ describe(defineRag, () => {
         });
 
         it("removes chunks from the lexical store on remove()", async () => {
+            expect.assertions(4);
+
             const { store, vectors } = memoryVectors();
             const lexical = recordingLexicalStore();
             const ctx = fakeCtx(vectors);
@@ -1027,6 +1113,8 @@ describe(defineRag, () => {
         });
 
         it("cleans up stale lexical chunks when a re-index shrinks the source", async () => {
+            expect.assertions(2);
+
             const { vectors } = memoryVectors();
             const lexical = recordingLexicalStore();
             const ctx = fakeCtx(vectors);
@@ -1047,6 +1135,8 @@ describe(defineRag, () => {
 
     describe("onChunk callback", () => {
         it("fires after each chunk is upserted with progress info", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
@@ -1069,11 +1159,13 @@ describe(defineRag, () => {
         });
 
         it("is not called for unchanged re-index", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const ctx = fakeCtx(vectors);
             const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
             const rag = docs(ctx);
-            const onChunk = vi.fn();
+            const onChunk = vi.fn<(info: { chunkIndex: number; id: string; text: string; total: number }) => void>();
 
             await rag.index({ id: "doc-1", onChunk, text: "hello world" });
             await rag.index({ id: "doc-1", onChunk, text: "hello world" });
@@ -1085,6 +1177,8 @@ describe(defineRag, () => {
 
     describe("rLS-filtered retrieval", () => {
         it("derives a filter from ctx.auth and applies it to the vector query", async () => {
+            expect.assertions(1);
+
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors, { orgId: "org-a" });
             const docs = defineRag({
@@ -1103,6 +1197,8 @@ describe(defineRag, () => {
         });
 
         it("merges the RLS filter OVER the caller filter (RLS wins on key collision)", async () => {
+            expect.assertions(1);
+
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors, { orgId: "org-a" });
             const docs = defineRag({
@@ -1123,6 +1219,8 @@ describe(defineRag, () => {
         });
 
         it("supports an async rlsFilter and an undefined (no-constraint) result", async () => {
+            expect.assertions(1);
+
             const { queryCalls, vectors } = memoryVectors();
             const ctx = fakeCtx(vectors, { role: "admin" });
             const docs = defineRag({
@@ -1141,6 +1239,8 @@ describe(defineRag, () => {
         });
 
         it("applies the RLS-merged filter to the lexical leg too", async () => {
+            expect.assertions(1);
+
             const { vectors } = memoryVectors();
             const lexical = recordingLexicalStore();
             const ctx = fakeCtx(vectors, { orgId: "org-a" });
@@ -1173,6 +1273,8 @@ describe(bm25LexicalStore, () => {
     };
 
     it("ranks documents by BM25 relevance and honours topK", async () => {
+        expect.assertions(5);
+
         const store = bm25LexicalStore();
 
         await store.index(
@@ -1191,6 +1293,8 @@ describe(bm25LexicalStore, () => {
     });
 
     it("is idempotent across re-index and forgets removed docs", async () => {
+        expect.assertions(3);
+
         const store = bm25LexicalStore();
 
         await store.index([chunk("a#0", "storm cloud rain")], {});
@@ -1209,6 +1313,8 @@ describe(bm25LexicalStore, () => {
     });
 
     it("isolates namespaces", async () => {
+        expect.assertions(3);
+
         const store = bm25LexicalStore();
 
         await store.index([chunk("a#0", "tenant alpha secret")], { namespace: "org-a" });
@@ -1224,6 +1330,8 @@ describe(bm25LexicalStore, () => {
     });
 
     it("fails closed when handed a metadata filter it cannot evaluate", async () => {
+        expect.assertions(2);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         try {
@@ -1242,6 +1350,8 @@ describe(bm25LexicalStore, () => {
     });
 
     it("fails closed on a FLAT-equality filter too (the shape rlsFilter produces) — RLS bypass regression", async () => {
+        expect.assertions(2);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         try {
@@ -1308,6 +1418,8 @@ describe("defineRag ctx.trace instrumentation", () => {
     };
 
     it("wraps each embed in a generation span carrying the model id and post-hoc usage/cost", async () => {
+        expect.hasAssertions();
+
         const { vectors } = memoryVectors();
         const ctx = tracingCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
@@ -1328,6 +1440,8 @@ describe("defineRag ctx.trace instrumentation", () => {
     });
 
     it("embeds untraced when the context has no `trace` (a hand-built ctx)", async () => {
+        expect.assertions(2);
+
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
@@ -1338,6 +1452,8 @@ describe("defineRag ctx.trace instrumentation", () => {
     });
 
     it("emits gen_ai.conversation.id on the embed span when the context carries one", async () => {
+        expect.hasAssertions();
+
         const { vectors } = memoryVectors();
         const ctx = { ...tracingCtx(vectors), conversationId: "thread-42" };
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
@@ -1352,6 +1468,8 @@ describe("defineRag ctx.trace instrumentation", () => {
     });
 
     it("omits gen_ai.conversation.id when no conversation id is set", async () => {
+        expect.hasAssertions();
+
         const { vectors } = memoryVectors();
         const ctx = tracingCtx(vectors);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
