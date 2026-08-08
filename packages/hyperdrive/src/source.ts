@@ -5,13 +5,13 @@
  * **action** reads the tenant slice from Hyperdrive via `ctx.sql` (action-only,
  * non-deterministic), projects each external row to a Lunora document, and hands
  * the documents to a **mutation** that materializes them into the DO's SQLite
- * (`materializeExternalRows` from `@lunora/do`) — after which `defineShape` carries
+ * (`materializeExternalRows` from `@lunora/shard-engine`) — after which `defineShape` carries
  * the slice to clients unchanged.
  *
  * This module owns the read+project half. `pullSourceRows` runs the parameterised
  * tenant query and maps every row; `projectSourceRow` is the per-row mapping (the
  * external primary key becomes `_id`, plus an optional `map` transform). The write
- * half (diff + apply) lives in `@lunora/do`. The declarative `.source()` table
+ * half (diff + apply) lives in `@lunora/shard-engine`. The declarative `.source()` table
  * modifier (Phase 2) automates this whole loop on a poll alarm; this is the manual,
  * blessed pattern that unblocks the use case today.
  */
@@ -51,7 +51,7 @@ interface PullSourceOptions extends ProjectOptions {
  * the id column is missing/nullish so a misconfigured query fails loudly rather than
  * materializing rows under an `"undefined"` id.
  *
- * Delegates to `@lunora/do`'s `liftSourceId` — the single id-lift the declarative
+ * Delegates to `@lunora/shard-engine`'s `liftSourceId` — the single id-lift the declarative
  * `.source()` poll loop also uses — so the manual bridge and the codegen path can
  * never diverge in their missing-id handling.
  */
