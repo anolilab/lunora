@@ -440,6 +440,38 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             expect(isLunoraError(error)).toBe(true);
             expect((error as Error).message).toContain("cannot be stored");
         });
+
+        it("refuses a document carrying the reserved key rather than eating it", () => {
+            expect.assertions(4);
+
+            // Nothing stops a schema from declaring a `__sql__` field: the only
+            // reserved-name enforcement in the stack is `RESERVED_TABLE_NAMES`
+            // in `packages/codegen/src/discover-schema.ts:64`, which covers
+            // TABLE names, and `SYSTEM_INDEX_FIELDS`
+            // (`packages/server/src/schema.ts:861`), which is a two-entry list
+            // of indexable system fields, not a prohibition on user ones.
+            //
+            // Left unguarded this loses data twice over, silently and on write:
+            // a projected document has its field overwritten by the originals
+            // map, and one with nothing to project still decodes as though the
+            // key were ours — spreading the user's own object up to the top
+            // level and dropping the field.
+            for (const document of [
+                { __sql__: { keep: "me" }, name: "a" },
+                { __sql__: { keep: "me" }, amountMinor: 10n },
+            ]) {
+                const error = ((): unknown => {
+                    try {
+                        return encodeDocJson(document);
+                    } catch (error_: unknown) {
+                        return error_;
+                    }
+                })();
+
+                expect(isLunoraError(error)).toBe(true);
+                expect((error as Error).message).toContain("__sql__");
+            }
+        });
     });
 
     describe("backward compatibility", () => {
@@ -479,6 +511,43 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const row = await writer.get("tagged-1", "paymentSessions");
 
             expect(row?.["amountMinor"]).toBe(10n);
+        });
+
+        it("leaves a tagged-in-place row unqueryable until a write re-projects it", async () => {
+            expect.assertions(3);
+
+            // Pins the migration answer for rows written while `bigint`s were
+            // stored tagged in place: they READ correctly, but the stored text
+            // at `$.amountMinor` is still an array, so every `json_extract`
+            // comparison misses them. Any write through the store rewrites the
+            // whole document and re-projects it — but a row nobody touches stays
+            // invisible to `filter`/`withIndex`/`ORDER BY`/`SUM`, so existing
+            // data needs a rewrite pass, not just this fix.
+            const writer = setup();
+
+            harness.raw(
+                "INSERT INTO paymentSessions (id, _creationTime, __doc__) VALUES (?, ?, ?)",
+                "tagged-1",
+                1_700_000_000_000,
+                JSON.stringify({ _creationTime: 1_700_000_000_000, _id: "tagged-1", amountMinor: ["$lunora.wire$", "bigint", "10"], currency: "usd" }),
+            );
+
+            const before = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
+
+            expect(ids(before.page)).toStrictEqual([]);
+
+            // A single-field patch is enough: `patch` merges over the DECODED
+            // document and re-encodes the whole blob.
+            await writer.patch("tagged-1", { currency: "eur" });
+
+            const after = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
+            const stored = JSON.parse(harness.raw(`SELECT __doc__ FROM paymentSessions WHERE id = 'tagged-1'`)[0]?.["__doc__"] as string) as Record<
+                string,
+                unknown
+            >;
+
+            expect(ids(after.page)).toStrictEqual(["tagged-1"]);
+            expect(stored["amountMinor"]).toBe(10);
         });
     });
 });

@@ -844,9 +844,10 @@ const DOC_COLUMN = "__doc__";
 /**
  * `encodeDocJson`'s reserved key inside the blob (`do-sql.ts`'s
  * `DOC_ORIGINALS_KEY`), holding the wire-tagged originals of the fields it
- * projected to a SQL-comparable scalar. Storage bookkeeping, not a user field,
- * so the data browser drops it — the projected value already sits in the
- * field's own column, in the JSON-safe form this read path requires (see
+ * projected to a SQL-comparable scalar. Storage bookkeeping rather than a user
+ * field — `encodeDocJson` refuses to store a document that declares the name —
+ * so the data browser drops it. The projected value already sits in the field's
+ * own column, in the JSON-safe form this read path requires (see
  * {@link safeParseObject}).
  */
 const DOC_ORIGINALS_KEY = "__sql__";

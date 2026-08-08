@@ -30,8 +30,18 @@ const DOC_COLUMN = "__doc__";
  * Reserved top-level key inside the `__doc__` blob holding the **wire-tagged
  * originals** of the top-level fields that {@link encodeDocJson} projected to a
  * SQL-comparable scalar. See {@link encodeDocJson} for why the projection
- * exists. `__`-prefixed names are reserved by the codegen column guard, so this
- * can never collide with a user field.
+ * exists.
+ *
+ * **Nothing upstream stops a schema from declaring a field of this name.** The
+ * only reserved-name enforcement in the stack is `RESERVED_TABLE_NAMES`
+ * (`packages/codegen/src/discover-schema.ts:64`), which covers TABLE names
+ * colliding with `ctx.db` members, and `SYSTEM_INDEX_FIELDS`
+ * (`packages/server/src/schema.ts:861`), which is the two-entry list of
+ * indexable system fields — neither is a prohibition on user field names, and
+ * there is no `__`-prefix guard anywhere. {@link encodeDocJson} therefore
+ * rejects the name itself, which is also what lets {@link decodeDocJson} treat
+ * the key as unambiguously its own: a row carrying a user's `__sql__` can never
+ * have been stored.
  */
 const DOC_ORIGINALS_KEY = "__sql__";
 
@@ -81,10 +91,23 @@ const sqlComparableProjection = (value: unknown): number | string | undefined =>
  * A document with none of those leaves is untouched by both steps and encodes
  * byte-identically to plain `JSON.stringify` — the property the OCC
  * compare-and-swap and every already-stored row depend on.
- * @throws LunoraError `BAD_REQUEST` when the document holds a value no codec can store (a class instance, a cycle, nesting past the wire codec's 64-level cap)
+ * @throws LunoraError `BAD_REQUEST` when the document declares the reserved {@link DOC_ORIGINALS_KEY} field, or holds a value no codec can store (a class instance, a cycle, nesting past the wire codec's 64-level cap)
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "DocJson" mirrors the established `DOC_COLUMN`/`__doc__` naming this module already uses throughout.
 const encodeDocJson = (document: Record<string, unknown>): string => {
+    // Refuse the reserved key rather than clobber it. Both outcomes of letting
+    // it through are silent data loss ON WRITE: a projected document overwrites
+    // the user's value with the originals map, and one with nothing to project
+    // still decodes as though the key were ours — spreading the user's own
+    // object up to the top level and dropping the field. Nothing upstream
+    // rejects the name (see DOC_ORIGINALS_KEY), so this is the only guard.
+    if (Object.hasOwn(document, DOC_ORIGINALS_KEY)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `"${DOC_ORIGINALS_KEY}" is reserved by the row store's document encoding and cannot be used as a field name — rename the field`,
+        );
+    }
+
     let projected: Record<string, unknown> | undefined;
     let originals: Record<string, unknown> | undefined;
 
