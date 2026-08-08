@@ -148,6 +148,9 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
     };
 };
 
+/** True when `deployment` carries a usable admin bearer — the observability tools' gate. */
+const hasAdminToken = (deployment: LocalDeployment | undefined): boolean => deployment?.token !== undefined && deployment.token.length > 0;
+
 /**
  * The deployment tools, resolving their target at dispatch time.
  *
@@ -156,6 +159,13 @@ const createClientCache = (fetchImplementation: typeof fetch | undefined): ((dep
  * happened to be up at startup would stay invisible for the rest of the
  * session. Calling one while nothing is running returns an actionable error
  * instead.
+ *
+ * The observability tools are the ONE exception: they read the deployment's
+ * logs and grouped errors, so an unauthenticated server must not advertise that
+ * they exist. Their gate is therefore a snapshot taken here, at build time —
+ * fail-closed, at the cost of a session that started before the dev server not
+ * seeing them. Dispatch re-checks the token as freshly resolved, so a listed
+ * tool whose token has since gone is still refused.
  */
 const lazyDeploymentTools = (
     source: LocalDeploymentSource,
@@ -164,7 +174,7 @@ const lazyDeploymentTools = (
 ): ReadonlyArray<McpTool> => {
     const resolve = typeof source === "function" ? source : (): LocalDeployment => source;
 
-    return toolDefinitions(allowWrites).map((definition) => {
+    return toolDefinitions(allowWrites, hasAdminToken(resolve())).map((definition) => {
         return {
             definition,
             handle: async (input: Record<string, unknown>): Promise<ToolResult> => {
@@ -174,7 +184,7 @@ const lazyDeploymentTools = (
                     return { content: [{ text: NO_DEPLOYMENT_MESSAGE, type: "text" }], isError: true };
                 }
 
-                return callTool(clientFor(deployment), definition.name, input, allowWrites);
+                return callTool(clientFor(deployment), definition.name, input, allowWrites, hasAdminToken(deployment));
             },
         };
     });

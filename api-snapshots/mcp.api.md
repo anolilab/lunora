@@ -125,6 +125,12 @@ interface McpTool {
 const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 ```
 
+### `OBSERVABILITY_TOOL_DEFINITIONS` (const)
+
+```ts
+const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
 ### `PaidMcpChargeConfig` (type)
 
 ```ts
@@ -186,6 +192,7 @@ interface ToolDefinition {
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
+    outputSchema?: ToolInputSchema;
 }
 ```
 
@@ -214,6 +221,7 @@ interface ToolResult {
         type: "text";
     }[];
     isError?: boolean;
+    structuredContent?: Record<string, unknown>;
 }
 ```
 
@@ -238,7 +246,7 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, hasAdminToken?: boolean) => Promise<ToolResult>;
 ```
 
 ### `connectLocalStdio` (const)
@@ -304,7 +312,7 @@ const serveStateless: (server: Server, request: Request, options?: HandleRequest
 ### `toolDefinitions` (const)
 
 ```ts
-const toolDefinitions: (allowWrites: boolean) => ReadonlyArray<ToolDefinition>;
+const toolDefinitions: (allowWrites: boolean, hasAdminToken?: boolean) => ReadonlyArray<ToolDefinition>;
 ```
 
 ## `@lunora/mcp/docs`
@@ -470,6 +478,7 @@ interface ToolDefinition {
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
+    outputSchema?: ToolInputSchema;
 }
 ```
 
@@ -492,6 +501,7 @@ interface ToolResult {
         type: "text";
     }[];
     isError?: boolean;
+    structuredContent?: Record<string, unknown>;
 }
 ```
 

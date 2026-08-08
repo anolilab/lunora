@@ -69,6 +69,7 @@
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.43",
         "@lunora/errors": "1.0.0-alpha.16",
+        "@lunora/shard-engine": "1.0.0-alpha.15",
         "@modelcontextprotocol/sdk": "catalog:mcp"
     },
     "devDependencies": {

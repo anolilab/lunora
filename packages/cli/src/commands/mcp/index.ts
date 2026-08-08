@@ -20,6 +20,7 @@ const mcpCommand: Command = {
         ["lunora mcp uninstall --print", "Show what would be removed, without removing it"],
         ["lunora mcp serve", "Run the stdio MCP server (this is what your editor spawns)"],
         ["lunora mcp serve --allow-writes", "Also expose the mutation/action tools"],
+        ["lunora mcp serve --token $LUNORA_ADMIN_TOKEN", "Expose the observability tools (logs, issues, advisories, insights, migrations) too"],
     ],
     group: "Develop",
     loader: () =>
@@ -43,7 +44,12 @@ const mcpCommand: Command = {
         { description: "serve: skip the documentation tools", name: "no-docs", type: Boolean },
         { description: "Docs site origin backing the documentation tools (default https://lunora.sh)", name: "docs-url", type: String },
         { description: "serve: deployment URL to expose (default: the running dev server)", name: "url", type: String },
-        { description: "serve: bearer token (default: LUNORA_ADMIN_TOKEN from the environment or .dev.vars)", name: "token", type: String },
+        {
+            description:
+                "serve: bearer token (default: LUNORA_ADMIN_TOKEN from the environment or .dev.vars). Also gates the observability tools (logs, issues, advisories, query insights, migration status) — without a token they are not exposed at all",
+            name: "token",
+            type: String,
+        },
     ],
 };
 

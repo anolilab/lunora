@@ -43,12 +43,28 @@ interface ToolDefinition {
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
+
+    /**
+     * JSON Schema for the tool's `structuredContent`. Optional: a tool that
+     * emits only a text block declares none, and a client that negotiated an
+     * MCP revision older than `2025-06-18` ignores it either way.
+     */
+    outputSchema?: ToolInputSchema;
 }
 
 /** The MCP `CallToolResult` shape this package's tools return. */
 interface ToolResult {
     content: { text: string; type: "text" }[];
     isError?: boolean;
+
+    /**
+     * The machine-readable result, mirroring the text block. Present only for
+     * tools that declare an `outputSchema`; per the MCP spec it must be a JSON
+     * OBJECT (never a bare array) and must survive `JSON.stringify` — the
+     * transport serializes it, so an un-mapped `bigint` here fails the whole
+     * response rather than one field.
+     */
+    structuredContent?: Record<string, unknown>;
 }
 
 export type { ToolAnnotations, ToolDefinition, ToolInputSchema, ToolResult };
