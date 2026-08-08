@@ -1,4 +1,3 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field this binding keys rows by */
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import type { CollectionConfig } from "@tanstack/db";
@@ -57,6 +56,53 @@ const createGate = (): Gate => {
     };
 };
 
+/** One-shot warning so a lossy sync stream is noticed without spamming the console per write. */
+let warnedCheckpointFallback = false;
+
+/** Default `onFallback` for {@link createCheckpointRegistry} — warns once per process. */
+const defaultOnFallback = (event: CheckpointFallbackEvent): void => {
+    if (warnedCheckpointFallback) {
+        return;
+    }
+
+    warnedCheckpointFallback = true;
+
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[@lunora/db] released an optimistic overlay via the ${String(event.waitedMs)}ms checkpoint fallback: the server confirmed ` +
+            `${event.kind} ${String(event.watermark)} but no sync frame ever echoed it. A dropped shape poke or \`settled\` frame is the ` +
+            `usual cause — inspect the subscription rather than raising \`fallbackMs\`. (Reported once per process.)`,
+    );
+};
+
+/**
+ * Live per-shard registries, keyed by client then shard key. Read by
+ * {@link getShardCheckpoints}.
+ *
+ * A registry MUST be shared by every collection on the same shard. `clientSeq` is
+ * per-client-per-shard and `bindMutators` pushes all its mutators down one FIFO
+ * chain, so the watermark a write waits on is advanced by whichever subscription
+ * happens to be poked first. A registry minted per collection therefore hangs:
+ * writing `tagColors` advances the shard watermark, the `tagColors` registry hears
+ * the poke, and the `nodes` registry's `awaitMutationId` never settles — leaving
+ * that transaction's `isPersisted` pending forever.
+ */
+const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();
+
+/**
+ * Registries that have a sync source wired to them. Read by
+ * {@link hasCheckpointsAttached}.
+ *
+ * `bindMutators` gates an overlay on the shard's registry only if *something*
+ * advances it — otherwise the mutator would wait out the whole fallback window on
+ * every write. A `lunoraCollectionOptions` call marks its registry here at creation
+ * time (not at first sync), because a lazily-syncing collection still means the
+ * watermark stream exists and will confirm the write.
+ *
+ * Package-internal: deliberately not re-exported from `index.ts`.
+ */
+const attachedRegistries = new WeakSet<CheckpointRegistry>();
+
 /** A watermark pair — the two monotonic lines a checkpoint registry gates on. */
 export interface CheckpointWatermark {
     /** Op-log cursor the server has durably applied. */
@@ -94,6 +140,7 @@ export interface CheckpointRegistryOptions {
      * pre-fallback behavior, which hangs on a dropped poke).
      */
     fallbackMs?: number;
+
     /**
      * Notified each time the fallback fires. A fallback is never *correct* — it
      * means a poke or `settled` frame that should have confirmed the write never
@@ -112,16 +159,16 @@ export interface CheckpointRegistryOptions {
  *
  * Two inputs, deliberately distinct:
  *
- * - {@link resolve} is the **authoritative** advance, called by whoever owns the
- *   watermark stream — a `data`/`delta` frame's `lastMutationId`, or a shape poke's
- *   `checkpoint`. The synced rows have landed, so gates open immediately.
- * - {@link acknowledge} is the **provisional** advance, called when the server has
- *   accepted the write (the mutator RPC ack) but the matching rows have not
- *   necessarily been delivered yet. Releasing here would drop the overlay before
- *   the synced row exists — a visible flicker — so instead it arms a bounded
- *   fallback. If the authoritative frame lands first the fallback is cancelled;
- *   if it never lands, the overlay is released after `fallbackMs` and the event is
- *   reported rather than hanging forever.
+ * - {@link CheckpointRegistry.resolve} is the **authoritative** advance, called by whoever owns
+ * the watermark stream — a `data`/`delta` frame's `lastMutationId`, or a shape poke's
+ * `checkpoint`. The synced rows have landed, so gates open immediately.
+ * - {@link CheckpointRegistry.acknowledge} is the **provisional** advance, called when the server
+ * has accepted the write (the mutator RPC ack) but the matching rows have not
+ * necessarily been delivered yet. Releasing here would drop the overlay before
+ * the synced row exists — a visible flicker — so instead it arms a bounded
+ * fallback. If the authoritative frame lands first the fallback is cancelled;
+ * if it never lands, the overlay is released after `fallbackMs` and the event is
+ * reported rather than hanging forever.
  *
  * That pairing is why a lost poke degrades to a late overlay drop instead of a
  * permanently stuck `isPersisted` promise.
@@ -137,12 +184,13 @@ export interface CheckpointRegistry {
     awaitCheckpoint: (cursor: number) => Promise<void>;
     /** Resolve once the server has echoed a `lastMutationId >= id` for this client. */
     awaitMutationId: (id: number) => Promise<void>;
+
     /**
      * Tear the registry down: `clearTimeout` every armed fallback timer and empty
      * the armed set. Idempotent. A discarded registry (Vite HMR dispose, sign-out)
      * can otherwise hold up to `fallbackMs` of pending `setTimeout`s alive through
      * their closures — keeping a Node/SSR event loop from draining. Distinct from
-     * {@link resolve}: `resolve` settles parked *waiters* (and disarms the timers it
+     * {@link CheckpointRegistry.resolve}: `resolve` settles parked *waiters* (and disarms the timers it
      * subsumes as a side effect); `dispose` guarantees no armed timer survives,
      * independent of any watermark.
      */
@@ -155,24 +203,6 @@ export interface CheckpointRegistry {
 
 /** Default fallback window: long enough that a slow-but-arriving poke wins, short enough that a UI isn't visibly stuck. */
 export const CHECKPOINT_FALLBACK_MS = 3000;
-
-/** One-shot warning so a lossy sync stream is noticed without spamming the console per write. */
-let warnedCheckpointFallback = false;
-
-const defaultOnFallback = (event: CheckpointFallbackEvent): void => {
-    if (warnedCheckpointFallback) {
-        return;
-    }
-
-    warnedCheckpointFallback = true;
-
-    // eslint-disable-next-line no-console
-    console.warn(
-        `[@lunora/db] released an optimistic overlay via the ${String(event.waitedMs)}ms checkpoint fallback: the server confirmed ` +
-            `${event.kind} ${String(event.watermark)} but no sync frame ever echoed it. A dropped shape poke or \`settled\` frame is the ` +
-            `usual cause — inspect the subscription rather than raising \`fallbackMs\`. (Reported once per process.)`,
-    );
-};
 
 /**
  * A standalone checkpoint/mutation-id registry. Prefer {@link getShardCheckpoints}
@@ -274,26 +304,15 @@ export const createCheckpointRegistry = (options: CheckpointRegistryOptions = {}
                 disarmUpTo("mutationId", mutationId);
             }
         },
-        stats: () => ({
-            fallbacks,
-            pendingCheckpointWaiters: checkpointGate.waiting(),
-            pendingMutationWaiters: mutationGate.waiting(),
-        }),
+        stats: () => {
+            return {
+                fallbacks,
+                pendingCheckpointWaiters: checkpointGate.waiting(),
+                pendingMutationWaiters: mutationGate.waiting(),
+            };
+        },
     };
 };
-
-/**
- * Live per-shard registries, keyed by client then shard key.
- *
- * A registry MUST be shared by every collection on the same shard. `clientSeq` is
- * per-client-per-shard and `bindMutators` pushes all its mutators down one FIFO
- * chain, so the watermark a write waits on is advanced by whichever subscription
- * happens to be poked first. A registry minted per collection therefore hangs:
- * writing `tagColors` advances the shard watermark, the `tagColors` registry hears
- * the poke, and the `nodes` registry's `awaitMutationId` never settles — leaving
- * that transaction's `isPersisted` pending forever.
- */
-const registriesByClient = new WeakMap<LunoraClient, Map<string, CheckpointRegistry>>();
 
 /**
  * The shared checkpoint registry for `client` + `shardKey` — created on first use.
@@ -330,19 +349,6 @@ export const getShardCheckpoints = (client: LunoraClient, shardKey?: string, opt
 
     return registry;
 };
-
-/**
- * Registries that have a sync source wired to them.
- *
- * `bindMutators` gates an overlay on the shard's registry only if *something*
- * advances it — otherwise the mutator would wait out the whole fallback window on
- * every write. A `lunoraCollectionOptions` call marks its registry here at creation
- * time (not at first sync), because a lazily-syncing collection still means the
- * watermark stream exists and will confirm the write.
- *
- * Package-internal: deliberately not re-exported from `index.ts`.
- */
-const attachedRegistries = new WeakSet<CheckpointRegistry>();
 
 /** Mark `registry` as fed by a live sync source. */
 export const markCheckpointsAttached = (registry: CheckpointRegistry): void => {

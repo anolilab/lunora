@@ -273,6 +273,7 @@ class MaterializerRuntime {
                 );
             }
             default: {
+                // eslint-disable-next-line no-console -- the `warn` strategy's whole contract is to report the skipped event; the runtime has no logger binding
                 console.warn(
                     `[MaterializerRuntime] unhandled event type "${entry.type}" (seq ${String(entry.seq)}). ` +
                         "The event was skipped. Configure `unknownEventHandling` if this is expected.",

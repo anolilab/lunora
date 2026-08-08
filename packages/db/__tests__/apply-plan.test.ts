@@ -26,8 +26,8 @@ const fakeCollection = (log: string[], name: string) =>
     }) as unknown as Collection<Row, string>;
 
 /** A `ctx.db` double recording the ops applied to it, in order. */
-const fakeWriter = (log: string[]): PlanWriter =>
-    ({
+const fakeWriter = (log: string[]): PlanWriter => {
+    return {
         delete: async (id: string) => {
             log.push(`delete:${id}`);
         },
@@ -39,7 +39,11 @@ const fakeWriter = (log: string[]): PlanWriter =>
         patch: async (id: string, patch: Record<string, unknown>) => {
             log.push(`patch:${id}:${JSON.stringify(patch)}`);
         },
-    }) as unknown as PlanWriter;
+    };
+};
+
+/** The error `applyPlanToCollections` throws for a keyless optimistic insert. */
+const NEEDS_ID = /needs an "_id"/;
 
 const plan: ChangePlan = {
     deletes: [{ id: "d1", table: "nodes" }],
@@ -47,7 +51,7 @@ const plan: ChangePlan = {
     patches: [{ fields: { text: "edited" }, id: "p1", table: "nodes" }],
 };
 
-describe("applyPlanToCollections", () => {
+describe(applyPlanToCollections, () => {
     it("applies deletes, then patches, then inserts", () => {
         expect.assertions(1);
 
@@ -80,9 +84,9 @@ describe("applyPlanToCollections", () => {
 
         // Without a key now, the optimistic row is invisible until it syncs — and then
         // arrives as a second row.
-        expect(() => applyPlanToCollections({ nodes: fakeCollection(log, "nodes") }, { inserts: [{ row: { text: "x" }, table: "nodes" }] })).toThrow(
-            /needs an "_id"/,
-        );
+        expect(() => {
+            applyPlanToCollections({ nodes: fakeCollection(log, "nodes") }, { inserts: [{ row: { text: "x" }, table: "nodes" }] });
+        }).toThrow(NEEDS_ID);
     });
 
     it("is a no-op for an empty plan", () => {
@@ -96,7 +100,7 @@ describe("applyPlanToCollections", () => {
     });
 });
 
-describe("applyPlanToDb", () => {
+describe(applyPlanToDb, () => {
     it("applies the plan in the same order as the collection applier", async () => {
         expect.assertions(1);
 

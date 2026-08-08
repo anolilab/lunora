@@ -94,6 +94,8 @@ const createNext = (originalCtx: Record<string, unknown>): MockNext => {
 
 describe("eventsContext middleware", () => {
     it("attaches ctx.events with expected facade methods", async () => {
+        expect.assertions(6);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 
@@ -111,6 +113,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("preserves existing ctx fields through next merge", async () => {
+        expect.assertions(4);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
         const inputCtx = { existing: "value", auth: { userId: "u1" } };
@@ -129,6 +133,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("ctx.events.append delegates to the DO client", async () => {
+        expect.assertions(5);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 
@@ -148,6 +154,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("ctx.events.getSince returns entries after watermark", async () => {
+        expect.assertions(2);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 
@@ -166,6 +174,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("ctx.events.getRange returns paginated results", async () => {
+        expect.assertions(6);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 
@@ -192,6 +202,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("ctx.events.getSize returns total count", async () => {
+        expect.assertions(1);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 
@@ -210,6 +222,8 @@ describe("eventsContext middleware", () => {
     });
 
     it("ctx.events.getState returns full state", async () => {
+        expect.assertions(3);
+
         const client = createTestClient();
         const middleware = eventsContext(client);
 

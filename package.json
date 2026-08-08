@@ -49,6 +49,7 @@
         "lint:package-json:fix": "vis sort-package-json",
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
+        "lint:project-json": "node scripts/check-project-json-targets.js",
         "lint:registry:sync": "node scripts/sync-auth-ui-registry.mjs --check",
         "lint:types": "vis run lint:types && pnpm run lint:types:registry",
         "lint:types:registry": "pnpm run build:packages && tsc -p registry/tsconfig.json",

@@ -31,13 +31,20 @@ const derived = (data: Record<string, unknown>, id = "d"): string => {
     return [...rows.keys()][0] as string;
 };
 
-// Deterministic PRNG so a failure reproduces.
-let seed = 12_345;
-const rnd = (): number => {
-    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+// Deterministic PRNG so a failure reproduces. The state lives in the closure
+// rather than a module-level `let`, so nothing else in the file can perturb the
+// sequence.
+const makeRandom = (initialSeed: number): (() => number) => {
+    let seed = initialSeed;
 
-    return seed / 2_147_483_648;
+    return (): number => {
+        seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+
+        return seed / 2_147_483_648;
+    };
 };
+
+const rnd = makeRandom(12_345);
 
 const KEYS = ["a", "B", "_x", "z", "Ä", "0", "10", "2", "toString", "a-b", "a_b"];
 
