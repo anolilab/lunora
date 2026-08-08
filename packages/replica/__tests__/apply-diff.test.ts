@@ -53,16 +53,20 @@ const canonicalize = (value: unknown): unknown => {
 const expectedDerivedId = (diff: TableDiff, changeIndex: number, data: Record<string, unknown>): string =>
     `row-${referenceFnv1a64(`${diff.table}::${diff.id ?? String(diff.timestamp)}::${String(changeIndex)}::${JSON.stringify(canonicalize(data))}`)}`;
 
-const onlyDerivedKey = (rows: Map<string, Record<string, unknown>>): string => {
-    const keys = [...rows.keys()].filter((key) => key.startsWith("row-"));
-
-    expect(keys).toHaveLength(1);
-
-    return keys[0] as string;
-};
+/**
+ * The derived-id keys of an applyDiff result, in insertion order.
+ *
+ * Deliberately assertion-free: a helper that asserts on its caller's behalf
+ * bakes a `+1` into every `expect.assertions(n)` that calls it, so changing one
+ * line here fails five unrelated tests pointing at the wrong file. Callers
+ * assert the whole array, which checks the count and the values in one go.
+ */
+const derivedKeys = (rows: Map<string, Record<string, unknown>>): string[] => [...rows.keys()].filter((key) => key.startsWith("row-"));
 
 describe("applyDiff", () => {
     it("leaves the caller's map untouched", () => {
+        expect.assertions(2);
+
         const current = new Map([["a", { id: "a", n: 1 }]]);
 
         const next = applyDiff(current, diffOf([{ id: "a", type: "delete" }]));
@@ -72,6 +76,8 @@ describe("applyDiff", () => {
     });
 
     it("merges updates onto the existing row and skips unknown rows", () => {
+        expect.assertions(2);
+
         const current = new Map([["a", { id: "a", name: "alice", n: 1 }]]);
 
         const next = applyDiff(
@@ -87,6 +93,8 @@ describe("applyDiff", () => {
     });
 
     it("keys an insert by its own id, coercing a numeric id to a string", () => {
+        expect.assertions(1);
+
         const next = applyDiff(new Map(), diffOf([{ data: { id: 42, name: "n" }, type: "insert" }]));
 
         expect(next.get("42")).toStrictEqual({ id: "42", name: "n" });
@@ -95,6 +103,8 @@ describe("applyDiff", () => {
 
 describe("fnv1a64Hex", () => {
     it("is bit-identical to the BigInt reference across 2000 random strings", () => {
+        expect.assertions(1);
+
         // Driven directly against the exported function rather than through
         // `applyDiff`, so a divergence is attributed to the hash itself.
         let seed = 987_654;
@@ -131,6 +141,8 @@ describe("fnv1a64Hex", () => {
     });
 
     it("matches the reference on boundary inputs", () => {
+        expect.hasAssertions();
+
         for (const input of ["", "a", "\0", "\u{10FFFF}", "\uD800", "\uDFFF", "é中文", "x".repeat(1000)]) {
             expect(fnv1a64Hex(input), `mismatch for ${JSON.stringify(input)}`).toBe(referenceFnv1a64(input));
         }
@@ -139,49 +151,61 @@ describe("fnv1a64Hex", () => {
 
 describe("canonicalizeForHash", () => {
     it("orders keys by code unit, so JSON.stringify is byte-stable", () => {
+        expect.assertions(3);
         expect(JSON.stringify(canonicalizeForHash({ B: 1, a: 2 }))).toBe('{"B":1,"a":2}');
         expect(JSON.stringify(canonicalizeForHash({ a: 2, B: 1 }))).toBe('{"B":1,"a":2}');
         expect(JSON.stringify(canonicalizeForHash({ "a-b": 1, aXb: 3, a_b: 2 }))).toBe('{"a-b":1,"aXb":3,"a_b":2}');
     });
 
     it("sorts at every depth and preserves array order", () => {
+        expect.assertions(1);
         expect(JSON.stringify(canonicalizeForHash({ o: { z: 1, a: { y: 1, b: 2 } }, list: [3, 1, 2] }))).toBe('{"list":[3,1,2],"o":{"a":{"b":2,"y":1},"z":1}}');
     });
 });
 
 describe("deriveInsertId (via id-less inserts)", () => {
     it("is exported and agrees with what applyDiff derives", () => {
+        expect.assertions(1);
+
         const data = { name: "alice" };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), diff))).toBe(deriveInsertId(diff, 0, data));
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([deriveInsertId(diff, 0, data)]);
     });
 
     it("matches the BigInt FNV-1a reference digest", () => {
+        expect.assertions(1);
+
         const data = { body: "hello world", tags: ["a", "b"] };
         const diff = diffOf([{ data, type: "insert" }]);
 
         const next = applyDiff(new Map(), diff);
 
-        expect(onlyDerivedKey(next)).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("matches the reference digest for astral code points", () => {
+        expect.assertions(1);
+
         const data = { note: "🎉 party \u{10FFFF}", who: "é中文" };
         const diff = diffOf([{ data, type: "insert" }]);
 
         const next = applyDiff(new Map(), diff);
 
-        expect(onlyDerivedKey(next)).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("derives the same id when the same diff is replayed", () => {
+        expect.assertions(1);
+
         const diff = diffOf([{ data: { name: "alice" }, type: "insert" }]);
 
         expect([...applyDiff(new Map(), diff).keys()]).toStrictEqual([...applyDiff(new Map(), diff).keys()]);
     });
 
     it("is insensitive to key insertion order at any depth", () => {
+        expect.assertions(2);
+
         const shallow = applyDiff(new Map(), diffOf([{ data: { a: 1, b: 2 }, type: "insert" }]));
         const shallowReordered = applyDiff(new Map(), diffOf([{ data: { b: 2, a: 1 }, type: "insert" }]));
 
@@ -194,6 +218,8 @@ describe("deriveInsertId (via id-less inserts)", () => {
     });
 
     it("sorts keys by code unit, not by locale collation", () => {
+        expect.assertions(1);
+
         // "B" (0x42) sorts before "a" (0x61) by code unit, but AFTER it under
         // ICU collation — so this pair is exactly where a localeCompare-based
         // canonicalizer would disagree with the reference, and where two
@@ -201,10 +227,12 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const data = { B: 1, a: 2 };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), diff))).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("distinguishes two identical id-less inserts within one diff", () => {
+        expect.assertions(1);
+
         const next = applyDiff(
             new Map(),
             diffOf([
@@ -217,6 +245,8 @@ describe("deriveInsertId (via id-less inserts)", () => {
     });
 
     it("distinguishes diffs that share a timestamp but differ in id", () => {
+        expect.assertions(1);
+
         const a = applyDiff(new Map(), diffOf([{ data: { name: "x" }, type: "insert" }], "diff-a"));
         const b = applyDiff(new Map(), diffOf([{ data: { name: "x" }, type: "insert" }], "diff-b"));
 
@@ -224,6 +254,8 @@ describe("deriveInsertId (via id-less inserts)", () => {
     });
 
     it("matches JSON.stringify's treatment of undefined in objects and arrays", () => {
+        expect.assertions(2);
+
         // JSON.stringify omits undefined-valued object entries, so `{ a: 1 }`
         // and `{ a: 1, b: undefined }` must canonicalize identically...
         const withUndefined = applyDiff(new Map(), diffOf([{ data: { a: 1, b: undefined }, type: "insert" }]));
@@ -235,12 +267,14 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const holeData = { list: [1, undefined, 3] };
         const holeDiff = diffOf([{ data: holeData, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), holeDiff))).toBe(expectedDerivedId(holeDiff, 0, { list: [1, null, 3] }));
+        expect(derivedKeys(applyDiff(new Map(), holeDiff))).toStrictEqual([expectedDerivedId(holeDiff, 0, { list: [1, null, 3] })]);
     });
 });
 
 describe("applyDiffs", () => {
     it("is equivalent to folding applyDiff over the backlog", () => {
+        expect.assertions(1);
+
         const base = new Map([["seed", { id: "seed", n: 0 }]]);
         const backlog = [
             diffOf([{ data: { id: "a", n: 1 }, type: "insert" }], "d1"),
@@ -259,6 +293,8 @@ describe("applyDiffs", () => {
     });
 
     it("leaves the caller's map untouched", () => {
+        expect.assertions(1);
+
         const base = new Map([["a", { id: "a", n: 1 }]]);
 
         applyDiffs(base, [diffOf([{ id: "a", type: "delete" }]), diffOf([{ data: { id: "b" }, type: "insert" }])]);
@@ -267,6 +303,8 @@ describe("applyDiffs", () => {
     });
 
     it("returns a copy for an empty backlog", () => {
+        expect.assertions(2);
+
         const base = new Map([["a", { id: "a" }]]);
         const next = applyDiffs(base, []);
 
@@ -277,6 +315,8 @@ describe("applyDiffs", () => {
 
 describe("applyDiffToSnapshot", () => {
     it("replaces only the targeted table and shares the rest by reference", () => {
+        expect.assertions(3);
+
         const posts = new Map([["p1", { id: "p1" }]]);
         const snapshot = new Map([
             ["posts", posts],
@@ -291,6 +331,8 @@ describe("applyDiffToSnapshot", () => {
     });
 
     it("creates the table when the snapshot has no entry for it", () => {
+        expect.assertions(1);
+
         const next = applyDiffToSnapshot(new Map(), diffOf([{ data: { id: "u1" }, type: "insert" }]));
 
         expect(next.get("users")?.get("u1")).toStrictEqual({ id: "u1" });

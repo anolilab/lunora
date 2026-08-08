@@ -37,6 +37,8 @@ type TodoHookResult = ReturnType<typeof renderHook<ReturnType<typeof useLocalQue
 
 describe(useLocalQuery, () => {
     it("returns live query results and does not call mirror.query again on an unrelated re-render", () => {
+        expect.assertions(5);
+
         const mirror = makeMirror();
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "write tests" }, type: "insert" }]));
@@ -63,6 +65,8 @@ describe(useLocalQuery, () => {
     });
 
     it("surfaces a malformed query as an error instead of collapsing it to undefined", () => {
+        expect.assertions(2);
+
         const mirror = makeMirror();
 
         const { result } = renderHook(() => useLocalQuery(mirror, "NOT VALID SQL"));
@@ -72,6 +76,8 @@ describe(useLocalQuery, () => {
     });
 
     it("updates data when the mirror advances to a new version", () => {
+        expect.assertions(3);
+
         const mirror = makeMirror();
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "first" }, type: "insert" }]));
@@ -92,6 +98,8 @@ describe(useLocalQuery, () => {
     });
 
     it("re-queries after clearData bumps the version even though nothing was appended to the event log", () => {
+        expect.assertions(2);
+
         const mirror = makeMirror();
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "first" }, type: "insert" }]));
@@ -108,6 +116,8 @@ describe(useLocalQuery, () => {
     });
 
     it("supports many (70) distinct concurrent queries on one mirror without a render loop", () => {
+        expect.hasAssertions();
+
         const mirror = makeMirror();
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "write tests" }, type: "insert" }]));
@@ -158,6 +168,8 @@ describe(useLocalQuery, () => {
     });
 
     it("does not crash render on a bigint param (returns data or a typed error, never throws)", () => {
+        expect.assertions(5);
+
         const mirror = makeMirror();
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "write tests" }, type: "insert" }]));

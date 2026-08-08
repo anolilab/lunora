@@ -24,6 +24,8 @@ describe("eventLogDOClient wire contract", () => {
     };
 
     it("append POSTs the events as JSON to /append", async () => {
+        expect.assertions(4);
+
         const { client, requests } = clientWith(() => Response.json({ entries: [{ payload: { n: 1 }, seq: 0, timestamp: 1, type: "a" }] }));
 
         const entries = await client.append([{ payload: { n: 1 }, type: "a" }]);
@@ -35,6 +37,8 @@ describe("eventLogDOClient wire contract", () => {
     });
 
     it("getSince and getRange encode their cursor in the query string", async () => {
+        expect.assertions(3);
+
         const { client, requests } = clientWith(() => Response.json({ entries: [], hasMore: false }));
 
         await client.getSince(7);
@@ -48,6 +52,8 @@ describe("eventLogDOClient wire contract", () => {
     });
 
     it("surfaces the DO's structured error message on a non-OK response", async () => {
+        expect.assertions(5);
+
         const { client } = clientWith(() => Response.json({ error: { code: "BAD_REQUEST", message: "events[] required" } }, { status: 400 }));
 
         await expect(client.append([])).rejects.toThrow("EventLogDO.append failed (400): events[] required");
@@ -58,12 +64,16 @@ describe("eventLogDOClient wire contract", () => {
     });
 
     it("falls back to the status text when the error body is not JSON", async () => {
+        expect.assertions(1);
+
         const { client } = clientWith(() => new Response("<html>upstream exploded</html>", { status: 502, statusText: "Bad Gateway" }));
 
         await expect(client.getSize()).rejects.toThrow("EventLogDO.getSize failed (502): Bad Gateway");
     });
 
     it("falls back to the status text when the error body has no message", async () => {
+        expect.assertions(1);
+
         const { client } = clientWith(() => Response.json({ error: { code: "INTERNAL" } }, { status: 500, statusText: "Internal Server Error" }));
 
         await expect(client.getState()).rejects.toThrow("EventLogDO.getState failed (500): Internal Server Error");
@@ -74,17 +84,20 @@ describe("eventLogDOClient wire contract", () => {
 
 describe("seq guards", () => {
     it("isGlobalSeq narrows numbers only", () => {
+        expect.assertions(3);
         expect(isGlobalSeq(0)).toBe(true);
         expect(isGlobalSeq(42)).toBe(true);
         expect(isGlobalSeq({ client: 1, global: 0, rebaseGeneration: 0 })).toBe(false);
     });
 
     it("isClientSeq requires the rebaseGeneration marker", () => {
+        expect.assertions(2);
         expect(isClientSeq({ client: 1, global: 0, rebaseGeneration: 2 })).toBe(true);
         expect(isClientSeq(5)).toBe(false);
     });
 
     it("isInputEvent accepts seq-less events and rejects near-misses", () => {
+        expect.assertions(8);
         expect(isInputEvent({ payload: { x: 1 }, timestamp: 100, type: "chat.messageSent" })).toBe(true);
 
         expect(isInputEvent(undefined)).toBe(false);
@@ -102,6 +115,8 @@ describe("seq guards", () => {
 
 describe("eventSource edge paths", () => {
     it("applyEvent emits replay-error and keeps state when the reducer throws", () => {
+        expect.assertions(6);
+
         const source = new EventSource({ count: 0 }, (state, entry) => {
             if (entry.type === "boom") {
                 throw new Error("reducer exploded");
@@ -136,6 +151,8 @@ describe("eventSource edge paths", () => {
     });
 
     it("events() returns immediately for an already-aborted signal", async () => {
+        expect.assertions(1);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -150,6 +167,8 @@ describe("eventSource edge paths", () => {
     });
 
     it("events() wakes an idle iterator when a new event arrives", async () => {
+        expect.assertions(3);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         // No past entries: the iterator parks in the phase-2 wait.
@@ -172,6 +191,8 @@ describe("eventSource edge paths", () => {
     });
 
     it("plan 284: abort while idle settles the pending next() promise", async () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -203,6 +224,8 @@ describe("eventSource edge paths", () => {
     });
 
     it("plan 284: abort tears down the state-changed listener (no leaked listener/buffer)", async () => {
+        expect.assertions(3);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
         const offSpy = vi.spyOn(source.emitter, "off");
 
@@ -238,6 +261,8 @@ describe("eventSource edge paths", () => {
     });
 
     it("plan 284: no duplicate seq is yielded across the phase-1/phase-2 boundary when an event is applied mid-replay", async () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         // Two past entries so the generator suspends at a `yield` mid-way
@@ -252,9 +277,7 @@ describe("eventSource edge paths", () => {
         // First past entry.
         const firstResult = await iterator.next();
 
-        if (!firstResult.done) {
-            seqs.push(firstResult.value.seq);
-        }
+        seqs.push(firstResult.value!.seq);
 
         // Suspended between the two past entries' yields — apply a THIRD event
         // now, before resuming. If phase 1's own `getSince` snapshot were
@@ -267,16 +290,12 @@ describe("eventSource edge paths", () => {
         // Second past entry (from the original 2-entry snapshot).
         const secondResult = await iterator.next();
 
-        if (!secondResult.done) {
-            seqs.push(secondResult.value.seq);
-        }
+        seqs.push(secondResult.value!.seq);
 
         // The third (mid-replay) event, via phase 2's buffer.
         const thirdResult = await iterator.next();
 
-        if (!thirdResult.done) {
-            seqs.push(thirdResult.value.seq);
-        }
+        seqs.push(thirdResult.value!.seq);
 
         expect(seqs).toStrictEqual([...new Set(seqs)]);
         expect(seqs).toHaveLength(3);
@@ -338,12 +357,16 @@ describe(subscribeToMirror, () => {
     };
 
     it("derives the mirror table from the function ref and registers it", () => {
+        expect.assertions(1);
+
         const { double } = wire();
 
         expect(double.registered).toStrictEqual(["fn_todos_list"]);
     });
 
     it("upserts every row of a frame and deletes rows that dropped out of the next frame", () => {
+        expect.assertions(4);
+
         const { double, push } = wire();
 
         push([
@@ -368,6 +391,8 @@ describe(subscribeToMirror, () => {
     });
 
     it("treats a single-object frame as one row and numeric ids as strings", () => {
+        expect.assertions(2);
+
         const { double, push } = wire();
 
         push({ id: 7, title: "solo" });
@@ -381,6 +406,8 @@ describe(subscribeToMirror, () => {
     });
 
     it("ignores frames that produce no changes", () => {
+        expect.assertions(1);
+
         const { double, push } = wire();
 
         // Scalar frames carry no rows; with nothing previously mirrored there
@@ -392,6 +419,8 @@ describe(subscribeToMirror, () => {
     });
 
     it("tears down the underlying client subscription on unsubscribe", () => {
+        expect.assertions(2);
+
         const { unsubscribe, unsubscribed } = wire();
 
         expect(unsubscribed()).toBe(false);

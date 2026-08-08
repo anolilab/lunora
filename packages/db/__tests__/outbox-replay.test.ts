@@ -1,4 +1,3 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field the fixtures mirror */
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

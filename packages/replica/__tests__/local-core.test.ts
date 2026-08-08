@@ -7,6 +7,8 @@ import type { InputEvent } from "../src/seq";
 
 describe(createTableDiff, () => {
     it("creates a diff with default timestamp", () => {
+        expect.assertions(3);
+
         const diff = createTableDiff("users", [{ type: "insert", data: { name: "alice" } }]);
 
         expect(diff.table).toBe("users");
@@ -15,12 +17,16 @@ describe(createTableDiff, () => {
     });
 
     it("accepts an explicit timestamp", () => {
+        expect.assertions(1);
+
         const diff = createTableDiff("users", [], 42);
 
         expect(diff.timestamp).toBe(42);
     });
 
     it("mints a stable id without throwing when crypto.randomUUID is unavailable (non-secure origin)", () => {
+        expect.assertions(3);
+
         const realCrypto = globalThis.crypto;
 
         try {
@@ -45,16 +51,20 @@ describe(createTableDiff, () => {
 
 describe(isDiffEmpty, () => {
     it("returns true for diff with no changes", () => {
+        expect.assertions(1);
         expect(isDiffEmpty(createTableDiff("t", []))).toBe(true);
     });
 
     it("returns false for diff with changes", () => {
+        expect.assertions(1);
         expect(isDiffEmpty(createTableDiff("t", [{ type: "insert", data: {} }]))).toBe(false);
     });
 });
 
 describe(diffSize, () => {
     it("counts all changes", () => {
+        expect.assertions(1);
+
         const diff = createTableDiff("t", [
             { type: "insert", data: {} },
             { type: "update", id: "1", data: {} },
@@ -67,6 +77,8 @@ describe(diffSize, () => {
 
 describe(classifyChanges, () => {
     it("partitions changes by kind", () => {
+        expect.assertions(3);
+
         const diff = createTableDiff("t", [
             { type: "insert", data: { id: "1" } },
             { type: "update", id: "2", data: {} },
@@ -82,6 +94,8 @@ describe(classifyChanges, () => {
     });
 
     it("returns empty arrays for empty diff", () => {
+        expect.assertions(3);
+
         const { inserts, updates, deletes } = classifyChanges(createTableDiff("t", []));
 
         expect(inserts).toEqual([]);
@@ -92,6 +106,8 @@ describe(classifyChanges, () => {
 
 describe(mergeDiffs, () => {
     it("merges diffs for the same table, preserving order", () => {
+        expect.assertions(6);
+
         const a = createTableDiff("t", [{ type: "insert", data: { id: "1" } }], 10);
         const b = createTableDiff("t", [{ type: "update", id: "1", data: { name: "bob" } }], 20);
 
@@ -106,10 +122,13 @@ describe(mergeDiffs, () => {
     });
 
     it("returns null for empty input", () => {
+        expect.assertions(1);
         expect(mergeDiffs([])).toBeNull();
     });
 
     it("produces a constant-size, non-compounding merge id regardless of child count", () => {
+        expect.assertions(4);
+
         const many = Array.from({ length: 1000 }, (_, index) => createTableDiff("t", [{ type: "insert", data: { id: String(index) } }], index));
 
         const merged = mergeDiffs(many);
@@ -128,6 +147,8 @@ describe(mergeDiffs, () => {
     });
 
     it("mints the SAME merged id for the SAME child sequence, a different id otherwise", () => {
+        expect.assertions(3);
+
         const a = createTableDiff("t", [{ type: "insert", data: { id: "1" } }], 10, "diff-a");
         const b = createTableDiff("t", [{ type: "insert", data: { id: "2" } }], 20, "diff-b");
         const c = createTableDiff("t", [{ type: "insert", data: { id: "3" } }], 30, "diff-c");
@@ -146,6 +167,8 @@ describe(mergeDiffs, () => {
 
 describe(EventLog, () => {
     it("starts empty", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         expect(log.isEmpty).toBe(true);
@@ -153,6 +176,8 @@ describe(EventLog, () => {
     });
 
     it("appends entries with monotonically increasing seq", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         const e1 = log.append("test", { msg: "first" });
@@ -164,6 +189,8 @@ describe(EventLog, () => {
     });
 
     it("assigns timestamps on append", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
         const entry = log.append("test", null);
 
@@ -172,6 +199,8 @@ describe(EventLog, () => {
     });
 
     it("getSince returns entries from watermark", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -186,6 +215,8 @@ describe(EventLog, () => {
     });
 
     it("getSince returns all entries when sinceSeq <= 0", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -196,6 +227,8 @@ describe(EventLog, () => {
     });
 
     it("getSince returns empty when seq is beyond end", () => {
+        expect.assertions(1);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -204,6 +237,8 @@ describe(EventLog, () => {
     });
 
     it("getFrom supports pagination", () => {
+        expect.assertions(6);
+
         const log = new EventLog();
 
         for (let i = 0; i < 10; i += 1) {
@@ -227,6 +262,8 @@ describe(EventLog, () => {
     });
 
     it("getFrom returns empty when fromSeq is beyond end", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -236,6 +273,8 @@ describe(EventLog, () => {
     });
 
     it("snapshot captures full state", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.append("a", { x: 1 });
@@ -248,6 +287,8 @@ describe(EventLog, () => {
     });
 
     it("load restores from snapshot", () => {
+        expect.assertions(3);
+
         const log1 = new EventLog();
 
         log1.append("a", 1);
@@ -263,6 +304,8 @@ describe(EventLog, () => {
     });
 
     it("clear removes all entries", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -274,6 +317,8 @@ describe(EventLog, () => {
     });
 
     it("stores table diffs on entries", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
         const diff = createTableDiff("users", [{ type: "insert", data: { id: "1" } }]);
 
@@ -286,12 +331,16 @@ describe(EventLog, () => {
     // ── headSeq ───────────────────────────────────────────────────────
 
     it("headSeq is null for empty log", () => {
+        expect.assertions(1);
+
         const log = new EventLog();
 
         expect(log.headSeq).toBeNull();
     });
 
     it("headSeq tracks last appended entry", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -304,6 +353,8 @@ describe(EventLog, () => {
     });
 
     it("load restores headSeq from snapshot", () => {
+        expect.assertions(3);
+
         const log1 = new EventLog();
 
         log1.append("a", 1);
@@ -322,6 +373,8 @@ describe(EventLog, () => {
     });
 
     it("snapshot captures headSeq", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         const snap1 = log.snapshot();
@@ -338,6 +391,8 @@ describe(EventLog, () => {
     // ── AppendOptions ──────────────────────────────────────────────────
 
     it("append accepts clientId and sessionId metadata", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         const entry = log.append("test", { msg: "hello" }, undefined, {
@@ -350,6 +405,8 @@ describe(EventLog, () => {
     });
 
     it("append with InputEvent accepts AppendOptions", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
         const input: InputEvent<string, { n: number }> = { type: "test", payload: { n: 1 }, timestamp: Date.now() };
 
@@ -363,6 +420,8 @@ describe(EventLog, () => {
     });
 
     it("append auto-assigns parentSeqNum from head", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         const e1 = log.append("a", null);
@@ -379,6 +438,8 @@ describe(EventLog, () => {
     });
 
     it("append accepts explicit parentSeqNum overriding auto", () => {
+        expect.assertions(1);
+
         const log = new EventLog();
 
         log.append("a", null); // seq 0
@@ -393,6 +454,8 @@ describe(EventLog, () => {
     // ── commitAll ──────────────────────────────────────────────────────
 
     it("commitAll appends multiple entries atomically", () => {
+        expect.assertions(5);
+
         const log = new EventLog();
 
         const entries = log.commitAll([
@@ -409,6 +472,8 @@ describe(EventLog, () => {
     });
 
     it("commitAll returns empty array for empty input", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         const entries = log.commitAll([]);
@@ -418,6 +483,8 @@ describe(EventLog, () => {
     });
 
     it("commitAll wires causal chain within the batch", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         const entries = log.commitAll([
@@ -432,6 +499,8 @@ describe(EventLog, () => {
     });
 
     it("commitAll chains from head when log has prior entries", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
 
         log.append("prior", null); // seq 0, headSeq = 0
@@ -450,6 +519,8 @@ describe(EventLog, () => {
     });
 
     it("commitAll updates headSeq", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.commitAll([{ type: "x", payload: null }]);
@@ -464,6 +535,8 @@ describe(EventLog, () => {
     // REPLICA-06: bounded in-memory growth ─────────────────────────────
 
     it("maxEntries caps the log — a long run does not grow it unboundedly", () => {
+        expect.assertions(4);
+
         const log = new EventLog({ maxEntries: 5 });
 
         for (let index = 0; index < 100; index += 1) {
@@ -482,6 +555,8 @@ describe(EventLog, () => {
     });
 
     it("maxEntries caps commitAll batches too", () => {
+        expect.assertions(2);
+
         const log = new EventLog({ maxEntries: 3 });
 
         log.commitAll(
@@ -496,6 +571,8 @@ describe(EventLog, () => {
     });
 
     it("without maxEntries the log stays unbounded (default, backward-compatible)", () => {
+        expect.assertions(1);
+
         const log = new EventLog();
 
         for (let index = 0; index < 50; index += 1) {
@@ -506,6 +583,8 @@ describe(EventLog, () => {
     });
 
     it("truncateBelow discards entries below the floor without disturbing headSeq/nextSeq", () => {
+        expect.assertions(6);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -527,6 +606,8 @@ describe(EventLog, () => {
     });
 
     it("truncateBelow a floor past every entry empties the log", () => {
+        expect.assertions(2);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -539,6 +620,8 @@ describe(EventLog, () => {
     });
 
     it("truncateBelow(0) is a no-op", () => {
+        expect.assertions(1);
+
         const log = new EventLog();
 
         log.append("a", null);
@@ -554,6 +637,8 @@ describe(EventLog, () => {
 
 describe(applyDiff, () => {
     it("inserts new rows", () => {
+        expect.assertions(1);
+
         const rows = new Map<string, Record<string, unknown>>();
         const diff = createTableDiff("t", [{ type: "insert", data: { id: "1", name: "alice" } }]);
 
@@ -563,6 +648,8 @@ describe(applyDiff, () => {
     });
 
     it("inserts row with auto-generated id when missing", () => {
+        expect.assertions(4);
+
         const rows = new Map<string, Record<string, unknown>>();
         const diff = createTableDiff("t", [{ type: "insert", data: { name: "bob" } }]);
 
@@ -580,6 +667,8 @@ describe(applyDiff, () => {
     // REPLICA-05: replay determinism — re-applying the exact same diff must
     // derive the exact same id every time, not a fresh `crypto.randomUUID()`.
     it("derives the SAME id when the same id-less diff is replayed", () => {
+        expect.assertions(2);
+
         const diff = createTableDiff("t", [{ type: "insert", data: { name: "bob" } }], 1000);
 
         const first = applyDiff(new Map(), diff);
@@ -593,6 +682,8 @@ describe(applyDiff, () => {
     });
 
     it("derives DIFFERENT ids for id-less inserts at different positions in the same diff, even with identical data", () => {
+        expect.assertions(1);
+
         const diff = createTableDiff(
             "t",
             [
@@ -608,6 +699,8 @@ describe(applyDiff, () => {
     });
 
     it("derives DIFFERENT ids for id-less inserts with different content", () => {
+        expect.assertions(1);
+
         const diffA = createTableDiff("t", [{ type: "insert", data: { name: "alice" } }], 1000);
         const diffB = createTableDiff("t", [{ type: "insert", data: { name: "bob" } }], 1000);
 
@@ -618,6 +711,8 @@ describe(applyDiff, () => {
     });
 
     it("updates existing rows", () => {
+        expect.assertions(1);
+
         const rows = new Map([["1", { id: "1", name: "alice", age: 30 }]]);
         const diff = createTableDiff("t", [{ type: "update", id: "1", data: { age: 31 } }]);
 
@@ -627,6 +722,8 @@ describe(applyDiff, () => {
     });
 
     it("skips update for unknown row", () => {
+        expect.assertions(1);
+
         const rows = new Map<string, Record<string, unknown>>();
         const diff = createTableDiff("t", [{ type: "update", id: "missing", data: { x: 1 } }]);
 
@@ -636,6 +733,8 @@ describe(applyDiff, () => {
     });
 
     it("deletes a row", () => {
+        expect.assertions(2);
+
         const rows = new Map([["1", { id: "1", name: "alice" }]]);
         const diff = createTableDiff("t", [{ type: "delete", id: "1" }]);
 
@@ -646,6 +745,8 @@ describe(applyDiff, () => {
     });
 
     it("does not mutate the original map", () => {
+        expect.assertions(1);
+
         const rows = new Map([["1", { id: "1", name: "alice" }]]);
         const diff = createTableDiff("t", [{ type: "delete", id: "1" }]);
 
@@ -655,6 +756,8 @@ describe(applyDiff, () => {
     });
 
     it("handles mixed changes in one pass", () => {
+        expect.assertions(4);
+
         const rows = new Map([
             ["1", { id: "1", name: "alice" }],
             ["2", { id: "2", name: "bob" }],
@@ -677,6 +780,8 @@ describe(applyDiff, () => {
 
 describe(applyDiffs, () => {
     it("applies multiple diffs in order", () => {
+        expect.assertions(1);
+
         const rows = new Map<string, Record<string, unknown>>();
 
         const diffs = [
@@ -692,6 +797,8 @@ describe(applyDiffs, () => {
 
 describe(applyDiffToSnapshot, () => {
     it("updates the correct table map in the snapshot", () => {
+        expect.assertions(1);
+
         const users = new Map([["1", { id: "1", name: "alice" }]]);
         const state = new Map([["users", users]]);
 
@@ -702,6 +809,8 @@ describe(applyDiffToSnapshot, () => {
     });
 
     it("creates a new table map when it does not exist", () => {
+        expect.assertions(1);
+
         const state = new Map<string, Map<string, Record<string, unknown>>>();
 
         const diff = createTableDiff("users", [{ type: "insert", data: { id: "1", name: "alice" } }]);
@@ -711,6 +820,8 @@ describe(applyDiffToSnapshot, () => {
     });
 
     it("does not mutate the original snapshot", () => {
+        expect.assertions(1);
+
         const users = new Map([["1", { id: "1", name: "alice" }]]);
         const state = new Map([["users", users]]);
 

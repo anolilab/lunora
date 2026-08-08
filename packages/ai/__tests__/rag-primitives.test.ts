@@ -12,7 +12,7 @@ vi.mock(import("ai"), async (importOriginal) => {
 
     return {
         ...actual,
-        embed: vi.fn(async () => {
+        embed: vi.fn<() => Promise<{ embedding: number[] }>>(async () => {
             return { embedding: [1, 0] };
         }) as unknown as typeof actual.embed,
     };
@@ -33,17 +33,21 @@ const chunk = (id: string, overrides: Partial<RetrievedChunk> = {}): RetrievedCh
 
 describe(fixedWindowChunks, () => {
     it("returns the whole trimmed text as one chunk when it fits the window", () => {
+        expect.assertions(2);
         expect(fixedWindowChunks("  hello world  ", 100, 10)).toStrictEqual(["hello world"]);
         // Exactly at the boundary still fits in one window.
         expect(fixedWindowChunks("abcde", 5, 2)).toStrictEqual(["abcde"]);
     });
 
     it("returns no chunks for empty or whitespace-only text", () => {
+        expect.assertions(2);
         expect(fixedWindowChunks("", 10, 2)).toStrictEqual([]);
         expect(fixedWindowChunks("   \n\t  ", 10, 2)).toStrictEqual([]);
     });
 
     it("splits into size-char windows stepping by size minus overlap", () => {
+        expect.assertions(1);
+
         // 10 chars, size 4, overlap 2 → step 2 → windows at 0,2,4,6 (6+4 ≥ 10 stops).
         const chunks = fixedWindowChunks("abcdefghij", 4, 2);
 
@@ -51,6 +55,8 @@ describe(fixedWindowChunks, () => {
     });
 
     it("overlaps consecutive windows by exactly `overlap` characters", () => {
+        expect.hasAssertions();
+
         const overlap = 3;
         const chunks = fixedWindowChunks("the quick brown fox jumps over the lazy dog", 10, overlap);
 
@@ -63,12 +69,15 @@ describe(fixedWindowChunks, () => {
     });
 
     it("stops once a window reaches the end instead of emitting a redundant tail", () => {
+        expect.assertions(1);
         // 7 chars, size 5, overlap 3 → step 2 → windows at 0 ("abcde") and 2
         // ("cdefg", reaches the end) — no degenerate windows at 4/6.
         expect(fixedWindowChunks("abcdefg", 5, 3)).toStrictEqual(["abcde", "cdefg"]);
     });
 
     it("covers every character of the input across the windows", () => {
+        expect.assertions(2);
+
         const text = `${"x".repeat(23)}END`;
         const chunks = fixedWindowChunks(text, 7, 2);
         const lastChunk = chunks.at(-1) as string;
@@ -79,6 +88,7 @@ describe(fixedWindowChunks, () => {
     });
 
     it("rejects invalid size and overlap", () => {
+        expect.assertions(5);
         expect(() => fixedWindowChunks("abc", 0, 0)).toThrow(RangeError);
         expect(() => fixedWindowChunks("abc", 1.5, 0)).toThrow(RangeError);
         expect(() => fixedWindowChunks("abc", 10, -1)).toThrow(RangeError);
@@ -89,6 +99,8 @@ describe(fixedWindowChunks, () => {
 
 describe(concurrentMap, () => {
     it("preserves input order even when later items resolve first", async () => {
+        expect.assertions(1);
+
         const delays = [30, 5, 20, 1];
 
         const results = await concurrentMap(delays, 4, async (delay, index) => {
@@ -103,6 +115,8 @@ describe(concurrentMap, () => {
     });
 
     it("never exceeds the concurrency limit", async () => {
+        expect.assertions(1);
+
         let inFlight = 0;
         let peak = 0;
 
@@ -125,6 +139,8 @@ describe(concurrentMap, () => {
     });
 
     it("passes each item with its index and handles an empty input", async () => {
+        expect.assertions(2);
+
         const seen: [string, number][] = [];
 
         await concurrentMap(["a", "b"], 1, async (item, index) => {
@@ -139,6 +155,8 @@ describe(concurrentMap, () => {
     });
 
     it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
+        expect.assertions(3);
+
         const started: number[] = [];
         const processed: number[] = [];
 
@@ -169,6 +187,7 @@ describe(concurrentMap, () => {
     });
 
     it("rejects an invalid limit", async () => {
+        expect.assertions(2);
         await expect(concurrentMap([1], 0, async () => 0)).rejects.toThrow(RangeError);
         await expect(concurrentMap([1], 1.5, async () => 0)).rejects.toThrow(RangeError);
     });
@@ -176,6 +195,8 @@ describe(concurrentMap, () => {
 
 describe(hybridRank, () => {
     it("scores each chunk by summed reciprocal ranks across both lists", () => {
+        expect.assertions(1);
+
         const shared = chunk("doc#0");
         const vectorOnly = chunk("doc#1");
         const textOnly = chunk("doc#2");
@@ -187,6 +208,8 @@ describe(hybridRank, () => {
     });
 
     it("keeps the vector-leg chunk object for ids present in both lists", () => {
+        expect.assertions(1);
+
         const vectorChunk = chunk("doc#0", { metadata: { title: "rich" }, score: 0.9 });
         const lexicalChunk = chunk("doc#0", { metadata: undefined, score: 3.2 });
 
@@ -196,6 +219,8 @@ describe(hybridRank, () => {
     });
 
     it("breaks exact ties in favour of the better vector rank", () => {
+        expect.assertions(1);
+
         // Both are rank 0 in exactly one list → identical fused scores; the
         // vector-ranked chunk must come first.
         const fromVector = chunk("vec#0");
@@ -207,6 +232,8 @@ describe(hybridRank, () => {
     });
 
     it("dampens rank influence via the k constant", () => {
+        expect.assertions(2);
+
         const first = chunk("a#0");
         const second = chunk("b#0");
         const third = chunk("c#0");
@@ -225,6 +252,7 @@ describe(hybridRank, () => {
     });
 
     it("returns an empty list when both legs are empty", () => {
+        expect.assertions(1);
         expect(hybridRank([], [])).toStrictEqual([]);
     });
 });
@@ -248,6 +276,8 @@ describe("defineRag default chunker wiring", () => {
     };
 
     it("chunks through the configured chunkSize/chunkOverlap window", async () => {
+        expect.assertions(4);
+
         const { upserts, vectors } = recordingVectors();
         const context: RagContext = { vectors };
         const docs = defineRag({
@@ -267,11 +297,14 @@ describe("defineRag default chunker wiring", () => {
     });
 
     it("rejects a non-integer chunkSize at config time", () => {
+        expect.assertions(2);
         expect(() => defineRag({ chunkSize: 2.5, index: "docs" })).toThrow(LunoraError);
         expect(() => defineRag({ chunkSize: 0, index: "docs" })).toThrow(/chunkSize/u);
     });
 
     it("rejects an out-of-range importance at index time", async () => {
+        expect.assertions(2);
+
         const { vectors } = recordingVectors();
         const context: RagContext = { vectors };
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: { specificationVersion: "v2" } as never, index: "docs" });
@@ -281,6 +314,8 @@ describe("defineRag default chunker wiring", () => {
     });
 
     it("rejects invalid chunkContext values at retrieve time", async () => {
+        expect.assertions(2);
+
         const { vectors } = recordingVectors();
         const patched: RagVectors = {
             ...vectors,

@@ -186,7 +186,7 @@ export interface BindMutatorsContext<TCollections extends CollectionMap = Collec
      * `lastMutationId >= clientSeq` (via {@link CheckpointRegistry.resolve}), so the
      * row never flashes out and back.
      *
-     * Defaults to the shared per-shard registry for `client` + {@link shardKey}
+     * Defaults to the shared per-shard registry for `client` + {@link BindMutatorsContext.shardKey}
      * ({@link getShardCheckpoints}) — the same one
      * {@link import("./collection-options").lunoraCollectionOptions} defaults to, so
      * a shard's collections and its mutators gate on one watermark line without the

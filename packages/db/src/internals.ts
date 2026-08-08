@@ -78,7 +78,6 @@ const outboxCarriers = new WeakMap<OutboxExecutor, Collection<Row, string>>();
  */
 export const createOutboxCarrier = (): Collection<Row, string> =>
     createCollection<Row, string>({
-        // eslint-disable-next-line no-underscore-dangle -- `_id` is the Lunora document-id field
         getKey: (row) => row._id,
         id: `${OUTBOX_MUTATION_FN_NAME}:${safeRandomUUID()}`,
         startSync: true,

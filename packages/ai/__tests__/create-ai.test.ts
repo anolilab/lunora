@@ -53,11 +53,14 @@ const fakeBinding = (): AiBindingLike & { runCalls: [string, Record<string, unkn
 
 describe("createAi", () => {
     it("throws when neither a binding nor a provider is supplied", () => {
+        expect.assertions(1);
         expect(() => createAi({})).toThrow(/requires a `binding`/);
     });
 
     describe("model resolution (provider-agnostic seam)", () => {
         it("resolves a string model id against the Workers AI provider", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
 
@@ -68,6 +71,8 @@ describe("createAi", () => {
         });
 
         it("passes a bring-your-own AI SDK model straight through (no provider call)", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
             const external = { __external: "openai:gpt-5" } as unknown as LanguageModel;
@@ -79,6 +84,8 @@ describe("createAi", () => {
         });
 
         it("falls back to defaultModel when no model is passed", () => {
+            expect.assertions(1);
+
             const provider = fakeProvider();
             const ai = createAi({ defaultModel: "@cf/meta/llama-3.1-8b-instruct", provider });
 
@@ -88,6 +95,8 @@ describe("createAi", () => {
         });
 
         it("throws when no model and no defaultModel are available", () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
             expect(() => ai.model()).toThrow(/no model supplied and no `defaultModel`/);
@@ -96,6 +105,8 @@ describe("createAi", () => {
 
     describe("embedding model resolution", () => {
         it("resolves a string id against the provider's textEmbeddingModel", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
 
@@ -106,6 +117,8 @@ describe("createAi", () => {
         });
 
         it("passes a bring-your-own EmbeddingModel through unchanged", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
             const external = { __external: "openai-embed" } as unknown as EmbeddingModel;
@@ -115,6 +128,8 @@ describe("createAi", () => {
         });
 
         it("throws a clear LunoraError when the provider has no textEmbeddingModel", () => {
+            expect.assertions(2);
+
             const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
             const ai = createAi({ provider });
 
@@ -134,6 +149,8 @@ describe("createAi", () => {
         });
 
         it("falls back to defaultEmbeddingModel when no embedding model is passed", () => {
+            expect.assertions(1);
+
             const provider = fakeProvider();
             const ai = createAi({ defaultEmbeddingModel: "@cf/baai/bge-base-en-v1.5", provider });
 
@@ -143,6 +160,8 @@ describe("createAi", () => {
         });
 
         it("does not reuse the language-model defaultModel as an embedding fallback", () => {
+            expect.assertions(2);
+
             // A language-model default must never leak into embeddingModel(): the ids
             // belong to different Workers AI families, so reusing it would defer a
             // wrong-family error to inference time instead of failing locally.
@@ -154,6 +173,8 @@ describe("createAi", () => {
         });
 
         it("throws when no embedding model and no defaultEmbeddingModel are available", () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
             expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultEmbeddingModel`/);
@@ -162,6 +183,8 @@ describe("createAi", () => {
 
     describe("run (raw binding passthrough)", () => {
         it("forwards model, inputs, and options to the binding", async () => {
+            expect.assertions(2);
+
             const binding = fakeBinding();
             const ai = createAi({ binding, provider: fakeProvider() });
 
@@ -172,12 +195,16 @@ describe("createAi", () => {
         });
 
         it("throws when only a custom provider (no binding) was supplied", async () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
             await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run requires the `binding`/);
         });
 
         it("routes raw ai.run() through the env-resolved gateway when the caller sets none", async () => {
+            expect.assertions(1);
+
             const binding = fakeBinding();
             const ai = createAi({ binding, env: gatewayEnv() });
 
@@ -187,6 +214,8 @@ describe("createAi", () => {
         });
 
         it("carries the correlation metadata on the env-resolved gateway", async () => {
+            expect.assertions(1);
+
             const binding = fakeBinding();
             // eslint-disable-next-line no-secrets/no-secrets -- fake test trace id, not a real secret
             const traceId = "0123456789abcdef0123456789abcdef";
@@ -200,6 +229,8 @@ describe("createAi", () => {
         });
 
         it("preserves a caller-supplied gateway over the env-resolved one", async () => {
+            expect.assertions(1);
+
             const binding = fakeBinding();
             const ai = createAi({ binding, env: gatewayEnv() });
 
@@ -209,6 +240,8 @@ describe("createAi", () => {
         });
 
         it("leaves run options untouched when no gateway is configured", async () => {
+            expect.assertions(1);
+
             const binding = fakeBinding();
             const ai = createAi({ binding });
 
@@ -220,6 +253,8 @@ describe("createAi", () => {
 
     describe("provider construction from a binding", () => {
         it("builds the Workers AI provider from env.AI when no provider is given", () => {
+            expect.assertions(2);
+
             const binding = fakeBinding();
             // No `provider` → createAi must construct one via createWorkersAI and
             // expose it. We only assert it produced a callable provider; the real
@@ -232,6 +267,8 @@ describe("createAi", () => {
     });
 
     it("exposes the underlying provider for raw model access", () => {
+        expect.assertions(1);
+
         const provider = fakeProvider();
         const ai = createAi({ provider });
 

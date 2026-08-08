@@ -1,4 +1,3 @@
-/* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Lunora document fields the fixtures mirror */
 import { LunoraError } from "@lunora/errors";
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, describe, expect, it, vi } from "vitest";

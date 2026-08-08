@@ -304,6 +304,7 @@ export class EventsSync {
 
             return events.length;
         } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- fallback for a caller that supplied no `onError`; swallowing the failure silently is the worse default
             const onError = this.#options.onError ?? console.error;
 
             onError(error);

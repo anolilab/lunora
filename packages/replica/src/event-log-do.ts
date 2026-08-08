@@ -243,6 +243,7 @@ export class EventLogDO {
             // Log server-side, but return a generic message — echoing
             // `error.message` (or a stringified error) back to the caller can
             // leak stack-trace / internal detail (CodeQL: information exposure).
+            // eslint-disable-next-line no-console -- the only place the real error survives; the response deliberately carries none of it
             console.error("[event-log-do] request failed:", error);
 
             return errorResponse(500, "INTERNAL_ERROR", "internal error");

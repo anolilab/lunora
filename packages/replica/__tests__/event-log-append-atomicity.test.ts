@@ -29,6 +29,11 @@ interface StoredEventRow {
 /** A payload containing this marker makes the mock's INSERT throw — simulates a mid-batch write failure. */
 const FAIL_MARKER = "__FAIL__";
 
+/** The three `SELECT … FROM events` shapes the mock recognises. */
+const SEQ_RANGE = /WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i;
+const SEQ_SINCE = /WHERE\s+seq\s*>=\s*\?/i;
+const SEQ_LIMIT = /LIMIT\s+(\d+)/i;
+
 const createMockState = (): EventLogDO["state"] => {
     let events: StoredEventRow[] = [];
     let batches: StoredBatchRow[] = [];
@@ -89,20 +94,17 @@ const createMockState = (): EventLogDO["state"] => {
         }
 
         if (upper.includes("FROM EVENTS")) {
-            let rows = [...events];
+            // Both recognised WHERE shapes are the same bounded filter — a range
+            // names both ends, a `>= ?` names only the lower one — so pick the
+            // bounds and filter once. An unrecognised query stays unbounded.
+            const isRange = SEQ_RANGE.test(query);
+            const isSince = !isRange && SEQ_SINCE.test(query) && params.length > 0;
+            const from = isRange || isSince ? Number(params[0]) : Number.NEGATIVE_INFINITY;
+            const to = isRange ? Number(params[1]) : Number.POSITIVE_INFINITY;
 
-            if (/WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i.test(query)) {
-                const from = Number(params[0]);
-                const to = Number(params[1]);
+            let rows = events.filter((r) => r.seq >= from && r.seq <= to);
 
-                rows = rows.filter((r) => r.seq >= from && r.seq <= to);
-            } else if (/WHERE\s+seq\s*>=\s*\?/i.test(query) && params.length > 0) {
-                const since = Number(params[0]);
-
-                rows = rows.filter((r) => r.seq >= since);
-            }
-
-            const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+            const limitMatch = SEQ_LIMIT.exec(query);
 
             if (limitMatch) {
                 rows = rows.slice(0, Number(limitMatch[1]));
@@ -158,6 +160,8 @@ const doFetch = (do_: EventLogDO, method: string, path: string, body?: unknown):
 
 describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     it("a mid-batch write failure persists nothing (all-or-nothing)", async () => {
+        expect.assertions(2);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const res = await doFetch(do_, "POST", "/append", {
@@ -180,6 +184,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("a retried batch with the same batchId returns the original entries without duplicating", async () => {
+        expect.assertions(5);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const body = {
@@ -217,6 +223,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("multiple retries of the same batchId still yield exactly one persisted copy", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const body = { batchId: "dup-key", events: [{ type: "z", payload: {} }] };
@@ -232,6 +240,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("different batchIds are independent — no false-positive dedup", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         await doFetch(do_, "POST", "/append", { batchId: "batch-a", events: [{ type: "a", payload: {} }] });
@@ -244,6 +254,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("rejects an empty-string batchId", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const res = await doFetch(do_, "POST", "/append", { batchId: "", events: [{ type: "a", payload: {} }] });
@@ -252,6 +264,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("reusing a batchId with a DIFFERENT event batch is rejected as a conflict, not silently dropped", async () => {
+        expect.assertions(4);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const first = await doFetch(do_, "POST", "/append", { batchId: "reused-key", events: [{ type: "a", payload: { n: 1 } }] });

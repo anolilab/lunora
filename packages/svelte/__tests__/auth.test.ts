@@ -10,14 +10,14 @@ const createAuthFakeClient = () => {
     let currentUser: User | null = null;
     const tokenListeners = new Set<(t: string | null) => void>();
 
-    const setAuthToken = vi.fn((next: string | null) => {
+    const setAuthToken = vi.fn<(next: string | null) => void>((next) => {
         token = next;
         for (const listener of tokenListeners) listener(next);
     });
 
-    const getAuthToken = vi.fn((): string | null => token);
+    const getAuthToken = vi.fn<() => string | null>(() => token);
 
-    const onAuthTokenChange = vi.fn((listener: (tokenValue: string | null) => void): Unsubscribe => {
+    const onAuthTokenChange = vi.fn<(listener: (tokenValue: string | null) => void) => Unsubscribe>((listener) => {
         tokenListeners.add(listener);
 
         return () => {
@@ -25,7 +25,7 @@ const createAuthFakeClient = () => {
         };
     });
 
-    const getCurrentUser = vi.fn(async (): Promise<User | null> => currentUser);
+    const getCurrentUser = vi.fn<() => Promise<User | null>>(async () => currentUser);
 
     const setCurrentUser = (user: User | null) => {
         currentUser = user;

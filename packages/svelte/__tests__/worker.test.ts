@@ -51,7 +51,7 @@ const rpcRequest = (): Request =>
 describe("withLunora — SvelteKit single-worker composition (PLAN4 §3, class-B)", () => {
     it("delegates a non-reserved path to the wrapped SvelteKit handler", async () => {
         const shard = createShardSpy();
-        const svelteKit = { fetch: vi.fn(() => new Response("rendered page", { status: 200 })) };
+        const svelteKit = { fetch: vi.fn<() => Response>(() => new Response("rendered page", { status: 200 })) };
 
         const worker = withLunora(svelteKit, { shardDO: shard.namespace });
 
@@ -66,7 +66,7 @@ describe("withLunora — SvelteKit single-worker composition (PLAN4 §3, class-B
 
     it("routes /_lunora/rpc into Lunora rather than the SvelteKit handler", async () => {
         const shard = createShardSpy();
-        const svelteKit = { fetch: vi.fn(() => new Response("rendered page")) };
+        const svelteKit = { fetch: vi.fn<() => Response>(() => new Response("rendered page")) };
 
         const worker = withLunora(svelteKit, { shardDO: shard.namespace });
 
@@ -84,7 +84,7 @@ describe("withLunora — SvelteKit single-worker composition (PLAN4 §3, class-B
         const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const shard = createShardSpy();
         const svelteKit = {
-            fetch: vi.fn(() => {
+            fetch: vi.fn<() => Response>(() => {
                 throw new Error("SvelteKit render exploded");
             }),
         };
@@ -109,8 +109,8 @@ describe("withLunora — SvelteKit single-worker composition (PLAN4 §3, class-B
 
     it("accepts a factory that derives Lunora options from the per-request env", async () => {
         const shard = createShardSpy();
-        const svelteKit = { fetch: vi.fn(() => new Response("page")) };
-        const optionsFactory = vi.fn((env: unknown) => {
+        const svelteKit = { fetch: vi.fn<() => Response>(() => new Response("page")) };
+        const optionsFactory = vi.fn<(env: unknown) => { shardDO: never }>((env) => {
             return { shardDO: (env as { SHARD: unknown }).SHARD as never };
         });
 
