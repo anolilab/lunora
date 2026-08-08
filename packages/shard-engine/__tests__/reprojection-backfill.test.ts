@@ -1,10 +1,19 @@
+import { DatabaseSync } from "node:sqlite";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { runDataMigration } from "../src/data-migration";
 import { encodeDocJson } from "../src/do-sql";
-import { buildReprojectionMigration, countLegacyRows, reprojectableFields, reprojectionMigrationId, reprojectionTables } from "../src/reprojection-backfill";
+import {
+    buildReprojectionMigration,
+    countLegacyRows,
+    jsonPathSegment,
+    reprojectableFields,
+    reprojectionMigrationId,
+    reprojectionTables,
+} from "../src/reprojection-backfill";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -116,6 +125,49 @@ describe("reprojection backfill", () => {
             expect(buildReprojectionMigration(reprojectionMigrationId("auditLog"), schema, harness.sql)).toBeUndefined();
             expect(buildReprojectionMigration(reprojectionMigrationId("ledger"), schema, harness.sql)).toBeUndefined();
             expect(buildReprojectionMigration("backfill-names", schema, harness.sql)).toBeUndefined();
+        });
+    });
+
+    describe("json path segments", () => {
+        it("emits the bare form for an identifier-safe field", () => {
+            expect.assertions(2);
+
+            // Codegen already constrains schema field names to this shape
+            // (`FIELD_NAME_RE` in parse-validator), so the common case must not
+            // gain quotes it does not need — the shared helper this mirrors
+            // keys off the same regex.
+            expect(jsonPathSegment("amountMinor")).toBe("amountMinor");
+            expect(jsonPathSegment("_creationTime")).toBe("_creationTime");
+        });
+
+        it("escapes a backslash before the quote that would re-escape it", () => {
+            expect.assertions(2);
+
+            // `\` has to go first: escaping `"` first inserts a backslash that
+            // the `\` pass would then double.
+            expect(jsonPathSegment(String.raw`back\slash`)).toBe(String.raw`"back\\slash"`);
+            expect(jsonPathSegment(String.raw`quote"and\slash`)).toBe(String.raw`"quote\"and\\slash"`);
+        });
+
+        it("produces a path SQLite actually resolves", () => {
+            expect.assertions(3);
+
+            // The assertion that matters. An unescaped `\` yields
+            // `$."back\slash"`, which SQLite resolves to NULL rather than
+            // erroring — a silent miss, exactly what the quoting exists to stop.
+            const database = new DatabaseSync(":memory:");
+
+            try {
+                const document = JSON.stringify({ "amount.minor": 1, [String.raw`back\slash`]: 2, plain: 3 });
+                const read = (field: string): unknown =>
+                    (database.prepare(`SELECT json_extract(?, '$.${jsonPathSegment(field)}') AS v`).all(document) as { v: unknown }[])[0]?.v;
+
+                expect(read("plain")).toBe(3);
+                expect(read("amount.minor")).toBe(1);
+                expect(read(String.raw`back\slash`)).toBe(2);
+            } finally {
+                database.close();
+            }
         });
     });
 

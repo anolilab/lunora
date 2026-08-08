@@ -44,16 +44,41 @@ import { mayHoldProjectedValue } from "./sql-projection";
 const WIRE_TAG = (encodeWire(0n) as unknown[])[0] as string;
 
 /**
- * One JSON-path object key, quoted so SQLite's path grammar reads it as a single
- * segment. Without this a field named `amount.minor` becomes `$.amount.minor`,
- * which resolves to a *nested* key and silently matches nothing.
+ * Field names codegen admits without quoting — the regex `parse-validator.ts`
+ * enforces on every schema field, so anything matching it is already known to be
+ * a bare-safe JSON-path segment.
+ */
+const BARE_PATH_SEGMENT_RE = /^[A-Za-z_$][\w$]*$/u;
+
+/**
+ * One JSON-path object key, quoted when the bare form would misparse. Without
+ * this a field named `amount.minor` becomes `$.amount.minor`, which resolves to
+ * a *nested* key and silently matches nothing.
+ *
+ * `\` is escaped BEFORE `"`, or the backslash inserted by the quote escape would
+ * itself be re-escaped. Getting that order wrong is not theoretical: a field
+ * holding a backslash yields `$."back\slash"`, which SQLite 3.53 resolves to
+ * NULL rather than erroring — the same shape of silent miss the quoting exists
+ * to prevent.
+ *
+ * Deliberately behaviour-identical to `shared/json-path-segment.ts` (introduced
+ * on the branch that fixes this repo-wide) rather than importing it: that file
+ * does not exist here, and importing it would couple two otherwise independent
+ * PRs. Whichever merges second deletes this copy, and because the two agree
+ * exactly, that deletion is a no-op refactor rather than a behaviour change.
+ * Neither difference was reachable from here — schema field names come from
+ * codegen, which already constrains them to identifiers — but two copies of an
+ * escaping rule drifting in opposite directions is precisely the defect the
+ * shared helper exists to fix, and being unreachable today is how that survives
+ * to become reachable later.
  *
  * Known gap, deliberately not widened here: `documentPath` in `do-sql.ts` does
- * not quote either, so such a field is already unaddressable everywhere in this
+ * not quote at all, so such a field is already unaddressable everywhere in this
  * store. Fixing it there is the root-cause edit, but it changes the expression
  * text of every `CREATE INDEX`, so it needs a rebuild story of its own.
  */
-const jsonPathSegment = (field: string): string => `"${field.replaceAll('"', String.raw`\"`)}"`;
+const jsonPathSegment = (field: string): string =>
+    BARE_PATH_SEGMENT_RE.test(field) ? field : `"${field.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`)}"`;
 
 /**
  * Field names on `definition` that could hold a projected value.
@@ -217,6 +242,8 @@ const buildReprojectionMigration = (id: string, schema: SchemaLike, sql: SqlExec
     };
 };
 
-export { buildReprojectionMigration, countLegacyRows, reprojectableFields, reprojectionTables };
+// `jsonPathSegment` is exported for its own test only — deliberately NOT
+// re-exported from the package barrel, so it stays off the public API surface.
+export { buildReprojectionMigration, countLegacyRows, jsonPathSegment, reprojectableFields, reprojectionTables };
 
-export {REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId} from "../../../shared/reprojection-id";
+export { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId } from "../../../shared/reprojection-id";
