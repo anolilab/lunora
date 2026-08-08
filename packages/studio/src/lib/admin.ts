@@ -950,6 +950,17 @@ export interface RequestLogEntry {
     tablesRead: string[];
     /** Tables the handler wrote; empty for a read-only dispatch. */
     tablesWritten: string[];
+
+    /**
+     * W3C trace id (32-hex) of the dispatch; absent for a row written before the
+     * column existed.
+     *
+     * The request log is durable while the span ring it links to is in-memory, so
+     * a row older than the current DO instance carries an id whose waterfall is
+     * gone. The Trace link is therefore best-effort against local traces — the id
+     * still resolves in whatever collector `otlpSink` ships to.
+     */
+    traceId?: string;
     /** Epoch-ms the dispatch completed. */
     ts: number;
     /** Acting userId forwarded by the runtime; absent when anonymous. */

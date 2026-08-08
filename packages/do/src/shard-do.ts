@@ -6443,6 +6443,10 @@ abstract class ShardDO {
             shardKey: this.runner.shardKey,
             tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
             tablesWritten,
+            // Read from the shared per-request anchor rather than re-resolved, so
+            // the row lands in the SAME trace as this dispatch's `ctx.trace` spans
+            // and its `ctx.log` lines. `undefined` outside a dispatch-scoped call.
+            traceId: this.currentRequestTrace?.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };

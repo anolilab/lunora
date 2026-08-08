@@ -1,11 +1,12 @@
 import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { LogFilterCriteria } from "../../../src/features/logs/logs-panel";
 import { filterLogs, LogsPanel, summarizeLogs } from "../../../src/features/logs/logs-panel";
 import type { LogEntry, RequestLogEntry } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { peekPendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 import wrapInRouter from "../../render-with-router";
@@ -202,6 +203,54 @@ describe("logsPanel — requests view (default)", () => {
         const rows = await screen.findAllByTestId("lg-req-row");
 
         expect(rows[0]?.textContent).toContain("messages:send");
+    });
+});
+
+describe("logsPanel — trace drill-down", () => {
+    afterEach(() => {
+        sessionStorage.clear();
+    });
+
+    it("hands a request row's trace to the Traces panel, scoped to the browsed shard", async () => {
+        expect.assertions(2);
+
+        const traced: RequestLogEntry[] = [{ ...(REQUESTS[0] as RequestLogEntry), traceId: "trace-req" }];
+
+        render(renderPanel(createClient(ENTRIES, traced)));
+
+        fireEvent.click(await screen.findByTestId("lg-req-trace-link"));
+
+        // The hand-off, not the navigation, is the contract: Traces reads it on
+        // mount and pre-filters. Shard "" is the root DO the panel defaults to.
+        expect(peekPendingTraceFilter()?.traceId).toBe("trace-req");
+        expect(peekPendingTraceFilter()?.shardKey).toBe("");
+    });
+
+    it("shows no Trace link on a request row written before the trace_id column existed", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        // The shared REQUESTS fixtures carry no `traceId` — the legacy-row shape.
+        await screen.findAllByTestId("lg-req-row");
+
+        expect(screen.queryByTestId("lg-req-trace-link")).toBeNull();
+        expect(screen.getAllByTestId("lg-req-row")).toHaveLength(2);
+    });
+
+    it("hands an errors-view log line's trace over the same way", async () => {
+        expect.assertions(1);
+
+        const traced: LogEntry[] = [{ ...(ENTRIES[0] as LogEntry), traceId: "trace-log" }];
+
+        render(renderPanel(createClient(traced)));
+
+        await screen.findByTestId("lg-table");
+        await switchToErrors();
+
+        fireEvent.click(await screen.findByTestId("lg-trace-link"));
+
+        expect(peekPendingTraceFilter()?.traceId).toBe("trace-log");
     });
 });
 

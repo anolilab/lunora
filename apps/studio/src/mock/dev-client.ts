@@ -437,6 +437,7 @@ const dataFor = (reference: string, args: unknown): unknown => {
                         subscriptionsReRun: 0,
                         tablesRead: ["messages"],
                         tablesWritten: [],
+                        traceId: "trace-list",
                         ts: now - 4000,
                     },
                     {
@@ -448,7 +449,21 @@ const dataFor = (reference: string, args: unknown): unknown => {
                         subscriptionsReRun: 0,
                         tablesRead: ["posts"],
                         tablesWritten: [],
+                        traceId: "trace-publish",
                         ts: now - 9000,
+                    },
+                    // No `traceId`: a row written before the column existed. The
+                    // Requests view must render it with no Trace link rather than
+                    // an empty button.
+                    {
+                        durationMs: 8,
+                        functionPath: "messages:send",
+                        outcome: "ok",
+                        seq: 8999,
+                        subscriptionsReRun: 2,
+                        tablesRead: [],
+                        tablesWritten: ["messages"],
+                        ts: now - 14_000,
                     },
                 ],
             };

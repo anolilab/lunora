@@ -401,8 +401,18 @@ block (span id, kind, the full attribute bag, the error, and any
 same dispatch emitted, joined by trace id. **Errors only** narrows the list to
 traces where something threw; the search box matches a span name or span id as
 well as the trace's own identifiers, so an id pasted from an error report finds
-the trace containing it. In the **Logs** panel, a line emitted inside a dispatch
-carries a **Trace** link that opens its waterfall on the shard it came from.
+the trace containing it. Both **Logs** views carry a **Trace** link on rows
+emitted inside a dispatch, opening the waterfall on the shard it came from.
+
+:::caution[The Requests view's Trace link is best-effort]
+The durable request log records each dispatch's trace id, but it **outlives** the
+span ring it points at: the log survives hibernation and the ring does not. A
+Trace link on a row older than the current DO instance therefore lands on an
+empty Traces panel — the trace has aged out locally. The id itself stays valid
+wherever [`otlpSink`](#otlpsink) ships spans, which is where a deployed app's
+traces are retained; it is also emitted on the `Logpush` console event, so a SIEM
+can join a request to its spans.
+:::
 
 ### Generation spans (AI)
 

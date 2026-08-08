@@ -56,6 +56,7 @@ interface AppendRequestLogEntry {
     subscriptionsReRun?: number;
     tablesRead?: string[];
     tablesWritten?: string[];
+    traceId?: string;
     ts: number;
     userId?: string;
 }
@@ -681,6 +682,7 @@ interface RequestLogEntry {
     subscriptionsReRun: number;
     tablesRead: string[];
     tablesWritten: string[];
+    traceId?: string;
     ts: number;
     userId?: string;
 }

@@ -53,6 +53,46 @@ const OUTCOME_VARIANT: Record<RequestOutcome, BadgeVariant> = {
     ok: "secondary",
 };
 
+interface TraceLinkCellProps {
+    /** Open the Traces panel filtered to this row's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
+    readonly testId: string;
+    /** Absent for a row with no ambient trace, or one predating the field. */
+    readonly traceId?: string;
+}
+
+/**
+ * The trailing "Trace" cell shared by both log views — the drill-down from a
+ * line to the waterfall it came from, instead of matching timestamps by eye.
+ *
+ * Best-effort by construction on the Requests side: that log is durable while
+ * the span ring is in-memory, so a row older than the current DO instance links
+ * to a waterfall that has been hibernated away and the Traces panel shows its
+ * ordinary empty state. The id stays valid in an external collector either way.
+ *
+ * Renders an empty cell rather than nothing when there is no trace, so the
+ * column width stays constant down the virtualized list.
+ */
+const TraceLinkCell = ({ onOpenTrace, testId, traceId }: TraceLinkCellProps): ReactElement => {
+    const t = useT();
+
+    const onClick = (): void => {
+        if (traceId !== undefined) {
+            onOpenTrace(traceId);
+        }
+    };
+
+    return (
+        <span className="w-16 shrink-0 text-right" role="gridcell">
+            {traceId === undefined ? null : (
+                <button className="text-primary underline-offset-2 hover:underline" data-testid={testId} onClick={onClick} type="button">
+                    {t("Trace")}
+                </button>
+            )}
+        </span>
+    );
+};
+
 interface LogRowProps {
     readonly entry: LogEntry;
     readonly index: number;
@@ -71,18 +111,10 @@ interface LogRowProps {
  * fresh inline objects.
  */
 const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): ReactElement => {
-    const t = useT();
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
     // Rendered once; `""` (no fields, or an empty bag from a worker predating
     // field normalization) skips the chip entirely rather than showing a blank span.
     const fields = formatLogFields(entry.fields);
-    const { traceId } = entry;
-
-    const onTraceClick = (): void => {
-        if (traceId !== undefined) {
-            onOpenTrace(traceId);
-        }
-    };
 
     return (
         <div
@@ -110,20 +142,7 @@ const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): 
                     </span>
                 )}
             </span>
-            {/*
-             * The drill-down the two panels were missing: a line emitted inside a
-             * dispatch knows its trace, so it can hand you the waterfall it came
-             * from instead of leaving you to match timestamps by eye. Absent for
-             * lines with no ambient trace (container lifecycle, hibernation errors)
-             * and for any worker predating the buffered `traceId`.
-             */}
-            <span className="w-16 shrink-0 text-right" role="gridcell">
-                {traceId === undefined ? null : (
-                    <button className="text-primary underline-offset-2 hover:underline" data-testid="lg-trace-link" onClick={onTraceClick} type="button">
-                        {t("Trace")}
-                    </button>
-                )}
-            </span>
+            <TraceLinkCell onOpenTrace={onOpenTrace} testId="lg-trace-link" traceId={entry.traceId} />
         </div>
     );
 };
@@ -132,6 +151,8 @@ interface RequestRowProps {
     readonly entry: RequestLogEntry;
     readonly index: number;
     readonly measureRef: (node: HTMLDivElement | null) => void;
+    /** Open the Traces panel filtered to this dispatch's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
     readonly start: number;
 }
 
@@ -143,7 +164,7 @@ const tablesLabel = (tables: string[]): string => (tables.length === 0 ? "—" :
  * log adds over the in-memory error buffer: function path, shard, acting user,
  * outcome, duration, and the read/written table sets.
  */
-const RequestRow = ({ entry, index, measureRef, start }: RequestRowProps): ReactElement => {
+const RequestRow = ({ entry, index, measureRef, onOpenTrace, start }: RequestRowProps): ReactElement => {
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
 
     return (
@@ -178,6 +199,7 @@ const RequestRow = ({ entry, index, measureRef, start }: RequestRowProps): React
                     ? entry.errorMessage
                     : `r:${tablesLabel(entry.tablesRead)} · w:${tablesLabel(entry.tablesWritten)}`}
             </span>
+            <TraceLinkCell onOpenTrace={onOpenTrace} testId="lg-req-trace-link" traceId={entry.traceId} />
         </div>
     );
 };
@@ -618,6 +640,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                                             index={virtualRow.index}
                                             key={virtualRow.key}
                                             measureRef={virtualizer.measureElement}
+                                            onOpenTrace={openTrace}
                                             start={virtualRow.start}
                                         />
                                     ) : (
