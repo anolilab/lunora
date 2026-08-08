@@ -127,11 +127,18 @@ on a scheduled snapshot as well as a hand-taken one. A snapshot with no recorded
 checksum — one written by a release before this feature existed — fails
 `--verify` rather than passing quietly.
 
-A bucket-backed snapshot is uploaded as a single body, so it has to fit in
-memory: `create --bucket` refuses above 256 MiB and tells you the ways out
-(`--tables` to narrow it, or `--dir` plus `wrangler r2 object put` to move the
-file yourself). The scheduled backup, which runs inside a Worker isolate rather
-than on a machine, refuses above 64 MiB.
+`list --bucket` reads one object per snapshot (the sidecar), so a bucket holding
+thousands of snapshots is that many small reads; a damaged or unrelated
+`.manifest.json` under the prefix is skipped with a warning rather than failing
+the command.
+
+Both tiers cap the snapshot they will build, and for different reasons.
+`create --bucket` refuses above **32 MiB**, the limit of the checksum-verified
+upload route — bigger would mean an unverified signed PUT, which is not what the
+copy you restore from should depend on. The scheduled backup refuses above
+**24 MiB**, because it assembles the snapshot inside a Worker isolate. Either
+way the answer is `--tables` / `backupTables`, or `--dir` plus
+`wrangler r2 object put` to move a large file yourself.
 
 <Callout>
     On `@lunora/platform-node`, object storage is an fs-backed shim: a "bucket" there is a directory on the same machine. The commands work unchanged, but it is
@@ -170,9 +177,15 @@ admin routes and the bucket binding is the authority. The manifest lives beside
 the snapshots in the same bucket, so `list` is one read and there is no separate
 index to have lost.
 
-If the worker itself is gone too, the objects are still ordinary R2 objects:
-`wrangler r2 object get <bucket>/backups/lunora-backup-<id>.ndjson` pulls one
-down, and `lunora import` replays it into any deployment.
+If the worker itself is gone too, the objects are still ordinary R2 objects.
+Note the key uses the file-name form of the id — dashes, not colons:
+
+```bash
+wrangler r2 object list <bucket> --prefix backups/
+wrangler r2 object get <bucket>/backups/lunora-backup-2026-06-01T12-00-00-000Z.ndjson \
+    --file ./snapshot.ndjson
+lunora import ./snapshot.ndjson --url https://api.example.com
+```
 
 ## Export and import
 

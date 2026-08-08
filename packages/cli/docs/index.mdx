@@ -615,9 +615,13 @@ and `.` swapped for `-`, because those characters are awkward in filenames
 (`lunora-backup-2026-06-01T12-00-00-000Z.ndjson`). `restore` takes either: an id
 it finds in the manifest, or a path/key you name directly.
 
-A bucket-backed snapshot is uploaded as one body, so it has to fit in the CLI's
-memory: above 256 MiB `create --bucket` refuses and names the workaround
-(`--tables`, or `--dir` plus `wrangler r2 object put`).
+A bucket-backed snapshot goes through the checksum-verified admin upload route,
+which takes one body and caps it at 32 MiB. Above that `create --bucket` refuses
+and names the workaround (`--tables` to narrow the snapshot, or `--dir` plus
+`wrangler r2 object put` to move the file yourself). The alternative — the
+signed-PUT fallback the blob importer uses for large files — is not
+checksum-verified and needs URL signing configured, which is not what the copy
+you restore from should depend on.
 
 See [Backups, export & import](/docs/concepts/backups) for the full picture —
 snapshot format, restore drills, and moving data between deployments.

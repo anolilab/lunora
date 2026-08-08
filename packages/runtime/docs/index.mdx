@@ -212,16 +212,23 @@ reporting an unverified restore as a verified one.)
 ### Size
 
 The backup is built in the isolate: `orchestrateExport` resolves every shard's
-rows into memory before the first byte is written, so the snapshot has to fit
-alongside them in a Worker's ~128 MB. The run therefore **refuses at 64 MiB of
-NDJSON** (`BACKUP_TOO_LARGE`) instead of being killed for running out of
-memory — the cron invocation fails loudly and nothing is written. Narrow it with
-`backupTables`, take snapshots more often, or move the job off-platform with
-`lunora backup create --bucket`, which has more headroom (256 MiB) because it
-runs on a machine rather than in an isolate.
+rows into memory before the first row is encoded, so the snapshot has to fit
+alongside them in a Worker's ~128 MB. The run **refuses past 24 MiB of NDJSON**
+(`BACKUP_TOO_LARGE`) — the cron invocation fails loudly and nothing is written.
 
-Raising that ceiling means making the export itself streaming; a bigger object
-or a multipart upload would not help, because the rows are already in memory
+Read that cap for what it is: a bound on the snapshot, not on peak memory. For
+shard-local tables the row set is already resident when the first check runs, so
+it only bounds anything incrementally for `.global()` tables, which stream from
+a generator. The number is set well under the isolate's limit precisely because
+it cannot bound the larger allocation, and a backup comfortably under it can
+still exhaust a Worker if the row set behind it is large.
+
+Narrow it with `backupTables`, or move the job off-platform with
+`lunora backup create --bucket` (32 MiB, and it runs on a machine). Backing up
+more often does not help — every run is a full snapshot, not an increment.
+
+Raising the ceiling means making the export fan-out stream per shard. A bigger
+object or a multipart upload would not help: the rows are already in memory
 before the upload starts.
 
 ### Reading objects back
