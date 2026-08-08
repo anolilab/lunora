@@ -8,9 +8,9 @@
  * a local path, and the destination decides whether that path _is_ the backup
  * or a staging file on its way somewhere else.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -127,6 +127,27 @@ const readManifest = async (directory: string): Promise<BackupManifestEntry[]> =
 };
 
 /**
+ * Replace the manifest in one step: write a sibling temp file, then rename over
+ * the old one. Writing in place truncates first, so a crash or a full disk
+ * mid-write leaves an unparseable index — and {@link readManifest} then refuses
+ * every later `backup create` rather than clobbering it, which turns one bad
+ * write into a stuck backup schedule. The temp file is a sibling so the rename
+ * stays within one filesystem, where it is atomic.
+ */
+const writeManifest = async (directory: string, entries: ReadonlyArray<BackupManifestEntry>): Promise<void> => {
+    const temporaryPath = join(directory, `${MANIFEST_FILE}.${randomUUID()}.tmp`);
+
+    try {
+        await writeFile(temporaryPath, `${JSON.stringify(entries, undefined, 2)}\n`, "utf8");
+        await rename(temporaryPath, join(directory, MANIFEST_FILE));
+    } catch (error: unknown) {
+        await rm(temporaryPath, { force: true });
+
+        throw error;
+    }
+};
+
+/**
  * Backups in a local directory: the snapshot is written straight to its final
  * path (staging *is* committing) and the index is a single `manifest.json`
  * beside the snapshots.
@@ -151,7 +172,7 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
             const manifest = await readManifest(directory);
 
             manifest.push(entry);
-            await writeFile(join(directory, MANIFEST_FILE), `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
+            await writeManifest(directory, manifest);
         },
         stage: async (name) => {
             await mkdir(directory, { recursive: true });

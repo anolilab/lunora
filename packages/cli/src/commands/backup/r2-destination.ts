@@ -40,6 +40,19 @@ const MANIFEST_SUFFIX = ".manifest.json";
 /** Default key prefix — the same one the platform's scheduled backup writes under, so both land in one history. */
 const DEFAULT_BACKUP_PREFIX = "backups/";
 
+/**
+ * Largest snapshot this destination will upload, because it uploads by value:
+ * the admin upload route takes a whole body, and so does the signed-PUT
+ * fallback above that route's 32 MiB cap, so the snapshot is read into memory
+ * to send it. Refusing at a stated limit is the honest failure — the
+ * alternative is an out-of-memory crash after a successful export, which tells
+ * the operator nothing.
+ *
+ * Lifting it means teaching the upload path R2 multipart (and giving
+ * `StreamingFetchLike` a stream body), not raising this number.
+ */
+const MAX_BUCKET_SNAPSHOT_BYTES = 256 * 1_048_576;
+
 interface R2DestinationOptions {
     /** Where to reach the worker's admin storage routes, and which bucket to address (`context.bucket`). */
     context: BlobUploadContext;
@@ -75,10 +88,14 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
     return {
         commit: async (file, stagedPath, digest) => {
             try {
-                // ponytail: the snapshot is buffered to upload it, because the
-                // admin upload route (and the signed-PUT fallback above its 32
-                // MiB cap) both take a whole body. Snapshots beyond a few
-                // hundred MiB need R2 multipart before this is safe.
+                if (digest.bytes > MAX_BUCKET_SNAPSHOT_BYTES) {
+                    throw new LunoraError(
+                        "INTERNAL",
+                        `backup: the snapshot is ${String(digest.bytes)} bytes, above the ${String(MAX_BUCKET_SNAPSHOT_BYTES)}-byte limit for a bucket upload (it is sent as one body, so it has to fit in memory). Narrow it with \`--tables\`, or take it to a directory with \`--dir\` and move the file with \`wrangler r2 object put\`.`,
+                    );
+                }
+
+                // Read by value: see MAX_BUCKET_SNAPSHOT_BYTES.
                 const body = await readFile(stagedPath);
 
                 await uploadStorageBlob(
@@ -125,7 +142,16 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
             const directory = await mkdtemp(join(tmpdir(), "lunora-backup-"));
             const path = join(directory, file.split("/").at(-1) ?? "snapshot.ndjson");
 
-            await pipeline(Readable.from(response.body as AsyncIterable<Uint8Array>), createWriteStream(path));
+            try {
+                await pipeline(Readable.from(response.body as AsyncIterable<Uint8Array>), createWriteStream(path));
+            } catch (error: unknown) {
+                // Nothing returns `release` on this path, so the temp directory
+                // (holding however much of the snapshot arrived) would be left
+                // behind on every failed download.
+                await rm(directory, { force: true, recursive: true });
+
+                throw error;
+            }
 
             return { path, release: async () => rm(directory, { force: true, recursive: true }) };
         },
