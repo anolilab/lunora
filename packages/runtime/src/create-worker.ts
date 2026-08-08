@@ -52,7 +52,7 @@ import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
-import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, toHex } from "./storage-admin-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
 import { createDroppedTraceNotice, resolveTraceTrust } from "./trace-trust";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
@@ -569,8 +569,11 @@ interface BackupStore {
     }>;
     put: (
         key: string,
-        body: ArrayBuffer | Blob | null | ReadableStream | string,
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
+        body: ArrayBuffer | ArrayBufferView | Blob | null | ReadableStream | string,
+        // `sha256` (hex or bytes) is what makes R2 record a checksum for the
+        // object; without it `list()`/`head()` report none and every later
+        // integrity check degrades to comparing sizes.
+        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
     ) => Promise<unknown>;
 }
 
@@ -588,6 +591,13 @@ interface BackupManifest {
     id: string;
     rows: number;
     scheduledTime: number;
+
+    /**
+     * Lowercase-hex SHA-256 of the snapshot, recorded on the object as well as
+     * here. `lunora backup restore --verify` checks the bytes against it, which
+     * is what keeps the unattended tier as checkable as the hand-run one.
+     */
+    sha256: string;
     tables?: string;
 }
 
@@ -1374,6 +1384,38 @@ interface RpcContext {
  * a fresh encoder per export/backup stream.
  */
 const NDJSON_ENCODER = new TextEncoder();
+
+/**
+ * How much NDJSON the scheduled backup will hold before it refuses the run.
+ *
+ * The export fan-out resolves every shard's rows into memory before a single
+ * byte is written, so the snapshot is built in the isolate whatever the upload
+ * looks like — and a Worker isolate has ~128 MB. Half of that is the point past
+ * which "it worked in staging" turns into an out-of-memory kill in production
+ * with no diagnostic. Refusing at a stated number, with the workarounds named,
+ * is the failure an operator can act on.
+ *
+ * R2 itself would take far more (≈5 GiB in one `put`, terabytes multipart);
+ * this bound is the isolate's, not the store's.
+ */
+const MAX_SCHEDULED_BACKUP_BYTES = 64 * 1_048_576;
+
+/**
+ * Join the encoded NDJSON chunks into the exact bytes that get hashed and
+ * stored. One allocation of a known length — the chunks are dropped by the
+ * caller immediately afterwards.
+ */
+const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Uint8Array<ArrayBuffer> => {
+    const out = new Uint8Array(new ArrayBuffer(totalBytes));
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return out;
+};
 
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
@@ -4134,32 +4176,42 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
         const tables = options.backupTables;
 
-        // Stream the NDJSON straight into R2 so the concatenated body is never
-        // held in worker memory at once. `put` resolves after the stream is
-        // fully consumed, so the row/byte counters are final by the time we
-        // write the manifest. Caveat: the shard fan-out is materialised per
-        // shard (one envelope each) and collected before the stream drains, so
-        // peak memory still scales with the total shard-local row count — the
-        // streaming bounds the response bytes, not the source data.
+        // This backup is built in memory, and says so. The export fan-out
+        // (`orchestrateExport`) resolves every shard's rows into one array
+        // before the first row is written here, so the peak is the row set
+        // itself — an upload that streamed, multipart or otherwise, would remove
+        // one copy of the encoded bytes and not raise that ceiling. What bounds
+        // the run is {@link MAX_SCHEDULED_BACKUP_BYTES}, checked as rows arrive
+        // so an oversized shard fails loudly at a stated limit instead of
+        // taking the isolate down with an out-of-memory kill.
+        //
+        // Lifting the ceiling means making the export itself streaming, not
+        // changing the upload.
         let rows = 0;
         let bytes = 0;
-        const parts: string[] = [];
+        const chunks: Uint8Array[] = [];
 
         const writeRow = (row: ExportRow): void => {
-            const line = `${JSON.stringify(row)}\n`;
+            // Encode once: these are the exact bytes that get hashed and stored,
+            // so the manifest's `bytes` is the object's real length rather than
+            // a UTF-16 string length.
+            const chunk = NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`);
 
             rows += 1;
-            // Count real UTF-8 bytes for the manifest, not UTF-16 string length.
-            bytes += NDJSON_ENCODER.encode(line).byteLength;
-            parts.push(line);
+            bytes += chunk.byteLength;
+
+            if (bytes > MAX_SCHEDULED_BACKUP_BYTES) {
+                throw new LunoraError(
+                    `scheduled backup exceeded the ${String(MAX_SCHEDULED_BACKUP_BYTES)}-byte in-memory limit — nothing was written. Narrow it with \`backupTables\`, shorten the interval, or take this snapshot off-platform with \`lunora backup create --bucket\`.`,
+                    { code: "BACKUP_TOO_LARGE", status: 507 },
+                );
+            }
+
+            chunks.push(chunk);
         };
 
-        // Collect the NDJSON before writing it. R2 `put` requires a known-length
-        // body (a raw ReadableStream of unknown length is rejected by workerd),
-        // and the per-shard fan-out already materialises every row in memory
-        // before the export drains, so a Blob here adds no meaningful peak-memory
-        // cost over the source data. An error from the export propagates
-        // directly, so no partial object is ever written.
+        // An error from the export (including the size guard above) propagates
+        // out of here, so no partial object and no manifest is ever written.
         await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
 
         const prefix = options.backupPrefix ?? "backups/";
@@ -4167,9 +4219,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Colons/periods are awkward in object keys; keep the raw id for the manifest.
         const fileKey = `${prefix}lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
         const manifestKey = `${fileKey}.manifest.json`;
+        const body = concatChunks(chunks, bytes);
+        // Digest the snapshot and hand it to R2 with the body: R2 verifies the
+        // digest on write and records it, so a corrupted upload fails closed and
+        // `head`/`list` can report a checksum afterwards. Recording it in the
+        // manifest too is what lets `lunora backup restore --verify` check a
+        // cron-written snapshot — without it the unattended tier would be the
+        // one nobody can verify, which is backwards.
+        const sha256 = toHex(await crypto.subtle.digest("SHA-256", body));
 
-        await store.put(fileKey, new Blob(parts, { type: "application/x-ndjson" }), {
+        await store.put(fileKey, body, {
             httpMetadata: { contentType: "application/x-ndjson" },
+            sha256,
         });
 
         const manifest: BackupManifest = {
@@ -4180,6 +4241,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             id: timestamp,
             rows,
             scheduledTime: controller.scheduledTime,
+            sha256,
             ...(tables ? { tables: tables.join(",") } : {}),
         };
 

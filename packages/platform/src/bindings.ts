@@ -307,7 +307,12 @@ export interface R2BucketLike {
         // drifting from the binding it projects. A `Uint8Array` is the most
         // natural thing to hand a byte store.
         body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string | null,
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
+        // `sha256` is in the real `R2Bucket.put` signature and `@lunora/storage`'s
+        // `upload` has always passed it; the projection omitted it, which is the
+        // drift this file exists to prevent. R2 verifies the digest on write and
+        // records it, and a recorded digest is the only reason `list()`/`head()`
+        // can report `checksums.sha256` at all.
+        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
     ) => Promise<R2ObjectLike>;
     /** Resume an in-progress multipart upload by id (R2 `resumeMultipartUpload`). Optional; see {@link Storage.resumeMultipartUpload}. */
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;

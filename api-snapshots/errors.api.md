@@ -240,6 +240,15 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";
     };
+    readonly BACKUP_TOO_LARGE: {
+        readonly hint: readonly [
+            "The scheduled backup is assembled in the Worker isolate — the export fan-out resolves every shard's rows into memory before the first byte is written — so it refuses past a fixed size instead of being killed for running out of memory. Nothing was written.",
+            "",
+            "Narrow the snapshot with `backupTables`, run the cron more often so each snapshot is smaller, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate."
+        ];
+        readonly status: 507;
+        readonly title: "Backup too large to assemble in memory";
+    };
     readonly CRON_JOBS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Cron jobs not configured";
@@ -289,9 +298,22 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage delete not configured";
     };
+    readonly STORAGE_DOWNLOAD_NOT_CONFIGURED: {
+        readonly hint: readonly [
+            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker (`createStorage(...).download`). The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass it.",
+            "",
+            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`."
+        ];
+        readonly status: 400;
+        readonly title: "Storage download not configured";
+    };
     readonly STORAGE_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Storage not configured";
+    };
+    readonly STORAGE_OBJECT_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Storage object not found";
     };
     readonly STORAGE_UPLOAD_NOT_CONFIGURED: {
         readonly status: 400;

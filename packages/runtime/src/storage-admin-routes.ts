@@ -286,4 +286,4 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 };
 
 export type { StorageAdminRouteDeps };
-export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_OBJECT_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH };
+export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_OBJECT_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH, toHex };

@@ -377,6 +377,7 @@ interface R2BucketLike {
         httpMetadata?: {
             contentType?: string;
         };
+        sha256?: ArrayBuffer | string;
     }) => Promise<R2ObjectLike>;
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
 }

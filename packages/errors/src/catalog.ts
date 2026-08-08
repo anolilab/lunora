@@ -190,6 +190,15 @@ export const ERROR_CATALOG = {
     AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
     AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
+    BACKUP_TOO_LARGE: {
+        hint: [
+            "The scheduled backup is assembled in the Worker isolate — the export fan-out resolves every shard's rows into memory before the first byte is written — so it refuses past a fixed size instead of being killed for running out of memory. Nothing was written.",
+            "",
+            "Narrow the snapshot with `backupTables`, run the cron more often so each snapshot is smaller, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate.",
+        ],
+        status: 507,
+        title: "Backup too large to assemble in memory",
+    },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
     EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
@@ -209,7 +218,17 @@ export const ERROR_CATALOG = {
         title: "Storage checksum mismatch",
     },
     STORAGE_DELETE_NOT_CONFIGURED: { status: 400, title: "Storage delete not configured" },
+    STORAGE_DOWNLOAD_NOT_CONFIGURED: {
+        hint: [
+            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker (`createStorage(...).download`). The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass it.",
+            "",
+            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`.",
+        ],
+        status: 400,
+        title: "Storage download not configured",
+    },
     STORAGE_NOT_CONFIGURED: { status: 400, title: "Storage not configured" },
+    STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
     VECTORS_NOT_CONFIGURED: { status: 400, title: "Vector index introspector not configured" },

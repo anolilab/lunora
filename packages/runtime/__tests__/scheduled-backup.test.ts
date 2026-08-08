@@ -38,27 +38,51 @@ const coordinatorWithExport = (rows: ExportRows): QueryCoordinator => {
     };
 };
 
+/** Decode any body shape `BackupStore.put` accepts, so the double never silently records an empty object. */
+const bodyText = async (body: unknown): Promise<string> => {
+    if (typeof body === "string") {
+        return body;
+    }
+
+    if (body instanceof Blob) {
+        return body.text();
+    }
+
+    if (body instanceof ReadableStream) {
+        return new Response(body).text();
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return new TextDecoder().decode(body);
+    }
+
+    if (body instanceof ArrayBuffer) {
+        return new TextDecoder().decode(body);
+    }
+
+    throw new TypeError(`backup store double received an unsupported body: ${Object.prototype.toString.call(body)}`);
+};
+
 /** An in-memory {@link BackupStore} double that records put/delete and serves list pages. */
-const memoryBackupStore = (): BackupStore & { objects: Map<string, string> } => {
+const memoryBackupStore = (): BackupStore & { checksums: Map<string, string>; objects: Map<string, string> } => {
     const objects = new Map<string, string>();
+    const checksums = new Map<string, string>();
 
-    const put = vi.fn<(key: string, body: unknown) => Promise<{ etag: string; key: string; size: number }>>(async (key, body) => {
-        let text: string;
+    const put = vi.fn<(key: string, body: unknown, putOptions?: { sha256?: ArrayBuffer | string }) => Promise<{ etag: string; key: string; size: number }>>(
+        async (key, body, putOptions) => {
+            const text = await bodyText(body);
 
-        if (typeof body === "string") {
-            text = body;
-        } else if (body instanceof Blob) {
-            text = await body.text();
-        } else if (body instanceof ReadableStream) {
-            text = await new Response(body).text();
-        } else {
-            text = "";
-        }
+            objects.set(key, text);
 
-        objects.set(key, text);
+            // R2 records a checksum only when the writer supplies one; the
+            // double keeps that distinction so a test can tell them apart.
+            if (typeof putOptions?.sha256 === "string") {
+                checksums.set(key, putOptions.sha256);
+            }
 
-        return { etag: "e", key, size: text.length };
-    });
+            return { etag: "e", key, size: text.length };
+        },
+    );
 
     const list = vi.fn<(listOptions?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{ objects: { key: string }[] }>>(async (listOptions) => {
         const prefix = listOptions?.prefix ?? "";
@@ -75,8 +99,12 @@ const memoryBackupStore = (): BackupStore & { objects: Map<string, string> } => 
         objects.delete(key);
     });
 
-    return { delete: remove, list, objects, put };
+    return { checksums, delete: remove, list, objects, put };
 };
+
+/** Lowercase-hex SHA-256 of a UTF-8 string — the same digest the runtime computes over the snapshot. */
+const sha256Hex = async (text: string): Promise<string> =>
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const fire = async (worker: ReturnType<typeof createWorker>, controller: ScheduledControllerLike): Promise<void> => {
     await worker.scheduled(controller, {}, { passThroughOnException: () => undefined, waitUntil: () => undefined });
@@ -120,6 +148,60 @@ describe("createWorker — scheduled backup", () => {
 
         expect(manifest.rows).toBe(2);
         expect(manifest).toMatchObject({ createdAt: "2026-06-03T12:00:00.000Z", cron: BACKUP_CRON, file: ndjsonKey, scheduledTime: SCHEDULED_TIME });
+    });
+
+    it("records the snapshot's checksum on the object and in the manifest", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        const ndjsonKey = "backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson";
+        const manifest = JSON.parse(store.objects.get(`${ndjsonKey}.manifest.json`) ?? "") as BackupManifest;
+        const expected = await sha256Hex(store.objects.get(ndjsonKey) ?? "");
+
+        // Without a recorded checksum the unattended tier is the one nobody can
+        // check — `lunora backup restore --verify` would have nothing to compare
+        // a cron-written snapshot against.
+        expect(manifest.sha256).toBe(expected);
+        // Handed to R2 as well, which verifies it on write and reports it later.
+        expect(store.checksums.get(ndjsonKey)).toBe(expected);
+        expect(store.checksums.has(`${ndjsonKey}.manifest.json`)).toBe(false);
+    });
+
+    it("refuses a snapshot past the in-memory limit instead of running the isolate out of memory", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        // ~1 KiB per row × 200k rows is comfortably past the 64 MiB bound, and
+        // the guard trips while rows are still arriving rather than after the
+        // whole export has been held.
+        const wide = "x".repeat(1024);
+        const rows = Array.from({ length: 200_000 }, (_unused, index) => {
+            return { doc: { _id: `u${String(index)}`, blob: wide }, table: "users" };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport(rows),
+            shardDO: noopNamespace,
+        });
+
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/in-memory limit/u);
+
+        // Nothing written, so no manifest can point at a snapshot that is not there.
+        expect(store.objects.size).toBe(0);
+        expect(store.put).not.toHaveBeenCalled();
     });
 
     it("includes `.global()` rows from exportGlobals in the snapshot", async () => {

@@ -343,6 +343,7 @@ interface BackupManifest {
     id: string;
     rows: number;
     scheduledTime: number;
+    sha256: string;
     tables?: string;
 }
 ```
@@ -363,11 +364,12 @@ interface BackupStore {
         }>;
         truncated?: boolean;
     }>;
-    put: (key: string, body: ArrayBuffer | Blob | null | ReadableStream | string, options?: {
+    put: (key: string, body: ArrayBuffer | ArrayBufferView | Blob | null | ReadableStream | string, options?: {
         customMetadata?: Record<string, string>;
         httpMetadata?: {
             contentType?: string;
         };
+        sha256?: ArrayBuffer | string;
     }) => Promise<unknown>;
 }
 ```
