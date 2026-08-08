@@ -16,6 +16,7 @@
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
@@ -65,7 +66,11 @@ const documentPath = (prefix: string, field: string): string => {
         return `${prefix}_creationTime`;
     }
 
-    return `json_extract(${prefix}${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
+    // Two grammars, both owed, in this order: `jsonPathSegment` quotes for
+    // SQLite's JSON-path grammar (`a.b` is one key, not a nested lookup), then
+    // `'` doubling escapes the finished path for the SQL string literal it sits
+    // in. Doing only the second is what let `$.a.b` read the wrong slot.
+    return `json_extract(${prefix}${DOC_COLUMN}, '$.${jsonPathSegment(field).replaceAll("'", "''")}')`;
 };
 
 const jsonPath = (field: string): string => documentPath("", field);
@@ -74,8 +79,15 @@ const jsonPath = (field: string): string => documentPath("", field);
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
  * `dsql.raw` to keep the **literal** `json_extract(__doc__, '$.field')` path —
  * binding the path as a parameter would defeat SQLite's expression indexes.
- * Field names come from schema-defined query keys (already `'`-escaped), so the
- * raw embed is injection-safe.
+ *
+ * The raw embed is injection-safe because {@link documentPath} escapes the name
+ * for both grammars it crosses — not because the name is trusted. Do not read
+ * the older "field names come from schema-defined query keys" claim back into
+ * this: it holds for the schema-sourced callers (indexes, TTL, relations), but
+ * `ctx.db.<table>.findMany({ where, orderBy })` passes its keys through
+ * `where-sql.ts`'s storage-blind compiler with no `definition.shape` lookup, so
+ * a procedure that spreads an argument into `where` reaches here with a name off
+ * the wire.
  */
 const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
 
