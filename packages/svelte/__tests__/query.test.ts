@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference, LunoraClient, SubscriptionErrorCallback } from "@lunora/client";
 import { get } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,18 +8,18 @@ const fnRef = { __lunoraRef: "messages:list" } as unknown as FunctionReference;
 const args = { room: "general" } as unknown;
 
 const createFakeClient = () => {
-    const unsubscribe = vi.fn();
+    const unsubscribe = vi.fn<() => void>();
     let lastCallback: ((value: unknown) => void) | undefined;
     let lastOnError: ((error: { message: string }) => void) | undefined;
 
-    const subscribe = vi.fn(
-        (_function: unknown, _args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => {
-            lastCallback = callback;
-            lastOnError = options?.onError;
+    const subscribe = vi.fn<
+        (function_: unknown, args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => () => void
+    >((_function, _args, callback, options) => {
+        lastCallback = callback;
+        lastOnError = options?.onError;
 
-            return unsubscribe;
-        },
-    );
+        return unsubscribe;
+    });
 
     const client = { subscribe } as unknown as LunoraClient;
 
@@ -72,7 +72,7 @@ describe("query store", () => {
         emit([{ id: 1 }]);
         emit([{ id: 1 }, { id: 2 }]);
 
-        expect(seen).toEqual([undefined, [{ id: 1 }], [{ id: 1 }, { id: 2 }]]);
+        expect(seen).toStrictEqual([undefined, [{ id: 1 }], [{ id: 1 }, { id: 2 }]]);
 
         stop();
     });
@@ -94,7 +94,7 @@ describe("query store", () => {
 
     it("forwards subscription errors to the onError option", () => {
         const { client, emitError } = createFakeClient();
-        const onError = vi.fn();
+        const onError = vi.fn<SubscriptionErrorCallback>();
         const store = query(client, fnRef, args, { onError });
 
         const stop = store.subscribe(() => {});
