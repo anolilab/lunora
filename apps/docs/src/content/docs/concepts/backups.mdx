@@ -13,6 +13,18 @@ copy has to live outside Cloudflare.
 | Snapshot backups       | `lunora backup create [--bucket <name>]` | unbounded | a file you keep, or an R2 bucket |
 | Scheduled R2 backups   | `backupCron` + `backupStore`             | unbounded | an R2 bucket in your account     |
 
+Pick by the question you are actually asking:
+
+- **"Undo the last hour."** Point-in-time recovery. It is in place, on the
+  platform, and covers the last 30 days without reading an object store or
+  replaying anything.
+- **"Get me the data from three months ago"**, or **"put production into
+  staging"**, or **"keep a copy somewhere Cloudflare is not."** Snapshot
+  backups. Portable NDJSON, no window, restorable into a different deployment.
+
+The two share nothing: PITR never reads a snapshot, and a snapshot restore never
+touches the change log.
+
 Everything below talks to admin-gated endpoints on a running worker, so each
 command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
 variable over `--token`, which is visible to other local processes through the
@@ -61,9 +73,16 @@ lunora backup create                    # snapshot every table
 lunora backup create --tables users,messages
 lunora backup create --dir ./snapshots  # default: .lunora-backups
 lunora backup list                      # print the manifest
-lunora backup restore 2026-06-01T12-00-00-000Z
+lunora backup restore 2026-06-01T12:00:00.000Z
 lunora backup restore ./snapshots/some-file.ndjson
 ```
+
+<Callout>
+    A backup **id** is the ISO timestamp the snapshot was taken at — `2026-06-01T12:00:00.000Z` — which is what `list` prints first and what `restore` matches.
+    The **file name** (and object key) is that same timestamp with `:` and `.` swapped for `-`, because those characters are awkward in file names:
+    `lunora-backup-2026-06-01T12-00-00-000Z.ndjson`. `restore` accepts either — an id from the manifest, or a path/key you name directly — so passing the file
+    name where you meant the id fails with "backup not found" rather than restoring the wrong thing.
+</Callout>
 
 A snapshot's id is the ISO timestamp it was taken at, and the manifest records
 the file, row count, byte size, the SHA-256 of the snapshot, and the table
@@ -85,7 +104,7 @@ bucket in your account instead:
 lunora backup create --bucket default              # the app's default bucket
 lunora backup create --bucket archive --prefix db/ # a named bucket + key prefix
 lunora backup list --bucket default
-lunora backup restore 2026-06-01T12-00-00-000Z --bucket default --verify
+lunora backup restore 2026-06-01T12:00:00.000Z --bucket default --verify
 ```
 
 The destination is the only thing that changes: the NDJSON is byte-identical to
@@ -103,9 +122,16 @@ destination: a listing that merged a bucket and a directory would leave you
 unable to say which copy you are about to restore.
 
 `--verify` re-reads the snapshot and checks it against the SHA-256 recorded when
-it was taken, before a single row is imported. A snapshot with no recorded
-checksum — one written by the scheduled backup, or by an older CLI — fails
+it was taken, before a single row is imported. Both tiers record one, so it works
+on a scheduled snapshot as well as a hand-taken one. A snapshot with no recorded
+checksum — one written by a release before this feature existed — fails
 `--verify` rather than passing quietly.
+
+A bucket-backed snapshot is uploaded as a single body, so it has to fit in
+memory: `create --bucket` refuses above 256 MiB and tells you the ways out
+(`--tables` to narrow it, or `--dir` plus `wrangler r2 object put` to move the
+file yourself). The scheduled backup, which runs inside a Worker isolate rather
+than on a machine, refuses above 64 MiB.
 
 <Callout>
     On `@lunora/platform-node`, object storage is an fs-backed shim: a "bucket" there is a directory on the same machine. The commands work unchanged, but it is
@@ -124,6 +150,29 @@ prunes older snapshots past the retention count, and produces exactly the format
 `lunora backup restore <file>` consumes — including the key layout
 `lunora backup list --bucket` reads, so cron-written and hand-taken snapshots
 share one history.
+
+### Restoring when the CLI machine is gone
+
+This is the case the bucket exists for: the laptop or CI runner that took the
+backups is unavailable, and the snapshots are the only copy. Nothing about a
+restore depends on that machine — the bucket is self-describing, and the CLI is
+a client:
+
+```bash
+npx lunora backup list --bucket default --prod --url https://api.example.com
+npx lunora backup restore 2026-06-01T12:00:00.000Z \
+    --bucket default --verify --prod --url https://api.example.com --yes
+```
+
+Any machine with `npx`, the worker's URL, and `LUNORA_ADMIN_TOKEN` can do this;
+no R2 credentials are involved, because the bytes travel through the worker's
+admin routes and the bucket binding is the authority. The manifest lives beside
+the snapshots in the same bucket, so `list` is one read and there is no separate
+index to have lost.
+
+If the worker itself is gone too, the objects are still ordinary R2 objects:
+`wrangler r2 object get <bucket>/backups/lunora-backup-<id>.ndjson` pulls one
+down, and `lunora import` replays it into any deployment.
 
 ## Export and import
 
@@ -183,7 +232,8 @@ A backup you have never restored is a hypothesis. The cheapest drill:
 If you keep backups in a bucket, do the drill from the bucket
 (`lunora backup restore <id> --bucket <name> --verify`) rather than from a copy
 on your laptop — the machine that took the backup is the one you are assuming
-you will not have.
+you will not have. Drill a **scheduled** snapshot, not only one you took by
+hand: the unattended tier is the one whose failures nobody watches.
 
 Do this before you need it, and again whenever the schema changes shape.
 

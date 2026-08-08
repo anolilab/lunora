@@ -188,7 +188,7 @@ Each run writes two objects under `backupPrefix`:
   (the same NDJSON shape the `/_lunora/admin/export` endpoint and
   `lunora backup create` produce).
 - `lunora-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
-  (`{ id, createdAt, cron, file, rows, bytes, scheduledTime, tables? }`).
+  (`{ id, createdAt, cron, file, rows, bytes, sha256, scheduledTime, tables? }`).
 
 The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
 is named after the moment it represents. The backup requires `adminToken`
@@ -202,9 +202,27 @@ built-in backup.
 
 `lunora backup list --bucket <name>` reads the same layout, so scheduled
 snapshots and ones taken by hand with `lunora backup create --bucket <name>`
-appear as one history. Snapshots the cron writes carry no `sha256`, so
-`lunora backup restore --verify` refuses them rather than reporting an
-unverified restore as a verified one.
+appear as one history — and `lunora backup restore <id> --bucket <name> --verify`
+works on either, because both tiers record the snapshot's SHA-256 in the
+manifest. The scheduled run also hands the digest to R2, which verifies it on
+write and reports it from `head`/`list` afterwards. (Snapshots written by a
+release before this one carry no checksum; `--verify` refuses those rather than
+reporting an unverified restore as a verified one.)
+
+### Size
+
+The backup is built in the isolate: `orchestrateExport` resolves every shard's
+rows into memory before the first byte is written, so the snapshot has to fit
+alongside them in a Worker's ~128 MB. The run therefore **refuses at 64 MiB of
+NDJSON** (`BACKUP_TOO_LARGE`) instead of being killed for running out of
+memory — the cron invocation fails loudly and nothing is written. Narrow it with
+`backupTables`, take snapshots more often, or move the job off-platform with
+`lunora backup create --bucket`, which has more headroom (256 MiB) because it
+runs on a machine rather than in an isolate.
+
+Raising that ceiling means making the export itself streaming; a bigger object
+or a multipart upload would not help, because the rows are already in memory
+before the upload starts.
 
 ### Reading objects back
 

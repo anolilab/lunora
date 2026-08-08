@@ -604,8 +604,20 @@ merged into one listing.
 
 ```bash
 lunora backup create --bucket default --tables users,messages
-lunora backup restore 2026-06-01T12-00-00-000Z --bucket default --verify
+lunora backup list --bucket default
+lunora backup restore 2026-06-01T12:00:00.000Z --bucket default --verify
 ```
+
+A backup **id** is the ISO timestamp the snapshot was taken at
+(`2026-06-01T12:00:00.000Z`) — that is what `list` prints first and what
+`restore` matches. The **filename / object key** is the same timestamp with `:`
+and `.` swapped for `-`, because those characters are awkward in filenames
+(`lunora-backup-2026-06-01T12-00-00-000Z.ndjson`). `restore` takes either: an id
+it finds in the manifest, or a path/key you name directly.
+
+A bucket-backed snapshot is uploaded as one body, so it has to fit in the CLI's
+memory: above 256 MiB `create --bucket` refuses and names the workaround
+(`--tables`, or `--dir` plus `wrangler r2 object put`).
 
 See [Backups, export & import](/docs/concepts/backups) for the full picture —
 snapshot format, restore drills, and moving data between deployments.
