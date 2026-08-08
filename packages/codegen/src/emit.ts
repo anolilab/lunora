@@ -4296,7 +4296,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, buildReprojectionMigration, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
@@ -5058,13 +5058,19 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
-            const migration = LUNORA_MIGRATIONS[args.id];
+            this.ensureMigrated();
+
+            // Falls back to the framework's reserved re-projection backfill
+            // (\`__lunora_reproject__<table>\`), which rewrites rows whose
+            // v.bigint()/v.bytes() columns are still stored in the pre-projection
+            // tagged form. Built here rather than at module scope because it
+            // needs this shard's \`sql\` handle to tell a legacy row from a
+            // current one.
+            const migration = LUNORA_MIGRATIONS[args.id] ?? buildReprojectionMigration(args.id, schema as unknown as SchemaLike, this.sql as SqlExec);
 
             if (!migration) {
                 throw new LunoraError("MIGRATION_NOT_FOUND", \`data migration "\${args.id}" is not registered\`, { status: 404 });
             }
-
-            this.ensureMigrated();
 
 ${adminWriterPrelude}
 

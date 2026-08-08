@@ -10,9 +10,23 @@
  *
  * The codec therefore operates on the **serialized** value (the output of
  * `serializeSqlValue`), which is the exact form the where-compiler binds:
- * always `null`, a `number`, or a `string`. That collapses booleans (→ 0/1),
- * bigints (→ text) and objects (→ JSON text) before they reach us, so the
- * comparable domain maps 1:1 onto SQLite's storage classes.
+ * always `null`, a `number`, or a `string`. That collapses booleans (→ 0/1) and
+ * objects (→ JSON text) before they reach us, so the comparable domain maps 1:1
+ * onto SQLite's storage classes.
+ *
+ * `bigint` arrives as text too, but as the fixed-width order-preserving key
+ * built in `sql-projection.ts` rather than as `String(value)` — which is the
+ * point: the key's lexicographic order already matches numeric order, so hexing
+ * its UTF-8 bytes below preserves that, and a range over a `v.bigint()` column
+ * narrows correctly instead of conservatively.
+ *
+ * Bytes arrive as base64, which is **not** order-preserving — the standard
+ * alphabet puts `/` (0x2F) below `A` (0x41), so `[0xFF]` encodes to `"/w=="` and
+ * sorts BELOW `[0x00]`'s `"AA=="`. Equality and prefix narrowing are unaffected
+ * (the mapping is injective), but a range or `ORDER BY` over a `v.bytes()`
+ * column is ordered by base64 text rather than by bytes. Not a regression —
+ * bytes could not be stored at all before — and not fixed here, because an
+ * order-preserving binary encoding is a stored-format change.
  *
  * Ordering contract (matches SQLite's `NULL < INTEGER/REAL < TEXT`):
  *

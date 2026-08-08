@@ -1480,6 +1480,12 @@ const RELATION_EXISTS_KEY = "__relationExists";
 const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
 ```
 
+### `REPROJECTION_MIGRATION_PREFIX` (const)
+
+```ts
+const REPROJECTION_MIGRATION_PREFIX = "__lunora_reproject__";
+```
+
 ### `RLS_UNWRAP_SYMBOL` (const)
 
 ```ts
@@ -3007,6 +3013,12 @@ const buildPokeFrames: (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMeta
 }) => string[];
 ```
 
+### `buildReprojectionMigration` (const)
+
+```ts
+const buildReprojectionMigration: (id: string, schema: SchemaLike, sql: SqlExec) => DataMigrationLike | undefined;
+```
+
 ### `buildSeekBeforeWhere` (const)
 
 ```ts
@@ -3075,6 +3087,12 @@ const computeRankPage: (deps: RankPageDeps, tableName: string, indexName: string
 
 ```ts
 const containsRelationPredicate: (where: WhereInput, schema: ResolveContext["schema"], tableName: string) => boolean;
+```
+
+### `countLegacyRows` (const)
+
+```ts
+const countLegacyRows: (sql: SqlExec, table: string, fields: ReadonlyArray<string>) => number;
 ```
 
 ### `coveringGeohashes` (const)
@@ -3768,6 +3786,24 @@ const relayCountFor: (subscribers: number, perRelayCapacity: number, maxRelays: 
 
 ```ts
 const renderSql: (engine: SqlEngine, query: SQL) => RenderedSql;
+```
+
+### `reprojectableFields` (const)
+
+```ts
+const reprojectableFields: (definition: TableDefinitionLike) => string[];
+```
+
+### `reprojectionMigrationId` (const)
+
+```ts
+const reprojectionMigrationId: (table: string) => string;
+```
+
+### `reprojectionTables` (const)
+
+```ts
+const reprojectionTables: (schema: SchemaLike) => string[];
 ```
 
 ### `resolveRankPartition` (const)

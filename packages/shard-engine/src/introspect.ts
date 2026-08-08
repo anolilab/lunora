@@ -2,8 +2,10 @@ import { LunoraError } from "@lunora/errors";
 
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
+import { decodeWire } from "../../../shared/wire-codec";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
+import { DOC_ORIGINALS_KEY } from "./do-sql";
 import type { SortDirection } from "./schema-types";
 
 /**
@@ -846,20 +848,20 @@ const DOC_COLUMN = "__doc__";
  * JSON-parse a stored `__doc__` blob to a plain object, or `undefined` when the
  * text isn't a JSON object.
  *
- * **Deliberately does NOT decode the wire codec.** A `v.bigint()` / `v.bytes()`
- * column is stored tagged (`["$lunora.wire$","bigint","1000"]`), and it is
- * tempting to decode it here so the value reaches display "already correct".
- * That breaks the read outright: this function feeds `readTablePage`, whose
- * result is returned by the admin RPC through `jsonResponse` — the one DO result
- * path that does **not** `encodeWire` (contrast the user dispatch and the WS
- * push, which both do). `JSON.stringify` throws on a bigint and flattens an
- * `ArrayBuffer` to `{}`, so decoding here turns browsing any bigint table into
- * a redacted 500.
+ * Parses only — no wire decode here, because `__doc__` is raw storage text and
+ * this returns it as-is. {@link expandDocumentRows} is where the format is
+ * interpreted, and it is where the decode happens.
  *
- * It is also unnecessary. `LunoraClient` decodes the whole response
- * (`decodeWire(body.result)`), so the tagged array becomes a real bigint on the
- * client, before the grid ever sees it. The rows must stay JSON-safe from here
- * to that call. The `readTablePage` test asserts exactly that.
+ * The admin RPC now wire-encodes every result on the way out (`adminResponse`
+ * in `shard-do.ts`), matching what the WS subscription push has always done, so
+ * a real `bigint`/`ArrayBuffer` reaching that boundary is encoded exactly once
+ * and `LunoraClient`'s `decodeWire(body.result)` turns it back. That was NOT
+ * true when this store first shipped — the admin POST was the one result path
+ * that skipped `encodeWire`, so anything decoded here reached a bare
+ * `JSON.stringify` and threw on a bigint. An earlier version of this comment
+ * still described that world and said decoding here was forbidden; it is now the
+ * opposite, and passing an ALREADY-tagged value through is the bug (the encoder
+ * escapes it a second time and the grid renders the tag).
  * @returns the parsed object, or `undefined` when parsing fails or the result is not a plain object
  */
 const safeParseObject = (text: string): Record<string, unknown> | undefined => {
@@ -870,6 +872,36 @@ const safeParseObject = (text: string): Record<string, unknown> | undefined => {
     } catch {
         return undefined;
     }
+};
+
+/**
+ * Put a row's projected columns back to their real values for display.
+ *
+ * `encodeDocJson` stores a SORT KEY at `$.field` for `bigint`/bytes — a
+ * zero-padded digit string, not the value — and parks the wire-tagged original
+ * under the reserved key. The original is the only exact copy, so the grid
+ * should show it, but it has to be DECODED first: the admin egress wire-encodes
+ * whatever it is handed, and the codec escapes an array whose element 0 is its
+ * own sentinel, so passing the tagged form straight through double-wraps it and
+ * the grid renders `["$lunora.wire$","bigint","4200"]` instead of `4200n`.
+ *
+ * The plain-object test mirrors `decodeDocJson`'s: a scalar or array under this
+ * name predates the write guard and belongs to the user, so it is left in place
+ * as an ordinary field rather than spread across the row.
+ * @returns the document's fields with any projected columns restored
+ */
+const restoreProjectedFields = (documentData: Record<string, unknown>): Record<string, unknown> => {
+    const { [DOC_ORIGINALS_KEY]: originals, ...fields } = documentData;
+
+    if (originals === undefined) {
+        return fields;
+    }
+
+    if (originals === null || typeof originals !== "object" || Array.isArray(originals)) {
+        return { [DOC_ORIGINALS_KEY]: originals, ...fields };
+    }
+
+    return { ...fields, ...(decodeWire(originals) as Record<string, unknown>) };
 };
 
 /**
@@ -901,7 +933,7 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
 
         const meta = Object.fromEntries(Object.entries(row).filter(([column]) => column !== DOC_COLUMN));
 
-        parsed.push({ ...meta, ...documentData });
+        parsed.push({ ...meta, ...restoreProjectedFields(documentData) });
     }
 
     const metaColumns = columns.filter((name) => name !== DOC_COLUMN);

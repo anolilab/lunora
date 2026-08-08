@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "lunorash/do";
-import { applyCdcChanges, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
+import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, createSecrets, LunoraError } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 import type { AiBindingLike, LunoraAi } from "@lunora/ai";
@@ -906,13 +906,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
-            const migration = LUNORA_MIGRATIONS[args.id];
+            this.ensureMigrated();
+
+            // Falls back to the framework's reserved re-projection backfill
+            // (`__lunora_reproject__<table>`), which rewrites rows whose
+            // v.bigint()/v.bytes() columns are still stored in the pre-projection
+            // tagged form. Built here rather than at module scope because it
+            // needs this shard's `sql` handle to tell a legacy row from a
+            // current one.
+            const migration = LUNORA_MIGRATIONS[args.id] ?? buildReprojectionMigration(args.id, schema as unknown as SchemaLike, this.sql as SqlExec);
 
             if (!migration) {
                 throw new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 });
             }
-
-            this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;

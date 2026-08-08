@@ -234,6 +234,14 @@ export type {
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey } from "./relay";
 export type { RelayHost } from "./relay-hub";
 export { createRelayLink, DEFAULT_MAX_RELAYS, OwnerRelay, RelayMember } from "./relay-hub";
+export {
+    buildReprojectionMigration,
+    countLegacyRows,
+    reprojectableFields,
+    REPROJECTION_MIGRATION_PREFIX,
+    reprojectionMigrationId,
+    reprojectionTables,
+} from "./reprojection-backfill";
 export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
 export { readSchemaHistory, readSchemaVersion, recordSchemaVersion, SCHEMA_HISTORY_MAX_VERSIONS } from "./schema-history";
 export type {
