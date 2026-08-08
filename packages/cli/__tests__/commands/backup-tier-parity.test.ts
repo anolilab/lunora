@@ -99,11 +99,6 @@ const backupStoreOver = (bucket: Bucket): BackupStore => {
         delete: async (key: string) => {
             bucket.delete(key);
         },
-        get: async (key: string) => {
-            const stored = bucket.get(key);
-
-            return stored === undefined ? null : { text: async () => stored.toString("utf8") };
-        },
         list: async (listOptions?: { prefix?: string }) => {
             return {
                 objects: [...bucket.keys()]

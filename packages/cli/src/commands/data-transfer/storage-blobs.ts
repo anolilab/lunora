@@ -3,6 +3,7 @@
  * and moving every blob into R2 through the worker's admin routes.
  */
 import { LunoraError } from "@lunora/errors";
+import { STORAGE_UPLOAD_MAX_BODY_BYTES } from "@lunora/runtime";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
@@ -151,13 +152,14 @@ const readStorageMetadata = async (snapshot: ConvexSnapshot, storageTableEntry: 
 };
 
 /**
- * Body budget of `PUT /_lunora/admin/storage` (mirrors the runtime's
- * `STORAGE_UPLOAD_MAX_BODY_BYTES`). Blobs up to this size take the verified
- * route, which digests the body and refuses to write on a mismatch. Above it the
- * admin route refuses the body, so the signed-PUT fallback applies — see
- * `uploadLargeBlob` for what that path can and cannot promise.
+ * Body budget of `PUT /_lunora/admin/storage` — imported from the route that
+ * enforces it, not restated, because the two drifting apart decides whether an
+ * upload silently takes the unverified path. Blobs up to this size take the
+ * verified route, which digests the body and refuses to write on a mismatch.
+ * Above it the admin route refuses the body, so the signed-PUT fallback applies
+ * — see `uploadLargeBlob` for what that path can and cannot promise.
  */
-const MAX_VERIFIED_UPLOAD_BYTES = 32 * 1_048_576;
+const MAX_VERIFIED_UPLOAD_BYTES: number = STORAGE_UPLOAD_MAX_BODY_BYTES;
 
 /** One object as `GET /_lunora/admin/storage` reports it. */
 interface StorageListObject {

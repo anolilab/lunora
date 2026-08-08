@@ -25,13 +25,12 @@ import { pipeline } from "node:stream/promises";
 
 import { LunoraError } from "@lunora/errors";
 import type { BackupManifestEntry } from "@lunora/runtime";
-import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, isBackupManifestKey } from "@lunora/runtime";
+import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, isBackupManifestEntry, isBackupManifestKey, normalizeBackupPrefix } from "@lunora/runtime";
 
 import type { Logger } from "../../util/logger";
 import type { BlobUploadContext } from "../data-transfer/storage-blobs";
 import { bucketQuery, listStorageObjects, MAX_VERIFIED_UPLOAD_BYTES, uploadStorageBlob } from "../data-transfer/storage-blobs";
 import type { BackupDestination } from "./destination";
-import { isManifestEntry } from "./destination";
 
 /** Admin route serving one object's bytes back (see `@lunora/runtime`'s storage admin routes). */
 const STORAGE_OBJECT_ENDPOINT_PATH = "/_lunora/admin/storage/object";
@@ -48,16 +47,9 @@ interface R2DestinationOptions {
     prefix?: string;
 }
 
-/**
- * A prefix is a key prefix, not a directory, but everyone types it like one.
- * Without this, `--prefix backups` yields `backupslunora-backup-…` — a key that
- * works, sorts oddly, and does not match anything the scheduled backup wrote.
- */
-const normalizePrefix = (prefix: string): string => (prefix === "" || prefix.endsWith("/") ? prefix : `${prefix}/`);
-
 const createR2Destination = (options: R2DestinationOptions): BackupDestination => {
     const { context, logger } = options;
-    const prefix = normalizePrefix(options.prefix ?? BACKUP_KEY_PREFIX);
+    const prefix = normalizeBackupPrefix(options.prefix ?? BACKUP_KEY_PREFIX);
     const label = `bucket ${context.bucket ?? "(default)"} under ${prefix}`;
     // The bucket the whole destination addresses lives on the context, so the
     // upload helpers and these routes cannot end up naming different buckets.
@@ -83,7 +75,7 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
         try {
             const parsed: unknown = JSON.parse(await readObject(key));
 
-            if (isManifestEntry(parsed)) {
+            if (isBackupManifestEntry(parsed)) {
                 return parsed;
             }
 

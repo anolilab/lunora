@@ -20,6 +20,8 @@
  */
 import { join } from "node:path";
 
+import type { BackupManifestEntry } from "@lunora/runtime";
+
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
@@ -30,7 +32,7 @@ import type { StreamingFetchLike } from "../data-transfer";
 import { runExportCommand, runImportCommand } from "../data-transfer";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
-import type { BackupDestination, BackupManifestEntry } from "./destination";
+import type { BackupDestination } from "./destination";
 import { createDirectoryDestination, digestFile } from "./destination";
 import type { BackupOptions } from "./index";
 import { createR2Destination } from "./r2-destination";
@@ -153,7 +155,12 @@ const runBackupCreate = async (options: BackupCommandOptions, destination: Backu
 
         return { code: 0, entry };
     } finally {
-        await staged.release();
+        // Cleanup failing cannot make a backup that landed report failure —
+        // `logger.success` has already printed, and a script reading the exit
+        // code would retry a snapshot that is sitting in the bucket.
+        await staged.release().catch((error: unknown) => {
+            options.logger.warn(`backup: could not clean up staging (${error instanceof Error ? error.message : String(error)})`);
+        });
     }
 };
 
@@ -249,7 +256,9 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
         // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
         return { code: result.code };
     } finally {
-        await snapshot.release();
+        await snapshot.release().catch((error: unknown) => {
+            options.logger.warn(`backup: could not clean up the downloaded snapshot (${error instanceof Error ? error.message : String(error)})`);
+        });
     }
 };
 

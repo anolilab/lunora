@@ -19,13 +19,24 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { BackupManifestEntry } from "@lunora/runtime";
-import { backupObjectKey } from "@lunora/runtime";
+import { backupObjectKey, isBackupManifestEntry } from "@lunora/runtime";
 
 /** A snapshot made readable as a local file, plus how to let go of it. */
 interface MaterializedSnapshot {
     /** Local path an import can read. */
     path: string;
     /** Drop any temporary copy made to produce {@link MaterializedSnapshot.path}. */
+    release: () => Promise<void>;
+}
+
+/**
+ * Somewhere to write a snapshot that does not exist yet — deliberately not a
+ * {@link MaterializedSnapshot}, whose `path` names a file you can read.
+ */
+interface StagedSnapshot {
+    /** Local path the export should stream its NDJSON to. */
+    path: string;
+    /** Drop whatever staging allocated. A no-op where the staged file is the backup. */
     release: () => Promise<void>;
 }
 
@@ -36,7 +47,12 @@ interface SnapshotDigest {
 }
 
 interface BackupDestination {
-    /** Land the staged NDJSON at `file`. Throws unless the bytes are there afterwards. */
+    /**
+     * Move the staged NDJSON to where this destination keeps snapshots, and
+     * throw if it cannot — a destination that returns normally is promising the
+     * bytes are at `file`. Nothing to do where staging already wrote them
+     * there.
+     */
     commit: (file: string, stagedPath: string, digest: SnapshotDigest) => Promise<void>;
     /** Human-readable destination, for logs and "nothing found" messages. */
     readonly label: string;
@@ -61,16 +77,10 @@ interface BackupDestination {
      * nothing for a local one — and `create` calls it however the run ends, so
      * a failed export cannot leave a copy of production behind.
      */
-    stage: (id: string) => Promise<MaterializedSnapshot>;
+    stage: (id: string) => Promise<StagedSnapshot>;
 }
 
 const MANIFEST_FILE = "manifest.json";
-
-const isManifestEntry = (value: unknown): value is BackupManifestEntry =>
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as BackupManifestEntry).id === "string" &&
-    typeof (value as BackupManifestEntry).file === "string";
 
 /**
  * Byte length + SHA-256 of a file, read as a stream so a multi-GB snapshot is
@@ -97,8 +107,9 @@ const digestFile = async (path: string): Promise<SnapshotDigest> => {
  * But a manifest that exists yet fails to parse (or isn't an array) is the
  * recovery index the feature exists to protect: throw rather than silently
  * treating it as empty, so the next `backup create` can't overwrite it and
- * destroy the historical index. (`isManifestEntry` still drops malformed
- * entries from an otherwise-valid array — those carry no recoverable id/file).
+ * destroy the historical index. (`isBackupManifestEntry` still drops
+ * malformed entries from an otherwise-valid array — those carry no recoverable
+ * id/file).
  */
 const readManifest = async (directory: string): Promise<BackupManifestEntry[]> => {
     const path = join(directory, MANIFEST_FILE);
@@ -123,7 +134,7 @@ const readManifest = async (directory: string): Promise<BackupManifestEntry[]> =
         throw new TypeError(`backup: ${path} exists but is not a JSON array — refusing to overwrite it; fix or remove it manually`);
     }
 
-    return parsed.filter(isManifestEntry);
+    return parsed.filter((entry): entry is BackupManifestEntry => isBackupManifestEntry(entry));
 };
 
 /**
@@ -153,6 +164,8 @@ const writeManifest = async (directory: string, entries: ReadonlyArray<BackupMan
  * beside the snapshots.
  */
 const createDirectoryDestination = (directory: string): BackupDestination => {
+    const locate = (id: string): string => backupObjectKey("", id);
+
     return {
         commit: async (): Promise<void> => {
             // The export already wrote the file at its final path — there is
@@ -160,7 +173,7 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
         },
         label: directory,
         list: async () => readManifest(directory),
-        locate: (id) => backupObjectKey("", id),
+        locate,
         materialize: (entry, target) => {
             const path = entry === undefined ? target : join(directory, entry.file);
 
@@ -179,12 +192,10 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
 
             // The staged file IS the backup here, so releasing it must not
             // delete anything — this path is inside the operator's directory.
-            return { path: join(directory, backupObjectKey("", id)), release: () => Promise.resolve() };
+            return { path: join(directory, locate(id)), release: () => Promise.resolve() };
         },
     };
 };
 
-export type { BackupDestination, MaterializedSnapshot, SnapshotDigest };
-export { createDirectoryDestination, digestFile, isManifestEntry };
-
-export { type BackupManifestEntry } from "@lunora/runtime";
+export type { BackupDestination };
+export { createDirectoryDestination, digestFile };

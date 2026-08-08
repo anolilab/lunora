@@ -96,7 +96,7 @@ describe("lunora backup", () => {
         expect(existsSync(join(directory, manifest[0]!.file))).toBe(true);
     });
 
-    it("writes the exact snapshot bytes and manifest JSON a directory backup has always produced", async () => {
+    it("writes exactly these snapshot bytes and this manifest JSON", async () => {
         expect.assertions(2);
 
         const { logger } = capturingLogger();
