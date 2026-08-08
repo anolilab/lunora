@@ -132,11 +132,13 @@ thousands of snapshots is that many small reads; a damaged or unrelated
 `.manifest.json` under the prefix is skipped with a warning rather than failing
 the command.
 
-Both tiers cap the snapshot they will build, and for different reasons.
-`create --bucket` refuses above **32 MiB**, the limit of the checksum-verified
-upload route — bigger would mean an unverified signed PUT, which is not what the
-copy you restore from should depend on. The scheduled backup refuses above
-**24 MiB**, because it assembles the snapshot inside a Worker isolate. Either
+Both bucket-backed tiers cap the snapshot they will build, for different
+reasons; `--dir` is uncapped. `create --bucket` refuses above **32 MiB**, the
+limit of the checksum-verified upload route — bigger would mean an unverified
+signed PUT, which is not what the copy you restore from should depend on. The
+scheduled backup refuses above **24 MiB**: it assembles the snapshot inside a
+Worker isolate, and the cap is set well under that isolate's memory limit
+because it bounds the snapshot rather than the export that produced it. Either
 way the answer is `--tables` / `backupTables`, or `--dir` plus
 `wrangler r2 object put` to move a large file yourself.
 
@@ -173,9 +175,9 @@ npx lunora backup restore 2026-06-01T12:00:00.000Z \
 
 Any machine with `npx`, the worker's URL, and `LUNORA_ADMIN_TOKEN` can do this;
 no R2 credentials are involved, because the bytes travel through the worker's
-admin routes and the bucket binding is the authority. The manifest lives beside
-the snapshots in the same bucket, so `list` is one read and there is no separate
-index to have lost.
+admin routes and the bucket binding is the authority. Each snapshot's manifest
+lives beside it in the same bucket, so there is no separate index to have lost —
+`list` reads them back one object at a time.
 
 If the worker itself is gone too, the objects are still ordinary R2 objects.
 Note the key uses the file-name form of the id — dashes, not colons:
