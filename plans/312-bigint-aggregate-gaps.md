@@ -17,16 +17,15 @@ aggregate paths grew two guards. Each is correct in isolation; together they lea
 two shapes with **no way to aggregate a bigint column at all**:
 
 1. **A soft-delete table cannot use the aggregate companion, at any magnitude.**
-   `ctx-db.ts:2467` takes the maintained-companion fast path only when
+   `ctx-db.ts`'s aggregate reader takes the maintained-companion fast path only when
    `definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation && !aggScope`.
-   For a soft-delete table `aggScope` is _always_ truthy (`:2451`
-   `softDeleteScope(definition.softDeleteMode, undefined)`), so every aggregate falls
+   For a soft-delete table `aggScope` is _always_ truthy (it is `softDeleteScope(definition.softDeleteMode, undefined)`, computed unconditionally), so every aggregate falls
    to the SQL scan — which now refuses a `v.bigint()` field rather than coerce padded
    text into the ~1.5e40 that falls out of it. Net effect: **no aggregate over a
    bigint column on a soft-delete table**, even for values well inside 2^53.
 
 2. **Declaring `aggregateIndex` on a bigint column caps that column's writes at
-   2^53.** `aggregate-tally.ts:62` refuses a magnitude past `MAX_SAFE_BIGINT`, because
+   2^53.** `aggregate-tally.ts`'s `coerceAggregateNumber` refuses a magnitude past `MAX_SAFE_BIGINT`, because
    the companion's `__value__` is a REAL column that cannot hold it exactly. The
    refusal fires on the **write**, not the read — so one index declaration makes the
    column unusable for large values, which is the opposite of the direction people
@@ -38,13 +37,24 @@ combination is the gap.
 
 ## 1. Current state (audit)
 
-- `packages/shard-engine/src/ctx-db.ts:2451` — `aggScope` computed unconditionally
-  from `softDeleteMode`.
-- `packages/shard-engine/src/ctx-db.ts:2467` — the fast-path predicate that `aggScope`
-  disqualifies.
-- `packages/shard-engine/src/aggregate-tally.ts:18-19` — `MAX_SAFE_BIGINT`, documented
+> **Citations are by symbol, not line number.** An earlier draft of this plan
+> cited `ctx-db.ts:2451`/`:2467` and `aggregate-tally.ts:62`; the plan-265
+> round-two work inserted `assertReducibleBySql` above them and moved all three
+> by ~26 lines within days. Grep for the symbol.
+
+**Since this plan was written**, the scan-path refusal is no longer inline: it is
+`assertReducibleBySql` (`ctx-db.ts`), applied at three entry points — the
+aggregate reader plus **both** halves of `groupBy`, which previously had no guard
+at all. That closed the "unguarded `groupBy`" hole but did **not** close either
+gap below: a soft-delete table still cannot reach the companion, so it still
+lands on the scan, which now refuses a bigint field loudly instead of returning
+~1.5e40.
+
+- `packages/shard-engine/src/ctx-db.ts` — `aggScope`, computed unconditionally from `softDeleteMode` in the aggregate reader.
+- `packages/shard-engine/src/ctx-db.ts` — the `definition.aggregateIndexes && !baseWhere && !hasRelation && !aggScope` fast-path predicate that `aggScope` disqualifies.
+- `packages/shard-engine/src/aggregate-tally.ts` — `MAX_SAFE_BIGINT`, documented
   as "the largest magnitude the companion's REAL `__value__` column holds exactly".
-- `packages/shard-engine/src/aggregate-tally.ts:62-65` — the write-side refusal, whose
+- `packages/shard-engine/src/aggregate-tally.ts` — `coerceAggregateNumber`'s write-side refusal, whose
   message already points at the two workarounds ("aggregate a narrower column, or read
   the rows and reduce them in the handler").
 
