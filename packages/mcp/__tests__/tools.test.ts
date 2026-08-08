@@ -54,7 +54,7 @@ const mockClient = (): {
 };
 
 describe("toolDefinitions", () => {
-    it("exposes only the four read-only tools by default (writes disabled)", () => {
+    it("exposes only the four read-only tools by default (writes disabled, no admin token)", () => {
         expect.assertions(2);
 
         const names = toolDefinitions(false).map((tool) => tool.name);

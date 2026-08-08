@@ -1,6 +1,8 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
+import { callObservabilityTool, OBSERVABILITY_TOOL_DEFINITIONS, OBSERVABILITY_TOOL_NAMES } from "./observability-tools";
+import { errorResult, ok } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 
 /**
@@ -92,17 +94,26 @@ const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
 const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(WRITE_TOOL_DEFINITIONS.map((tool) => tool.name));
 
 /**
- * The tools this server advertises. When `allowWrites` is false (the default),
- * only the read-only surface is exposed — the mutation/action tools are omitted
- * from `ListTools` entirely, so an AI agent can't invoke a write it can't see.
+ * The tools this server advertises, in three tiers:
+ *
+ * - the read-only surface, always exposed;
+ * - the observability surface, exposed only when an admin token resolved —
+ * read-only, but it surfaces production logs and grouped errors, so an
+ * unauthenticated server must not even advertise that it exists;
+ * - the write surface, exposed only when `allowWrites` is set.
+ *
+ * Both gates OMIT rather than refuse: an AI agent can't invoke what it can't
+ * see. Dispatch re-checks both in {@link callTool}, so the guarantee does not
+ * depend on a client honouring the advertised list.
  */
-const toolDefinitions = (allowWrites: boolean): ReadonlyArray<ToolDefinition> =>
+const toolDefinitions = (allowWrites: boolean, hasAdminToken = false): ReadonlyArray<ToolDefinition> =>
     // Fail closed: only the boolean `true` opts in. These are exported helpers, so
     // an env-plumbed/JS caller could pass a truthy string like `"false"`/`"0"` —
     // the explicit `=== true` guards that despite the declared `boolean` type.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
-    allowWrites === true ? [...READ_ONLY_TOOL_DEFINITIONS, ...WRITE_TOOL_DEFINITIONS] : READ_ONLY_TOOL_DEFINITIONS;
+    /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
+    [...READ_ONLY_TOOL_DEFINITIONS, ...(hasAdminToken === true ? OBSERVABILITY_TOOL_DEFINITIONS : []), ...(allowWrites === true ? WRITE_TOOL_DEFINITIONS : [])];
 
+/* eslint-enable @typescript-eslint/no-unnecessary-boolean-literal-compare */
 /** Extract and validate `functionPath` from an MCP `arguments` bag. */
 const readFunctionPath = (input: Record<string, unknown>): string => {
     const { functionPath } = input;
@@ -176,60 +187,6 @@ const reference = (functionPath: string): FunctionReference => {
 };
 
 /**
- * Base64-encode bytes for the model-visible JSON, chunking to stay under
- * `String.fromCharCode`'s argument-count ceiling on large buffers (mirrors the
- * wire codec's own encoder).
- */
-const bytesToBase64 = (bytes: Uint8Array): string => {
-    let binary = "";
-    const chunk = 0x80_00;
-
-    for (let index = 0; index < bytes.length; index += chunk) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-    }
-
-    return btoa(binary);
-};
-
-/**
- * `JSON.stringify` replacer for a decoded RPC result. `client.query`/`mutation`/
- * `action` return `decodeWire(...)`, which revives `v.int64()` leaves as real
- * `bigint` and `v.bytes()`/typed-array columns as `ArrayBuffer`/typed arrays.
- * Raw `JSON.stringify` THROWS on a bigint (turning a successful call into a tool
- * error) and serializes an `ArrayBuffer` to `{}` / a `Uint8Array` to an
- * index-keyed object (silent corruption). Map every bigint → its decimal string
- * and every bytes leaf → base64 so the model sees a faithful value instead.
- */
-const jsonResultReplacer = (_key: string, value: unknown): unknown => {
-    if (typeof value === "bigint") {
-        return value.toString();
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return bytesToBase64(new Uint8Array(value));
-    }
-
-    if (ArrayBuffer.isView(value)) {
-        const view = value;
-
-        return bytesToBase64(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-    }
-
-    return value;
-};
-
-const ok = (value: unknown): ToolResult => {
-    // A void-returning mutation/action resolves to `undefined`, and
-    // `JSON.stringify(undefined)` yields the JS value `undefined` (not a
-    // string), which violates both `ToolResult.content[].text: string` and the
-    // MCP `TextContent` contract. Emit the JSON `null` literal in that case.
-    const text = value === undefined ? "null" : JSON.stringify(value, jsonResultReplacer, 2);
-
-    return { content: [{ text, type: "text" }] };
-};
-
-/**
  * The deployment's public-function registry is static per deploy, but every run
  * tool (via {@link assertRunnable}) and `lunora_get_function_schema` needs it —
  * two sequential admin round trips per tool call without caching. Memoize
@@ -296,21 +253,34 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
  *
- * `allowWrites` gates the mutation/action tools: when false (the default) a call
- * to a write tool is refused even if the client somehow names it, so the
- * read-only guarantee holds at dispatch, not just in the advertised tool list.
+ * `allowWrites` gates the mutation/action tools and `hasAdminToken` gates the
+ * observability tools: when either is false a call to the gated tool is refused
+ * even if the client somehow names it, so both guarantees hold at dispatch, not
+ * just in the advertised tool list.
  */
-const callTool = async (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites = false): Promise<ToolResult> => {
+const callTool = async (
+    client: LunoraClient,
+    name: string,
+    input: Record<string, unknown>,
+    allowWrites = false,
+    hasAdminToken = false,
+): Promise<ToolResult> => {
     try {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
+        /* eslint-disable @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers */
         if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
-            return {
-                content: [
-                    { text: `tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`, type: "text" },
-                ],
-                isError: true,
-            };
+            return errorResult(`tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`);
         }
+
+        if (OBSERVABILITY_TOOL_NAMES.has(name)) {
+            if (hasAdminToken !== true) {
+                return errorResult(
+                    `tool "${name}" is unavailable: it reads the deployment's logs and errors, which needs an admin token. Set LUNORA_ADMIN_TOKEN (or pass --token) and reconnect.`,
+                );
+            }
+
+            return await callObservabilityTool(client, name, input);
+        }
+        /* eslint-enable @typescript-eslint/no-unnecessary-boolean-literal-compare */
 
         switch (name) {
             case "lunora_get_function_schema": {
@@ -319,7 +289,7 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
                 const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
                 if (descriptor === undefined) {
-                    return { content: [{ text: `function not found: ${functionPath}`, type: "text" }], isError: true };
+                    return errorResult(`function not found: ${functionPath}`);
                 }
 
                 return ok({ args: descriptor.args ?? [], kind: descriptor.kind, path: descriptor.path });
@@ -352,16 +322,17 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
                 return ok(await client.query(reference(functionPath), args, { shardKey }));
             }
             default: {
-                return { content: [{ text: `unknown tool: ${name}`, type: "text" }], isError: true };
+                return errorResult(`unknown tool: ${name}`);
             }
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        return { content: [{ text: message, type: "text" }], isError: true };
+        return errorResult(message);
     }
 };
 
 export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };
 
+export { OBSERVABILITY_TOOL_DEFINITIONS } from "./observability-tools";
 export { type ToolDefinition, type ToolInputSchema, type ToolResult } from "./tool-types";
