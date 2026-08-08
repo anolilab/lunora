@@ -1,11 +1,30 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runDoctor } from "../../src/commands/doctor/handler";
+import { DOCTOR_CODES, runDoctor, runDoctorCommand } from "../../src/commands/doctor/handler";
 import type { Logger } from "../../src/util/logger";
+
+/** Run async `body` while capturing everything written to `process.stdout`. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    let captured = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return captured;
+};
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
     const lines: string[] = [];
@@ -333,6 +352,178 @@ describe("runDoctor", () => {
             const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
             expect(versionFinding(result.findings)).toBeUndefined();
+        });
+    });
+
+    /**
+     * A globally-installed `lunora` shadowing the project's pinned one makes every
+     * other finding describe a project this CLI may be the wrong version for —
+     * and `checkVersionSkew` cannot see it, because the manifest it reads is
+     * exactly the file the shadowing binary ignores.
+     */
+    describe("cli shadowing", () => {
+        /** Install `@lunora/cli` the way pnpm does: a symlink into a store directory. */
+        const seedLocalCli = (): string => {
+            const store = join(workdir, "node_modules", ".pnpm", "@lunora+cli@1.0.0", "node_modules", "@lunora", "cli", "dist");
+
+            mkdirSync(store, { recursive: true });
+            writeFileSync(join(store, "bin.mjs"), "// bin\n", "utf8");
+            mkdirSync(join(workdir, "node_modules", "@lunora"), { recursive: true });
+            symlinkSync(dirname(store), join(workdir, "node_modules", "@lunora", "cli"), "dir");
+
+            return join(store, "bin.mjs");
+        };
+
+        const shadowFinding = (findings: ReadonlyArray<{ code: string; level: string }>) => findings.find((finding) => finding.code === "cli-shadowed");
+
+        it("stays clean when the running binary is the project's own pnpm-linked install", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const localEntry = seedLocalCli();
+            const result = await runDoctor({ cwd: workdir, executablePath: localEntry, logger: makeLogger().logger });
+
+            // The bin is reached through a symlinked package directory, which is
+            // the layout that a naive path-equality check reports as a mismatch.
+            expect(shadowFinding(result.findings)).toBeUndefined();
+        });
+
+        it("warns exactly once when the running binary lives outside the project", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+            seedLocalCli();
+
+            const globalDir = mkdtempSync(join(tmpdir(), "lunora-cli-global-"));
+            const globalEntry = join(globalDir, "bin.mjs");
+
+            writeFileSync(globalEntry, "// bin\n", "utf8");
+
+            const result = await runDoctor({ cwd: workdir, executablePath: globalEntry, logger: makeLogger().logger });
+
+            rmSync(globalDir, { force: true, recursive: true });
+
+            expect(result.findings.filter((finding) => finding.code === "cli-shadowed")).toHaveLength(1);
+            expect(shadowFinding(result.findings)?.level).toBe("warn");
+            // A wrong binary is never a hard failure — it is often deliberate.
+            expect(result.code).toBe(0);
+        });
+
+        it("skips silently when the project has no local install", async () => {
+            expect.assertions(1);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, executablePath: join(tmpdir(), "somewhere", "bin.mjs"), logger: makeLogger().logger });
+
+            expect(shadowFinding(result.findings)).toBeUndefined();
+        });
+    });
+
+    describe("--format json", () => {
+        it("puts one JSON document on stdout and the human report on stderr", async () => {
+            expect.assertions(5);
+
+            seed(workdir, PLACEHOLDER_WRANGLER);
+
+            const { logger } = makeLogger();
+            let stderr = "";
+            const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+                stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+                return true;
+            });
+
+            const stdout = await captureStdout(async () => {
+                await runDoctorCommand({ cwd: workdir, format: "json", logger });
+            });
+
+            stderrSpy.mockRestore();
+
+            const parsed = JSON.parse(stdout) as { code: number; findings: { code: string; level: string }[]; ok: boolean; summary: Record<string, number> };
+
+            expect(parsed.ok).toBe(false);
+            expect(parsed.code).toBe(1);
+            expect(parsed.findings.some((finding) => finding.code === "d1-placeholder-id" && finding.level === "fail")).toBe(true);
+            expect(parsed.summary.fail).toBe(1);
+            // The report is still rendered — on stderr, so stdout stays pipeable.
+            expect(stderr).toContain("lunora doctor — project preflight");
+        });
+
+        it("counts every level in the summary and keeps pass findings in the document", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const stdout = await captureStdout(async () => {
+                await runDoctorCommand({ cwd: workdir, format: "json", logger: makeLogger().logger });
+            });
+
+            const parsed = JSON.parse(stdout) as { findings: { level: string }[]; summary: Record<"fail" | "info" | "pass" | "warn", number> };
+
+            expect(parsed.summary.pass).toBeGreaterThan(0);
+            expect(parsed.findings.filter((finding) => finding.level === "pass")).toHaveLength(parsed.summary.pass);
+        });
+
+        it("renders the human report on the caller's logger in pretty mode", async () => {
+            expect.assertions(2);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const { lines, logger } = makeLogger();
+
+            const stdout = await captureStdout(async () => {
+                await runDoctorCommand({ cwd: workdir, logger });
+            });
+
+            expect(stdout).toBe("");
+            expect(lines.some((line) => line.includes("lunora doctor — project preflight"))).toBe(true);
+        });
+
+        it("rejects an unknown --format the same way the other commands do", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const { lines, logger } = makeLogger();
+
+            const stdout = await captureStdout(async () => {
+                const result = await runDoctorCommand({ cwd: workdir, format: "yaml", logger });
+
+                expect(result.code).toBe(1);
+            });
+
+            expect(stdout).toBe("");
+            expect(lines.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+        });
+    });
+
+    /**
+     * The codes are the machine-readable contract, so adding or renaming one has
+     * to be a deliberate act rather than a side effect of editing a check. The
+     * docs table is the committed fixture: it is the artefact consumers read, so
+     * asserting against it keeps the contract and its documentation in one place
+     * instead of two that can drift.
+     */
+    describe("finding codes", () => {
+        const DOCS_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "docs", "index.mdx");
+
+        it("is a sorted, duplicate-free list", () => {
+            expect.assertions(2);
+
+            expect([...DOCTOR_CODES]).toStrictEqual([...DOCTOR_CODES].toSorted((left, right) => left.localeCompare(right)));
+            expect(new Set(DOCTOR_CODES).size).toBe(DOCTOR_CODES.length);
+        });
+
+        it("documents exactly the codes the doctor can emit", () => {
+            expect.assertions(1);
+
+            const documented = [...readFileSync(DOCS_PATH, "utf8").matchAll(/^\| `(?<code>[a-z\d-]+)` +\| +(?:fail|info|pass|warn) /gmu)].map(
+                (match) => match.groups?.code ?? "",
+            );
+
+            expect(documented).toStrictEqual([...DOCTOR_CODES]);
         });
     });
 });
