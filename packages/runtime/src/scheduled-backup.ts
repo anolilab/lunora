@@ -9,12 +9,13 @@
  * two write into the same bucket on purpose.
  */
 import type { BackupManifestEntry } from "./backup-layout";
-import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestKey } from "./backup-layout";
+import { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestKey, normalizeBackupPrefix } from "./backup-layout";
 import type { BackupStore, ScheduledControllerLike, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { streamExportRows } from "./export-stream";
 import type { ShardNamespaceLike } from "./resolve-shard";
+import { toHex } from "./storage-admin-routes";
 
 /** Shared, stateless encoder — `encode()` is reusable, so one instance serves every run. */
 const NDJSON_ENCODER = new TextEncoder();
@@ -22,8 +23,16 @@ const NDJSON_ENCODER = new TextEncoder();
 /** Safety bound on the retention list loop — far above any realistic backup count. */
 const MAX_PRUNE_PAGES = 1000;
 
-/** Sidecar reads in flight while pruning. Enough to hide round-trip latency over a retention window of tens. */
-const PRUNE_READ_CONCURRENCY = 8;
+/**
+ * Custom-metadata key stamped on every sidecar this backup writes, holding the
+ * cron expression that produced it.
+ *
+ * Retention reads it off the object listing, which is what makes the writer
+ * check free — no per-sidecar request. It carries the *expression* rather than
+ * a boolean because "some cron wrote this" is not narrow enough: two
+ * deployments sharing a bucket would prune each other's snapshots.
+ */
+const BACKUP_CRON_METADATA_KEY = "lunoraBackupCron";
 
 /**
  * Largest snapshot this run will assemble, measured on the encoded NDJSON.
@@ -51,17 +60,6 @@ interface BackupManifest extends BackupManifestEntry {
     sha256: string;
 }
 
-/** Lowercase-hex encode a digest. */
-const toHex = (buffer: ArrayBuffer): string => {
-    let out = "";
-
-    for (const byte of new Uint8Array(buffer)) {
-        out += byte.toString(16).padStart(2, "0");
-    }
-
-    return out;
-};
-
 /** Join the encoded rows into the exact bytes that get hashed and stored. */
 const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Uint8Array<ArrayBuffer> => {
     const out = new Uint8Array(new ArrayBuffer(totalBytes));
@@ -75,54 +73,48 @@ const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Ui
     return out;
 };
 
-/** Read one sidecar, or `undefined` when it is missing or unreadable. */
-const readManifest = async (store: BackupStore, key: string): Promise<BackupManifest | undefined> => {
-    try {
-        const object = await store.get(key);
-
-        if (object === null) {
-            return undefined;
-        }
-
-        return JSON.parse(await object.text()) as BackupManifest;
-    } catch {
-        // An unreadable sidecar is not evidence that the snapshot is ours to
-        // delete. Treated as "someone else's", which keeps it.
-        return undefined;
-    }
-};
-
 /**
- * Enforce `backupRetain` by keeping only the newest N **scheduled** snapshots
- * and deleting the older ones plus their sidecars.
+ * Enforce `backupRetain` by keeping only the newest N snapshots **this cron**
+ * wrote, deleting the older ones plus their sidecars.
  *
  * The writer check is the whole point. Both backup writers share this prefix
- * and this sidecar suffix so that `lunora backup list --bucket` shows one
- * history — which also makes an operator's snapshot indistinguishable from a
- * cron's by key alone. Pruning on key shape would therefore delete the
- * pre-migration snapshot somebody took by hand an hour ago, silently, from the
- * bucket the docs told them to use. So each candidate's sidecar is read, and
- * only entries carrying this backup's own `scheduledTime` are eligible.
+ * and this sidecar suffix so `lunora backup list --bucket` shows one history —
+ * which also makes an operator's snapshot indistinguishable from a cron's by
+ * key alone. Pruning on key shape would delete the pre-migration snapshot
+ * somebody took by hand an hour ago, silently, from the bucket the docs told
+ * them to use. And "written by a cron" is not narrow enough either: two
+ * deployments sharing one bucket would prune each other, and each would quietly
+ * get half the retention it asked for. So a snapshot is eligible only when its
+ * sidecar carries this worker's own cron expression.
+ *
+ * The marker is read off the object listing rather than by reading each
+ * sidecar, so retention costs one `list` page per 1000 objects and no
+ * per-object requests — which matters against the Worker subrequest ceiling
+ * once a bucket has accumulated snapshots.
+ *
+ * Sidecars written before this marker existed carry no metadata and are never
+ * eligible: retention cannot tell them from an operator's, and keeping data is
+ * the safe direction. Delete those by hand once.
  *
  * Backup keys embed an ISO timestamp with `:`/`.` swapped for `-`, which sorts
  * lexicographically by recency, so a descending sort is a recency sort. A
  * no-op when retention is unset or non-positive.
  */
-const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined): Promise<void> => {
+const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<void> => {
     if (retain === undefined || retain <= 0) {
         return;
     }
 
-    const manifestKeys: string[] = [];
+    const mine: string[] = [];
     let cursor: string | undefined;
 
     for (let page = 0; page < MAX_PRUNE_PAGES; page += 1) {
         // eslint-disable-next-line no-await-in-loop -- R2 list is paged; each request resumes from the prior page's cursor.
-        const listing = await store.list({ cursor, prefix });
+        const listing = await store.list({ cursor, include: ["customMetadata"], prefix });
 
         for (const object of listing.objects) {
-            if (isBackupManifestKey(object.key)) {
-                manifestKeys.push(object.key);
+            if (isBackupManifestKey(object.key) && object.customMetadata?.[BACKUP_CRON_METADATA_KEY] === cron) {
+                mine.push(object.key);
             }
         }
 
@@ -133,24 +125,22 @@ const pruneBackups = async (store: BackupStore, prefix: string, retain: number |
         cursor = listing.cursor;
     }
 
-    // Newest first, then keep only the ones this backup wrote.
-    const ordered = manifestKeys.toSorted((a, b) => b.localeCompare(a));
-    const scheduled: string[] = [];
-
-    for (let index = 0; index < ordered.length; index += PRUNE_READ_CONCURRENCY) {
-        // eslint-disable-next-line no-await-in-loop -- one window of sidecar reads at a time
-        const window = await Promise.all(
-            ordered.slice(index, index + PRUNE_READ_CONCURRENCY).map(async (key) => [key, await readManifest(store, key)] as const),
-        );
-
-        for (const [key, manifest] of window) {
-            if (typeof manifest?.scheduledTime === "number") {
-                scheduled.push(key);
-            }
-        }
-    }
-
-    await Promise.all(scheduled.slice(retain).flatMap((manifestKey) => [store.delete(manifestKey), store.delete(backupObjectKeyOfManifest(manifestKey))]));
+    // Newest first; everything past the retention window goes.
+    await Promise.all(
+        mine
+            .toSorted((a, b) => b.localeCompare(a))
+            .slice(retain)
+            .map(async (manifestKey) => {
+                // Snapshot first, sidecar second. A sidecar without its snapshot
+                // is a listable entry that fails to restore; a snapshot without
+                // its sidecar is invisible to retention forever, because the
+                // marker retention prunes on lives on the sidecar. If only one
+                // delete lands, this order is the recoverable one — the next run
+                // sees the sidecar again and retries.
+                await store.delete(backupObjectKeyOfManifest(manifestKey));
+                await store.delete(manifestKey);
+            }),
+    );
 };
 
 /**
@@ -219,7 +209,7 @@ const runScheduledBackup = async (
     // here, so no partial object and no manifest is ever written.
     await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
 
-    const prefix = options.backupPrefix ?? BACKUP_KEY_PREFIX;
+    const prefix = normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX);
     const id = new Date(controller.scheduledTime).toISOString();
     const fileKey = backupObjectKey(prefix, id);
     const body = concatChunks(chunks, bytes);
@@ -250,9 +240,22 @@ const runScheduledBackup = async (
         ...(tables ? { tables: tables.join(",") } : {}),
     };
 
-    await store.put(backupManifestKey(fileKey), `${JSON.stringify(manifest, undefined, 2)}\n`, { httpMetadata: { contentType: "application/json" } });
+    await store.put(backupManifestKey(fileKey), `${JSON.stringify(manifest, undefined, 2)}\n`, {
+        // Retention's writer check reads this back off the object listing.
+        customMetadata: { [BACKUP_CRON_METADATA_KEY]: controller.cron },
+        httpMetadata: { contentType: "application/json" },
+    });
 
-    await pruneBackups(store, prefix, options.backupRetain);
+    // Both objects have landed by here, so the backup succeeded whatever
+    // retention does next. Failing the cron invocation for a failed prune would
+    // report a broken backup to an operator whose backup is fine, and bury the
+    // real symptom — that retention stopped.
+    try {
+        await pruneBackups(store, prefix, options.backupRetain, controller.cron);
+    } catch (error: unknown) {
+        // eslint-disable-next-line no-console -- server-side diagnostic; the alternative is a silently broken retention
+        console.warn(`[lunora] backup ${fileKey} was written, but retention failed:`, error);
+    }
 };
 
 export type { BackupManifest };

@@ -1,5 +1,13 @@
 export type { BackupManifestEntry } from "./backup-layout";
-export { BACKUP_KEY_PREFIX, BACKUP_MANIFEST_SUFFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestKey } from "./backup-layout";
+export {
+    BACKUP_KEY_PREFIX,
+    backupManifestKey,
+    backupObjectKey,
+    backupObjectKeyOfManifest,
+    isBackupManifestEntry,
+    isBackupManifestKey,
+    normalizeBackupPrefix,
+} from "./backup-layout";
 export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format";
 export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {
@@ -167,6 +175,7 @@ export type {
     ShardFunctionReference,
 } from "./shard-client";
 export { createShardClient } from "./shard-client";
+export { STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";

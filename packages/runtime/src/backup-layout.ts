@@ -17,6 +17,15 @@
 /** Default key prefix backups live under. Both writers default here so one bucket is one history. */
 const BACKUP_KEY_PREFIX = "backups/";
 
+/**
+ * A prefix is a key prefix, not a directory, but everyone types it like one.
+ * Without this, `--prefix backups` / `backupPrefix: "backups"` yields
+ * `backupslunora-backup-…`: a key that works, sorts oddly, and matches nothing
+ * the other writer produced. Idempotent, and `""` stays `""` so the same
+ * builder can produce a bare file name.
+ */
+const normalizeBackupPrefix = (prefix: string): string => (prefix === "" || prefix.endsWith("/") ? prefix : `${prefix}/`);
+
 /** Suffix of the per-snapshot manifest sidecar, written beside the snapshot it describes. */
 const BACKUP_MANIFEST_SUFFIX = ".manifest.json";
 
@@ -30,7 +39,7 @@ const BACKUP_MANIFEST_SUFFIX = ".manifest.json";
  * and object keys. Conflating the two forms is why `restore` used to be
  * documented with an argument it could never match.
  */
-const backupObjectKey = (prefix: string, id: string): string => `${prefix}lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
+const backupObjectKey = (prefix: string, id: string): string => `${normalizeBackupPrefix(prefix)}lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
 
 /** The sidecar key for a snapshot at `objectKey`. */
 const backupManifestKey = (objectKey: string): string => `${objectKey}${BACKUP_MANIFEST_SUFFIX}`;
@@ -66,5 +75,26 @@ interface BackupManifestEntry {
     tables?: string;
 }
 
+/**
+ * Is this a backup manifest? The shape check both sides need: the reader, to
+ * skip an unrelated object under the prefix, and retention, to decide whether
+ * something is safe to delete. The side that deletes must not be the side
+ * without a guard.
+ */
+const isBackupManifestEntry = (value: unknown): value is BackupManifestEntry =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as BackupManifestEntry).id === "string" &&
+    typeof (value as BackupManifestEntry).file === "string";
+
 export type { BackupManifestEntry };
-export { BACKUP_KEY_PREFIX, BACKUP_MANIFEST_SUFFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestKey };
+export {
+    BACKUP_KEY_PREFIX,
+    BACKUP_MANIFEST_SUFFIX,
+    backupManifestKey,
+    backupObjectKey,
+    backupObjectKeyOfManifest,
+    isBackupManifestEntry,
+    isBackupManifestKey,
+    normalizeBackupPrefix,
+};

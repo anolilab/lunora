@@ -64,33 +64,57 @@ const bodyText = async (body: unknown): Promise<string> => {
 };
 
 /** An in-memory {@link BackupStore} double that records put/delete and serves list pages. */
-const memoryBackupStore = (): BackupStore & { checksums: Map<string, string>; objects: Map<string, string> } => {
+const memoryBackupStore = (): BackupStore & {
+    checksums: Map<string, string>;
+    metadata: Map<string, Record<string, string>>;
+    objects: Map<string, string>;
+} => {
     const objects = new Map<string, string>();
     const checksums = new Map<string, string>();
+    const metadata = new Map<string, Record<string, string>>();
 
-    const put = vi.fn<(key: string, body: unknown, putOptions?: { sha256?: ArrayBuffer | string }) => Promise<{ etag: string; key: string; size: number }>>(
-        async (key, body, putOptions) => {
-            const text = await bodyText(body);
+    const put = vi.fn<
+        (
+            key: string,
+            body: unknown,
+            putOptions?: { customMetadata?: Record<string, string>; sha256?: ArrayBuffer | string },
+        ) => Promise<{ etag: string; key: string; size: number }>
+    >(async (key, body, putOptions) => {
+        const text = await bodyText(body);
 
-            objects.set(key, text);
+        objects.set(key, text);
 
-            // R2 records a checksum only when the writer supplies one; the
-            // double keeps that distinction so a test can tell them apart.
-            if (typeof putOptions?.sha256 === "string") {
-                checksums.set(key, putOptions.sha256);
-            }
+        if (putOptions?.customMetadata !== undefined) {
+            metadata.set(key, putOptions.customMetadata);
+        }
 
-            return { etag: "e", key, size: text.length };
-        },
-    );
+        // R2 records a checksum only when the writer supplies one; the double
+        // keeps that distinction so a test can tell them apart.
+        if (typeof putOptions?.sha256 === "string") {
+            checksums.set(key, putOptions.sha256);
+        }
 
-    const list = vi.fn<(listOptions?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{ objects: { key: string }[] }>>(async (listOptions) => {
+        return { etag: "e", key, size: text.length };
+    });
+
+    const list = vi.fn<
+        (listOptions?: {
+            cursor?: string;
+            include?: ("customMetadata" | "httpMetadata")[];
+            limit?: number;
+            prefix?: string;
+        }) => Promise<{ objects: { customMetadata?: Record<string, string>; key: string }[] }>
+    >(async (listOptions) => {
         const prefix = listOptions?.prefix ?? "";
         const keys = [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => a.localeCompare(b));
+        // R2 returns custom metadata on a listing only when it is asked for.
+        const withMetadata = listOptions?.include?.includes("customMetadata") ?? false;
 
         return {
             objects: keys.map((key) => {
-                return { key };
+                const custom = withMetadata ? metadata.get(key) : undefined;
+
+                return custom === undefined ? { key } : { customMetadata: custom, key };
             }),
         };
     });
@@ -99,13 +123,7 @@ const memoryBackupStore = (): BackupStore & { checksums: Map<string, string>; ob
         objects.delete(key);
     });
 
-    const get = vi.fn<(key: string) => Promise<{ text: () => Promise<string> } | null>>(async (key) => {
-        const stored = objects.get(key);
-
-        return stored === undefined ? null : { text: async () => stored };
-    });
-
-    return { checksums, delete: remove, get, list, objects, put };
+    return { checksums, delete: remove, list, metadata, objects, put };
 };
 
 /** Lowercase-hex SHA-256 of a UTF-8 string — the same digest the runtime computes over the snapshot. */
@@ -257,6 +275,73 @@ describe("createWorker — scheduled backup", () => {
         expect(store.objects.has("backups/lunora-backup-2026-06-04T12-00-00-000Z.ndjson")).toBe(true);
     });
 
+    it("leaves another deployment's snapshots alone, and costs no per-object reads", async () => {
+        expect.assertions(4);
+
+        const store = memoryBackupStore();
+        // A second worker backing up into the same bucket and prefix, on its own
+        // schedule. "Written by a cron" is not a narrow enough test: pruning on
+        // that would have each deployment deleting the other's snapshots, and
+        // both quietly getting half the retention they configured.
+        const otherKey = "backups/lunora-backup-2026-06-01T09-30-00-000Z.ndjson";
+
+        store.objects.set(otherKey, "other\n");
+        store.objects.set(`${otherKey}.manifest.json`, JSON.stringify({ cron: "*/30 * * * *", file: otherKey, id: "2026-06-01T09:30:00.000Z" }));
+        store.metadata.set(`${otherKey}.manifest.json`, { lunoraBackupCron: "*/30 * * * *" });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+
+        expect(store.objects.has(otherKey)).toBe(true);
+        expect(store.objects.has(`${otherKey}.manifest.json`)).toBe(true);
+        // Its own older snapshot still goes.
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(false);
+
+        // The writer check rides on the listing. A read per sidecar would scale
+        // with the whole bucket and burn the Worker subrequest budget.
+        expect(vi.mocked(store.list).mock.calls.every(([listOptions]) => listOptions?.include?.includes("customMetadata") === true)).toBe(true);
+    });
+
+    it("reports a successful backup even when retention fails", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        vi.mocked(store.delete).mockRejectedValue(new Error("R2 unavailable"));
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
+        store.metadata.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", { lunoraBackupCron: BACKUP_CRON });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        // The snapshot and its manifest have both landed before retention runs.
+        // Failing the invocation here would show an operator a broken backup
+        // cron over a backup that is fine, and bury the real symptom.
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).resolves.toBeUndefined();
+
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("retention failed"), expect.anything());
+
+        warn.mockRestore();
+    });
+
     it("includes `.global()` rows from exportGlobals in the snapshot", async () => {
         expect.assertions(2);
 
@@ -387,6 +472,7 @@ describe("createWorker — scheduled backup", () => {
 
             store.objects.set(key, body);
             store.objects.set(`${key}.manifest.json`, JSON.stringify({ cron: BACKUP_CRON, file: key, id, scheduledTime: Date.parse(id) }));
+            store.metadata.set(`${key}.manifest.json`, { lunoraBackupCron: BACKUP_CRON });
         };
 
         seed("2026-06-01T00:00:00.000Z", "old\n");

@@ -338,12 +338,6 @@ interface AuthUserFieldSpec {
 const BACKUP_KEY_PREFIX = "backups/";
 ```
 
-### `BACKUP_MANIFEST_SUFFIX` (const)
-
-```ts
-const BACKUP_MANIFEST_SUFFIX = ".manifest.json";
-```
-
 ### `BackupManifest` (interface)
 
 ```ts
@@ -373,16 +367,15 @@ interface BackupManifestEntry {
 ```ts
 interface BackupStore {
     delete: (key: string) => Promise<unknown>;
-    get: (key: string) => Promise<{
-        text: () => Promise<string>;
-    } | null>;
     list: (options?: {
         cursor?: string;
+        include?: ("customMetadata" | "httpMetadata")[];
         limit?: number;
         prefix?: string;
     }) => Promise<{
         cursor?: string;
         objects: ReadonlyArray<{
+            customMetadata?: Record<string, string>;
             key: string;
         }>;
         truncated?: boolean;
@@ -1710,6 +1703,12 @@ interface RunExportTapOptions {
 const SHARD_REGISTRY_DO_NAME: string;
 ```
 
+### `STORAGE_UPLOAD_MAX_BODY_BYTES` (const)
+
+```ts
+const STORAGE_UPLOAD_MAX_BODY_BYTES: number;
+```
+
 ### `ScheduledControllerLike` (interface)
 
 ```ts
@@ -2393,6 +2392,12 @@ const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response 
 const handleCorsPreflight: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
 ```
 
+### `isBackupManifestEntry` (const)
+
+```ts
+const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
+```
+
 ### `isBackupManifestKey` (const)
 
 ```ts
@@ -2425,6 +2430,12 @@ const mergeStrategyForAggregate: (input: {
     kind: "scalar";
     op: "avg" | "count" | "max" | "min" | "sum";
 }) => MergeStrategy;
+```
+
+### `normalizeBackupPrefix` (const)
+
+```ts
+const normalizeBackupPrefix: (prefix: string) => string;
 ```
 
 ### `otlpSink` (const)

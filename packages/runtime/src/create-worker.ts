@@ -564,15 +564,15 @@ interface BackupStore {
     delete: (key: string) => Promise<unknown>;
 
     /**
-     * Read one object back. Retention uses it to check whether a candidate
-     * snapshot is one this backup wrote before deleting it — the bucket is
-     * shared with `lunora backup create --bucket`, so the key alone does not
-     * say who wrote it. A raw R2 binding satisfies this.
+     * List objects under a prefix. `include: ["customMetadata"]` is how
+     * retention tells its own snapshots from an operator's without a request
+     * per object — R2 returns custom metadata on a listing only when asked, and
+     * may return fewer than `limit` results when it is, which the cursor loop
+     * already handles.
      */
-    get: (key: string) => Promise<{ text: () => Promise<string> } | null>;
-    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{
+    list: (options?: { cursor?: string; include?: ("customMetadata" | "httpMetadata")[]; limit?: number; prefix?: string }) => Promise<{
         cursor?: string;
-        objects: ReadonlyArray<{ key: string }>;
+        objects: ReadonlyArray<{ customMetadata?: Record<string, string>; key: string }>;
         truncated?: boolean;
     }>;
     put: (
@@ -580,7 +580,8 @@ interface BackupStore {
         body: ArrayBuffer | ArrayBufferView | Blob | null | ReadableStream | string,
         // `sha256` (hex or bytes) is what makes R2 record a checksum for the
         // object; without it `list()`/`head()` report none and every later
-        // integrity check degrades to comparing sizes.
+        // integrity check degrades to comparing sizes. `customMetadata` carries
+        // the marker retention prunes on.
         options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
     ) => Promise<unknown>;
 }
@@ -1238,8 +1239,11 @@ interface WorkerOptions {
     /**
      * Reads one object back, backing the admin-gated
      * `GET /_lunora/admin/storage/object` endpoint that `lunora backup restore
-     * --bucket` pulls snapshots through. Passing `createStorage(...).download`
-     * satisfies it. Omit it and the endpoint responds
+     * --bucket` pulls snapshots through. Wrap the storage call — the generated
+     * app worker emits
+     * `(key, opts) => pick(opts?.bucket).download(key)` — rather than passing
+     * `createStorage(...).download` itself, whose second parameter is a byte
+     * range, not a bucket. Omit it and the endpoint responds
      * `STORAGE_DOWNLOAD_NOT_CONFIGURED`.
      */
     storageDownload?: StorageDownloadFunction;

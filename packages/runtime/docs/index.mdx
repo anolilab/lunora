@@ -200,6 +200,14 @@ Register your own cron handlers via `crons` (keyed by the exact expression);
 they run independently of — and, on a shared expression, alongside — the
 built-in backup.
 
+Retention only ever removes snapshots **this** cron wrote: each sidecar is
+stamped with its cron expression, and the prune matches on it. Snapshots taken
+by hand, and snapshots from a second deployment sharing the bucket, are left
+alone — so two workers on one bucket each keep the retention they configured.
+(Sidecars written before this marker existed are never pruned automatically;
+delete those by hand once.) A failed prune is reported and does not fail the
+backup that already landed.
+
 `lunora backup list --bucket <name>` reads the same layout, so scheduled
 snapshots and ones taken by hand with `lunora backup create --bucket <name>`
 appear as one history — and `lunora backup restore <id> --bucket <name> --verify`
@@ -236,8 +244,15 @@ before the upload starts.
 `lunora backup restore --bucket` pulls a snapshot down through the admin-gated
 `GET /_lunora/admin/storage/object?key=…`, which streams one object's body
 under the same bearer as every other admin route. It needs a `storageDownload`
-function on the worker (`createStorage(...).download`); the generated app
-worker wires it alongside the other `storage*` options. Without it the endpoint
+function on the worker — wrap the storage call, as the generated app worker
+does:
+
+```ts
+storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
+```
+
+`createStorage(...).download` cannot be passed directly: its second parameter is
+a byte range, not a bucket. Without it the endpoint
 answers `STORAGE_DOWNLOAD_NOT_CONFIGURED` and a bucket restore is not
 available — the snapshot is still readable with `wrangler r2 object get`.
 

@@ -3581,10 +3581,6 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
-### `BACKUP_MANIFEST_SUFFIX` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
 ### `BackupManifest` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4089,6 +4085,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `STORAGE_UPLOAD_MAX_BODY_BYTES` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ScheduledControllerLike` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4369,6 +4369,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `isBackupManifestEntry` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `isBackupManifestKey` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4382,6 +4386,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `mergeStrategyForAggregate` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `normalizeBackupPrefix` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
