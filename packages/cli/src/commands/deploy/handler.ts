@@ -12,7 +12,6 @@ import {
     isMintableSecretKey,
     packageNamesFromBindings,
     parseDevVariableEntries,
-    readLinkedProject,
     requiredSecrets,
     resolveDeployDriver,
     upsertDevVariableLine,
@@ -32,7 +31,7 @@ import { Project } from "ts-morph";
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
-import { autoLinkFromDeployOutput } from "../../util/auto-link";
+import { autoLinkFromDeployOutput, parseDeployedUrl } from "../../util/auto-link";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
@@ -40,6 +39,8 @@ import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
+import type { HealthFetch } from "../../util/health-probe";
+import { HEALTH_PATH, HEALTH_READY_PATH, probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
@@ -52,6 +53,7 @@ import { defaultSpawner } from "../../util/spawn";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import type { VectorMetadataIndex } from "../../util/vectorize-metadata";
 import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectorize-metadata";
+import readWranglerName from "../../util/wrangler-name";
 import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -83,6 +85,21 @@ interface DeployCommandOptions {
     fetchImpl?: FetchLike;
     /** Output format: `pretty` (default) or `json`. */
     format?: string;
+
+    /**
+     * After a successful live deploy, probe the new version's health route
+     * (`/_lunora/health/ready`, falling back to `/_lunora/health`) and fail the
+     * command when it never answers. Opt-in, not default-on: a worker whose
+     * health route is admin-gated or unreachable from CI must still be
+     * deployable, and a default network step would turn a successful deploy
+     * into a red build for an unrelated reason.
+     */
+    healthCheck?: boolean;
+
+    /** Injectable fetch for `--health-check`; defaults to the global `fetch`. */
+    healthFetch?: HealthFetch;
+    /** Injectable inter-attempt delay for `--health-check`; injected in tests to skip the real wait. */
+    healthSleep?: (ms: number) => Promise<void>;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
     logger: Logger;
@@ -176,11 +193,49 @@ interface DeployCommandOptions {
     updateSchemaBaseline?: boolean;
 }
 
+/**
+ * What this run put where — the identity of the thing that was just deployed.
+ *
+ * Present on every run that reached (and completed) the wrangler invocation,
+ * including `--dry-run` and `--preview`, so a consumer can tell "nothing went
+ * live" from "went live" without inferring it from a missing `url`. A dry run
+ * publishes nothing and therefore never carries a `url`.
+ *
+ * No `versionId`: the pinned wrangler (4.114.0) has no structured deploy output
+ * and no flag that returns the version id — it only prints it in prose, and
+ * scraping a second value out of prose is exactly what this shouldn't do. The
+ * id is available from `lunora deployments list` after the fact.
+ */
+interface DeployedIdentity {
+    /** ISO-8601 stamp taken when the wrangler invocation returned. */
+    deployedAt: string;
+    /** True when `--dry-run` validated + bundled without publishing. */
+    dryRun: boolean;
+    /** The Cloudflare environment this run targeted, when `--env` named one. */
+    env?: string;
+    /** True when `--preview` uploaded a version instead of shifting live traffic. */
+    preview: boolean;
+    /** The URL wrangler reported publishing to; absent on a dry run, or when the output carried no URL. */
+    url?: string;
+    /** The Worker name from the project's wrangler config. */
+    workerName?: string;
+}
+
 interface DeployCommandResult {
     code: number;
+    /** What was deployed and where — set once the wrangler invocation completed. */
+    deployment?: DeployedIdentity;
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
     error?: string;
+
+    /**
+     * The `--health-check` probe's verdict, when the flag was set and the probe
+     * ran. A red probe fails the command (`code` is non-zero) — but the deploy
+     * itself still succeeded, which is why the reason is reported separately
+     * from `error`.
+     */
+    healthCheck?: { error?: string; ok: boolean; url: string };
 
     /**
      * The `.dev.vars`-shaped filename (never a full path, never a value) a
@@ -840,14 +895,18 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
         return undefined;
     }
 
-    // `wrangler deploy`'s published URL is never captured here, so without an
-    // explicit `--migrate-url` the downstream migration would default to
+    // The deployed URL is only known AFTER wrangler runs, and this gate runs
+    // before it — so there is nothing to default to here, and without an
+    // explicit `--migrate-url` the downstream migration would fall back to
     // `http://localhost:8787` (the dev worker) and apply against LOCAL state —
     // and ship the production admin bearer to whatever listens on that port.
     // Refuse before deploying rather than silently targeting localhost later.
+    // (A linked checkout satisfies this without the flag: the caller resolves
+    // `migrateUrl` through `resolveWorkerUrl`, which reads the link this
+    // deploy's predecessor recorded.)
     if (options.migrateUrl === undefined) {
         const message =
-            "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost";
+            "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is only known after wrangler runs, and this gate runs before it; refusing to default to localhost";
 
         options.logger.error(message);
 
@@ -1065,6 +1124,62 @@ const provisionVectorMetadataIndexes = async (options: DeployCommandOptions, cwd
     }
 };
 
+/** Attempt budget + spacing for `--health-check`: a fresh version takes seconds to propagate, and a predictable ceiling is what a CI timeout is set against. */
+const HEALTH_CHECK_ATTEMPTS = 5;
+const HEALTH_CHECK_DELAY_MS = 2000;
+
+/**
+ * The opt-in `--health-check` step: prove the version just deployed actually
+ * answers. Probes the readiness gate first and falls back to the aggregate route
+ * (older deployments have no `/ready`), retrying on a bounded budget because a
+ * single immediate probe of a still-propagating deploy is a coin flip.
+ *
+ * Returns `undefined` when the flag wasn't set. The URL comes from the deploy
+ * that just ran, falling back to the recorded link for THIS environment; with
+ * neither, the step refuses rather than guessing an origin.
+ */
+const runHealthCheckStep = async (options: DeployCommandOptions, cwd: string, deployedUrl: string | undefined): Promise<DeployCommandResult["healthCheck"]> => {
+    if (options.healthCheck !== true) {
+        return undefined;
+    }
+
+    const baseUrl = deployedUrl ?? resolveWorkerUrl({ cwd, env: options.env });
+
+    if (baseUrl === undefined) {
+        const message =
+            "--health-check: the deploy succeeded, but no URL to probe could be resolved — wrangler's output carried none and this checkout has no link for this environment. Run `lunora link --url <https://your-worker>` and re-deploy, or drop --health-check.";
+
+        options.logger.error(message);
+
+        return { error: message, ok: false, url: "" };
+    }
+
+    const probe = await probeHealth({
+        attempts: HEALTH_CHECK_ATTEMPTS,
+        baseUrl,
+        delayMs: HEALTH_CHECK_DELAY_MS,
+        fetchImpl: options.healthFetch,
+        // The readiness gate answers "can this version serve"; the aggregate is
+        // the one that exists on older deployments.
+        paths: [HEALTH_READY_PATH, HEALTH_PATH],
+        sleep: options.healthSleep,
+    });
+
+    if (probe.error === undefined) {
+        options.logger.success(`health check ok (${probe.url})`);
+
+        return { ok: true, url: probe.url };
+    }
+
+    // The deploy SUCCEEDED and the probe did not — different facts, and the
+    // message has to say which one failed or it reads as a broken deploy.
+    options.logger.error(
+        `--health-check: the deploy succeeded, but the new version did not answer after ${String(HEALTH_CHECK_ATTEMPTS)} attempt(s) — ${probe.error}`,
+    );
+
+    return { error: probe.error, ok: false, url: probe.url };
+};
+
 /**
  * After a successful `wrangler deploy`, run any requested data migrations and —
  * only when the whole operation succeeded — advance the committed schema
@@ -1212,6 +1327,111 @@ const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> },
     return true;
 };
 
+/**
+ * Assemble the wrangler {@link SpawnDescriptor}, including how its stdout is
+ * handled — the one decision that has to be right for `--format json` to stay
+ * pipeable:
+ *
+ * Pretty + publishing uses `captureStdout` (buffered AND teed, so the URL can be
+ * read while the user still watches live progress). Json + publishing uses
+ * `captureStdoutSilently` (buffered, never teed — the caller replays it to
+ * stderr), because `captureStdout` there would interleave with the single JSON
+ * document on stdout and corrupt it. A dry run has nothing to read, so its
+ * stdout is left alone (mapped to stderr in json mode).
+ */
+const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, target: string): SpawnDescriptor => {
+    const jsonFormat = isJsonFormat(options.format);
+    // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
+    // preview and a `--format json` deploy need to report where the thing went
+    // just as much as a first pretty deploy does, and a re-deploy is how a
+    // CHANGED url gets noticed.
+    const publishes = options.dryRun !== true;
+
+    const deployCommand = buildDeployCommand(cwd, options, target);
+    const exec = execArgsFor(detectPackageManager(cwd), deployCommand.tool, deployCommand.args);
+
+    return {
+        args: exec.args,
+        captureStdout: publishes && !jsonFormat,
+        captureStdoutSilently: publishes && jsonFormat,
+        command: exec.command,
+        cwd,
+        stdoutToStderr: jsonFormat && !publishes,
+    };
+};
+
+interface CompleteDeployInputs {
+    cwd: string;
+    descriptor: SpawnDescriptor;
+    mintedSecretsFile: string | undefined;
+    options: DeployCommandOptions;
+    reblessSchemaBaseline: (() => void) | undefined;
+    /** Wrangler's captured stdout, or `undefined` when this run didn't capture it. */
+    stdout: string | undefined;
+    validation: DeployCommandResult["validation"];
+}
+
+/**
+ * Everything that happens once `wrangler` has exited 0: name what was deployed,
+ * record the link, prove the new version answers, then finalize (migrations +
+ * baseline re-bless). Extracted from {@link executeDeploy} to keep both
+ * functions' cognitive complexity within the 15-node budget.
+ */
+const completeDeploy = async ({
+    cwd,
+    descriptor,
+    mintedSecretsFile,
+    options,
+    reblessSchemaBaseline,
+    stdout,
+    validation,
+}: CompleteDeployInputs): Promise<DeployCommandResult> => {
+    // A dry run publishes nothing, so it reports no URL — the discriminators say
+    // so explicitly rather than leaving a consumer to infer it from the absence.
+    const deployment: DeployedIdentity = {
+        deployedAt: new Date().toISOString(),
+        dryRun: options.dryRun === true,
+        env: options.env,
+        preview: options.preview === true,
+        url: options.dryRun === true ? undefined : parseDeployedUrl(stdout),
+        workerName: readWranglerName(cwd),
+    };
+
+    // A dry run published nothing, and a preview uploaded a Version without
+    // going live — either way, skip the post-deploy finalize (migrations /
+    // baseline re-bless), the link write, and the health probe, which only apply
+    // to a live deploy. The URL is still reported.
+    if (options.dryRun === true || options.preview === true) {
+        if (options.healthCheck === true) {
+            options.logger.warn(
+                `--health-check skipped: ${options.dryRun === true ? "a dry run publishes nothing" : "a preview version serves no live traffic"}`,
+            );
+        }
+
+        return { code: 0, deployment, descriptor, mintedSecretsFile, validation };
+    }
+
+    // Zero-effort linking: record the deployed URL, warn instead of clobbering
+    // when an existing link disagrees. Skipped for `--temporary`: that account
+    // is deleted in ~60 minutes, so its URL must never become the checkout's
+    // recorded target.
+    if (options.temporary !== true) {
+        autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
+    }
+
+    // Prove the new version answers BEFORE running migrations against it — a
+    // worker that can't serve is not one to migrate.
+    const healthCheck = await runHealthCheckStep(options, cwd, deployment.url);
+
+    if (healthCheck?.error !== undefined) {
+        return { code: 1, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
+    }
+
+    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
+
+    return { ...finalized, deployment, healthCheck };
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -1334,45 +1554,25 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: 1, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
     }
 
-    // Capture wrangler's stdout (to read the deployed URL for auto-link) only on
-    // a first, unlinked, real (non-dry-run, non-preview) pretty-mode deploy — so
-    // existing links are never clobbered and subsequent deploys keep full TTY output.
-    const shouldAutoLink = !isJsonFormat(options.format) && options.dryRun !== true && options.preview !== true && readLinkedProject(cwd) === undefined;
-
-    const deployCommand = buildDeployCommand(cwd, options, target);
-    const exec = execArgsFor(detectPackageManager(cwd), deployCommand.tool, deployCommand.args);
-    const descriptor: SpawnDescriptor = {
-        args: exec.args,
-        captureStdout: shouldAutoLink,
-        command: exec.command,
-        cwd,
-        // In `--format json` mode stdout is reserved for the single JSON document,
-        // so route wrangler's progress + deployed-URL output to stderr instead.
-        stdoutToStderr: isJsonFormat(options.format),
-    };
+    const descriptor = buildDeploySpawn(cwd, options, target);
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);
 
     const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
+    // Replay what was captured silently, so `--format json` still shows the
+    // deploy output the operator reads in a CI log — on stderr, where it can't
+    // touch the document on stdout.
+    if (descriptor.captureStdoutSilently === true && result.stdout !== undefined && result.stdout !== "") {
+        process.stderr.write(result.stdout);
+    }
+
     if (result.code !== 0) {
         return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    // A dry run published nothing, and a preview uploaded a Version without
-    // going live — either way, skip the post-deploy finalize (migrations /
-    // baseline re-bless) and auto-link, which only apply to a production
-    // deploy. wrangler prints the preview URL itself.
-    if (options.dryRun || options.preview) {
-        return { code: 0, descriptor, mintedSecretsFile, validation };
-    }
-
-    // Zero-effort linking: record the deployed URL the first time (self-guards
-    // when already linked or when stdout wasn't captured).
-    autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, output: result.stdout });
-
-    return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
+    return completeDeploy({ cwd, descriptor, mintedSecretsFile, options, reblessSchemaBaseline, stdout: result.stdout, validation });
 };
 
 /**
@@ -1408,9 +1608,14 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
             logger: options.logger,
             migrated: options.migrate === true,
             mintedSecretsFile: result.mintedSecretsFile,
+            // From the deploy that just ran, not the link file — the link can be
+            // stale (or absent on a first deploy), and this run knows the truth.
+            url: result.deployment?.url,
         });
     } else if (result.code === 0 && options.preview === true) {
-        options.logger.success("preview version uploaded — see the preview URL in the wrangler output above");
+        const previewUrl = result.deployment?.url;
+
+        options.logger.success(previewUrl === undefined ? "preview version uploaded" : `preview version uploaded — ${previewUrl}`);
     }
 
     return result;
@@ -1425,6 +1630,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         dryRun: options.dryRun === true,
         env: options.env,
         format: options.format,
+        healthCheck: options.healthCheck === true,
         logger,
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
@@ -1449,5 +1655,5 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
 });
 
 export { execute };
-export type { DeployCommandOptions, DeployCommandResult };
+export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity };
 export { runDeployCommand };

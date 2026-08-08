@@ -3,7 +3,7 @@ export { COMMANDS, runCli, VERSION } from "./cli";
 export { runCodegenCommand } from "./commands/codegen/handler";
 export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer";
 export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer";
-export type { DeployCommandOptions, DeployCommandResult } from "./commands/deploy/handler";
+export type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from "./commands/deploy/handler";
 export { runDeployCommand } from "./commands/deploy/handler";
 export type { DevCommandOptions, DevCommandPlan } from "./commands/dev/handler";
 export { planDevCommand, runDevCommand } from "./commands/dev/handler";
