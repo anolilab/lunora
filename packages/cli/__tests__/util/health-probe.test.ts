@@ -97,4 +97,27 @@ describe("probeHealth", () => {
 
         expect(result.error).toContain("could not reach https://app.workers.dev/_lunora/health (getaddrinfo ENOTFOUND)");
     });
+
+    it("gives the default fetch a per-attempt deadline so a silent worker cannot hang the probe", async () => {
+        expect.assertions(3);
+
+        // The real hazard: Node's `fetch` never times out on its own, so a
+        // connection that is accepted and then goes quiet would block forever.
+        // Assert the abort signal reaches `fetch` rather than the wall-clock
+        // behaviour, which would mean actually waiting for a timeout.
+        const globalFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("The operation was aborted due to timeout"));
+
+        try {
+            const result = await probeHealth({ baseUrl: "https://app.workers.dev", sleep: noSleep, timeoutMs: 25 });
+
+            expect(result.error).toContain("could not reach");
+
+            const [, init] = globalFetch.mock.calls[0] as [string, RequestInit | undefined];
+
+            expect(init?.signal).toBeInstanceOf(AbortSignal);
+            expect(init?.signal?.aborted).toBe(false);
+        } finally {
+            globalFetch.mockRestore();
+        }
+    });
 });

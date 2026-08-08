@@ -49,6 +49,13 @@ const fail = (message) => {
 const kib = (bytes) => `${(bytes / 1024).toFixed(1)} KiB`;
 
 /**
+ * Cloudflare's pre-compression Worker script limit — 64 MB, the same on Free and
+ * Paid, alongside the per-plan gzip limit (3 MB / 10 MB).
+ * https://developers.cloudflare.com/workers/platform/limits/
+ */
+const RAW_LIMIT_BYTES = 64 * 1024 * 1024;
+
+/**
  * Materialize the reference template as a project whose dependencies resolve.
  *
  * A symlink farm rather than an install: every `@lunora/*` dependency is a
@@ -154,6 +161,21 @@ if (update) {
     process.stdout.write(`worker-size.json updated: ${delta >= 0 ? "+" : ""}${kib(delta)} gzipped against the previous baseline.\n`);
 
     process.exit(0);
+}
+
+// Cloudflare enforces two ceilings, not one: the plan's gzip limit AND a 64 MB
+// pre-compression limit on both plans. The baseline check below is a regression
+// signal measured in gzip, so it cannot see a bundle that compresses extremely
+// well — a large generated lookup table is tiny gzipped and enormous raw. That
+// bundle would pass the gate and be rejected at upload, so the raw limit gets
+// its own absolute check.
+if (bundle.rawBytes > RAW_LIMIT_BYTES) {
+    fail(
+        `The reference Worker (templates/${baseline.template}) exceeds Cloudflare's pre-compression limit.\n` +
+            `  raw:   ${kib(bundle.rawBytes)}\n` +
+            `  limit: ${kib(RAW_LIMIT_BYTES)} before compression (both plans)\n` +
+            `This is an upload-time rejection, not a budget — accepting it with \`worker-size:update\` will not help.`,
+    );
 }
 
 if (bundle.gzipBytes > ceiling) {

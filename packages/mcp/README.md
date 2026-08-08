@@ -83,9 +83,11 @@ reading operational data.
 
 They return `structuredContent` alongside the usual text block, described by each
 tool's `outputSchema` (MCP revision `2025-06-18` and later; older clients keep
-reading the text block). Each takes a `limit` clamped server-side, and an
-optional `shardKey` — on a `.shardBy()`-partitioned deployment these reads are
-**per-shard**, not deployment-wide.
+reading the text block). All but `lunora_get_migration_status` take a `limit`
+clamped server-side; migration status takes only `shardKey` and returns every
+migration, because truncating that list would hide the pending one. Each also
+takes an optional `shardKey` — on a `.shardBy()`-partitioned deployment these
+reads are **per-shard**, not deployment-wide.
 
 `lunora_get_function_schema` returns a JSON object with three fields:
 

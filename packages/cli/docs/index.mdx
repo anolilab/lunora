@@ -198,7 +198,7 @@ CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each findin
 still rendered, but on stderr, so the document stays pipeable. The exit code is
 identical in both formats.
 
-```json
+```jsonc
 {
     "code": 1,
     "findings": [
@@ -206,11 +206,12 @@ identical in both formats.
             "code": "d1-placeholder-id",
             "fix": "Run `wrangler d1 create <name>` …",
             "level": "fail",
-            "message": "D1 binding \"DB\" has a placeholder database_id …"
-        }
+            "message": "D1 binding \"DB\" has a placeholder database_id …",
+        },
+        // …the info- and pass-level findings the summary counts
     ],
     "ok": false,
-    "summary": { "fail": 1, "info": 1, "pass": 1, "warn": 0 }
+    "summary": { "fail": 1, "info": 1, "pass": 1, "warn": 0 },
 }
 ```
 
@@ -366,8 +367,18 @@ A release pipeline reads the URL out of the same document it already checks the
 exit code of:
 
 ```bash
+set -euo pipefail
+
 result=$(lunora deploy --env production --format json --health-check)
 url=$(echo "$result" | jq -r '.deployment.url')
+
+# The document is printed on failure too, and a failed deploy carries no URL —
+# without this guard `jq` yields "null" and the smoke test requests null/api/smoke,
+# so the pipeline fails at the wrong step.
+if [ -z "$url" ] || [ "$url" = "null" ]; then
+    echo "deploy reported no URL" >&2
+    exit 1
+fi
 
 curl -fsS "$url/api/smoke"
 ```

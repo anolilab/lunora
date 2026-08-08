@@ -78,6 +78,14 @@ registry_sync:
 # own tsconfig. Both regressions it has caught (the CLI entry point, and an
 # unlisted `vue-demi` build script that broke every scaffold's first install) came
 # from packages/registry changes, not from the templates.
+# Worker size budget. Listed separately from `packages` so the gate cannot be
+# switched off by editing the gate: a PR touching only the checker, the
+# committed baseline, or the job itself still runs it.
+worker_size:
+    - "scripts/check-worker-size.js"
+    - "worker-size.json"
+    - ".github/workflows/test.yml"
+
 templates:
     - "templates/**"
     - "registry/**"

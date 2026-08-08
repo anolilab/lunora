@@ -29,6 +29,7 @@
             "e2e": "${{ steps.changes.outputs.e2e }}"
             "codecov": "${{ steps.changes.outputs.codecov }}"
             "templates": "${{ steps.changes.outputs.templates }}"
+            "worker_size": "${{ steps.changes.outputs.worker_size }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -317,7 +318,7 @@
     # reports it.
     "worker-size":
         "name": "Worker size budget"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true'"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30

@@ -147,11 +147,13 @@ types.
 
 ## Worker size
 
-Cloudflare caps the size of a Worker script
-[after gzip compression](https://developers.cloudflare.com/workers/platform/limits/):
-**3 MB on the Workers Free plan and 10 MB on Workers Paid**. The limit is
-enforced at upload, so an over-budget bundle is a rejected deploy rather than a
-slow one.
+Cloudflare caps a Worker script
+[in two places](https://developers.cloudflare.com/workers/platform/limits/):
+**3 MB on Workers Free and 10 MB on Workers Paid after gzip compression**, and
+**64 MB before compression** on both plans. Both are enforced at upload, so an
+over-budget bundle is a rejected deploy rather than a slow one — and a bundle
+that compresses unusually well (a large generated table, say) can sit under the
+gzip limit while breaching the raw one. Check both numbers.
 
 `lunora build` weighs what it wrote:
 
@@ -165,8 +167,9 @@ pnpm lunora build --format json | jq .bundle
 
 Only the uploaded files are counted — the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
-roughly triple the number. The gzip figure is the one to compare against the
-limit; it matches what `wrangler deploy` reports as `Total Upload: … / gzip: …`.
+roughly triple the number. Compare `gzipBytes` against your plan's compressed
+limit and `rawBytes` against the 64 MB one; together they match what
+`wrangler deploy` reports as `Total Upload: … / gzip: …`.
 
 A starter app is around **410 KiB gzipped**, so most projects have a lot of
 room. If yours is approaching the limit:

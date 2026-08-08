@@ -49,6 +49,14 @@ interface HealthProbeInputs {
     paths?: ReadonlyArray<string>;
     /** Injectable clock for the inter-attempt delay; defaults to a real timer. */
     sleep?: (ms: number) => Promise<void>;
+
+    /**
+     * Per-attempt timeout, in ms. Applies only to the default fetch — an
+     * injected `fetchImpl` owns its own deadline. Without it a stalled
+     * connection would hang the probe indefinitely, since Node's `fetch` has no
+     * timeout of its own.
+     */
+    timeoutMs?: number;
 }
 
 interface HealthProbeResult {
@@ -109,8 +117,14 @@ const probeHealth = async ({
     fetchImpl,
     paths = [HEALTH_PATH],
     sleep = realSleep,
+    timeoutMs = 10_000,
 }: HealthProbeInputs): Promise<HealthProbeResult> => {
-    const doFetch = fetchImpl ?? ((url: string) => fetch(url));
+    // Node's `fetch` never times out on its own: a worker that accepts the
+    // connection and then goes quiet would hang the probe — and with it
+    // `deploy --health-check` — until CI's job timeout killed it. That defeats
+    // the whole point of a fixed attempt budget, so bound every attempt. An
+    // abort surfaces as a transport error, which `probeOnce` already reds.
+    const doFetch = fetchImpl ?? ((url: string) => fetch(url, { signal: AbortSignal.timeout(timeoutMs) }));
     const budget = Math.max(1, attempts);
     let result = await probeOnce(baseUrl, paths, doFetch);
 
