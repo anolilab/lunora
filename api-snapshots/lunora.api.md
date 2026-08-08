@@ -3577,7 +3577,19 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `BACKUP_KEY_PREFIX` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `BACKUP_MANIFEST_SUFFIX` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `BackupManifest` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `BackupManifestEntry` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4241,6 +4253,18 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `backupManifestKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `backupObjectKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `backupObjectKeyOfManifest` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `buildHealthRoutes` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4342,6 +4366,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `handleCorsPreflight` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `isBackupManifestKey` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

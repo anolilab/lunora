@@ -242,12 +242,14 @@ const ERROR_CATALOG: {
     };
     readonly BACKUP_TOO_LARGE: {
         readonly hint: readonly [
-            "The scheduled backup is assembled in the Worker isolate — the export fan-out resolves every shard's rows into memory before the first byte is written — so it refuses past a fixed size instead of being killed for running out of memory. Nothing was written.",
+            "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
             "",
-            "Narrow the snapshot with `backupTables`, run the cron more often so each snapshot is smaller, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate."
+            "The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.",
+            "",
+            "Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot."
         ];
         readonly status: 507;
-        readonly title: "Backup too large to assemble in memory";
+        readonly title: "Backup too large to assemble in a Worker";
     };
     readonly CRON_JOBS_NOT_CONFIGURED: {
         readonly status: 400;

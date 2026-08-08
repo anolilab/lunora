@@ -332,18 +332,38 @@ interface AuthUserFieldSpec {
 }
 ```
 
+### `BACKUP_KEY_PREFIX` (const)
+
+```ts
+const BACKUP_KEY_PREFIX = "backups/";
+```
+
+### `BACKUP_MANIFEST_SUFFIX` (const)
+
+```ts
+const BACKUP_MANIFEST_SUFFIX = ".manifest.json";
+```
+
 ### `BackupManifest` (interface)
 
 ```ts
-interface BackupManifest {
+interface BackupManifest extends BackupManifestEntry {
+    cron: string;
+    scheduledTime: number;
+    sha256: string;
+}
+```
+
+### `BackupManifestEntry` (interface)
+
+```ts
+interface BackupManifestEntry {
     bytes: number;
     createdAt: string;
-    cron: string;
     file: string;
     id: string;
     rows: number;
-    scheduledTime: number;
-    sha256: string;
+    sha256?: string;
     tables?: string;
 }
 ```
@@ -353,6 +373,9 @@ interface BackupManifest {
 ```ts
 interface BackupStore {
     delete: (key: string) => Promise<unknown>;
+    get: (key: string) => Promise<{
+        text: () => Promise<string>;
+    } | null>;
     list: (options?: {
         cursor?: string;
         limit?: number;
@@ -2185,6 +2208,24 @@ const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, 
 const argsFromQuery: (url: URL) => Record<string, unknown>;
 ```
 
+### `backupManifestKey` (const)
+
+```ts
+const backupManifestKey: (objectKey: string) => string;
+```
+
+### `backupObjectKey` (const)
+
+```ts
+const backupObjectKey: (prefix: string, id: string) => string;
+```
+
+### `backupObjectKeyOfManifest` (const)
+
+```ts
+const backupObjectKeyOfManifest: (manifestKey: string) => string;
+```
+
 ### `buildHealthRoutes` (const)
 
 ```ts
@@ -2350,6 +2391,12 @@ const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response 
 
 ```ts
 const handleCorsPreflight: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
+```
+
+### `isBackupManifestKey` (const)
+
+```ts
+const isBackupManifestKey: (key: string) => boolean;
 ```
 
 ### `memoizeIdentity` (const)

@@ -260,6 +260,7 @@ interface PlatformCapabilities {
         localSql?: Capability;
         mail?: Capability;
         objectStorage?: Capability;
+        objectStorageBackups?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;
