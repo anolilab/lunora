@@ -1,7 +1,7 @@
 # Plan 311 — Rewrite the rows that `v.bigint()`/`v.bytes()` left unqueryable
 
 **Baseline:** `e67cd58a9` (2026-08-08) — the head of `fix/265-wire-codec-query-parity` (#365)
-**Status:** TODO
+**Status:** IMPLEMENTED on `fix/265-wire-codec-query-parity` (#365) as `bb398f461` — ships with the fix it completes, so it lands or reverts with it. See §10 for what was decided during execution.
 **Priority:** P1 · **Effort:** M · **Risk:** MED · **Category:** data/migration
 
 > **Executor instructions**: this plan has no new mechanism to build. `runDataMigration`
@@ -155,3 +155,59 @@ the shard. Recorded explicitly per the repo convention.
 - Is there a cheap **completeness check** an operator can run afterwards (a count of
   rows still matching the detector), and should `lunora doctor` surface it?
 - Does the CDC log need the same treatment, or is re-export sufficient?
+
+## 10. Execution notes (2026-08-08)
+
+Built as `packages/shard-engine/src/reprojection-backfill.ts` (~175 lines) on #365,
+so the fix and the migration that completes it land together.
+
+**No runner was written**, as §2 required. The module contributes exactly the three
+things this plan scoped: the affected-table derivation, the stored-text detector, and
+the identity transform. `runDataMigration` supplied batching, resumption, the cursor,
+claim/heartbeat and `dryRun`.
+
+**The detector** is `json_extract(__doc__, '$.f[0]') = <sentinel>` — it resolves for a
+legacy array and returns `NULL` for a current row, whose field is a JSON string. Paths
+are bound rather than interpolated, so a field name needs no escaping rule. The
+sentinel is derived from `encodeWire(0n)[0]`, not hand-copied: a literal would be a
+second definition free to drift from the codec.
+
+**The §8 STOP condition is pinned by test** — "does not match a row whose only tagged
+value is nested". Nested values stay wire-tagged under the current projection, so a
+detector that scanned the blob for the sentinel would rewrite every table forever and
+look like it was working.
+
+**Invocation needed no CLI change.** `lunora migrate up|status <id>` already fans out
+per shard with `--dry-run`/`--batch-size`; codegen resolves the reserved
+`__lunora_reproject__<table>` when the app's own registry misses.
+
+### The §9 open questions, answered
+
+- **Automatic on deploy? No — keep it explicitly invoked.** Every rewrite goes through
+  the writer, so it fires triggers, appends CDC and pokes every subscriber on the row.
+  On an all-legacy shard that is a full-table thundering herd, at deploy time, on a
+  path the operator did not ask for — and the first sign would be a subscriber storm.
+  The "nobody ran it" failure it would prevent is detectable and recoverable; a
+  surprise rewrite is neither. Opt-in per app with a batch cap would change the answer,
+  but that is a different design, not a flag.
+- **Yes, there is a cheap completeness check.** `countLegacyRows` is one query per
+  affected table and reads exactly zero when a table is fully re-projected — the
+  `--dry-run` figure before a run and the completeness figure after. It and
+  `reprojectionTables` are exported for `lunora doctor`, but **doctor is not wired**:
+  outside these workstreams, and it needs a per-shard fan-out decision.
+- **CDC**: not addressed; re-export after the backfill is sufficient, since the export
+  path re-encodes on #365.
+
+### Known cost
+
+Detection is one primary-key seek per visited row, alongside a scan that already reads
+every row. The alternative — pre-computing the legacy id set in one query — would hold
+every affected id in a Durable Object's 128 MB. Carries a `ponytail:` comment naming
+the ceiling.
+
+### Left for someone else
+
+`examples/payment-demo`'s `dataModel.ts` and `drizzle.shard.ts` are **stale on
+`alpha`** — `@lunora/payment` gained a `usageEvents.mode` field that was never
+regenerated. Surfaced by the regen run, unrelated to this work, reverted to keep the
+diff honest. Worth its own cleanup.
