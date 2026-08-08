@@ -1,3 +1,5 @@
+## @lunora/replica [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/%40lunora%2Freplica%401.0.0-alpha.44...%40lunora%2Freplica%401.0.0-alpha.45) (2026-08-08)
+
 ## @lunora/replica [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/%40lunora%2Freplica%401.0.0-alpha.43...%40lunora%2Freplica%401.0.0-alpha.44) (2026-08-07)
 
 
