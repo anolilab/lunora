@@ -1647,6 +1647,45 @@ target becomes real, and `@lunora/platform-node` is still experimental with no
 (#365) — 311 is the data left behind by the defect and now ships inside #365
 itself, while 312 was the price its fix paid — since executed (see the DONE &
 REMOVED note above); its open follow-ups live in 314 and 315.
+## Wave 20 — Cloud spend guardrails & abuse research (baseline `48366a2`, 2026-08-08)
+
+Research pass over the five platform-guardrail capabilities Vercel shipped as a
+bundle (soft/hard spend caps, anomaly alerting, function recursion protection,
+agent-queryable billing usage APIs, always-on L3/L4/L7 DDoS mitigation), read
+against the OSS prior art — Lago, OpenMeter, CloudKitty, OpenCost, CrowdSec,
+Coraza, Netdata, VictoriaMetrics `vmanomaly`, Kubernetes `ResourceQuota` — and
+against what `apps/cloud` already ships. Four of the five have a working seam
+already; recursion protection has none.
+
+**The pass also turned up a live defect,** which is why this is a plan and not a
+memo: the spend-cap chain meters off Analytics Engine and sums `double1` without
+the `_sample_interval` multiplier (`apps/cloud/src/metering/analytics.ts:55`), so
+the `platformUsage` ledger under-counts exactly when AE starts sampling — i.e.
+during the runaway-tenant scenario the hard cap exists to stop. The same repo
+already documents AE as "not for billing math"
+(`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
+
+| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status |
+| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ------ |
+| 306  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | TODO   |
+
+### Notes
+
+- **W1 gates most of the wave.** The metering fix (W1) is a one-line query change
+  and every ledger-reading workstream (soft cap, fast-path breach, anomaly score,
+  agent-queryable usage) depends on it. A hard cap on a lying meter is not a hard
+  cap.
+- **Recursion protection (W5) is fully independent** — no existing seam, no
+  dependency on W1 — so it is the item to run in parallel.
+- **DDoS is not a build.** L3/L4/L7 is inherited by construction (every tenant is
+  behind Cloudflare); the work is visibility (firewall events in the console),
+  per-org L7 sensitivity via the account-level managed-ruleset API, and closing
+  the CrowdSec-shaped detect→enforce loop with Cloudflare as the bouncer.
+- **"OpenCloud" was assessed and is not prior art** — `opencloud-eu` is a Go
+  rewrite of ownCloud Infinite Scale (file sync & share) with no metering,
+  spend-cap, or DDoS surface. The relevant OSS neighbourhood is the
+  metering/FinOps cluster and the detection/enforcement cluster, both surveyed in
+  §2 of the plan.
 
 ## Notes for executors (carried from prior waves)
 
