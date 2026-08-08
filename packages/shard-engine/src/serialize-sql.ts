@@ -9,15 +9,20 @@
  * (`syncRankIndexEntry`), and `rankKeyFromDocument` so a value compares
  * byte-for-byte against its stored form regardless of which shard produced it.
  *
- * The `bigint` and bytes cases MUST agree with `encodeDocJson`'s SQL-comparable
- * projection (`do-sql.ts`) — that is the form `json_extract(__doc__, '$.field')`
- * returns, and this is the other side of every comparison against it. The two
- * are asserted equal in `__tests__/ctx-db.bigint-bytes.test.ts`; drift between
- * them is invisible to types and shows up only as `filter`/`withIndex`/
- * `aggregate` silently matching nothing.
+ * For `bigint` and bytes this delegates to {@link sqlComparableProjection},
+ * which is the SAME function `encodeDocJson` (`do-sql.ts`) uses to decide what
+ * to store at `$.field`. One function rather than two agreeing ones: the two
+ * sides of every comparison are the two call sites, and a comment asking them
+ * to stay in step is exactly what let a mismatch ship.
+ *
+ * Everything else still drifts and always has — a `Date` stores as the wire
+ * codec's `["$lunora.wire$","date",5]` but binds here as
+ * `"\"1970-01-01T00:00:00.005Z\""`, and `NaN`/`Infinity` likewise. Those are
+ * not declarable column kinds, so no schema-typed query reaches them; a
+ * `v.any()` field holding one is not queryable, the same as it was before.
  */
 
-import { toBase64 } from "../../../shared/base64";
+import { sqlComparableProjection } from "./sql-projection";
 
 const serializeSqlValue = (value: unknown): unknown => {
     if (typeof value === "boolean") {
@@ -28,23 +33,12 @@ const serializeSqlValue = (value: unknown): unknown => {
         return value;
     }
 
-    if (typeof value === "bigint") {
-        // A number, not `value.toString()`: the stored projection is a JSON
-        // number, so SQLite compares INTEGER-to-INTEGER (numeric ordering,
-        // working `SUM`/`MIN`/`MAX`). A decimal string would compare as TEXT
-        // and sort `9` after `10`.
-        return Number(value);
-    }
+    const projected = sqlComparableProjection(value);
 
-    if (value instanceof ArrayBuffer) {
-        return toBase64(new Uint8Array(value));
-    }
-
-    if (ArrayBuffer.isView(value)) {
-        return toBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-    }
-
-    return JSON.stringify(value);
+    // `??`, deliberately NOT `||`: `0n` projects to a zero-padded key and an
+    // empty buffer to `""` — both falsy, both real projections that `||` would
+    // discard in favour of the JSON fallback.
+    return projected ?? JSON.stringify(value);
 };
 
 // eslint-disable-next-line import/prefer-default-export -- named export keeps the re-export chain through `@lunora/do` uniform with the rest of the engine barrel.

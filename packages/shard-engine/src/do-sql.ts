@@ -17,11 +17,11 @@ import { LunoraError } from "@lunora/errors";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
-import { toBase64 } from "../../../shared/base64";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { sqlComparableProjection } from "./sql-projection";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
@@ -30,43 +30,26 @@ const DOC_COLUMN = "__doc__";
  * Reserved top-level key inside the `__doc__` blob holding the **wire-tagged
  * originals** of the top-level fields that {@link encodeDocJson} projected to a
  * SQL-comparable scalar. See {@link encodeDocJson} for why the projection
- * exists.
+ * exists. Named for its contents: it holds the values SQL canNOT read, not the
+ * ones it can.
  *
- * **Nothing upstream stops a schema from declaring a field of this name.** The
- * only reserved-name enforcement in the stack is `RESERVED_TABLE_NAMES`
- * (`packages/codegen/src/discover-schema.ts:64`), which covers TABLE names
- * colliding with `ctx.db` members, and `SYSTEM_INDEX_FIELDS`
- * (`packages/server/src/schema.ts:861`), which is the two-entry list of
- * indexable system fields — neither is a prohibition on user field names, and
- * there is no `__`-prefix guard anywhere. {@link encodeDocJson} therefore
- * rejects the name itself, which is also what lets {@link decodeDocJson} treat
- * the key as unambiguously its own: a row carrying a user's `__sql__` can never
- * have been stored.
+ * **Nothing upstream reserves this name.** The only reserved-name enforcement in
+ * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover-schema`,
+ * which covers TABLE names colliding with `ctx.db` members, and
+ * `SYSTEM_INDEX_FIELDS` in `@lunora/server`'s `schema`, which is the two-entry
+ * list `["_creationTime", "_id"]` of indexable system fields. Neither prohibits
+ * a user field name, and there is no `__`-prefix guard anywhere.
+ *
+ * {@link encodeDocJson} therefore refuses the name itself. That guard is
+ * **prospective**: it stops new writes, and it cannot speak for a row already on
+ * disk that carries the name from before it existed. {@link decodeDocJson}
+ * narrows the remaining exposure by claiming the key only when its value is a
+ * plain object — a scalar or array under this name is left where it is rather
+ * than spread across the document — but a pre-existing plain-object field of
+ * this exact name would still be hoisted. No released version has ever written
+ * it, so the window is a schema that declared the name independently.
  */
-const DOC_ORIGINALS_KEY = "__sql__";
-
-/**
- * The SQL-comparable scalar to store at `$.field` in place of a value SQLite
- * cannot compare in its wire-tagged form.
- * @returns the projected scalar, or `undefined` when the value already compares correctly and should be stored as-is
- */
-const sqlComparableProjection = (value: unknown): number | string | undefined => {
-    if (typeof value === "bigint") {
-        // A JSON number: SQLite's JSON parser hands `json_extract` an INTEGER,
-        // so `=`, `<`/`>`, `ORDER BY`, `SUM` and `MIN`/`MAX` are all numeric.
-        // ponytail: |v| > 2^53 projects approximately — the parked original is
-        // exact, only the SQL comparison is lossy, and SQLite's own numeric
-        // stack cannot do better. Revisit only if exact big-integer predicates
-        // are ever actually required.
-        return Number(value);
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return toBase64(new Uint8Array(value));
-    }
-
-    return ArrayBuffer.isView(value) ? toBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) : undefined;
-};
+const DOC_ORIGINALS_KEY = "__originals__";
 
 /**
  * Encode a document into the `__doc__` blob's on-disk string form.
@@ -74,15 +57,17 @@ const sqlComparableProjection = (value: unknown): number | string | undefined =>
  * Two things happen, in this order.
  *
  * First, top-level `bigint` / bytes fields are projected to a SQL-comparable
- * scalar (a JSON number / a base64 string) and their wire-tagged originals are
- * parked under {@link DOC_ORIGINALS_KEY}. `json_extract(__doc__, '$.f')` is the
- * only way this store reads a field — every `where`, `.index()`, `ORDER BY` and
- * SQL-scan aggregate goes through it — and it addresses top-level fields
- * exclusively. Storing a `bigint` in its tagged-array form put the array's raw
- * JSON text on the other side of all of those: `filter`/`withIndex` silently
- * matched nothing, `SUM` read 0, `MAX` handed the raw tagged string back to the
- * caller. The projection is what makes those answers right; the parked original
- * is what keeps the round-trip exact, which `Number(9007199254740993n)` is not.
+ * scalar via {@link sqlComparableProjection} — the same function the query side
+ * binds through — and their wire-tagged originals are parked under
+ * {@link DOC_ORIGINALS_KEY}. `json_extract(__doc__, '$.f')` is the only way this
+ * store reads a field — every `where`, `.index()`, `ORDER BY` and SQL-scan
+ * aggregate goes through it — and it addresses top-level fields exclusively.
+ * Storing a `bigint` in its tagged-array form put the array's raw JSON text on
+ * the other side of all of those: `filter`/`withIndex` silently matched nothing,
+ * `SUM` read 0, `MAX` handed the raw tagged string back to the caller. The
+ * projection is what makes those answers right; the parked original is what
+ * keeps the round-trip exact, since the projection is a sort key rather than the
+ * value.
  *
  * Second, whatever remains goes through `encodeWire` (`shared/wire-codec.ts`),
  * which covers the nested leaves SQL never addresses — a `bigint` inside a
@@ -156,7 +141,15 @@ const decodeDocJson = (raw: string): Record<string, unknown> => {
     const decoded = decodeWire(JSON.parse(raw)) as Record<string, unknown>;
     const { [DOC_ORIGINALS_KEY]: originals, ...fields } = decoded;
 
-    return originals === undefined ? decoded : { ...fields, ...(originals as Record<string, unknown>) };
+    // Claim the key only when it looks like ours. `encodeDocJson` always writes
+    // a plain object here, so a scalar or array under this name predates the
+    // write guard and belongs to the user — spreading a string would explode it
+    // into `{"0":"h","1":"e",…}`, which is worse than leaving it alone.
+    if (originals === null || typeof originals !== "object" || Array.isArray(originals)) {
+        return decoded;
+    }
+
+    return { ...fields, ...(originals as Record<string, unknown>) };
 };
 
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
@@ -336,6 +329,7 @@ export {
     createIndexSql,
     decodeDocJson,
     DOC_COLUMN,
+    DOC_ORIGINALS_KEY,
     encodeDocJson,
     geoTableName,
     isFtsAvailable,

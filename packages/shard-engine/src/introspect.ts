@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
+import { DOC_ORIGINALS_KEY } from "./do-sql";
 import type { SortDirection } from "./schema-types";
 
 /**
@@ -842,17 +843,6 @@ const MAX_FACET_LIMIT = 200;
 const DOC_COLUMN = "__doc__";
 
 /**
- * `encodeDocJson`'s reserved key inside the blob (`do-sql.ts`'s
- * `DOC_ORIGINALS_KEY`), holding the wire-tagged originals of the fields it
- * projected to a SQL-comparable scalar. Storage bookkeeping rather than a user
- * field — `encodeDocJson` refuses to store a document that declares the name —
- * so the data browser drops it. The projected value already sits in the field's
- * own column, in the JSON-safe form this read path requires (see
- * {@link safeParseObject}).
- */
-const DOC_ORIGINALS_KEY = "__sql__";
-
-/**
  * JSON-parse a stored `__doc__` blob to a plain object, or `undefined` when the
  * text isn't a JSON object.
  *
@@ -910,9 +900,15 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
         }
 
         const meta = Object.fromEntries(Object.entries(row).filter(([column]) => column !== DOC_COLUMN));
-        const fields = Object.fromEntries(Object.entries(documentData).filter(([column]) => column !== DOC_ORIGINALS_KEY));
+        const { [DOC_ORIGINALS_KEY]: originals, ...fields } = documentData;
 
-        parsed.push({ ...meta, ...fields });
+        // `encodeDocJson` stores a SORT KEY at `$.field` for `bigint`/bytes —
+        // a zero-padded digit string, not the value — and parks the wire-tagged
+        // original under the reserved key. Show the original: it is the only
+        // exact copy, and it is already in the JSON-safe tagged form this read
+        // path requires (see safeParseObject), so the client's `decodeWire`
+        // turns it back into a real bigint for the grid.
+        parsed.push({ ...meta, ...fields, ...(originals as Record<string, unknown> | undefined) });
     }
 
     const metaColumns = columns.filter((name) => name !== DOC_COLUMN);

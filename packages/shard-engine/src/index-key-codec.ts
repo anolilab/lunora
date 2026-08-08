@@ -10,9 +10,15 @@
  *
  * The codec therefore operates on the **serialized** value (the output of
  * `serializeSqlValue`), which is the exact form the where-compiler binds:
- * always `null`, a `number`, or a `string`. That collapses booleans (→ 0/1),
- * bigints (→ text) and objects (→ JSON text) before they reach us, so the
- * comparable domain maps 1:1 onto SQLite's storage classes.
+ * always `null`, a `number`, or a `string`. That collapses booleans (→ 0/1) and
+ * objects (→ JSON text) before they reach us, so the comparable domain maps 1:1
+ * onto SQLite's storage classes.
+ *
+ * `bigint` and bytes arrive as text too, but as the fixed-width order-preserving
+ * key built in `sql-projection.ts` rather than as `String(value)` — which is the
+ * point: the key's lexicographic order already
+ * matches numeric order, so hexing its UTF-8 bytes below preserves that, and a
+ * range over a `v.bigint()` column narrows correctly instead of conservatively.
  *
  * Ordering contract (matches SQLite's `NULL < INTEGER/REAL < TEXT`):
  *

@@ -17,6 +17,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { OrderByInput, OrderKey, SortDirection } from "./schema-types";
 import type { WhereInput } from "./where-types";
 
@@ -74,7 +75,12 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
 
     values.push(record["_id"]);
 
-    return toBase64(JSON.stringify(values));
+    // `encodeWire`, not a bare `JSON.stringify`: the values come straight out of
+    // a decoded document, so ordering by a `v.bigint()` column put a real bigint
+    // in here and threw `TypeError: Do not know how to serialize a BigInt` — the
+    // same defect class this store's blob codec exists to fix, surviving in the
+    // cursor. Identity for pure-JSON keys, so existing cursors are byte-identical.
+    return toBase64(JSON.stringify(encodeWire(values)));
 };
 
 /**
@@ -90,11 +96,12 @@ const decodeCursor = (cursor: string): unknown[] => {
     let decoded: unknown;
 
     try {
-        decoded = JSON.parse(fromBase64(cursor)) as unknown;
+        decoded = decodeWire(JSON.parse(fromBase64(cursor)));
     } catch {
-        // atob() throws InvalidCharacterError on non-base64 input and
-        // JSON.parse throws SyntaxError on malformed JSON. Normalize both
-        // client-supplied failures to the same typed 400 error.
+        // atob() throws InvalidCharacterError on non-base64 input, JSON.parse
+        // throws SyntaxError on malformed JSON, and `decodeWire` throws
+        // RangeError past its depth/bigint bounds. Normalize every
+        // client-supplied failure to the same typed 400 error.
         throw invalidCursor();
     }
 

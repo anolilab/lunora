@@ -2481,6 +2481,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
+            // The scan reduces `json_extract(__doc__, '$.field')`, and for a
+            // `v.bigint()` column that is the zero-padded SORT KEY, not the
+            // number — `SUM` over it coerces to nonsense (1.5e40 for a handful
+            // of small values) and `MIN`/`MAX` hand back the padded string. The
+            // maintained companion above answers these correctly, so name it
+            // rather than return a number that looks plausible and is not.
+            if (definition.shape[aggOptions.field]?.kind === "bigint") {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" }): a v.bigint() column is stored as an order-preserving key, which SQL cannot reduce — declare an aggregateIndex for this (by, field, op) so the maintained companion answers it`,
+                );
+            }
+
             const whereCondition = compileWhereSql(resolved, doWhereSqlStrategy);
             const aggregateSql = aggregateSqlFunction(aggOptions.op);
             const ref = jsonPathSql(aggOptions.field);

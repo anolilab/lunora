@@ -40,24 +40,33 @@ import createSqliteExec from "./_helpers/node-sqlite";
  */
 const schema: SchemaLike = {
     tables: {
+        // `externalId` stands in for the OTHER reason people reach for
+        // `v.bigint()` — a snowflake / epoch-nanos id, past 2^53, uniquely
+        // indexed and never summed. It carries no aggregate index precisely
+        // because summing ids is not a question anyone asks.
         paymentSessions: {
-            aggregateIndexes: [
-                { by: ["currency"], field: "amountMinor", name: "sumByCurrency", on: "paymentSessions", op: "sum" },
-                { by: ["currency"], field: "amountMinor", name: "maxByCurrency", on: "paymentSessions", op: "max" },
-            ],
+            aggregateIndexes: [{ by: ["currency"], field: "amountMinor", name: "sumByCurrency", on: "paymentSessions", op: "sum" }],
             indexes: [
                 { fields: ["amountMinor"], name: "by_amount" },
                 { fields: ["currency", "amountMinor"], name: "by_currency_amount" },
+                { fields: ["externalId"], name: "by_external", unique: true },
             ],
             shape: {
                 amountMinor: { kind: "bigint" },
                 capturedMinor: { kind: "bigint" },
                 currency: { kind: "string" },
-                deletedAt: { kind: "number" },
+                externalId: { kind: "bigint" },
                 receipt: { kind: "bytes" },
                 refundedMinor: { kind: "bigint" },
             },
-            softDeleteMode: { field: "deletedAt" },
+        },
+        // Soft delete lives on its own table: it forces the aggregate reader off
+        // the maintained companion and onto the SQL scan, which would silently
+        // change what every aggregate test above is exercising.
+        receipts: {
+            indexes: [],
+            shape: { archivedAt: { kind: "number" }, payload: { kind: "bytes" } },
+            softDeleteMode: { field: "archivedAt" },
         },
     },
 } as unknown as SchemaLike;
@@ -104,17 +113,16 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
         it("round-trips a bigint beyond Number.MAX_SAFE_INTEGER exactly", async () => {
             expect.assertions(1);
 
-            // The SQL projection is lossy above 2^53 by construction; the STORED
-            // value must not be. This is the whole reason the originals are
-            // parked rather than reconstructed from the projection.
+            // The one value `Number()` cannot hold: `Number(9007199254740993n)`
+            // is 9007199254740992. Storage must be exact regardless.
             const writer = setup();
             const huge = 9_007_199_254_740_993n;
 
-            await writer.insert("paymentSessions", { _id: "a1", amountMinor: huge, currency: "usd" }, { allowExplicitId: true });
+            await writer.insert("paymentSessions", { _id: "a1", currency: "usd", externalId: huge }, { allowExplicitId: true });
 
             const row = await writer.get("a1");
 
-            expect(row?.["amountMinor"]).toBe(huge);
+            expect(row?.["externalId"]).toBe(huge);
         });
 
         it("findMany round-trips a bigint column", async () => {
@@ -173,7 +181,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const row = await writer.get("a1");
 
             expect(row?.["amountMinor"]).toBe(10n);
-            expect(estimateBytes({ amountMinor: 10n })).toBeGreaterThan(0);
+            // `{"amountMinor":"10"}` — 20 characters. A bigint charged as `{}`
+            // (the pre-fix shape) would be 17, and `undefined` fails the insert.
+            expect(estimateBytes({ amountMinor: 10n })).toBe(20);
         });
     });
 
@@ -188,6 +198,86 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const { page } = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
 
             expect(ids(page)).toStrictEqual(["s10"]);
+        });
+
+        it("never matches a row that is not equal, above 2^53", async () => {
+            expect.assertions(3);
+
+            // The rule every other behaviour is subordinate to: an equality
+            // predicate must not return a row that is not equal. Three adjacent
+            // values straddling 2^53 all collapse onto 9007199254740992 under
+            // `Number()`, so a projection built on it returned two extra rows
+            // for each probe — false positives out of a `where` that is
+            // routinely an authorization filter.
+            const writer = setup();
+            const values = [9_007_199_254_740_991n, 9_007_199_254_740_992n, 9_007_199_254_740_993n];
+
+            for (const [index, value] of values.entries()) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await writer.insert("paymentSessions", { _id: `x${String(index)}`, currency: "usd", externalId: value }, { allowExplicitId: true });
+            }
+
+            for (const [index, value] of values.entries()) {
+                // eslint-disable-next-line no-await-in-loop -- one probe per seeded value
+                const { page } = await writer.findMany("paymentSessions", { where: { externalId: value } });
+
+                expect(ids(page)).toStrictEqual([`x${String(index)}`]);
+            }
+        });
+
+        it("treats two distinct large bigints as distinct in a unique index", async () => {
+            expect.assertions(2);
+
+            // The index is built over `json_extract`, so it indexes whatever the
+            // projection stored. A lossy projection collapsed these two ids onto
+            // one key and the second insert threw ConflictError — a hard write
+            // regression claiming "duplicate" about two different values.
+            const writer = setup();
+
+            await writer.insert("paymentSessions", { _id: "u1", currency: "usd", externalId: 1_234_567_890_123_456_789n }, { allowExplicitId: true });
+            await writer.insert("paymentSessions", { _id: "u2", currency: "usd", externalId: 1_234_567_890_123_456_790n }, { allowExplicitId: true });
+
+            const { page } = await writer.findMany("paymentSessions", { where: { externalId: 1_234_567_890_123_456_790n } });
+
+            const kept = await writer.get("u1");
+
+            expect(ids(page)).toStrictEqual(["u2"]);
+            expect(kept?.["externalId"]).toBe(1_234_567_890_123_456_789n);
+        });
+
+        it("pages through a bigint ordering with a real continueCursor", async () => {
+            expect.assertions(3);
+
+            // `.paginate()` mints a cursor from the ordered document values, and
+            // the encoder was a bare `JSON.stringify` — a real bigint in there
+            // threw `TypeError: Do not know how to serialize a BigInt`, so the
+            // primary list API was unusable on the column this plan exists for.
+            // The seek predicate then compares the decoded cursor value, which
+            // only lands on the right row if it re-serializes to the stored key.
+            const writer = setup();
+
+            await seed(writer);
+
+            const first = await writer.query("paymentSessions").withIndex("by_amount").paginate({ numItems: 2 });
+
+            expect(first.page.map((row) => row["amountMinor"])).toStrictEqual([9n, 10n]);
+
+            const second = await writer.query("paymentSessions").withIndex("by_amount").paginate({ cursor: first.continueCursor, numItems: 2 });
+
+            expect(second.page.map((row) => row["amountMinor"])).toStrictEqual([200n]);
+            expect(second.isDone).toBe(true);
+        });
+
+        it("honours a limit alongside a bigint ordering", async () => {
+            expect.assertions(1);
+
+            const writer = setup();
+
+            await seed(writer);
+
+            const { page } = await writer.findMany("paymentSessions", { limit: 2, orderBy: [{ amountMinor: "desc" }] });
+
+            expect(page.map((row) => row["amountMinor"])).toStrictEqual([200n, 10n]);
         });
 
         it("filters on a range numerically, not lexically (pre-fix: matched every row)", async () => {
@@ -265,17 +355,39 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(19);
         });
 
-        it("sums and maxes a bigint column through the SQL scan path (pre-fix: 0 and a raw tagged string)", async () => {
+        it("refuses to reduce a bigint column on the SQL scan path", async () => {
             expect.assertions(2);
 
+            // No matching companion group, so the reader falls back to
+            // SUM/MAX over `json_extract` — which reads the order-preserving
+            // KEY, not the number. Coercing that text gives 1.5e40 for a handful
+            // of small values, and MAX hands back the padded string. Both are
+            // plausible-looking and wrong, so the reader names the limitation
+            // instead. Pre-fix this returned 0 and a raw tagged string.
             const writer = setup();
 
             await seed(writer);
 
-            // No `where`, so no companion group applies and the reader falls
-            // back to SUM/MAX over `json_extract`.
-            await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "sum" })).resolves.toBe(219);
-            await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max" })).resolves.toBe(200);
+            const error = await writer.aggregate("paymentSessions", { field: "capturedMinor", op: "sum" }).catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error)).toBe(true);
+            expect((error as Error).message).toContain("aggregateIndex");
+        });
+
+        it("refuses to aggregate a bigint too large for the companion to hold exactly", async () => {
+            expect.assertions(2);
+
+            // `__value__` is a REAL column. Folding a rounded value into a
+            // running total produces a sum nobody can audit, so the write that
+            // would corrupt the companion fails instead. Pre-fix this surfaced
+            // as an unmapped RangeError, i.e. a redacted 500.
+            const writer = setup();
+            const error = await writer
+                .insert("paymentSessions", { amountMinor: 9_007_199_254_740_993n, currency: "usd" }, {})
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error)).toBe(true);
+            expect((error as Error).message).toContain("MAX_SAFE_INTEGER");
         });
 
         it("groups by a bigint column instead of throwing out of the key encoder", async () => {
@@ -359,12 +471,12 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             const writer = setup();
 
-            await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: new Uint8Array([42, 42]).buffer }, { allowExplicitId: true });
-            await writer.delete("a1", "paymentSessions");
+            await writer.insert("receipts", { _id: "a1", payload: new Uint8Array([42, 42]).buffer }, { allowExplicitId: true });
+            await writer.delete("a1", "receipts");
 
-            const row = await writer.get("a1", "paymentSessions");
+            const row = await writer.get("a1", "receipts");
 
-            expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(new Uint8Array([42, 42]));
+            expect(new Uint8Array(row?.["payload"] as ArrayBuffer)).toStrictEqual(new Uint8Array([42, 42]));
         });
 
         it("filters on a bytes column by value", async () => {
@@ -393,17 +505,19 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
     describe("encoding invariants", () => {
         it("binds the same projection the blob stores for every SQL-comparable kind", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
-            // The invariant the whole query side rests on: whatever
+            // One function now produces both sides (`sql-projection.ts`), so
+            // this pins the wiring rather than an agreement between twins: what
             // `encodeDocJson` writes at `$.field` is what `serializeSqlValue`
-            // binds against it. Drift between the two is invisible to types and
-            // shows up only as zero rows.
-            const bytes = new Uint8Array([1, 2, 3]).buffer;
-            const stored = JSON.parse(encodeDocJson({ amountMinor: 10n, receipt: bytes })) as Record<string, unknown>;
+            // binds against it, for each kind the projection handles.
+            const { buffer } = new Uint8Array([1, 2, 3]);
+            const view = new Uint8Array(buffer, 1, 2);
+            const stored = JSON.parse(encodeDocJson({ amountMinor: 10n, capturedMinor: view, receipt: buffer })) as Record<string, unknown>;
 
             expect(stored["amountMinor"]).toStrictEqual(serializeSqlValue(10n));
-            expect(stored["receipt"]).toStrictEqual(serializeSqlValue(bytes));
+            expect(stored["receipt"]).toStrictEqual(serializeSqlValue(buffer));
+            expect(stored["capturedMinor"]).toStrictEqual(serializeSqlValue(view));
         });
 
         it("a doc with no bigint/bytes/Date leaves encodes byte-identically to plain JSON.stringify", () => {
@@ -457,8 +571,8 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             // key were ours — spreading the user's own object up to the top
             // level and dropping the field.
             for (const document of [
-                { __sql__: { keep: "me" }, name: "a" },
-                { __sql__: { keep: "me" }, amountMinor: 10n },
+                { __originals__: { keep: "me" }, currency: "a" },
+                { __originals__: { keep: "me" }, amountMinor: 10n },
             ]) {
                 const error = ((): unknown => {
                     try {
@@ -469,7 +583,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
                 })();
 
                 expect(isLunoraError(error)).toBe(true);
-                expect((error as Error).message).toContain("__sql__");
+                expect((error as Error).message).toContain("__originals__");
             }
         });
     });
@@ -547,7 +661,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             >;
 
             expect(ids(after.page)).toStrictEqual(["tagged-1"]);
-            expect(stored["amountMinor"]).toBe(10);
+            expect(stored["amountMinor"]).toBe(serializeSqlValue(10n));
         });
     });
 });

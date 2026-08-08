@@ -284,6 +284,37 @@ import { generateChart, generateFilter, generateSql } from "./sql-assistant";
  * stays alive across hibernation without a billable request. Clients send this
  * payload on their heartbeat instead of an app-level ping.
  */
+
+/**
+ * The success envelope for every admin RPC.
+ *
+ * `jsonResponse` is plain `Response.json`, and admin handlers return values read
+ * straight out of the row store — `decodeDocJson` hands back a real `bigint` for
+ * a `v.bigint()` column and a real `ArrayBuffer` for `v.bytes()`. Uncoded, the
+ * first throws `TypeError: Do not know how to serialize a BigInt` (a whole shard
+ * export 500s) and the second flattens to `{}` in a consumer's backup. Wrapping
+ * the envelope once here covers every handler rather than leaving each to
+ * remember; `createShardClient` already runs `decodeWire(body.result)` on every
+ * admin call (`@lunora/runtime`'s `shard-client`), and both codecs are the
+ * identity on pure-JSON payloads, so nothing else changes shape.
+ */
+const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
+
+/**
+ * The ingress half of {@link adminResponse}, so a payload this shard exported
+ * can be handed straight back — `cdcSync` → `applyCdc`, `exportShard` →
+ * `importShard` — with its `bigint`/bytes intact. Identity for pure-JSON args,
+ * so every other op is unaffected.
+ * @throws LunoraError `BAD_REQUEST` when the args are malformed — `decodeWire` raises a bare `RangeError` past its depth / bigint-digit bounds, and these are caller-supplied, so that is a 400 rather than the unmapped 500 it would otherwise become
+ */
+const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unknown> => {
+    try {
+        return decodeWire(rawArgs) as Record<string, unknown>;
+    } catch {
+        throw new LunoraError("BAD_REQUEST", "malformed admin RPC arguments");
+    }
+};
+
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
@@ -5446,19 +5477,21 @@ abstract class ShardDO {
      * is raw table contents, so the default is closed — unlike the WebSocket
      * upgrade gate, which defaults open for local dev.
      */
-    private async handleAdminRpc(request: Request, functionPath: string, args: Record<string, unknown>): Promise<Response> {
+    private async handleAdminRpc(request: Request, functionPath: string, rawArgs: Record<string, unknown>): Promise<Response> {
         if (!this.isAdminAuthorized(request)) {
             return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
         }
 
         try {
+            const args = decodeAdminArgs(rawArgs);
+
             // Read-only introspection ops share their logic with the WS
             // subscription bridge (see readAdminOp / executeAdminSubscription),
             // so a live subscriber and a one-shot POST observe the same shape.
             const read = this.readAdminOp(functionPath, args);
 
             if (read) {
-                return jsonResponse({ result: read.result }, 200);
+                return adminResponse(read.result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runMigration) {
@@ -5475,7 +5508,7 @@ abstract class ShardDO {
                     detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed },
                 });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.exportShard) {
@@ -5489,7 +5522,7 @@ abstract class ShardDO {
                 // `batchSize` × tables) and the worker pipes them serially.
                 const rows = await this.runShardExport({ batchSize: parsed.batchSize, tables: parsed.tables });
 
-                return jsonResponse({ result: { rows } }, 200);
+                return adminResponse({ rows });
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
@@ -5502,7 +5535,7 @@ abstract class ShardDO {
 
                 this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
@@ -5515,7 +5548,7 @@ abstract class ShardDO {
 
                 this.recordAudit("writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
@@ -5529,7 +5562,7 @@ abstract class ShardDO {
 
                 this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.clearTable) {
@@ -5543,7 +5576,7 @@ abstract class ShardDO {
 
                 this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
@@ -5552,7 +5585,7 @@ abstract class ShardDO {
                 // coordinator sums the `{before, total}` from every shard.
                 const result = await this.runShardRankBefore(parseRankBeforeArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankPage) {
@@ -5562,40 +5595,28 @@ abstract class ShardDO {
                 // `{ rows, hasMore }` slices from every shard into one page.
                 const result = await this.runShardRankPage(parseRankPageArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.cdcSync) {
                 // Read-only: page this shard's change-data-capture log past the
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
-                //
-                // `encodeWire` because `readCdcChanges` returns DECODED
-                // post-images: a `v.bigint()` column reaches here as a real
-                // bigint, and `jsonResponse` is plain `Response.json` — it would
-                // throw on the bigint and flatten a `v.bytes()` `ArrayBuffer` to
-                // `{}` in a consumer's backup. The tagged form is JSON-safe and
-                // lossless, and `applyCdc` below decodes it back, so
-                // export → replay round-trips. Identity for a payload with no
-                // such leaf, so the streaming-export bytes are unchanged.
                 const result = this.runShardCdcSync(parseCdcSyncArgs(args));
 
-                return jsonResponse({ result: encodeWire(result) }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.applyCdc) {
                 // Replay a CDC batch into this shard (point-in-time recovery).
                 // The writer mutates rows, so flush touched tables afterward.
-                // `decodeWire` is the ingress half of `cdcSync`'s egress encode
-                // (identity for pure-JSON batches, so an older export replays
-                // unchanged).
-                const result = await this.runShardApplyCdc(parseApplyCdcArgs(decodeWire(args) as Record<string, unknown>));
+                const result = await this.runShardApplyCdc(parseApplyCdcArgs(args));
 
                 await this.flushChangedTables();
 
                 this.recordAudit("applyCdc", { detail: { applied: result.applied } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runAs) {
@@ -5724,7 +5745,7 @@ abstract class ShardDO {
 
         this.recordAudit(functionPath.slice(ADMIN_FUNCTION_PREFIX.length), { detail: { ...patch, hash } });
 
-        return jsonResponse({ result: { state } }, 200);
+        return adminResponse({ state });
     }
 
     /**
@@ -5773,7 +5794,7 @@ abstract class ShardDO {
             // Best-effort: a metrics write must never fail the call.
         }
 
-        return jsonResponse({ result: { recorded: true } }, 200);
+        return adminResponse({ recorded: true });
     }
 
     /**
@@ -5832,7 +5853,7 @@ abstract class ShardDO {
             await this.flushChangedTables();
         }
 
-        return jsonResponse({ result: { recorded: true } }, 200);
+        return adminResponse({ recorded: true });
     }
 
     /**
@@ -5867,7 +5888,7 @@ abstract class ShardDO {
 
         this.recordAudit("runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
@@ -5919,7 +5940,7 @@ abstract class ShardDO {
 
         this.recordAudit("createWorkflowInstance", { id: instance.id, detail: { exportName: parsed.exportName } });
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -5942,7 +5963,7 @@ abstract class ShardDO {
             status: toWorkflowInstanceState(snapshot.status),
         };
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
     /* eslint-enable no-secrets/no-secrets */
 
@@ -5961,7 +5982,7 @@ abstract class ShardDO {
             typeof rawContext === "object" && rawContext !== null && !Array.isArray(rawContext) ? (rawContext as Record<string, unknown>) : undefined;
         const result = await this.evaluateFlags(context);
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6014,14 +6035,14 @@ abstract class ShardDO {
         const parsed = parseRecordMailArgs(args);
         const result = recordCapturedMail(this.shardHost.sql, parsed, Date.now());
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /** Empty the dev mail-catcher inbox (studio "clear inbox" action). Admin-gated by the caller. */
     private handleClearCapturedMail(): Response {
         const result = clearCapturedMail(this.shardHost.sql);
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6035,7 +6056,7 @@ abstract class ShardDO {
         const input = buildTestMailInput(args);
         const result = recordCapturedMail(this.shardHost.sql, input, Date.now());
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6051,14 +6072,14 @@ abstract class ShardDO {
         const messages = parseRecordQueueMessageArgs(args);
         const result = recordQueueMessages(this.shardHost.sql, messages, Date.now());
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
     private handleClearQueueMessages(): Response {
         const result = clearQueueMessages(this.shardHost.sql);
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6089,7 +6110,7 @@ abstract class ShardDO {
 
         this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
 
-        return jsonResponse({ result: { sent } }, 200);
+        return adminResponse({ sent });
     }
 
     /**
@@ -6114,7 +6135,7 @@ abstract class ShardDO {
             this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
         }
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6151,7 +6172,7 @@ abstract class ShardDO {
             this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
         }
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /** The AI-assistant admin writes, keyed by function path. */
@@ -6182,7 +6203,7 @@ abstract class ShardDO {
             this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
         }
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6203,7 +6224,7 @@ abstract class ShardDO {
      * No model call, no audit entry — it reads one property off `env`.
      */
     private handleAiAvailable(): Response {
-        return jsonResponse({ result: { available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined } }, 200);
+        return adminResponse({ available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined });
     }
 
     /**
@@ -6233,7 +6254,7 @@ abstract class ShardDO {
             this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });
         }
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -6280,7 +6301,7 @@ abstract class ShardDO {
 
         this.recordAudit("replayQueueMessage", { detail: { messageId: row.messageId, target }, id: parsed.id });
 
-        return jsonResponse({ result: { sent: 1, target } }, 200);
+        return adminResponse({ sent: 1, target });
     }
 
     /**
@@ -6492,7 +6513,7 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getPitrBookmark) {
             // Read-only — native ≤30-day tier, no write, nothing to flush.
-            return jsonResponse({ result: await readBookmark(this.state.storage, time) }, 200);
+            return adminResponse(await readBookmark(this.state.storage, time));
         }
 
         if (functionPath !== ADMIN_FUNCTIONS.pitrRestore) {
@@ -6517,7 +6538,7 @@ abstract class ShardDO {
 
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
 
-        const response = jsonResponse({ result: { ...armed, restarted: restart } }, 200);
+        const response = adminResponse({ ...armed, restarted: restart });
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.

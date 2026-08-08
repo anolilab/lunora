@@ -10,8 +10,13 @@
  * identically.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import { encodeWire } from "../../../shared/wire-codec";
 import type { AggregateIndexDefinitionLike } from "./schema-types";
+
+/** `Number.MAX_SAFE_INTEGER` as a `bigint` — the largest magnitude the companion's REAL `__value__` column holds exactly. */
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. Shared with the rank twin (`rank.ts`). */
 export const compareStrings = (a: string, b: string): number => {
@@ -43,17 +48,25 @@ export const aggregateTableName = (table: string, indexName: string): string => 
  * the maintained companion matches the scan answer for the typical
  * always-numeric column and degrades the same way for a stray non-number.
  *
- * A `v.bigint()` field contributes too, coerced through `Number` — the same
- * projection `encodeDocJson` stores and the SQL scan path therefore reads, so
- * the maintained companion and the scan agree. Without it a `sum` over a money
- * column silently reported 0.
+ * A `v.bigint()` field contributes too — without it a `sum` over a money column
+ * silently reported 0. `__value__` is a REAL column, so a value past
+ * `Number.MAX_SAFE_INTEGER` cannot be held exactly; rather than fold a rounded
+ * one into a running total nobody can audit, that throws. Money in minor units
+ * is nowhere near the boundary; a snowflake id is past it, and summing those is
+ * not a meaningful question anyway.
  * @returns the numeric value when finite, or `undefined` when not a finite number
+ * @throws LunoraError `BAD_REQUEST` when a `bigint` is too large for the companion's REAL column to hold exactly
  */
 export const coerceAggregateNumber = (value: unknown): number | undefined => {
     if (typeof value === "bigint") {
-        const asNumber = Number(value);
+        if (value > MAX_SAFE_BIGINT || value < -MAX_SAFE_BIGINT) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `bigint ${value.toString()} exceeds Number.MAX_SAFE_INTEGER and cannot be aggregated exactly — aggregate a narrower column, or read the rows and reduce them in the handler`,
+            );
+        }
 
-        return Number.isFinite(asNumber) ? asNumber : undefined;
+        return Number(value);
     }
 
     if (typeof value === "number") {
