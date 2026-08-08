@@ -65,7 +65,7 @@ lunora migrate <generate|create|up|down|status> [name|id]
 lunora env <list|get|set|unset|push|diff|doctor>
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
 lunora import <file> [--table <name>] [--batch-size n]
-lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
+lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
@@ -590,6 +590,21 @@ lunora backup list                     # list available snapshots
 lunora backup restore <id>             # restore a snapshot
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
 lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
+```
+
+`create`, `list` and `restore` write to a directory (`--dir`, default
+`.lunora-backups`) or to an R2 bucket in your account (`--bucket <name>`,
+`--prefix`, default prefix `backups/`). The snapshot is identical either way;
+only the destination changes, and bucket traffic goes through the worker's
+admin storage routes under the admin bearer, so the CLI holds no R2
+credentials. `restore --verify` checks the snapshot's SHA-256 against the
+manifest before importing anything, and fails when no checksum was recorded.
+One invocation reads one destination — a bucket and a directory are never
+merged into one listing.
+
+```bash
+lunora backup create --bucket default --tables users,messages
+lunora backup restore 2026-06-01T12-00-00-000Z --bucket default --verify
 ```
 
 See [Backups, export & import](/docs/concepts/backups) for the full picture —

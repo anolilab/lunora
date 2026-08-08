@@ -2146,6 +2146,7 @@ interface WorkerOptions {
     storage?: (env: unknown) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
+    storageDownload?: StorageDownloadFunction;
     storageList?: StorageListFunction;
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;

@@ -11,6 +11,7 @@
  */
 import type {
     StorageDeleteFn as StorageDeleteFunction,
+    StorageDownloadFn as StorageDownloadFunction,
     StorageListFn as StorageListFunction,
     StorageSignedUrlFn as StorageSignedUrlFunction,
     StorageUploadFn as StorageUploadFunction,
@@ -19,6 +20,7 @@ import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
 
 const STORAGE_PATH = "/_lunora/admin/storage";
+const STORAGE_OBJECT_PATH = "/_lunora/admin/storage/object";
 const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
 const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 
@@ -70,6 +72,7 @@ interface StorageAdminRouteDeps {
     storage: {
         storageBuckets?: string[];
         storageDelete?: StorageDeleteFunction;
+        storageDownload?: StorageDownloadFunction;
         storageList?: StorageListFunction;
         storageSignedUrl?: StorageSignedUrlFunction;
         storageUpload?: StorageUploadFunction;
@@ -206,6 +209,41 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         }
     };
 
+    /**
+     * Stream one object's bytes back under the admin bearer — the read half of
+     * the verified upload. `lunora backup restore --bucket` pulls a snapshot
+     * through here rather than through a signed URL, so a restore works on any
+     * deployment with a bucket bound, not only on one that also configured a
+     * URL signing secret.
+     *
+     * The body is passed through as a stream: a snapshot is arbitrarily large
+     * and must never be buffered in the isolate on its way out.
+     */
+    const handleStorageObject = async (request: Request): Promise<Response> => {
+        assertMethod(request, "GET", "Storage-object");
+
+        const storageDownload = requireAdminOption(request, storage.storageDownload, {
+            code: "STORAGE_DOWNLOAD_NOT_CONFIGURED",
+            message: "storage download requires a `storageDownload` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        const object = await storageDownload(key, { bucket: queryParameter(url, "bucket") });
+
+        if (!object?.body) {
+            throw new LunoraError(`No object at key ${key}`, { code: "STORAGE_OBJECT_NOT_FOUND", status: 404 });
+        }
+
+        return new Response(object.body, {
+            headers: {
+                "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+                ...(object.size === undefined ? {} : { "content-length": String(object.size) }),
+            },
+            status: 200,
+        });
+    };
+
     const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
         assertMethod(request, "GET", "Storage URL");
 
@@ -241,10 +279,11 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
     return {
         [STORAGE_BUCKETS_PATH]: handleStorageBuckets,
+        [STORAGE_OBJECT_PATH]: handleStorageObject,
         [STORAGE_PATH]: handleStorage,
         [STORAGE_URL_PATH]: handleStorageSignedUrl,
     };
 };
 
 export type { StorageAdminRouteDeps };
-export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH };
+export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_OBJECT_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH };

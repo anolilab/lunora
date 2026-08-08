@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
     ExecutionContextLike,
     StorageDeleteFn as StorageDeleteFunction,
+    StorageDownloadFn as StorageDownloadFunction,
     StorageListFn as StorageListFunction,
     StorageSignedUrlFn as StorageSignedUrlFunction,
     StorageUploadFn as StorageUploadFunction,
@@ -417,6 +418,103 @@ describe("createWorker — storage admin upload", () => {
         );
 
         expect(response.status).toBe(200);
+    });
+});
+
+describe("createWorker — storage admin object read", () => {
+    const OBJECT_URL = "https://app.example/_lunora/admin/storage/object?key=backups/snap.ndjson";
+    const NDJSON = '{"table":"users","doc":{"_id":"u1"}}\n';
+
+    const bodyOf = (text: string): ReadableStream =>
+        new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(text));
+                controller.close();
+            },
+        });
+
+    it("rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf(NDJSON) };
+            },
+        });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("reports STORAGE_DOWNLOAD_NOT_CONFIGURED when no reader is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_DOWNLOAD_NOT_CONFIGURED");
+    });
+
+    it("streams the object body back, with its bucket and content type", async () => {
+        expect.assertions(4);
+
+        const storageDownload = vi.fn<StorageDownloadFunction>(async () => {
+            return { body: bodyOf(NDJSON), httpMetadata: { contentType: "application/x-ndjson" }, size: NDJSON.length };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDownload });
+
+        const response = await worker.fetch(
+            new Request(`${OBJECT_URL}&bucket=media`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/x-ndjson");
+        await expect(response.text()).resolves.toBe(NDJSON);
+        expect(storageDownload).toHaveBeenCalledWith("backups/snap.ndjson", { bucket: "media" });
+    });
+
+    it("404s for a key that is not there", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDownload: async () => null });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_OBJECT_NOT_FOUND");
+    });
+
+    it("requires a key", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf(NDJSON) };
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage/object", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
     });
 });
 

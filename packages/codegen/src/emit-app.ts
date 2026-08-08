@@ -833,6 +833,7 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
         return {
             storageBuckets: Object.keys(buckets),
             storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
+            storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
             storageSignedUrl: hasSigning
                 ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT" }) =>

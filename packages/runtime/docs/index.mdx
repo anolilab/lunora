@@ -200,6 +200,22 @@ Register your own cron handlers via `crons` (keyed by the exact expression);
 they run independently of — and, on a shared expression, alongside — the
 built-in backup.
 
+`lunora backup list --bucket <name>` reads the same layout, so scheduled
+snapshots and ones taken by hand with `lunora backup create --bucket <name>`
+appear as one history. Snapshots the cron writes carry no `sha256`, so
+`lunora backup restore --verify` refuses them rather than reporting an
+unverified restore as a verified one.
+
+### Reading objects back
+
+`lunora backup restore --bucket` pulls a snapshot down through the admin-gated
+`GET /_lunora/admin/storage/object?key=…`, which streams one object's body
+under the same bearer as every other admin route. It needs a `storageDownload`
+function on the worker (`createStorage(...).download`); the generated app
+worker wires it alongside the other `storage*` options. Without it the endpoint
+answers `STORAGE_DOWNLOAD_NOT_CONFIGURED` and a bucket restore is not
+available — the snapshot is still readable with `wrangler r2 object get`.
+
 ### Wrangler bindings
 
 ```jsonc

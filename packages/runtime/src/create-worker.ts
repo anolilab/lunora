@@ -362,6 +362,22 @@ type StorageUploadFunction = (
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
 
 /**
+ * Reads one object's bytes back out of a storage bucket. Structurally the part
+ * of `@lunora/storage`'s `Storage["download"]` the admin endpoint needs — the
+ * body stream plus enough metadata to set the response headers. `null` means
+ * "no such object", which the route turns into a 404.
+ *
+ * This is the read half of {@link StorageUploadFunction}: `lunora backup
+ * restore --bucket` pulls a snapshot back through it under the same admin
+ * bearer that wrote it, so restoring from a bucket does not depend on signed
+ * URLs (which need a signing secret the deployment may not have configured).
+ */
+type StorageDownloadFunction = (
+    key: string,
+    options?: { bucket?: string },
+) => Promise<{ body: ReadableStream | null; httpMetadata?: { contentType?: string }; size?: number } | null>;
+
+/**
  * Mints a (signed or public) URL for one object so the admin file browser can
  * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
  * a share-link lifetime (the host clamps it); `bucket` selects a named bucket.
@@ -1224,6 +1240,15 @@ interface WorkerOptions {
      * `STORAGE_DELETE_NOT_CONFIGURED` — the studio surfaces a clear inline error.
      */
     storageDelete?: StorageDeleteFunction;
+
+    /**
+     * Reads one object back, backing the admin-gated
+     * `GET /_lunora/admin/storage/object` endpoint that `lunora backup restore
+     * --bucket` pulls snapshots through. Passing `createStorage(...).download`
+     * satisfies it. Omit it and the endpoint responds
+     * `STORAGE_DOWNLOAD_NOT_CONFIGURED`.
+     */
+    storageDownload?: StorageDownloadFunction;
 
     /**
      * Storage lister backing the admin-gated `GET /_lunora/admin/storage`
@@ -2906,6 +2931,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         storage: {
             storageBuckets: options.storageBuckets,
             storageDelete: options.storageDelete,
+            storageDownload: options.storageDownload,
             storageList: options.storageList,
             storageSignedUrl: options.storageSignedUrl,
             storageUpload: options.storageUpload,
@@ -4877,6 +4903,7 @@ export type {
     ScheduledControllerLike,
     ShardingInfo,
     StorageDeleteFunction as StorageDeleteFn,
+    StorageDownloadFunction as StorageDownloadFn,
     StorageListFunction as StorageListFn,
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,

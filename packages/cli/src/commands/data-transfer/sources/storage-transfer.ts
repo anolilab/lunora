@@ -226,7 +226,7 @@ const moveOneObject = async (
     if (alreadyStored.get(key)?.size !== bytes.length) {
         const metadata: StorageMetadataRow = { contentType: entry.contentType, id: entry.path, sha256, size: bytes.length };
 
-        await uploadStorageBlob(context, bytes, metadata, options.keyPrefix, logger);
+        await uploadStorageBlob(context, key, bytes, metadata, logger);
     }
 
     await recordTransfer(options.cwd, options.source, { key, path: entry.path, size: bytes.length });

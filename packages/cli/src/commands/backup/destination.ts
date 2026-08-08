@@ -8,7 +8,8 @@
  * a local path, and the destination decides whether that path _is_ the backup
  * or a staging file on its way somewhere else.
  */
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -21,7 +22,15 @@ interface BackupManifestEntry {
     file: string;
     id: string;
     rows: number;
+    /** Lowercase-hex SHA-256 of the snapshot, recorded when it was written. `restore --verify` checks the bytes against it. */
+    sha256?: string;
     tables?: string;
+}
+
+/** Byte length + checksum of a staged snapshot, computed once by `create` and handed to whichever destination stores it. */
+interface SnapshotDigest {
+    bytes: number;
+    sha256: string;
 }
 
 /** A snapshot made readable as a local file, plus whatever the destination itself knows about it. */
@@ -34,7 +43,7 @@ interface MaterializedSnapshot {
 
 interface BackupDestination {
     /** Land the staged NDJSON at `file`. Throws unless the bytes are there afterwards. */
-    commit: (file: string, stagedPath: string) => Promise<void>;
+    commit: (file: string, stagedPath: string, digest: SnapshotDigest) => Promise<void>;
     /** Human-readable destination, for logs and "nothing found" messages. */
     readonly label: string;
     /** Every recorded snapshot, oldest first. */
@@ -62,6 +71,26 @@ const isManifestEntry = (value: unknown): value is BackupManifestEntry =>
     value !== null &&
     typeof (value as BackupManifestEntry).id === "string" &&
     typeof (value as BackupManifestEntry).file === "string";
+
+/**
+ * Byte length + SHA-256 of a file, read as a stream so a multi-GB snapshot is
+ * never held in memory just to be hashed. One digest per snapshot, computed by
+ * `create` in one place: the manifest records it, the R2 upload declares it,
+ * and `restore --verify` compares against it.
+ */
+const digestFile = async (path: string): Promise<SnapshotDigest> => {
+    const hash = createHash("sha256");
+    let bytes = 0;
+
+    for await (const chunk of createReadStream(path)) {
+        const buffer = chunk as Buffer;
+
+        bytes += buffer.byteLength;
+        hash.update(buffer);
+    }
+
+    return { bytes, sha256: hash.digest("hex") };
+};
 
 /**
  * Read the backup index. A *missing* manifest is fine — start fresh with `[]`.
@@ -132,5 +161,5 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
     };
 };
 
-export type { BackupDestination, BackupManifestEntry, MaterializedSnapshot };
-export { createDirectoryDestination, isManifestEntry, MANIFEST_FILE };
+export type { BackupDestination, BackupManifestEntry, MaterializedSnapshot, SnapshotDigest };
+export { createDirectoryDestination, digestFile, isManifestEntry, MANIFEST_FILE };

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -127,6 +127,7 @@ describe("lunora backup", () => {
     "file": "lunora-backup-2026-06-03T12-00-00-000Z.ndjson",
     "id": "2026-06-03T12:00:00.000Z",
     "rows": 1,
+    "sha256": "84528e00c324faff7e650ef1fb502f3afef91ae32a542c2130ae415c242e1708",
     "tables": "users"
   }
 ]
@@ -250,6 +251,55 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(0);
         expect(importCalls[0]).toContain("/_lunora/admin/import");
+    });
+
+    it("restore --verify refuses a directory snapshot that no longer matches its manifest", async () => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const importCalls: string[] = [];
+
+        const verified = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+        });
+
+        expect(verified.code).toBe(0);
+
+        // Bit rot on the operator's disk is exactly what the portable tier has
+        // to survive being lied to about.
+        writeFileSync(join(workDir, ".lunora-backups", created.entry!.file), `${NDJSON}${NDJSON}`, "utf8");
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.some((line) => line.includes("does not match its recorded checksum"))).toBe(true);
     });
 
     it("restore fails for an unknown target", async () => {

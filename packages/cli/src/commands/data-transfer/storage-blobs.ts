@@ -168,9 +168,14 @@ interface StorageListObject {
 
 interface BlobUploadContext {
     baseUrl: string;
+    /** Named bucket for a multi-bucket deployment; omit for the worker's default bucket. */
+    bucket?: string;
     fetchImpl: StreamingFetchLike;
     token: string;
 }
+
+/** `&bucket=` when a named bucket was selected, nothing when the default is meant. */
+const bucketQuery = (context: BlobUploadContext): string => (context.bucket === undefined ? "" : `&bucket=${encodeURIComponent(context.bucket)}`);
 
 /** List the objects under `prefix`, following the cursor to the end. */
 const listStorageObjects = async (context: BlobUploadContext, prefix: string): Promise<StorageListObject[]> => {
@@ -180,7 +185,7 @@ const listStorageObjects = async (context: BlobUploadContext, prefix: string): P
     do {
         // An explicit page size matters here: the host's own default is 100, and
         // the idempotency pre-flight walks the whole key prefix.
-        const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?prefix=${encodeURIComponent(prefix)}&limit=${String(STORAGE_LIST_PAGE_SIZE)}${cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`}`;
+        const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?prefix=${encodeURIComponent(prefix)}&limit=${String(STORAGE_LIST_PAGE_SIZE)}${cursor === undefined ? "" : `&cursor=${encodeURIComponent(cursor)}`}${bucketQuery(context)}`;
 
         // eslint-disable-next-line no-await-in-loop -- cursor paging is sequential by definition
         const response = await context.fetchImpl(url, { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
@@ -217,7 +222,7 @@ const listStorageObjects = async (context: BlobUploadContext, prefix: string): P
  * before anything is written.
  */
 const uploadSmallBlob = async (context: BlobUploadContext, key: string, blobBytes: Buffer, metadata: StorageMetadataRow): Promise<string> => {
-    const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&expectedSha256=${metadata.sha256}&expectedSize=${String(metadata.size)}`;
+    const url = `${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&expectedSha256=${metadata.sha256}&expectedSize=${String(metadata.size)}${bucketQuery(context)}`;
 
     const response = await context.fetchImpl(url, {
         body: new Uint8Array(blobBytes),
@@ -249,7 +254,7 @@ const uploadSmallBlob = async (context: BlobUploadContext, key: string, blobByte
  */
 const deleteStorageObject = async (context: BlobUploadContext, key: string): Promise<boolean> => {
     const response = await context
-        .fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}`, {
+        .fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketQuery(context)}`, {
             headers: { authorization: `Bearer ${context.token}` },
             method: "DELETE",
         })
@@ -273,7 +278,7 @@ const deleteStorageObject = async (context: BlobUploadContext, key: string): Pro
  * later re-run would treat it as already-migrated.
  */
 const uploadLargeBlob = async (context: BlobUploadContext, key: string, blobBytes: Buffer, metadata: StorageMetadataRow, logger: Logger): Promise<string> => {
-    const mintUrl = `${context.baseUrl}${STORAGE_URL_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&method=PUT&contentType=${encodeURIComponent(metadata.contentType ?? "application/octet-stream")}`;
+    const mintUrl = `${context.baseUrl}${STORAGE_URL_ENDPOINT_PATH}?key=${encodeURIComponent(key)}&method=PUT&contentType=${encodeURIComponent(metadata.contentType ?? "application/octet-stream")}${bucketQuery(context)}`;
 
     const urlResponse = await context.fetchImpl(mintUrl, { headers: { authorization: `Bearer ${context.token}` }, method: "GET" });
 
@@ -333,15 +338,13 @@ const uploadLargeBlob = async (context: BlobUploadContext, key: string, blobByte
     return key;
 };
 
-const uploadStorageBlob = async (
-    context: BlobUploadContext,
-    blobBytes: Buffer,
-    metadata: StorageMetadataRow,
-    keyPrefix: string,
-    logger: Logger,
-): Promise<string> => {
-    const key = `${keyPrefix}${metadata.sha256}`;
-
+/**
+ * Upload one object with its declared size + checksum, through the verified
+ * admin route when it fits that route's body cap and the signed-PUT fallback
+ * when it does not. The caller names the `key`: a blob migration uses the
+ * content hash (so a re-run is idempotent), a backup uses its snapshot name.
+ */
+const uploadStorageBlob = async (context: BlobUploadContext, key: string, blobBytes: Buffer, metadata: StorageMetadataRow, logger: Logger): Promise<string> => {
     // Catch a truncated source before any network call: the export's own
     // metadata is the only statement of what the blob should weigh.
     if (blobBytes.length !== metadata.size) {
@@ -424,7 +427,7 @@ const migrateStorageBlobs = async (
         try {
             const blobBytes = await readSnapshotStorageBlob(snapshot, row.id);
 
-            storageIdMap.set(row.id, await uploadStorageBlob(context, blobBytes, row, keyPrefix, logger));
+            storageIdMap.set(row.id, await uploadStorageBlob(context, `${keyPrefix}${row.sha256}`, blobBytes, row, logger));
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : String(error);
 
