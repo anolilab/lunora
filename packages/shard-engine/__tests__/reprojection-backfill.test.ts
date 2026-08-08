@@ -2,18 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { runDataMigration } from "../src/data-migration";
 import { encodeDocJson } from "../src/do-sql";
-import {
-    buildReprojectionMigration,
-    countLegacyRows,
-    jsonPathSegment,
-    reprojectableFields,
-    reprojectionMigrationId,
-    reprojectionTables,
-} from "../src/reprojection-backfill";
+import { buildReprojectionMigration, countLegacyRows, reprojectableFields, reprojectionMigrationId, reprojectionTables } from "../src/reprojection-backfill";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
