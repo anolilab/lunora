@@ -93,7 +93,7 @@ const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
     // this function is to turn a bad `serverRef` into the LunoraError below, and an
     // untyped caller (plain JS, `any`, a stale generated file) passing null/undefined
     // would otherwise get a bare `TypeError` about `__lunoraRef` instead.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition, no-underscore-dangle -- guards untyped JS callers despite the non-nullable type; `__lunoraRef` is the field codegen stamps on a function reference
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untyped JS callers despite the non-nullable type
     const path = typeof serverRef === "string" ? serverRef : serverRef?.__lunoraRef;
 
     if (typeof path !== "string" || path.length === 0) {

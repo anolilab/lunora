@@ -35,20 +35,9 @@
  * says.
  */
 
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field rows are keyed by */
-
 import type { Collection } from "@tanstack/db";
 
 import type { Row } from "./internals";
-
-/** Merge a plan's row lists in application order, so both appliers walk the same sequence. */
-const ordered = (plan: ChangePlan): { deletes: ReadonlyArray<PlanDelete>; inserts: ReadonlyArray<PlanInsert>; patches: ReadonlyArray<PlanPatch> } => {
-    return {
-        deletes: plan.deletes ?? [],
-        inserts: plan.inserts ?? [],
-        patches: plan.patches ?? [],
-    };
-};
 
 /** One row to insert. `_id` may be pre-minted client-side so the optimistic row keys match the persisted one. */
 export interface PlanInsert {
@@ -115,13 +104,11 @@ export interface PlanWriter {
  * a write the server handles fine.
  */
 export const applyPlanToCollections = (collections: Record<string, Collection<Row, string>>, plan: ChangePlan): void => {
-    const { deletes, inserts, patches } = ordered(plan);
-
-    for (const entry of deletes) {
+    for (const entry of plan.deletes ?? []) {
         collections[entry.table]?.delete(entry.id);
     }
 
-    for (const entry of patches) {
+    for (const entry of plan.patches ?? []) {
         const collection = collections[entry.table];
 
         if (!collection) {
@@ -133,7 +120,7 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
         });
     }
 
-    for (const entry of inserts) {
+    for (const entry of plan.inserts ?? []) {
         const collection = collections[entry.table];
 
         if (!collection) {
@@ -163,19 +150,17 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name mirroring the framework's own `ctx.db`; renaming would break consumers and diverge from the writer it applies to
 export const applyPlanToDb = async (db: PlanWriter, plan: ChangePlan): Promise<void> => {
-    const { deletes, inserts, patches } = ordered(plan);
-
-    for (const entry of deletes) {
+    for (const entry of plan.deletes ?? []) {
         // eslint-disable-next-line no-await-in-loop -- ordered, single-threaded shard writes; a mid-plan throw rolls the mutation back
         await db.delete(entry.id as never);
     }
 
-    for (const entry of patches) {
+    for (const entry of plan.patches ?? []) {
         // eslint-disable-next-line no-await-in-loop -- see above
         await db.patch(entry.id as never, entry.fields);
     }
 
-    for (const entry of inserts) {
+    for (const entry of plan.inserts ?? []) {
         const { _id: clientId, ...body } = entry.row;
 
         // eslint-disable-next-line no-await-in-loop -- see above

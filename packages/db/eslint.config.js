@@ -28,6 +28,41 @@ export default createConfig(
             "**/eslint.config.js",
         ],
     },
+    // Scoped framework allowances (NOT blanket rule-off):
+    {
+        rules: {
+            // Leading-underscore identifiers that are framework API by design: _id /
+            // _creationTime are the public document fields; __lunora* are internal markers;
+            // _meta/__doc__ are data-model internals; __name is a bundler helper. Accidental
+            // dangles (and the trailing-underscore variety) are still flagged.
+            //
+            // Without this the package needed a file-level `eslint-disable
+            // no-underscore-dangle` in five files, which blinded each of them to a
+            // genuinely accidental dangle too.
+            "no-underscore-dangle": [
+                "error",
+                {
+                    allow: [
+                        "_id",
+                        "_creationTime",
+                        "_meta",
+                        "_parse",
+                        "_count",
+                        "_checks",
+                        "_chunk",
+                        "__doc__",
+                        "__name",
+                        "__lunoraRef",
+                        "__lunoraVisibility",
+                        "__lunoraProcedure",
+                        "__lunoraCtx",
+                        "__lunoraTable",
+                        "__lunoraPreloaded",
+                    ],
+                },
+            ],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code. Source
     // files still enforce all of these.
     {

@@ -1,4 +1,3 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field this binding keys rows by */
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import type { CollectionConfig } from "@tanstack/db";

@@ -32,8 +32,15 @@ frontend_lintable:
     - "**/package.json"
     # A project.json decides whether the eslint job runs a project at all — an
     # nx-shaped target silently turns its gate into a no-op — so a change to one
-    # has to reach the job that would catch that.
+    # has to reach the job that would catch that. The checker, the job, and this
+    # file are listed for the same reason `worker_size` lists them below: a PR
+    # that switches the gate off by editing the gate would otherwise match no
+    # filter, skip the job, and pass `lint-required-check`, which only fails on
+    # `failure`/`cancelled`.
     - "**/project.json"
+    - "scripts/check-project-json-targets.js"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
 
 package_json_lintable:

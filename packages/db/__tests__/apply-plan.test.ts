@@ -16,7 +16,6 @@ import type { Row } from "../src/internals";
 const fakeCollection = (log: string[], name: string) =>
     ({
         delete: (id: string) => log.push(`${name}:delete:${id}`),
-        // eslint-disable-next-line no-underscore-dangle -- `_id` is the Lunora document-id field rows are keyed by
         insert: (row: Row) => log.push(`${name}:insert:${row._id}`),
         update: (id: string, updater: (draft: Record<string, unknown>) => void) => {
             const draft: Record<string, unknown> = {};

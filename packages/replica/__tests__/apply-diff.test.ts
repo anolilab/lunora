@@ -53,13 +53,15 @@ const canonicalize = (value: unknown): unknown => {
 const expectedDerivedId = (diff: TableDiff, changeIndex: number, data: Record<string, unknown>): string =>
     `row-${referenceFnv1a64(`${diff.table}::${diff.id ?? String(diff.timestamp)}::${String(changeIndex)}::${JSON.stringify(canonicalize(data))}`)}`;
 
-const onlyDerivedKey = (rows: Map<string, Record<string, unknown>>): string => {
-    const keys = [...rows.keys()].filter((key) => key.startsWith("row-"));
-
-    expect(keys).toHaveLength(1);
-
-    return keys[0] as string;
-};
+/**
+ * The derived-id keys of an applyDiff result, in insertion order.
+ *
+ * Deliberately assertion-free: a helper that asserts on its caller's behalf
+ * bakes a `+1` into every `expect.assertions(n)` that calls it, so changing one
+ * line here fails five unrelated tests pointing at the wrong file. Callers
+ * assert the whole array, which checks the count and the values in one go.
+ */
+const derivedKeys = (rows: Map<string, Record<string, unknown>>): string[] => [...rows.keys()].filter((key) => key.startsWith("row-"));
 
 describe("applyDiff", () => {
     it("leaves the caller's map untouched", () => {
@@ -163,34 +165,34 @@ describe("canonicalizeForHash", () => {
 
 describe("deriveInsertId (via id-less inserts)", () => {
     it("is exported and agrees with what applyDiff derives", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const data = { name: "alice" };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), diff))).toBe(deriveInsertId(diff, 0, data));
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([deriveInsertId(diff, 0, data)]);
     });
 
     it("matches the BigInt FNV-1a reference digest", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const data = { body: "hello world", tags: ["a", "b"] };
         const diff = diffOf([{ data, type: "insert" }]);
 
         const next = applyDiff(new Map(), diff);
 
-        expect(onlyDerivedKey(next)).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("matches the reference digest for astral code points", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         const data = { note: "🎉 party \u{10FFFF}", who: "é中文" };
         const diff = diffOf([{ data, type: "insert" }]);
 
         const next = applyDiff(new Map(), diff);
 
-        expect(onlyDerivedKey(next)).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(next)).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("derives the same id when the same diff is replayed", () => {
@@ -216,7 +218,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
     });
 
     it("sorts keys by code unit, not by locale collation", () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
         // "B" (0x42) sorts before "a" (0x61) by code unit, but AFTER it under
         // ICU collation — so this pair is exactly where a localeCompare-based
@@ -225,7 +227,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const data = { B: 1, a: 2 };
         const diff = diffOf([{ data, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), diff))).toBe(expectedDerivedId(diff, 0, data));
+        expect(derivedKeys(applyDiff(new Map(), diff))).toStrictEqual([expectedDerivedId(diff, 0, data)]);
     });
 
     it("distinguishes two identical id-less inserts within one diff", () => {
@@ -252,7 +254,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
     });
 
     it("matches JSON.stringify's treatment of undefined in objects and arrays", () => {
-        expect.assertions(3);
+        expect.assertions(2);
 
         // JSON.stringify omits undefined-valued object entries, so `{ a: 1 }`
         // and `{ a: 1, b: undefined }` must canonicalize identically...
@@ -265,7 +267,7 @@ describe("deriveInsertId (via id-less inserts)", () => {
         const holeData = { list: [1, undefined, 3] };
         const holeDiff = diffOf([{ data: holeData, type: "insert" }]);
 
-        expect(onlyDerivedKey(applyDiff(new Map(), holeDiff))).toBe(expectedDerivedId(holeDiff, 0, { list: [1, null, 3] }));
+        expect(derivedKeys(applyDiff(new Map(), holeDiff))).toStrictEqual([expectedDerivedId(holeDiff, 0, { list: [1, null, 3] })]);
     });
 });
 

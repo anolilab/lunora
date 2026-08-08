@@ -29,6 +29,11 @@ interface StoredEventRow {
 /** A payload containing this marker makes the mock's INSERT throw — simulates a mid-batch write failure. */
 const FAIL_MARKER = "__FAIL__";
 
+/** The three `SELECT … FROM events` shapes the mock recognises. */
+const SEQ_RANGE = /WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i;
+const SEQ_SINCE = /WHERE\s+seq\s*>=\s*\?/i;
+const SEQ_LIMIT = /LIMIT\s+(\d+)/i;
+
 const createMockState = (): EventLogDO["state"] => {
     let events: StoredEventRow[] = [];
     let batches: StoredBatchRow[] = [];
@@ -89,25 +94,17 @@ const createMockState = (): EventLogDO["state"] => {
         }
 
         if (upper.includes("FROM EVENTS")) {
-            let rows = [...events];
+            // Both recognised WHERE shapes are the same bounded filter — a range
+            // names both ends, a `>= ?` names only the lower one — so pick the
+            // bounds and filter once. An unrecognised query stays unbounded.
+            const isRange = SEQ_RANGE.test(query);
+            const isSince = !isRange && SEQ_SINCE.test(query) && params.length > 0;
+            const from = isRange || isSince ? Number(params[0]) : Number.NEGATIVE_INFINITY;
+            const to = isRange ? Number(params[1]) : Number.POSITIVE_INFINITY;
 
-            const isRange = /WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i.test(query);
-            const isSince = !isRange && /WHERE\s+seq\s*>=\s*\?/i.test(query) && params.length > 0;
+            let rows = events.filter((r) => r.seq >= from && r.seq <= to);
 
-            if (isRange) {
-                const from = Number(params[0]);
-                const to = Number(params[1]);
-
-                rows = rows.filter((r) => r.seq >= from && r.seq <= to);
-            }
-
-            if (isSince) {
-                const since = Number(params[0]);
-
-                rows = rows.filter((r) => r.seq >= since);
-            }
-
-            const limitMatch = query.match(/LIMIT\s+(\d+)/i);
+            const limitMatch = SEQ_LIMIT.exec(query);
 
             if (limitMatch) {
                 rows = rows.slice(0, Number(limitMatch[1]));
