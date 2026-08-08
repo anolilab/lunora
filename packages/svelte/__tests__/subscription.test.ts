@@ -8,18 +8,18 @@ const fnRef = { __lunoraRef: "messages:subscribe" } as unknown as FunctionRefere
 const args = { channelId: "c1" } as unknown;
 
 const createFakeClient = () => {
-    const unsubscribeSpy = vi.fn();
+    const unsubscribeSpy = vi.fn<() => void>();
     let lastCallback: ((value: unknown) => void) | undefined;
     let lastOnError: ((error: { message: string }) => void) | undefined;
 
-    const subscribeSpy = vi.fn(
-        (_fn: unknown, _args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => {
-            lastCallback = callback;
-            lastOnError = options?.onError;
+    const subscribeSpy = vi.fn<
+        (function_: unknown, args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => () => void
+    >((_fn, _args, callback, options) => {
+        lastCallback = callback;
+        lastOnError = options?.onError;
 
-            return unsubscribeSpy;
-        },
-    );
+        return unsubscribeSpy;
+    });
 
     const client = { subscribe: subscribeSpy } as unknown as LunoraClient;
 
@@ -86,7 +86,7 @@ describe("subscription store", () => {
 
     it("routes a subscription error into the error store and the onError callback", () => {
         const { client, emitError } = createFakeClient();
-        const onError = vi.fn();
+        const onError = vi.fn<(error: Error) => void>();
         const { data, error } = subscription(client, fnRef, args, { onError });
 
         // Subscribe both stores so the data store's start callback wires onError.
