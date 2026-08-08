@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
+import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
+import type { RecordedSpawn, Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
 // A pass-through wrapper around the real `runCodegen` — every existing test in
@@ -59,6 +61,33 @@ const captureStdout = async (body: () => Promise<void>): Promise<string> => {
     }
 
     return captured;
+};
+
+/** What a real `wrangler deploy` prints once the Worker is live. */
+const WRANGLER_DEPLOY_OUTPUT = `Total Upload: 12.34 KiB / gzip: 4.56 KiB
+Uploaded lunora-app (2.21 sec)
+Deployed lunora-app triggers (0.85 sec)
+  https://lunora-app.acme.workers.dev
+Current Version ID: 1f2e3d4c-5b6a-7089-9a0b-1c2d3e4f5a6b
+`;
+
+/**
+ * A recording spawner that behaves like wrangler: when the descriptor asked for
+ * stdout (either capture mode), it resolves with real-looking deploy output so
+ * the URL parser has something to read.
+ */
+const deployingSpawner = (stdout: string = WRANGLER_DEPLOY_OUTPUT, exitCode = 0): { calls: RecordedSpawn[]; spawner: Spawner } => {
+    const calls: RecordedSpawn[] = [];
+
+    const spawner: Spawner = (descriptor) => {
+        calls.push({ descriptor });
+
+        const captured = descriptor.captureStdout === true || descriptor.captureStdoutSilently === true;
+
+        return Promise.resolve({ code: exitCode, stdout: captured ? stdout : undefined });
+    };
+
+    return { calls, spawner };
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -893,29 +922,36 @@ export const backfillNames = defineMigration({
                 expect(parsed.descriptor?.args).toContain("deploy");
             });
 
-            it("routes the spawned wrangler's stdout to stderr so it can't corrupt the JSON document", async () => {
-                // Regression: `wrangler deploy` inherits stdio; without redirection
-                // its progress + deployed-URL output interleaves with the JSON on
-                // stdout and breaks `lunora deploy --format json | jq`.
-                expect.assertions(2);
+            it("captures the spawned wrangler's stdout SILENTLY so it can't corrupt the JSON document", async () => {
+                // Regression: `wrangler deploy`'s progress + deployed-URL output
+                // must never interleave with the JSON on stdout, or
+                // `lunora deploy --format json | jq` breaks. json mode therefore
+                // captures without teeing (`captureStdoutSilently`); the plain
+                // `captureStdout` used in pretty mode WOULD tee, and corrupt it.
+                expect.assertions(5);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
-                const { calls, spawner } = createRecordingSpawner();
+                const { calls, spawner } = deployingSpawner();
                 const { logger } = silentLogger();
 
-                await captureStdout(async () => {
+                const stdout = await captureStdout(async () => {
                     await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
-                expect(calls[0]?.descriptor.stdoutToStderr).toBe(true);
+                expect(calls[0]?.descriptor.captureStdoutSilently).toBe(true);
+                expect(calls[0]?.descriptor.captureStdout).toBe(false);
 
-                // Pretty mode keeps wrangler's output inherited on stdout.
-                const pretty = createRecordingSpawner();
+                // Exactly one JSON document, with no wrangler text mixed in.
+                expect(stdout).not.toContain("Total Upload");
+                expect(JSON.parse(stdout)).toHaveProperty("deployment");
+
+                // Pretty mode tees, so the user still watches live progress.
+                const pretty = deployingSpawner();
 
                 await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner: pretty.spawner });
 
-                expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBe(false);
+                expect(pretty.calls[0]?.descriptor.captureStdout).toBe(true);
             });
 
             it("routes a postcodegen script's stdout to stderr in json mode", async () => {
@@ -971,6 +1007,69 @@ export const backfillNames = defineMigration({
                 expect(parsed.error).toBeDefined();
             });
 
+            it("reports the deployed URL in the document, so an automation never has to read it with its eyes", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, env: undefined, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as {
+                    deployment?: { deployedAt: string; dryRun: boolean; preview: boolean; url?: string; workerName?: string };
+                };
+
+                expect(parsed.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
+                expect(parsed.deployment?.workerName).toBe("lunora-app");
+                expect(parsed.deployment?.dryRun).toBe(false);
+                expect(parsed.deployment?.preview).toBe(false);
+                expect(Number.isNaN(Date.parse(parsed.deployment?.deployedAt ?? ""))).toBe(false);
+            });
+
+            it("--preview --format json reports the preview URL", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner("Worker Version ID: abc\n  https://preview-abc-lunora-app.acme.workers.dev\n");
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, preview: true, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { deployment?: { preview: boolean; url?: string } };
+
+                expect(parsed.deployment?.url).toBe("https://preview-abc-lunora-app.acme.workers.dev");
+                expect(parsed.deployment?.preview).toBe(true);
+                // A preview never becomes the checkout's recorded target.
+                expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
+            });
+
+            it("--dry-run reports the discriminator and no URL — nothing was published", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = deployingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, dryRun: true, secretLister: noRemoteSecrets, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { deployment?: { dryRun: boolean; url?: string } };
+
+                expect(parsed.deployment?.dryRun).toBe(true);
+                expect(parsed.deployment?.url).toBeUndefined();
+                // Nothing to read → wrangler's stdout is not captured at all.
+                expect(calls[0]?.descriptor.captureStdoutSilently).toBe(false);
+            });
+
             it("rejects an unknown --format the same way logs does", async () => {
                 expect.assertions(5);
 
@@ -989,6 +1088,136 @@ export const backfillNames = defineMigration({
                 expect(stdout).toBe("");
                 expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
                 expect(calls).toHaveLength(0);
+            });
+        });
+
+        describe("link capture", () => {
+            it("records the deployed URL after a real deploy", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+                const written = JSON.parse(readFileSync(join(workdir, ".lunora", "project.json"), "utf8")) as { workerUrl?: string };
+
+                expect(result.code).toBe(0);
+                expect(written.workerUrl).toBe("https://lunora-app.acme.workers.dev");
+            });
+
+            it("--temporary reports the URL but never records it as the checkout's target", async () => {
+                expect.assertions(2);
+
+                // The account is deleted in ~60 minutes; a link pointing at it
+                // would silently misroute `run` / `logs` / `--migrate` afterwards.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner, temporary: true });
+
+                expect(result.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
+                expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
+            });
+        });
+
+        describe("--health-check", () => {
+            it("passes when the new version answers", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { logger } = silentLogger();
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { ok: true, status: 200 };
+                });
+
+                const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
+
+                expect(result.code).toBe(0);
+                expect(result.healthCheck?.ok).toBe(true);
+                // Probed at the URL THIS run published to, readiness gate first.
+                expect(healthFetch).toHaveBeenCalledWith("https://lunora-app.acme.workers.dev/_lunora/health/ready");
+                expect(result.healthCheck?.error).toBeUndefined();
+            });
+
+            it("fails the command when the probe never goes green, and says the deploy itself succeeded", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { errors, logger } = silentLogger();
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { ok: false, status: 503 };
+                });
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    healthCheck: true,
+                    healthFetch,
+                    healthSleep: async () => {},
+                    secretLister: noRemoteSecrets,
+                    logger,
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                expect(result.healthCheck?.error).toContain("returned HTTP 503");
+                // The deploy succeeded and the probe did not — different facts.
+                expect(errors.join("\n")).toContain("the deploy succeeded, but the new version did not answer");
+                // The identity is still reported: the version IS out there.
+                expect(result.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
+            });
+
+            it("is skipped (with a warning) on a dry run, which publishes nothing to probe", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = deployingSpawner();
+                const { logger, warns } = silentLogger();
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { ok: true, status: 200 };
+                });
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    healthCheck: true,
+                    healthFetch,
+                    secretLister: noRemoteSecrets,
+                    logger,
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(healthFetch).not.toHaveBeenCalled();
+                expect(warns.join("\n")).toContain("--health-check skipped");
+            });
+
+            it("refuses rather than guessing an origin when no URL can be resolved", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                // wrangler printed no URL (custom-route-only worker) and the
+                // checkout has no link → nothing safe to probe.
+                const { spawner } = deployingSpawner("Total Upload: 1 KiB\nDeployed lunora-app triggers\n");
+                const { errors, logger } = silentLogger();
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { ok: true, status: 200 };
+                });
+
+                const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
+
+                expect(result.code).toBe(1);
+                expect(healthFetch).not.toHaveBeenCalled();
+                expect(errors.join("\n")).toContain("no URL to probe could be resolved");
             });
         });
 

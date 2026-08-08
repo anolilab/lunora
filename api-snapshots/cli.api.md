@@ -115,6 +115,9 @@ interface DeployCommandOptions {
     env?: string;
     fetchImpl?: FetchLike;
     format?: string;
+    healthCheck?: boolean;
+    healthFetch?: HealthFetch;
+    healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
     logger: Logger;
     migrate?: boolean;
@@ -140,8 +143,14 @@ interface DeployCommandOptions {
 ```ts
 interface DeployCommandResult {
     code: number;
+    deployment?: DeployedIdentity;
     descriptor: SpawnDescriptor | undefined;
     error?: string;
+    healthCheck?: {
+        error?: string;
+        ok: boolean;
+        url: string;
+    };
     mintedSecretsFile?: string;
     schemaDrift?: {
         blocked: boolean;
@@ -151,6 +160,19 @@ interface DeployCommandResult {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
     };
+}
+```
+
+### `DeployedIdentity` (interface)
+
+```ts
+interface DeployedIdentity {
+    deployedAt: string;
+    dryRun: boolean;
+    env?: string;
+    preview: boolean;
+    url?: string;
+    workerName?: string;
 }
 ```
 

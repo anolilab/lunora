@@ -27,6 +27,14 @@ interface DeploySummaryInputs {
      * scrollback from a log line that printed minutes earlier.
      */
     mintedSecretsFile?: string;
+
+    /**
+     * The URL this deploy published to, when it was read from wrangler's output.
+     * Preferred over the recorded link: the link can be stale (a custom domain
+     * added, the worker renamed) or absent entirely on a first deploy, while
+     * this value comes from the run that just finished.
+     */
+    url?: string;
 }
 
 /**
@@ -40,6 +48,7 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
     try {
         const link = readLinkedProject(cwd);
         const workerName = link?.workerName ?? readWranglerName(cwd);
+        const url = inputs.url ?? link?.workerUrl;
 
         logger.success("deploy complete");
         logger.info(`  worker:  ${workerName ?? "(see wrangler output above)"}`);
@@ -48,10 +57,10 @@ const renderDeploySummary = (inputs: DeploySummaryInputs): void => {
             logger.info(`  env:     ${env}`);
         }
 
-        if (link?.workerUrl === undefined) {
+        if (url === undefined) {
             logger.info("  url:     run `lunora link --url <https://your-worker>` to record it");
         } else {
-            logger.info(`  url:     ${link.workerUrl}`);
+            logger.info(`  url:     ${url}`);
         }
 
         if (migrated) {
