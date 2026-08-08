@@ -417,6 +417,7 @@ export class EventSource<S extends Record<string, unknown> = Record<string, unkn
                 );
             }
             default: {
+                // eslint-disable-next-line no-console -- the `warn` strategy's whole contract is to report the skipped event; the source has no logger binding
                 console.warn(
                     `[EventSource] unhandled event type "${entry.type}" (seq ${String(entry.seq)}). ` +
                         "The event was skipped. Configure `unknownEventHandling` if this is expected.",

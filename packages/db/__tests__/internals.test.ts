@@ -1,4 +1,3 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field; test fixtures mirror it verbatim */
 import { LunoraError } from "@lunora/errors";
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

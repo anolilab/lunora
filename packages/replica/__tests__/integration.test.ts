@@ -171,6 +171,7 @@ const createTestAdapter = (): SqliteAdapter => {
 
 describe(normalizeBindValue, () => {
     it("passes numbers, bigints, and strings through unchanged", () => {
+        expect.assertions(4);
         expect(normalizeBindValue(42)).toBe(42);
         expect(normalizeBindValue(1.5)).toBe(1.5);
         expect(normalizeBindValue(9_007_199_254_740_993n)).toBe(9_007_199_254_740_993n);
@@ -178,27 +179,34 @@ describe(normalizeBindValue, () => {
     });
 
     it("maps null and undefined to SQL NULL", () => {
+        expect.assertions(2);
         expect(normalizeBindValue(null)).toBeNull();
         expect(normalizeBindValue(undefined)).toBeNull();
     });
 
     it("maps booleans to 0/1", () => {
+        expect.assertions(2);
         expect(normalizeBindValue(true)).toBe(1);
         expect(normalizeBindValue(false)).toBe(0);
     });
 
     it("passes a Uint8Array/Buffer through unchanged", () => {
+        expect.assertions(1);
+
         const bytes = new Uint8Array([1, 2, 3]);
 
         expect(normalizeBindValue(bytes)).toBe(bytes);
     });
 
-    it("JSON-encodes plain objects and arrays", () => {
+    it("encodes plain objects and arrays as JSON", () => {
+        expect.assertions(2);
         expect(normalizeBindValue({ a: 1 })).toBe(JSON.stringify({ a: 1 }));
         expect(normalizeBindValue([1, "two", null])).toBe(JSON.stringify([1, "two", null]));
     });
 
     it("falls back to String() for exotic values instead of throwing", () => {
+        expect.assertions(2);
+
         const fn = () => "unused";
 
         expect(normalizeBindValue(fn)).toBe(String(fn));
@@ -210,6 +218,8 @@ describe(normalizeBindValue, () => {
 
 describe(applyDiffToDb, () => {
     it("inserts rows", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
 
@@ -222,6 +232,8 @@ describe(applyDiffToDb, () => {
     });
 
     it("updates rows", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, age INTEGER)");
         // Use parameterised INSERT — the mock does not parse inline VALUES
@@ -236,6 +248,8 @@ describe(applyDiffToDb, () => {
     });
 
     it("deletes rows", () => {
+        expect.assertions(1);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
         adapter.exec("INSERT INTO users (id, name) VALUES (?, ?)", ["1", "alice"]);
@@ -248,6 +262,8 @@ describe(applyDiffToDb, () => {
     });
 
     it("handles mixed batch", () => {
+        expect.assertions(3);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE items (id TEXT PRIMARY KEY, val TEXT)");
         adapter.exec("INSERT INTO items (id, val) VALUES (?, ?)", ["keep", "stay"]);
@@ -271,6 +287,8 @@ describe(applyDiffToDb, () => {
 
 describe(applyDiffsToDb, () => {
     it("applies diffs across tables in order", () => {
+        expect.assertions(4);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
         adapter.exec("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)");
@@ -297,6 +315,8 @@ describe(applyDiffsToDb, () => {
 
 describe(LocalMirror, () => {
     it("creates meta table on construction", () => {
+        expect.assertions(1);
+
         const adapter = createTestAdapter();
 
         // Constructed for its side effect (meta-table creation); the instance
@@ -310,11 +330,13 @@ describe(LocalMirror, () => {
     });
 
     it("applies diffs and notifies onChange", () => {
+        expect.assertions(4);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
 
         const mirror = new LocalMirror({ db: adapter, tables: { users: { primaryKey: "id" } } });
-        const onChange = vi.fn();
+        const onChange = vi.fn<() => void>();
         mirror.onChange(onChange);
 
         mirror.applyDiff(
@@ -338,6 +360,8 @@ describe(LocalMirror, () => {
     });
 
     it("tracks diffs in event log", () => {
+        expect.assertions(4);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
 
@@ -355,6 +379,8 @@ describe(LocalMirror, () => {
     });
 
     it("preserves data after restart via same adapter", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
 
@@ -377,6 +403,8 @@ describe(LocalMirror, () => {
     });
 
     it("mirror.query returns data from the db", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         adapter.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT)");
 
@@ -394,11 +422,13 @@ describe(LocalMirror, () => {
 
 describe(subscribeToMirror, () => {
     it("forwards subscription to the client", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         const mirror = new LocalMirror({ db: adapter, tables: { messages: { primaryKey: "id" } } });
 
         const subscribeCalls: { args: unknown; ref: string }[] = [];
-        const unsub = vi.fn();
+        const unsub = vi.fn<() => void>();
 
         const client: SubscriptionClient = {
             subscribe(functionRef: { __lunoraRef: string }, args: Record<string, unknown>, _cb: (data: unknown) => void) {
@@ -416,6 +446,8 @@ describe(subscribeToMirror, () => {
     });
 
     it("applies diffs from subscription callback", () => {
+        expect.assertions(2);
+
         const adapter = createTestAdapter();
         const mirror = new LocalMirror({ db: adapter, tables: { messages: { primaryKey: "id" } } });
 
@@ -424,15 +456,13 @@ describe(subscribeToMirror, () => {
         const client: SubscriptionClient = {
             subscribe(_fn: { __lunoraRef: string }, _args: Record<string, unknown>, cb: (data: unknown) => void) {
                 registeredCallback = cb;
-                return vi.fn();
+                return vi.fn<() => void>();
             },
         };
 
         subscribeToMirror(client, mirror, { __lunoraRef: "messages.sync" }, { room: "general" });
 
-        if (registeredCallback) {
-            registeredCallback([{ id: "1", text: "hello" }]);
-        }
+        registeredCallback!([{ id: "1", text: "hello" }]);
 
         const rows = adapter.query("SELECT * FROM fn_messages_sync WHERE id = ?", ["1"]);
 
@@ -441,10 +471,12 @@ describe(subscribeToMirror, () => {
     });
 
     it("cleanup unsubs the client subscription", () => {
+        expect.assertions(1);
+
         const adapter = createTestAdapter();
         const mirror = new LocalMirror({ db: adapter, tables: { t: { primaryKey: "id" } } });
 
-        const unsub = vi.fn();
+        const unsub = vi.fn<() => void>();
         const client: SubscriptionClient = {
             subscribe(_fn: { __lunoraRef: string }, _args: Record<string, unknown>, _cb: (data: unknown) => void) {
                 return unsub;

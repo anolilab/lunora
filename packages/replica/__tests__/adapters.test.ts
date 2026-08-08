@@ -19,6 +19,7 @@ import { createTableDiff } from "../src/table-diff";
 
 let SQL: Awaited<ReturnType<typeof initSqlJs>>;
 
+// eslint-disable-next-line vitest/require-top-level-describe -- the sql.js WASM engine is shared by every `describe.each` block below, so its init has to be file-scoped; inside a describe it would only cover that one block
 beforeAll(async () => {
     SQL = await initSqlJs();
 });
@@ -95,6 +96,8 @@ const engines: [name: string, make: () => SqliteAdapter][] = [
 
 describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     it("executes DDL and parameterised DML, then reads rows back", () => {
+        expect.assertions(1);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, age INTEGER)");
@@ -110,6 +113,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     });
 
     it("binds query parameters", () => {
+        expect.assertions(1);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE t (id TEXT PRIMARY KEY, v INTEGER)");
@@ -122,6 +127,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     });
 
     it("returns an empty array for a query with no matches", () => {
+        expect.assertions(1);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE empty_t (id TEXT PRIMARY KEY)");
@@ -130,6 +137,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     });
 
     it("commits a successful transaction", () => {
+        expect.assertions(1);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE t (id TEXT PRIMARY KEY)");
@@ -143,6 +152,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     });
 
     it("rolls the whole transaction back when the callback throws", () => {
+        expect.assertions(2);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE t (id TEXT PRIMARY KEY)");
@@ -160,6 +171,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
     });
 
     it("reports the last inserted rowid", () => {
+        expect.assertions(2);
+
         const database = makeAdapter();
 
         database.exec("CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT)");
@@ -177,6 +190,8 @@ describe.each(engines)("sqliteAdapter contract (%s)", (_name, makeAdapter) => {
 
 describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     it("creates the table from the first diff and applies insert/update/delete", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(
@@ -202,6 +217,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("re-inserting the same primary key replaces the row (INSERT OR REPLACE)", () => {
+        expect.assertions(1);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "v1" }, type: "insert" }]));
@@ -211,6 +228,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("evolves the schema when a later diff carries new columns", () => {
+        expect.assertions(1);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "old row" }, type: "insert" }]));
@@ -224,6 +243,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("honours a custom primary key from the table registry", () => {
+        expect.assertions(1);
+
         const mirror = new LocalMirror({ db: makeAdapter(), tables: { notes: { primaryKey: "noteId" } } });
 
         mirror.applyDiff(
@@ -238,6 +259,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("records every applied diff in the event log", () => {
+        expect.assertions(3);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
         const diff = createTableDiff("todos", [{ data: { id: "1" }, type: "insert" }]);
 
@@ -252,8 +275,10 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("skips empty diffs entirely — no event, no notification", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
-        const listener = vi.fn();
+        const listener = vi.fn<() => void>();
 
         mirror.onChange(listener);
         mirror.applyDiff(createTableDiff("todos", []));
@@ -263,6 +288,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("notifies onChange subscribers and survives a throwing listener", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
         const calls: string[] = [];
 
@@ -283,6 +310,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("clearData wipes rows but preserves schema and the event log", () => {
+        expect.assertions(4);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "t" }, type: "insert" }]));
@@ -303,6 +332,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     // REPLICA-09: clearData must notify subscribers and bump a version
     // independent of eventLog.size (which clearData never grows).
     it("clearData notifies onChange subscribers and bumps mirror.version without growing the event log", () => {
+        expect.assertions(3);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1" }, type: "insert" }]));
@@ -310,7 +341,7 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         const versionAfterApply = mirror.version;
         const eventLogSizeAfterApply = mirror.eventLog.size;
 
-        const listener = vi.fn();
+        const listener = vi.fn<() => void>();
 
         mirror.onChange(listener);
         mirror.clearData();
@@ -326,6 +357,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     // excluded from clearData. With the pattern escaped, only the literal
     // reserved-prefix tables are skipped.
     it("clearData does not wrongly skip tables that merely contain 'lunora' via the LIKE wildcard bug", () => {
+        expect.assertions(1);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("AAlunoraZextra", [{ data: { id: "1" }, type: "insert" }]));
@@ -336,6 +369,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("registerTable and mirroredTables reflect the registry", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter(), tables: { one: {} } });
 
         expect(mirror.mirroredTables).toStrictEqual(["one"]);
@@ -346,18 +381,23 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     });
 
     it("close disposes the connection and clears the event log", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter() });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1" }, type: "insert" }]));
         mirror.close();
 
         expect(mirror.eventLog.size).toBe(0);
+        // eslint-disable-next-line vitest/require-to-throw-message -- nothing is assertable across the three engines: sql.js/sqlite-wasm throw the bare string "Database closed", better-sqlite3 throws an Error with its own wording
         expect(() => mirror.query("SELECT 1 AS one")).toThrow();
     });
 
     // REPLICA-06: maxEventLogEntries bounds the mirror's internal event log
     // — a long run of applied diffs does not grow it unboundedly.
     it("maxEventLogEntries caps the mirror's event log over a long run", () => {
+        expect.assertions(2);
+
         const mirror = new LocalMirror({ db: makeAdapter(), maxEventLogEntries: 5 });
 
         for (let index = 0; index < 50; index += 1) {
@@ -376,6 +416,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     // returned wrong results before this.
     describe("column affinity", () => {
         it("declares a numeric column with numeric affinity so ORDER BY sorts numerically, not lexicographically", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(
@@ -392,6 +434,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("declares a numeric column so a comparison in WHERE is numeric, not lexicographic", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(
@@ -407,7 +451,9 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
             expect(mirror.query<{ id: string }>("SELECT id FROM scores WHERE priority > ? ORDER BY id", [5])).toStrictEqual([{ id: "a" }, { id: "b" }]);
         });
 
-        it("SUMs a numeric column arithmetically instead of coercing to string concatenation", () => {
+        it("sums a numeric column arithmetically instead of coercing to string concatenation", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(
@@ -423,6 +469,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("declares a non-integer numeric column REAL", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(createTableDiff("readings", [{ data: { id: "a", value: 1.5 }, type: "insert" }]));
@@ -433,6 +481,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("binds booleans as 0/1 integers instead of throwing", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(
@@ -445,18 +495,22 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
             expect(mirror.query<{ active: number }>("SELECT active FROM flags ORDER BY id")).toStrictEqual([{ active: 1 }, { active: 0 }]);
         });
 
-        it("JSON-encodes an object-valued column instead of throwing, and it round-trips as a string", () => {
+        it("encodes an object-valued column as JSON instead of throwing, and it round-trips as a string", () => {
+            expect.assertions(2);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(createTableDiff("events", [{ data: { id: "1", payload: { kind: "click", x: 1, y: 2 } }, type: "insert" }]));
 
             const [row] = mirror.query<{ payload: string }>("SELECT payload FROM events WHERE id = ?", ["1"]);
 
-            expect(typeof row?.payload).toBe("string");
+            expect(row?.payload).toBeTypeOf("string");
             expect(JSON.parse(row?.payload ?? "")).toStrictEqual({ kind: "click", x: 1, y: 2 });
         });
 
-        it("JSON-encodes an array-valued column instead of throwing, and it round-trips as a string", () => {
+        it("encodes an array-valued column as JSON instead of throwing, and it round-trips as a string", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(createTableDiff("events", [{ data: { id: "1", tags: ["a", "b"] }, type: "insert" }]));
@@ -467,6 +521,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("a mixed batch where one row carries an object-valued column still applies every row in the batch", () => {
+            expect.assertions(1);
+
             const mirror = new LocalMirror({ db: makeAdapter() });
 
             mirror.applyDiff(
@@ -487,6 +543,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
     // version must NOT wipe data on every restart.
     describe("schema version reconciliation", () => {
         it("drops a stale (pre-affinity) table on construction so the next applyDiff recreates it with numeric affinity", () => {
+            expect.assertions(1);
+
             const adapter = makeAdapter();
 
             // Simulate a table created by an older LocalMirror version: every
@@ -507,6 +565,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("re-seeds a dropped stale table with numeric affinity from the next applyDiff", () => {
+            expect.assertions(1);
+
             const adapter = makeAdapter();
 
             adapter.exec("CREATE TABLE scores (id TEXT PRIMARY KEY NOT NULL, points TEXT)");
@@ -528,6 +588,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
         });
 
         it("does not re-drop tables across a second construction once the schema version is already current", () => {
+            expect.assertions(1);
+
             const adapter = makeAdapter();
 
             const m1 = new LocalMirror({ db: adapter });
@@ -546,6 +608,8 @@ describe.each(engines)("localMirror end-to-end (%s)", (_name, makeAdapter) => {
 
 describe(createSqliteWasmAdapter, () => {
     it("falls back to -1 when the engine returns no rowid result", () => {
+        expect.assertions(1);
+
         const adapter = createSqliteWasmAdapter({
             close: () => undefined,
             exec: () => undefined,
@@ -556,6 +620,8 @@ describe(createSqliteWasmAdapter, () => {
     });
 
     it("returns a bigint rowid as a number", () => {
+        expect.assertions(1);
+
         const adapter = createSqliteWasmAdapter({
             close: () => undefined,
             exec: () => undefined,
@@ -570,6 +636,8 @@ describe(createSqliteWasmAdapter, () => {
 
 describe("localMirror.create (sql.js factory)", () => {
     it("wraps a raw sql.js database without manual adapter wiring", () => {
+        expect.assertions(2);
+
         const mirror = LocalMirror.create(new SQL.Database(), { tables: { todos: { primaryKey: "id" } } });
 
         mirror.applyDiff(createTableDiff("todos", [{ data: { id: "1", title: "from factory" }, type: "insert" }]));

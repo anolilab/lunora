@@ -131,6 +131,8 @@ describe(EventLogDO, () => {
     };
 
     it("returns empty state initially", async () => {
+        expect.assertions(3);
+
         const do_ = createDO();
         const res = await doFetch(do_, "GET", "/state");
 
@@ -143,6 +145,8 @@ describe(EventLogDO, () => {
     });
 
     it("returns size 0 initially", async () => {
+        expect.assertions(2);
+
         const do_ = createDO();
         const res = await doFetch(do_, "GET", "/size");
 
@@ -154,6 +158,8 @@ describe(EventLogDO, () => {
     });
 
     it("appends events and returns entries with seq numbers", async () => {
+        expect.assertions(8);
+
         const do_ = createDO();
         const res = await doFetch(do_, "POST", "/append", {
             events: [
@@ -176,6 +182,8 @@ describe(EventLogDO, () => {
     });
 
     it("returns events since a given seq", async () => {
+        expect.assertions(6);
+
         const do_ = createDO();
 
         // Append 3 events
@@ -201,6 +209,8 @@ describe(EventLogDO, () => {
     });
 
     it("supports paginated range queries", async () => {
+        expect.assertions(11);
+
         const do_ = createDO();
 
         // Append 5 events
@@ -242,6 +252,8 @@ describe(EventLogDO, () => {
     });
 
     it("rejects append with empty events array", async () => {
+        expect.assertions(1);
+
         const do_ = createDO();
         const res = await doFetch(do_, "POST", "/append", { events: [] });
 
@@ -249,6 +261,8 @@ describe(EventLogDO, () => {
     });
 
     it("rejects append with missing events field", async () => {
+        expect.assertions(1);
+
         const do_ = createDO();
         const res = await doFetch(do_, "POST", "/append", {});
 
@@ -256,6 +270,8 @@ describe(EventLogDO, () => {
     });
 
     it("rejects unknown routes with 404", async () => {
+        expect.assertions(1);
+
         const do_ = createDO();
         const res = await doFetch(do_, "GET", "/unknown");
 
@@ -263,6 +279,8 @@ describe(EventLogDO, () => {
     });
 
     it("returns state with entries and nextSeq after appends", async () => {
+        expect.assertions(2);
+
         const do_ = createDO();
 
         await doFetch(do_, "POST", "/append", {
@@ -280,6 +298,8 @@ describe(EventLogDO, () => {
     });
 
     it("handles custom timestamps", async () => {
+        expect.assertions(1);
+
         const do_ = createDO();
         const ts = 1_234_567_890;
 
@@ -295,6 +315,8 @@ describe(EventLogDO, () => {
     // ── REPLICA-02: clientId/sessionId/parentSeqNum ────────────────────
 
     it("round-trips clientId/sessionId/parentSeqNum through /append (REPLICA-02)", async () => {
+        expect.assertions(7);
+
         const do_ = createDO();
 
         const res = await doFetch(do_, "POST", "/append", {
@@ -324,6 +346,8 @@ describe(EventLogDO, () => {
     });
 
     it("rejects a non-finite timestamp instead of trusting it into the INTEGER column", async () => {
+        expect.assertions(1);
+
         const do_ = createDO();
 
         const res = await doFetch(do_, "POST", "/append", {
@@ -334,6 +358,8 @@ describe(EventLogDO, () => {
     });
 
     it("rejects a negative or non-integer parentSeqNum", async () => {
+        expect.assertions(2);
+
         const do_ = createDO();
 
         const negative = await doFetch(do_, "POST", "/append", {

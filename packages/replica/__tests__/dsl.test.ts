@@ -6,6 +6,8 @@ import { defineEvents, defineMaterializer, EventLog, InMemorySnapshotStore, Mate
 
 describe(defineEvents, () => {
     it("creates factory functions with qualified type names", () => {
+        expect.assertions(3);
+
         const events = defineEvents({
             chat: {
                 messageSent: {} as { channelId: string; text: string },
@@ -24,6 +26,8 @@ describe(defineEvents, () => {
     });
 
     it("each factory has a static type property", () => {
+        expect.assertions(1);
+
         const events = defineEvents({
             chat: {
                 messageSent: {} as { text: string },
@@ -34,6 +38,8 @@ describe(defineEvents, () => {
     });
 
     it("different namespaces produce distinct type prefixes", () => {
+        expect.assertions(2);
+
         const events = defineEvents({
             user: {
                 created: {} as { id: string },
@@ -49,6 +55,8 @@ describe(defineEvents, () => {
     });
 
     it("works with EventLog append", () => {
+        expect.assertions(3);
+
         const log = new EventLog();
         const events = defineEvents({
             counter: {
@@ -68,6 +76,8 @@ describe(defineEvents, () => {
     });
 
     it("produces unique timestamps per call", async () => {
+        expect.assertions(1);
+
         const events = defineEvents({
             test: {
                 tick: {} as { n: number },
@@ -84,6 +94,8 @@ describe(defineEvents, () => {
     });
 
     it("accepts version prefix option", () => {
+        expect.assertions(2);
+
         const events = defineEvents(
             {
                 chat: {
@@ -104,6 +116,8 @@ describe(defineEvents, () => {
 
 describe(defineMaterializer, () => {
     it("starts with initial state", () => {
+        expect.assertions(1);
+
         const m = defineMaterializer({
             name: "counts",
             initial: () => {
@@ -116,6 +130,8 @@ describe(defineMaterializer, () => {
     });
 
     it("applies events through the reducer", () => {
+        expect.assertions(2);
+
         const m = defineMaterializer({
             name: "counts",
             initial: () => {
@@ -140,6 +156,8 @@ describe(defineMaterializer, () => {
     });
 
     it("ignores events the reducer does not match", () => {
+        expect.assertions(1);
+
         const m = defineMaterializer({
             name: "counts",
             initial: () => {
@@ -154,6 +172,8 @@ describe(defineMaterializer, () => {
     });
 
     it("reset restores initial state", () => {
+        expect.assertions(2);
+
         const m = defineMaterializer({
             name: "counts",
             initial: () => {
@@ -173,6 +193,8 @@ describe(defineMaterializer, () => {
     });
 
     it("setState replaces state directly", () => {
+        expect.assertions(1);
+
         const m = defineMaterializer({
             name: "test",
             initial: () => {
@@ -187,6 +209,8 @@ describe(defineMaterializer, () => {
     });
 
     it("state getter returns a frozen object", () => {
+        expect.assertions(1);
+
         const m = defineMaterializer({
             name: "test",
             initial: () => {
@@ -205,6 +229,8 @@ describe(defineMaterializer, () => {
     });
 
     it("works as an EventReducer-compatible function", () => {
+        expect.assertions(1);
+
         const m = defineMaterializer({
             name: "compat",
             initial: () => 0,
@@ -229,6 +255,8 @@ describe(defineMaterializer, () => {
 
 describe(MaterializerRuntime, () => {
     it("applies entries to all materializers", () => {
+        expect.assertions(4);
+
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
@@ -256,6 +284,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("skips already-applied entries", () => {
+        expect.assertions(4);
+
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
@@ -283,6 +313,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("reset reinitializes all materializers", () => {
+        expect.assertions(3);
+
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
@@ -302,6 +334,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("recoverFromSnapshots restores state and watermark", async () => {
+        expect.assertions(3);
+
         const store = new InMemorySnapshotStore();
 
         // Pre-save a snapshot
@@ -326,6 +360,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("recoverFromSnapshots returns 0 when no snapshots exist", async () => {
+        expect.assertions(2);
+
         const store = new InMemorySnapshotStore();
         const counts = defineMaterializer({
             name: "counts",
@@ -342,6 +378,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("'fail' strategy on an unknown event leaves the watermark re-surfaceable — a catch-and-retry does not skip it", () => {
+        expect.assertions(5);
+
         const counts = defineMaterializer({
             name: "counts",
             initial: () => 0,
@@ -396,6 +434,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("ignores a malformed snapshot with a watermark but no state — replays from 0 rather than skipping events", async () => {
+        expect.assertions(4);
+
         const store = new InMemorySnapshotStore();
 
         // A partial write / adapter drift: `appliedSeq` is present but `state`
@@ -427,6 +467,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("ignores a NaN / negative appliedSeq — never writes NaN into the watermark", async () => {
+        expect.hasAssertions();
+
         const store = new InMemorySnapshotStore();
 
         const counts = defineMaterializer({
@@ -453,6 +495,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("persistSnapshots saves current state", async () => {
+        expect.assertions(2);
+
         const store = new InMemorySnapshotStore();
         const counts = defineMaterializer({
             name: "counts",
@@ -477,6 +521,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("recoverFromSnapshots then applyEntries skips recovered events", async () => {
+        expect.assertions(3);
+
         const store = new InMemorySnapshotStore();
         const counts = defineMaterializer({
             name: "counts",
@@ -504,6 +550,8 @@ describe(MaterializerRuntime, () => {
     });
 
     it("materializers list returns registered materializers", () => {
+        expect.assertions(3);
+
         const m1 = defineMaterializer({
             name: "a",
             initial: () => 0,

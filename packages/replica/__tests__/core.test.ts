@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { EventLogEntry } from "../src/index";
 import { EventEmitter, EventLog, EventSource, InMemorySnapshotStore, SubscriptionManager, UNHANDLED } from "../src/index";
 
 // ─── EventEmitter ─────────────────────────────────────────────────────
 
 describe(EventEmitter, () => {
     it("emits to registered handlers", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -16,6 +19,8 @@ describe(EventEmitter, () => {
     });
 
     it("off removes a handler", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -28,6 +33,8 @@ describe(EventEmitter, () => {
     });
 
     it("on returns an unsubscribe function", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -39,6 +46,8 @@ describe(EventEmitter, () => {
     });
 
     it("emits to wildcard handlers", () => {
+        expect.assertions(3);
+
         const emitter = new EventEmitter<{ a: number; b: string }>();
         const events: { event: string; payload: unknown }[] = [];
 
@@ -52,6 +61,8 @@ describe(EventEmitter, () => {
     });
 
     it("offAny removes a wildcard handler", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -64,6 +75,8 @@ describe(EventEmitter, () => {
     });
 
     it("onAny returns an unsubscribe function", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -75,6 +88,8 @@ describe(EventEmitter, () => {
     });
 
     it("continues after a handler throws", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ test: string }>();
         const calls: string[] = [];
 
@@ -88,6 +103,8 @@ describe(EventEmitter, () => {
     });
 
     it("hasListeners returns correct state", () => {
+        expect.assertions(2);
+
         const emitter = new EventEmitter<{ a: number }>();
 
         expect(emitter.hasListeners("a")).toBe(false);
@@ -98,6 +115,8 @@ describe(EventEmitter, () => {
     });
 
     it("hasListeners returns true when wildcard listeners exist", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ a: number }>();
 
         emitter.onAny(() => {});
@@ -106,6 +125,8 @@ describe(EventEmitter, () => {
     });
 
     it("listenerCount returns the right count", () => {
+        expect.assertions(2);
+
         const emitter = new EventEmitter<{ a: number }>();
 
         expect(emitter.listenerCount("a")).toBe(0);
@@ -117,6 +138,8 @@ describe(EventEmitter, () => {
     });
 
     it("clear removes all listeners", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ a: number }>();
         const calls: number[] = [];
 
@@ -129,6 +152,8 @@ describe(EventEmitter, () => {
     });
 
     it("emit returns true when a handler was called", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ a: number }>();
 
         emitter.on("a", () => {});
@@ -137,6 +162,8 @@ describe(EventEmitter, () => {
     });
 
     it("emit returns false when no handler was called", () => {
+        expect.assertions(1);
+
         const emitter = new EventEmitter<{ a: number }>();
 
         expect(emitter.emit("a", 1)).toBe(false);
@@ -147,6 +174,8 @@ describe(EventEmitter, () => {
 
 describe(EventSource, () => {
     it("starts with the initial state", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (s) => s);
 
         expect(source.state).toEqual({ count: 0 });
@@ -154,6 +183,8 @@ describe(EventSource, () => {
     });
 
     it("applies events through the reducer", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => {
             if (entry.type === "increment") {
                 return { count: state.count + (entry.payload as number) };
@@ -172,6 +203,8 @@ describe(EventSource, () => {
     });
 
     it("emits state-changed after each event", () => {
+        expect.assertions(1);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         const calls: number[] = [];
@@ -187,6 +220,8 @@ describe(EventSource, () => {
     });
 
     it("emits ready after replay", () => {
+        expect.hasAssertions();
+
         const source2 = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         const log2 = new EventLog();
@@ -209,6 +244,8 @@ describe(EventSource, () => {
     });
 
     it("skips entries that cause reducer errors during replay", () => {
+        expect.assertions(3);
+
         const source = new EventSource({ items: [] as string[] }, (state, entry) => {
             if (entry.type === "bad") {
                 throw new Error("bad entry");
@@ -237,6 +274,8 @@ describe(EventSource, () => {
     });
 
     it("reset restores initial state without clearing log", () => {
+        expect.assertions(4);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -252,6 +291,8 @@ describe(EventSource, () => {
     });
 
     it("replayFromLog after reset replays from watermark", () => {
+        expect.assertions(1);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -266,6 +307,8 @@ describe(EventSource, () => {
     });
 
     it("reset with a resume watermark replays only post-snapshot source entries", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         // External source log with three events (seq 0, 1, 2).
@@ -288,6 +331,8 @@ describe(EventSource, () => {
     });
 
     it("applyEvent forwards AppendOptions to the log entry", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         const entry = source.applyEvent("inc", null, {
@@ -300,6 +345,8 @@ describe(EventSource, () => {
     });
 
     it("applyEvent with InputEvent accepts AppendOptions", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         const input = { type: "inc" as const, payload: null, timestamp: Date.now() };
@@ -311,6 +358,8 @@ describe(EventSource, () => {
 
     // REPLICA-06: maxLogEntries bounds `source.log` over a long run.
     it("maxLogEntries caps the internal log over a long run", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state) => ({ count: state.count + 1 }), { maxLogEntries: 5 });
 
         for (let index = 0; index < 100; index += 1) {
@@ -327,6 +376,8 @@ describe(EventSource, () => {
 
 describe("eventSource.events()", () => {
     it("yields past entries immediately", async () => {
+        expect.assertions(1);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -346,6 +397,8 @@ describe("eventSource.events()", () => {
     });
 
     it("streams future entries after past ones are exhausted", async () => {
+        expect.assertions(3);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : state));
 
         source.applyEvent("inc", null);
@@ -377,6 +430,8 @@ describe("eventSource.events()", () => {
 
 describe("eventSource unknownEventHandling", () => {
     it("warn logs and skips unknown events (default)", () => {
+        expect.assertions(2);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED));
@@ -391,6 +446,8 @@ describe("eventSource unknownEventHandling", () => {
     });
 
     it("ignore silently skips unknown events", () => {
+        expect.assertions(2);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
@@ -407,6 +464,8 @@ describe("eventSource unknownEventHandling", () => {
     });
 
     it("fail throws on unknown events", () => {
+        expect.assertions(2);
+
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
             unknownEventHandling: "fail",
         });
@@ -418,7 +477,9 @@ describe("eventSource unknownEventHandling", () => {
     });
 
     it("custom handler is called with the entry", () => {
-        const handler = vi.fn();
+        expect.assertions(2);
+
+        const handler = vi.fn<(entry: EventLogEntry) => boolean>();
 
         const source = new EventSource({ count: 0 }, (state, entry) => (entry.type === "inc" ? { count: state.count + 1 } : UNHANDLED), {
             unknownEventHandling: handler,
@@ -436,6 +497,8 @@ describe("eventSource unknownEventHandling", () => {
     // "unhandled" via reference equality — only an explicit UNHANDLED return
     // should trigger the unknown-event strategy.
     it("a recognised, idempotent no-op reducer does not warn or invoke the unknown strategy", () => {
+        expect.assertions(3);
+
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         // eslint-disable-next-line sonarjs/function-return-type -- reducer contract is `S | typeof UNHANDLED`; the object/state/symbol arms trip the heuristic
@@ -474,6 +537,8 @@ describe("eventSource unknownEventHandling", () => {
 
 describe(SubscriptionManager, () => {
     it("onStateChange notifies on notifyState", () => {
+        expect.assertions(1);
+
         const subs = new SubscriptionManager();
         const calls: unknown[] = [];
 
@@ -484,6 +549,8 @@ describe(SubscriptionManager, () => {
     });
 
     it("onEvent notifies on matching event type", () => {
+        expect.assertions(1);
+
         const subs = new SubscriptionManager();
         const calls: string[] = [];
 
@@ -507,6 +574,8 @@ describe(SubscriptionManager, () => {
     });
 
     it("unsubscribe stops notifications", () => {
+        expect.assertions(1);
+
         const subs = new SubscriptionManager();
         const calls: unknown[] = [];
 
@@ -518,6 +587,8 @@ describe(SubscriptionManager, () => {
     });
 
     it("handles subscriber exceptions gracefully", () => {
+        expect.assertions(1);
+
         const subs = new SubscriptionManager();
         const calls: number[] = [];
 
@@ -531,6 +602,8 @@ describe(SubscriptionManager, () => {
     });
 
     it("clear removes all subscriptions", () => {
+        expect.assertions(1);
+
         const subs = new SubscriptionManager();
         const calls: unknown[] = [];
 
@@ -542,6 +615,8 @@ describe(SubscriptionManager, () => {
     });
 
     it("size tracks subscription count", () => {
+        expect.assertions(5);
+
         const subs = new SubscriptionManager();
 
         expect(subs.size).toBe(0);
@@ -568,6 +643,8 @@ describe(SubscriptionManager, () => {
 
 describe(InMemorySnapshotStore, () => {
     it("save and load round-trip", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
         const data = { users: [{ id: "1", name: "alice" }] };
 
@@ -578,12 +655,16 @@ describe(InMemorySnapshotStore, () => {
     });
 
     it("load returns null for missing key", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
 
         await expect(store.load("missing")).resolves.toBeNull();
     });
 
     it("list returns stored keys", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
 
         await store.save("a", 1);
@@ -595,6 +676,8 @@ describe(InMemorySnapshotStore, () => {
     });
 
     it("delete removes a snapshot", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
 
         await store.save("x", 1);
@@ -604,6 +687,8 @@ describe(InMemorySnapshotStore, () => {
     });
 
     it("clear removes all snapshots", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
 
         await store.save("a", 1);
@@ -614,6 +699,8 @@ describe(InMemorySnapshotStore, () => {
     });
 
     it("deep-clones stored data", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
         const original = { nested: { value: 1 } };
 

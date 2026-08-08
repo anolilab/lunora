@@ -103,6 +103,8 @@ const createClient = (do_: EventLogDO): EventLogDOClient =>
 
 describe("eventLogDOClient + MaterializerRuntime", () => {
     it("append events and read them back via getSince", async () => {
+        expect.assertions(8);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -125,6 +127,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("paginates via getRange", async () => {
+        expect.assertions(7);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -149,6 +153,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("reports size", async () => {
+        expect.assertions(2);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -160,6 +166,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("returns full state", async () => {
+        expect.assertions(2);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -175,6 +183,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("materializerRuntime.appendEvent persists through DO and applies to materializers", async () => {
+        expect.assertions(4);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -207,6 +217,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("materializerRuntime initialize recovers from DO and replays missed entries", async () => {
+        expect.assertions(3);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -243,6 +255,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("materializerRuntime initialize is idempotent when called twice", async () => {
+        expect.assertions(4);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -277,6 +291,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("appendEvent throws when no doClient configured", async () => {
+        expect.assertions(1);
+
         const counter = defineMaterializer({
             name: "counter",
             initial: () => {
@@ -293,6 +309,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     // ── REPLICA-04: per-materializer catch-up watermark ─────────────────
 
     it("a fresh materializer alongside one snapshotted at seq 500 still catches up from the start", async () => {
+        expect.assertions(3);
+
         const do_ = createDO();
         const client = createClient(do_);
 
@@ -335,6 +353,8 @@ describe("eventLogDOClient + MaterializerRuntime", () => {
     });
 
     it("recovering from snapshots keeps a fresh materializer's watermark at 0 (not the sibling's)", async () => {
+        expect.assertions(1);
+
         const store = new InMemorySnapshotStore();
 
         await store.save("veteran", { appliedSeq: 500, state: 500 });
