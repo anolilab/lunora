@@ -12,11 +12,13 @@ const createFakeClient = () => {
     const unsubscribe = vi.fn<() => void>();
     let lastCallback: ((value: unknown) => void) | undefined;
 
-    const subscribe = vi.fn<(function_: unknown, args: unknown, callback: (value: unknown) => void) => () => void>((_function, _args, callback) => {
-        lastCallback = callback;
+    const subscribe = vi.fn<(function_: unknown, args: unknown, callback: (value: unknown) => void, options?: { shardKey?: string }) => () => void>(
+        (_function, _args, callback) => {
+            lastCallback = callback;
 
-        return unsubscribe;
-    });
+            return unsubscribe;
+        },
+    );
 
     const client = { subscribe } as unknown as LunoraClient;
 

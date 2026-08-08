@@ -9,7 +9,7 @@ const args = { text: "hi" } as unknown;
 
 describe("mutation handle", () => {
     it("forwards args and options to client.mutation and resolves the result", async () => {
-        const mutationFn = vi.fn<() => Promise<unknown>>().mockResolvedValue({ id: 1 });
+        const mutationFn = vi.fn<(function_: unknown, args: unknown, options?: { shardKey?: string }) => Promise<unknown>>().mockResolvedValue({ id: 1 });
         const client = { mutation: mutationFn } as unknown as LunoraClient;
 
         const { mutate } = mutation(client, fnRef);
