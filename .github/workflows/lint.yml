@@ -79,6 +79,14 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
+            # First, before the build: a target declared in nx's `executor` shape
+            # makes vis report "No command configured" and pass, so the project's
+            # eslint below would be a ~13ms no-op reporting success. Ten packages
+            # were skipped that way. Runs first so the finding can't be masked by
+            # a later step failing.
+            - "name": "Check project.json target shapes"
+              "run": "pnpm run lint:project-json"
+
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
