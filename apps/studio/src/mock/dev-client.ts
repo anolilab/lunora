@@ -127,6 +127,11 @@ const TRACES = [
                 attributes: { method: "POST", url: "api.stripe.com/v1/charges" },
                 depth: 2,
                 durationMs: 200,
+                // A retried-then-succeeded outbound call: `kind` and the recorded
+                // events are what the span-detail block exists to show, and a
+                // handled retry is invisible anywhere else in the Studio.
+                events: [{ attributes: { "retry.attempt": 1 }, name: "http.retry", ts: now - 3900 }],
+                kind: "client",
                 name: "http.post",
                 offsetMs: 28,
                 ok: true,
@@ -170,6 +175,8 @@ const TRACES = [
                 depth: 1,
                 durationMs: 165,
                 error: { message: "card_declined: Your card was declined.", type: "StripeError" },
+                events: [{ attributes: { "exception.type": "StripeError" }, name: "exception", ts: now - 14_900 }],
+                kind: "client",
                 name: "stripe.charge",
                 offsetMs: 10,
                 ok: false,
@@ -379,10 +386,20 @@ const dataFor = (reference: string, args: unknown): unknown => {
         }
         case ADMIN_FUNCTIONS.getLogs: {
             return {
+                // `traceId` matches the `TRACES` fixtures above, so the Traces
+                // panel's correlated-log section and the Logs panel's Trace link
+                // both have something to resolve. The last line deliberately has
+                // none — a container-lifecycle entry, emitted outside any dispatch.
                 entries: [
-                    { functionPath: "posts:publish", level: "error", message: "Rate limited (429) from upstream", timestamp: now - 4000 },
-                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000 },
-                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000 },
+                    {
+                        functionPath: "posts:publish",
+                        level: "error",
+                        message: "Rate limited (429) from upstream",
+                        timestamp: now - 4000,
+                        traceId: "trace-publish",
+                    },
+                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000, traceId: "trace-list" },
+                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000, traceId: "trace-send" },
                     { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
                 ],
             };
