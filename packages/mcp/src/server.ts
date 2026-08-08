@@ -103,6 +103,10 @@ interface LunoraMcpServerOptions {
      * therefore NOT enforced by the token's scope; it is enforced in-process via
      * `allowWrites: false` (the default), which omits the write tools from the
      * advertised list and refuses them at dispatch.
+     *
+     * Its presence is also what gates the observability tools (logs, Issues,
+     * advisories, query insights, migration status): without a token they are
+     * omitted from `ListTools` and refused at dispatch.
      */
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
@@ -142,10 +146,15 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const allowWrites = options.allowWrites ?? false;
     const allowAgents = options.allowAgents ?? false;
     const agents = options.agents ?? [];
+    // The observability tools' gate. Read off `options.token` rather than the
+    // client, because a caller that injects a pre-built `client` has not told
+    // this server what that client can reach — and the fail-closed reading of
+    // "unknown" is "no privileged tools".
+    const hasAdminToken = typeof options.token === "string" && options.token.length > 0;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...toolDefinitions(allowWrites), ...agentToolDefinitions(agents, allowAgents)] };
+        return { tools: [...toolDefinitions(allowWrites, hasAdminToken), ...agentToolDefinitions(agents, allowAgents)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
@@ -161,7 +170,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
                   ...(options.agentMaxWaitMs === undefined ? {} : { maxWaitMs: options.agentMaxWaitMs }),
                   ...(options.agentPollIntervalMs === undefined ? {} : { pollIntervalMs: options.agentPollIntervalMs }),
               })
-            : await callTool(client, name, input, allowWrites);
+            : await callTool(client, name, input, allowWrites, hasAdminToken);
 
         return result as CallToolResult;
     });

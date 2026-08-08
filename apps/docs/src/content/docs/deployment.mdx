@@ -145,6 +145,43 @@ CI should run `lunora verify` (or `lunora prepare`) first so codegen drift and a
 stale `_generated/` are a build failure, not a deploy that silently uses old
 types.
 
+## Worker size
+
+Cloudflare caps a Worker script
+[in two places](https://developers.cloudflare.com/workers/platform/limits/):
+**3 MB on Workers Free and 10 MB on Workers Paid after gzip compression**, and
+**64 MB before compression** on both plans. Both are enforced at upload, so an
+over-budget bundle is a rejected deploy rather than a slow one — and a bundle
+that compresses unusually well (a large generated table, say) can sit under the
+gzip limit while breaching the raw one. Check both numbers.
+
+`lunora build` weighs what it wrote:
+
+```bash
+pnpm lunora build
+# … bundle: 1684.9 KiB raw, 412.9 KiB gzipped across 1 file(s)
+
+pnpm lunora build --format json | jq .bundle
+# { "files": 1, "gzipBytes": 422840, "rawBytes": 1725313 }
+```
+
+Only the uploaded files are counted — the sourcemap and the esbuild metafile
+sitting in the same out-dir are not part of the script, and counting them would
+roughly triple the number. Compare `gzipBytes` against your plan's compressed
+limit and `rawBytes` against the 64 MB one; together they match what
+`wrangler deploy` reports as `Total Upload: … / gzip: …`.
+
+A starter app is around **410 KiB gzipped**, so most projects have a lot of
+room. If yours is approaching the limit:
+
+- **Drop add-ons you no longer import.** Every `@lunora/*` add-on your Worker
+  entry reaches is bundled, whether or not a request ever uses it.
+- **Check for a dev-only import reaching the Worker entry.** A seed script, a
+  test helper, or a Node-only utility imported from `lunora/` pulls its whole
+  dependency tree into the deployed bundle.
+- **Look at what is actually heavy.** `lunora analyze` bundles the Worker and
+  prints the largest modules, which is usually enough to name the culprit.
+
 ## Streaming logs
 
 Tail a deployed Worker's live logs with:

@@ -1462,6 +1462,85 @@ explicit non-goal.
   scope for 304 and recorded as an open question; the Convex export format is
   symmetric, so the gap is small if a future wave wants it.
 
+## Wave 20 — agent/automation surface gap wave (baseline `370994075`, 2026-08-08)
+
+Competitive gap analysis of the CLI-and-tooling surface an automated consumer
+(CI job, coding agent, deploy pipeline) talks to. The headline was not that
+capabilities were missing — logs, env sync, previews, temporary deploys,
+seeding, MCP write-gating, `.lunora/dev.json` and the arg-validator path were
+all already here. It was that the **machine-readable edges were inconsistent**:
+the one command whose whole job is reporting project health had no JSON mode and
+no stable identifiers, and the deploy command's JSON mode was the one path that
+discarded the deployed URL it already knew how to parse.
+
+All four shipped. Plan files removed; the record is here and in git history.
+
+| Plan | Title                                            | Category   | Pkg    | Pri | Effort | Risk | Status                                                                      |
+| ---- | ------------------------------------------------ | ---------- | ------ | --- | ------ | ---- | --------------------------------------------------------------------------- |
+| 307  | `lunora doctor` machine-readable report + codes  | dx/cli     | cli    | P2  | S      | LOW  | DONE & REMOVED — `--format json`, 17 stable `DoctorCode`s, `cli-shadowed`   |
+| 308  | Deploy result identity + post-deploy health gate | dx/deploy  | cli    | P1  | M      | MED  | DONE & REMOVED — `deployment` in the result, `--health-check`, link refresh |
+| 309  | MCP observability read tools + structured output | dx/agents  | mcp    | P2  | M      | MED  | DONE & REMOVED — 5 token-gated read tools, `structuredContent`              |
+| 310  | Worker size measurement + CI budget              | build/perf | cli/ci | P2  | S      | LOW  | DONE & REMOVED — CI gate only; the warning was dropped per its STOP         |
+
+### What the plans got wrong (the reason to read this table)
+
+- **307's `checkCliShadow` design would have warned on every pnpm project.** It
+  prescribed comparing `realpathSync` of `node_modules/.bin/lunora` against the
+  running executable — but pnpm writes a POSIX shell shim there, not a symlink,
+  so the realpath is the shim and never matches `dist/bin.mjs`. Shipped instead:
+  realpath the installed CLI _package_ dirs and test containment, which is
+  correct for pnpm symlinks, npm/yarn hoisting, and shim launches.
+- **308's §1 was wrong that capturing the URL fixes `--migrate`'s refusal.** That
+  gate runs _before_ wrangler, so the captured URL does not exist yet at the
+  point of refusal. The misleading error text was corrected; moving the gate is
+  recorded as a follow-up rather than silently relaxing when `--migrate` aborts.
+- **309's §1 claim that `LunoraClient` "cannot reach these reads as-is" was
+  false**, and it is what sized the whole "shared admin caller" workstream. The
+  `__lunora_admin__:*` ops ride the ordinary RPC envelope and the shard
+  intercepts them before user dispatch — `client.query({ __lunoraRef: … })`
+  already works, which is what the studio does. The module collapsed to three
+  lines over `client.query`.
+- **310's STOP condition fired and was honoured.** A `templates/standalone`
+  worker measures 412.9 KiB gzipped (1684.9 KiB raw, production build) against
+  Cloudflare's 3 MB Free / 10 MB Paid compressed limit — 13.4% of the smaller
+  ceiling. The user-facing warning would have been an alarm nobody could
+  legitimately trip at a threshold nobody could justify, so only the CI gate
+  shipped. `build` still _reports_ the size unconditionally.
+
+### Follow-ups this wave opened
+
+- **`compromise` is 35% of a hello-world Worker.** `@visulima/redact` hard-depends
+  on `compromise@^14.15.1` (an English NLP library, 606 KiB raw in the bundle —
+  larger than any first-party package), pulled in by
+  `packages/observability/src/request-log.ts:30`. Every Lunora app carries it.
+  Worth its own plan: use redact's rule-based path, or lazy-load it.
+- **`--migrate`'s URL gate** could move to after the wrangler invocation so a
+  first deploy in a fresh CI checkout can migrate without `--migrate-url`.
+- **`lunora analyze` counts unuploaded files** — it sums the sourcemap and
+  metafile alongside the bundle, reporting ~6.9 MB where the upload is 1.6 MB.
+- **A per-package size breakdown needs no new tooling**: `<outDir>/bundle-meta.json`
+  already carries esbuild's `bytesInOutput`.
+
+### Considered and not filed
+
+Verified already shipped, and in most cases further along than the comparison
+set: snapshot import/export incl. blobs (plans 304/305), `lunora seed`, `env
+diff`/`push`/`doctor`, `logs --ndjson` + `--durable` archive reads, preview +
+temporary deploys with `--format json`, MCP fail-closed write gating with tool
+annotations, `.lunora/dev.json` agent status + background dev, `.lunora/project.json`
+linking, per-function argument validation at the builder (so every entrypoint
+inherits it), Cloudflare Access identity, log/metric retention, cron metadata in
+codegen output, and the capability matrix's `platform_unsupported_feature`
+diagnostic.
+
+**Rejected:** _automatic shard scale-out_ conflicts with `.shardBy` being an
+explicit, reviewable topology decision (cross-shard work is plan 168). _A
+browser DevTools extension_ duplicates the Studio. _A public-env-var count gate_
+is process for its own sake. _Running the project's test suite inside `lunora
+verify`_ is YAGNI — an agent can run `pnpm test` itself; the half with real
+value (live function-spec parity against the deployed worker) is a candidate for
+a later wave.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:

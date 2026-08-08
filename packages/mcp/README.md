@@ -45,16 +45,21 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 
 ## Tools
 
-| Tool                         | Description                                                                                                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lunora_list_functions`      | List the deployment's public functions (queries, mutations, actions) with their kinds.                                                                        |
-| `lunora_list_tables`         | List the deployment's `.global()` tables with their row counts.                                                                                               |
-| `lunora_get_function_schema` | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
-| `lunora_run_query`           | Run a query and return its result. Read-only.                                                                                                                 |
-| `lunora_run_mutation`        | Run a mutation and return its result. Writes data — use with care.                                                                                            |
-| `lunora_run_action`          | Run an action and return its result. May call external services.                                                                                              |
-| `agent_<name>`               | Start a durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) run and await its answer. One tool per exposed agent. Requires agents enabled. |
-| `lunora_agent_status`        | Poll a running agent by `threadKey` and return its answer once finished. Requires agents enabled.                                                             |
+| Tool                          | Description                                                                                                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`       | List the deployment's public functions (queries, mutations, actions) with their kinds.                                                                        |
+| `lunora_list_tables`          | List the deployment's `.global()` tables with their row counts.                                                                                               |
+| `lunora_get_function_schema`  | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
+| `lunora_run_query`            | Run a query and return its result. Read-only.                                                                                                                 |
+| `lunora_run_mutation`         | Run a mutation and return its result. Writes data — use with care.                                                                                            |
+| `lunora_run_action`           | Run an action and return its result. May call external services.                                                                                              |
+| `lunora_get_logs`             | Read the deployment's recent log entries (newest first). Requires an admin token.                                                                             |
+| `lunora_get_issues`           | List errors grouped into Issues by fingerprint, with counts and triage status. Requires an admin token.                                                       |
+| `lunora_get_advisories`       | List the deployment's schema/query advisories. Requires an admin token.                                                                                       |
+| `lunora_get_query_insights`   | Per-statement execution counts and latency over a recent window. Requires an admin token.                                                                     |
+| `lunora_get_migration_status` | Which migrations are applied and which are pending. Requires an admin token.                                                                                  |
+| `agent_<name>`                | Start a durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) run and await its answer. One tool per exposed agent. Requires agents enabled. |
+| `lunora_agent_status`         | Poll a running agent by `threadKey` and return its answer once finished. Requires agents enabled.                                                             |
 
 ### Recommended agent flow
 
@@ -64,6 +69,25 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 3. lunora_run_query / lunora_run_mutation / lunora_run_action
                                   → call the function with a well-formed arguments object
 ```
+
+### Observability tools (privileged)
+
+The five `lunora_get_*` observability tools are read-only, but they surface the
+deployment's **operational data** — log lines, request metadata, and grouped
+error messages, all of which may contain user data, and all of which land in the
+model's context (and therefore at its provider). They are exposed **only when an
+admin token resolved**: without one they are omitted from `ListTools` entirely
+and refused at dispatch, the same omit-don't-refuse rule the write tools use.
+They are independent of `--allow-writes`, which is about changing data, not
+reading operational data.
+
+They return `structuredContent` alongside the usual text block, described by each
+tool's `outputSchema` (MCP revision `2025-06-18` and later; older clients keep
+reading the text block). All but `lunora_get_migration_status` take a `limit`
+clamped server-side; migration status takes only `shardKey` and returns every
+migration, because truncating that list would hide the pending one. Each also
+takes an optional `shardKey` — on a `.shardBy()`-partitioned deployment these
+reads are **per-shard**, not deployment-wide.
 
 `lunora_get_function_schema` returns a JSON object with three fields:
 

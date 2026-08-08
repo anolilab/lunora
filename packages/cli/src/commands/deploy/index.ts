@@ -23,6 +23,12 @@ const deployCommand: Command = {
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
+        {
+            description:
+                "After the deploy, probe the new version's health route (/_lunora/health/ready, falling back to /_lunora/health) and fail if it never answers",
+            name: "health-check",
+            type: Boolean,
+        },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         {
             description:
@@ -85,6 +91,7 @@ export type DeployOptions = CreateOptions<{
     "dry-run": boolean | undefined;
     env: string | undefined;
     format: string | undefined;
+    "health-check": boolean | undefined;
     migrate: boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;

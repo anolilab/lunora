@@ -18,7 +18,7 @@ lunora add <auth|email>                 # add a feature to the current project
 lunora view [--remote]                  # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
 lunora info [--json]                    # print versions, wrangler summary, schema overview
-lunora doctor                           # preflight the project (bindings, placeholders, secrets)
+lunora doctor [--format <pretty|json>]  # preflight the project (bindings, placeholders, secrets)
 lunora registry <add|list|view|build>   # component registry
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
 
@@ -48,6 +48,7 @@ lunora deploy [--env <name>]            # codegen, validate wrangler, then wrang
               [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
+              [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora deployments <list|inspect|rollback|promote>   # history + traffic control
              [--env <name>] [--yes]
@@ -179,13 +180,68 @@ A read-only preflight over the current project. It reports pass / warn / fail fo
   by the worker entry.
 - **Version skew** — `@lunora/*` packages spanning different versions, or mixing
   release channels (e.g. stable + alpha).
+- **CLI shadowing** — a globally-installed `lunora` running instead of the
+  project's own, so the report describes a project this CLI is not pinned to.
 
 ```bash
 lunora doctor
+lunora doctor --format json    # machine-readable; one JSON document on stdout
 ```
 
 It writes nothing and exits non-zero when any hard check fails, so it works as a
 CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
+
+#### Machine-readable output
+
+`--format json` prints exactly one JSON document on stdout; the human report is
+still rendered, but on stderr, so the document stays pipeable. The exit code is
+identical in both formats.
+
+```jsonc
+{
+    "code": 1,
+    "findings": [
+        {
+            "code": "d1-placeholder-id",
+            "fix": "Run `wrangler d1 create <name>` …",
+            "level": "fail",
+            "message": "D1 binding \"DB\" has a placeholder database_id …",
+        },
+        // …the info- and pass-level findings the summary counts
+    ],
+    "ok": false,
+    "summary": { "fail": 1, "info": 1, "pass": 1, "warn": 0 },
+}
+```
+
+`ok` is redundant with `code` on purpose — it is the field a consumer without a
+shell reaches for first. `pass`-level findings are included, so the document
+describes everything that was checked, not only what went wrong.
+
+#### Finding codes
+
+Branch on `finding.code`, never on `message` — the codes are the contract, the
+prose is not. New codes are added over time; treat an unknown one as advisory.
+
+| Code                             | Level | Meaning                                                                      |
+| -------------------------------- | ----- | ---------------------------------------------------------------------------- |
+| `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).         |
+| `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                 |
+| `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                       |
+| `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                         |
+| `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry. |
+| `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.     |
+| `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.              |
+| `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.              |
+| `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.       |
+| `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                   |
+| `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting). |
+| `version-skew-channels`          | warn  | `@lunora/*` packages mix release channels (stable + alpha).                  |
+| `version-skew-cores`             | warn  | `@lunora/*` packages span different `major.minor.patch` versions.            |
+| `wrangler-missing`               | fail  | No `wrangler.jsonc` was found.                                               |
+| `wrangler-shard-binding-missing` | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.              |
+| `wrangler-shard-binding-ok`      | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                |
+| `wrangler-unparseable`           | fail  | `wrangler.jsonc` was found but is not valid JSONC.                           |
 
 ### `lunora dev`
 
@@ -235,8 +291,9 @@ immediately after a successful deploy.
 lunora deploy
 lunora deploy --env staging
 lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
-lunora deploy --temporary    # no Cloudflare account needed
-lunora deploy --dry-run      # run every pre-deploy gate, publish nothing
+lunora deploy --temporary     # no Cloudflare account needed
+lunora deploy --dry-run       # run every pre-deploy gate, publish nothing
+lunora deploy --health-check  # …then prove the new version answers
 ```
 
 You don't need a Cloudflare account to try a deploy. `--temporary` ships to a
@@ -248,13 +305,82 @@ authenticated, so drop `--temporary` once you've signed in.)
 `--dry-run` runs the full pre-deploy pipeline — codegen, the schema-drift gate,
 `wrangler.jsonc` validation, and the wrangler bundle — without publishing.
 
-A successful first deploy auto-writes `.lunora/project.json` (see `lunora link`)
-from the deployed URL, so follow-up commands don't need `--url`.
+A successful deploy auto-writes `.lunora/project.json` (see `lunora link`) from
+the deployed URL, so follow-up commands don't need `--url`. Every real deploy
+re-checks it: if the URL you just published to disagrees with the recorded one
+(a custom domain added, the worker renamed), the deploy **warns and keeps the
+recorded value** rather than rewriting an explicit `lunora link` — run
+`lunora link --url <new>` to accept the change. `--temporary` never writes a
+link, since that account is gone in an hour.
 
 `--preview` uploads a new Worker **version** (`wrangler versions upload`) and
-prints a preview URL instead of going live — production traffic is untouched, and
-the post-deploy steps (migrations, baseline re-bless, auto-link) are skipped. The
-`--ci` pipelines use it to deploy a preview on every pull / merge request.
+reports its preview URL instead of going live — production traffic is untouched,
+and the post-deploy steps (migrations, baseline re-bless, link write) are
+skipped. The `--ci` pipelines use it to deploy a preview on every pull / merge
+request.
+
+#### `--health-check`
+
+After a live deploy, probe the new version's health route
+(`/_lunora/health/ready`, falling back to `/_lunora/health` on deployments
+without a readiness gate) and fail the command when it never answers. Five
+attempts, two seconds apart — a fresh version takes a moment to propagate, and a
+fixed ceiling is what a CI timeout can be set against.
+
+It is opt-in on purpose: a worker whose health route is admin-gated or
+unreachable from the runner must still be deployable, and a default-on network
+step would turn a good deploy into a red build for an unrelated reason.
+
+A red probe exits non-zero and says which half failed — the deploy succeeded,
+the probe did not. The probe runs **before** `--migrate`, so a worker that can't
+serve is never migrated.
+
+#### Machine-readable output
+
+`--format json` writes exactly one JSON document to stdout (every human line,
+including wrangler's own output, goes to stderr). It carries a `deployment`
+object describing what this run put where:
+
+```jsonc
+{
+    "code": 0,
+    "deployment": {
+        "deployedAt": "2026-08-08T09:12:33.417Z",
+        "dryRun": false,
+        "env": "production",
+        "preview": false,
+        "url": "https://my-app.acme.workers.dev",
+        "workerName": "my-app",
+    },
+    "healthCheck": { "ok": true, "url": "https://my-app.acme.workers.dev/_lunora/health/ready" },
+    // …validation, schemaDrift, mintedSecretsFile
+}
+```
+
+`dryRun` and `preview` are always present, so a consumer can tell "nothing went
+live" from "went live" without inferring it from a missing `url`. There is no
+version id: the pinned wrangler has no structured deploy output, and
+`lunora deployments list` is the supported way to read one.
+
+A release pipeline reads the URL out of the same document it already checks the
+exit code of:
+
+```bash
+set -euo pipefail
+
+result=$(lunora deploy --env production --format json --health-check)
+url=$(echo "$result" | jq -r '.deployment.url')
+
+# The document is printed on failure too, and a failed deploy carries no URL —
+# without this guard `jq` yields "null" and the smoke test requests null/api/smoke,
+# so the pipeline fails at the wrong step.
+if [ -z "$url" ] || [ "$url" = "null" ]; then
+    echo "deploy reported no URL" >&2
+    exit 1
+fi
+
+curl -fsS "$url/api/smoke"
+```
 
 ### `lunora build`
 

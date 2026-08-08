@@ -3442,6 +3442,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.29.0(supports-color@10.2.2)(zod@4.4.3)

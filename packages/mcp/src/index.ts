@@ -6,8 +6,12 @@
  * The deployment server: It registers tools for introspecting a deployment
  * (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions
  * (`lunora_run_query`, plus `lunora_run_mutation` and `lunora_run_action` when
- * writes are enabled), each backed by `LunoraClient` over HTTP RPC. The server
- * is read-only by default — the write tools are exposed only when `allowWrites`
+ * writes are enabled), each backed by `LunoraClient` over HTTP RPC. It also
+ * exposes the deployment's observability reads (`lunora_get_logs`,
+ * `lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
+ * `lunora_get_migration_status`) whenever an admin token resolved — read-only,
+ * but privileged, so they are omitted entirely without one. The server is
+ * read-only by default — the write tools are exposed only when `allowWrites`
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
  * allowlisted against the deployment's discovered public functions. It can also
  * front durable `@lunora/agent` runs as `agent_<name>` tools when `allowAgents`
@@ -31,4 +35,4 @@ export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
-export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "./tools";
+export { callTool, OBSERVABILITY_TOOL_DEFINITIONS, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "./tools";

@@ -1,12 +1,15 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { BuildCommandResult } from "../../src/commands/build/handler";
 import { runBuildCommand } from "../../src/commands/build/handler";
 import type { Logger } from "../../src/util/logger";
+import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -24,21 +27,45 @@ const VALID_WRANGLER = `{
 }
 `;
 
-const silentLogger = (): { logger: Logger; successes: string[] } => {
+const silentLogger = (): { logger: Logger; successes: string[]; warnings: string[] } => {
     const successes: string[] = [];
+    const warnings: string[] = [];
 
     return {
         logger: {
             error: () => {},
             info: () => {},
             success: (message) => successes.push(message),
-            warn: () => {},
+            warn: (message) => warnings.push(message),
         },
         successes,
+        warnings,
     };
 };
 
+/** Worker script the fake wrangler "bundles" — big enough that gzip is a real number. */
+const SCRIPT = `export default { fetch() { return new Response(${JSON.stringify("ok".repeat(4096))}); } };\n`;
+
 let workdir: string;
+
+/**
+ * A spawner that writes what `wrangler deploy --outdir` writes: the script, its
+ * sourcemap, the esbuild metafile, and wrangler's explanatory README — so the
+ * measurement is exercised against the layout it actually has to filter.
+ */
+const bundlingSpawner =
+    (outDirectory: string): Spawner =>
+    async (descriptor) => {
+        const directory = join(workdir, outDirectory);
+
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(join(directory, "server.js"), SCRIPT, "utf8");
+        writeFileSync(join(directory, "server.js.map"), "x".repeat(50_000), "utf8");
+        writeFileSync(join(directory, "bundle-meta.json"), "y".repeat(50_000), "utf8");
+        writeFileSync(join(directory, "README.md"), "wrangler wrote this\n", "utf8");
+
+        return { code: 0, descriptor, stderr: "", stdout: "" };
+    };
 
 describe("lunora build", () => {
     beforeEach(() => {
@@ -102,6 +129,71 @@ describe("lunora build", () => {
             { binding: "SHARD", className: "ShardDO", sqlite: false, type: "durable_object" },
         ]);
         expect(successes.join("\n")).toContain("binding manifest written to");
+    });
+
+    it("weighs the bundle it wrote, counting only what Cloudflare uploads", async () => {
+        expect.assertions(4);
+
+        const { logger } = silentLogger();
+
+        const result = await runBuildCommand({ cwd: workdir, logger, outDir: "dist-worker", spawner: bundlingSpawner("dist-worker") });
+
+        // The sourcemap, the metafile and wrangler's README are all in the
+        // out-dir and none of them ship — counting them would report a bundle
+        // roughly three times its real weight.
+        expect(result.bundle?.files).toBe(1);
+        expect(result.bundle?.rawBytes).toBe(Buffer.byteLength(SCRIPT));
+        expect(result.bundle?.gzipBytes).toBe(gzipSync(Buffer.from(SCRIPT)).byteLength);
+        expect(result.bundle?.gzipBytes).toBeGreaterThan(0);
+    });
+
+    it("reports the size in the --format json document without failing on it", async () => {
+        expect.assertions(3);
+
+        const { logger } = silentLogger();
+        const written: string[] = [];
+        const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+            written.push(String(chunk));
+
+            return true;
+        });
+
+        let result: BuildCommandResult;
+
+        try {
+            result = await runBuildCommand({
+                cwd: workdir,
+                format: "json",
+                logger,
+                outDir: "dist-worker",
+                spawner: bundlingSpawner("dist-worker"),
+            });
+        } finally {
+            spy.mockRestore();
+        }
+
+        // Measuring is reporting: a size never changes the exit code.
+        expect(result.code).toBe(0);
+
+        const document = JSON.parse(written.join("")) as BuildCommandResult;
+
+        expect(written).toHaveLength(1);
+        expect(document.bundle?.gzipBytes).toBeGreaterThan(0);
+    });
+
+    it("says so rather than reporting zero when there is nothing to weigh", async () => {
+        expect.assertions(2);
+
+        const { logger, warnings } = silentLogger();
+
+        // The recording spawner writes no out-dir — which is what a changed
+        // wrangler layout would also look like. A 0-byte bundle would read as
+        // the healthiest possible result, so it must not be reported at all.
+        const { spawner } = createRecordingSpawner();
+        const result = await runBuildCommand({ cwd: workdir, logger, spawner });
+
+        expect(result.bundle).toBeUndefined();
+        expect(warnings.join("\n")).toContain("could not weigh the bundle");
     });
 
     it("--emit-bindings fails rather than describing a Worker that needs nothing", async () => {

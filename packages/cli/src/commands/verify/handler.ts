@@ -10,6 +10,8 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import type { HealthFetch } from "../../util/health-probe";
+import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -17,12 +19,6 @@ import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { VerifyOptions } from "./index";
-
-/**
- * Minimal fetch surface the optional health probe needs — a subset of the global
- * `fetch`, injectable so a test can feed a canned response without a network.
- */
-type HealthFetch = (url: string) => Promise<{ ok: boolean; status: number }>;
 
 interface VerifyCommandOptions {
     /** Override the schema-drift gate — report breaking drift as a warning instead of an error. */
@@ -81,54 +77,29 @@ const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?
     return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
 };
 
-/** The aggregate health route probed by the optional `--health-url` step. */
-const HEALTH_PATH = "/_lunora/health";
-
-/** Join a base URL and the health path without doubling the slash. */
-const joinHealthUrl = (base: string): string => (base.endsWith("/") ? base.slice(0, -1) : base) + HEALTH_PATH;
-
-/**
- * Probe a deployment's `GET /_lunora/health` when a `healthUrl` is supplied
- * (opt-in — the step is skipped otherwise, keeping `verify` offline-safe by
- * default). A `2xx` is green; a `503` (a critical dependency down) or any other
- * non-`2xx`, and a transport failure, are red. Returns `{ error }` on red, an
- * empty object on green.
- */
-const runHealthProbeStep = async (healthUrl: string, healthFetch: HealthFetch): Promise<{ error?: string }> => {
-    const url = joinHealthUrl(healthUrl);
-
-    let response: { ok: boolean; status: number };
-
-    try {
-        response = await healthFetch(url);
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        return { error: `health probe failed: could not reach ${url} (${message})` };
-    }
-
-    if (response.ok) {
-        return {};
-    }
-
-    return { error: `health probe failed: ${url} returned HTTP ${String(response.status)}` };
-};
-
 /**
  * Run the opt-in health probe when a `healthUrl` is supplied, logging a success
  * line on green. Returns the probe error on red, else `undefined`. Kept separate
  * from {@link runVerifyCommand} so its branching doesn't inflate that function's
  * cognitive complexity; the skip (no `healthUrl`) keeps `verify` offline-safe.
+ *
+ * Verify probes the AGGREGATE route once, with no retry: it validates a
+ * checkout rather than gating a release, so "is this deployment healthy right
+ * now" is the whole question — `deploy --health-check` is the one that waits
+ * for a fresh version to propagate.
  */
 const probeHealthIfRequested = async (options: VerifyCommandOptions, logger: Logger): Promise<string | undefined> => {
     if (options.healthUrl === undefined || options.healthUrl === "") {
         return undefined;
     }
 
-    const probe = await runHealthProbeStep(options.healthUrl, options.healthFetch ?? ((url) => fetch(url)));
+    const probe = await probeHealth({ baseUrl: options.healthUrl, fetchImpl: options.healthFetch });
 
     if (probe.error === undefined) {
-        logger.success(`verify: health probe ok (${joinHealthUrl(options.healthUrl)})`);
+        // Report the URL the verdict actually came from. Rebuilding it here
+        // would agree with the probe only while `verify` keeps the default
+        // `paths` — the moment it passes more, the message names the wrong one.
+        logger.success(`verify: health probe ok (${probe.url})`);
 
         return undefined;
     }
@@ -277,5 +248,5 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(asyn
 });
 
 export { execute };
-export type { HealthFetch, VerifyCommandOptions, VerifyCommandResult };
+export type { VerifyCommandOptions, VerifyCommandResult };
 export { runVerifyCommand };

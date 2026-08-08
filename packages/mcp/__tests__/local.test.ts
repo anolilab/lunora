@@ -106,6 +106,32 @@ describe("localTools", () => {
         expect(namesOf(localTools({ allowWrites: true, deployment: () => undefined, docs: false }))).toContain("lunora_run_mutation");
     });
 
+    it("hides the observability tools unless the resolved deployment carries an admin token", () => {
+        expect.assertions(3);
+
+        expect(namesOf(localTools({ deployment: () => undefined, docs: false }))).not.toContain("lunora_get_logs");
+        expect(namesOf(localTools({ deployment: { url: "https://worker.example" }, docs: false }))).not.toContain("lunora_get_logs");
+        expect(namesOf(localTools({ deployment: { token: "admin-token", url: "https://worker.example" }, docs: false }))).toContain("lunora_get_logs");
+    });
+
+    it("refuses an observability tool at dispatch when the resolved deployment has no token", async () => {
+        expect.assertions(2);
+
+        const { asFetch, urls } = stubFetch();
+        // Listed because a token was present at build time, then withdrawn — the
+        // dispatch-side check is what still refuses the call.
+        let deployment: LocalDeployment | undefined = { token: "admin-token", url: "https://worker.example" };
+        const tools = localTools({ deployment: () => deployment, docs: false, fetch: asFetch });
+        const logs = tools.find((tool) => tool.definition.name === "lunora_get_logs");
+
+        deployment = { url: "https://worker.example" };
+
+        const result = await logs?.handle({});
+
+        expect(result?.isError).toBe(true);
+        expect(urls).toStrictEqual([]);
+    });
+
     it("tells the caller to start the dev server when a deployment tool is used with none running", async () => {
         expect.assertions(2);
 
