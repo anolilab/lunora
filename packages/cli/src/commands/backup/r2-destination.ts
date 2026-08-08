@@ -41,25 +41,24 @@ const MANIFEST_SUFFIX = ".manifest.json";
 const DEFAULT_BACKUP_PREFIX = "backups/";
 
 interface R2DestinationOptions {
-    /** Named bucket for a multi-bucket deployment; omit for the worker's default bucket. */
-    bucket?: string;
+    /** Where to reach the worker's admin storage routes, and which bucket to address (`context.bucket`). */
     context: BlobUploadContext;
     logger: Logger;
     /** Key prefix backups live under. Defaults to {@link DEFAULT_BACKUP_PREFIX}. */
     prefix?: string;
 }
 
-/** Append `?bucket=` only when a named bucket was asked for — an empty value would select the default anyway, but noise in a URL is noise in a log. */
-const bucketQuery = (bucket: string | undefined): string => (bucket === undefined ? "" : `&bucket=${encodeURIComponent(bucket)}`);
-
 const createR2Destination = (options: R2DestinationOptions): BackupDestination => {
-    const { bucket, context, logger } = options;
+    const { context, logger } = options;
     const prefix = options.prefix ?? DEFAULT_BACKUP_PREFIX;
-    const label = `bucket ${bucket ?? "(default)"} under ${prefix}`;
+    const label = `bucket ${context.bucket ?? "(default)"} under ${prefix}`;
+    // The bucket the whole destination addresses lives on the context, so the
+    // upload helpers and these routes cannot end up naming different buckets.
+    const bucketParameter = context.bucket === undefined ? "" : `&bucket=${encodeURIComponent(context.bucket)}`;
 
     /** Fetch one object's bytes as text — used for the small manifest sidecars. */
     const readObject = async (key: string): Promise<string> => {
-        const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketQuery(bucket)}`, {
+        const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketParameter}`, {
             headers: { authorization: `Bearer ${context.token}` },
             method: "GET",
         });
@@ -105,13 +104,10 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
         },
         locate: (name) => `${prefix}${name}`,
         materialize: async (file) => {
-            const response = await context.fetchImpl(
-                `${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(file)}${bucketQuery(bucket)}`,
-                {
-                    headers: { authorization: `Bearer ${context.token}` },
-                    method: "GET",
-                },
-            );
+            const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_OBJECT_ENDPOINT_PATH}?key=${encodeURIComponent(file)}${bucketParameter}`, {
+                headers: { authorization: `Bearer ${context.token}` },
+                method: "GET",
+            });
 
             if (response.status === 404) {
                 return undefined;
@@ -135,7 +131,7 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
         },
         record: async (entry) => {
             const key = `${entry.file}${MANIFEST_SUFFIX}`;
-            const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketQuery(bucket)}`, {
+            const response = await context.fetchImpl(`${context.baseUrl}${STORAGE_ENDPOINT_PATH}?key=${encodeURIComponent(key)}${bucketParameter}`, {
                 body: `${JSON.stringify(entry, undefined, 2)}\n`,
                 headers: { authorization: `Bearer ${context.token}`, "content-type": "application/json" },
                 method: "PUT",

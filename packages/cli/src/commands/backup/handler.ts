@@ -386,7 +386,8 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
     }
 
     return createR2Destination({
-        bucket: options.bucket === "default" ? undefined : options.bucket,
+        // `default` is how the worker names its unnamed bucket; the storage
+        // routes want the parameter absent for it.
         context: { baseUrl, bucket: options.bucket === "default" ? undefined : options.bucket, fetchImpl, token },
         logger: options.logger,
         prefix: options.prefix,
