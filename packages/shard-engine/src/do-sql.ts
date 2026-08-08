@@ -13,39 +13,149 @@
  * from `./serialize-sql` so callers have a single SQL-helper import surface.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
+import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
+import { sqlComparableProjection } from "./sql-projection";
 
 /** The stored JSON document column every DO table carries alongside `id` / `_creationTime`. */
 const DOC_COLUMN = "__doc__";
 
 /**
- * Encode a document into the `__doc__` blob's on-disk string form. Wraps
- * `encodeWire` (the repo's tagged JSON-safe value codec, `shared/wire-codec.ts`)
- * so `v.bigint()` (a real `bigint` — `JSON.stringify` throws on it) and
- * `v.bytes()` (an `ArrayBuffer` — `JSON.stringify` silently corrupts it to
- * `{}`) round-trip through storage. A document with no bigint/bytes/Date/Map/
- * Set leaves encodes byte-identically to plain `JSON.stringify` (the wire
- * codec's documented fidelity guarantee) — load-bearing for the OCC
- * compare-and-swap and every `json_extract(__doc__, …)` read, which must see
- * the same stored string for a doc this change doesn't touch.
+ * Reserved top-level key inside the `__doc__` blob holding the **wire-tagged
+ * originals** of the top-level fields that {@link encodeDocJson} projected to a
+ * SQL-comparable scalar. See {@link encodeDocJson} for why the projection
+ * exists. Named for its contents: it holds the values SQL canNOT read, not the
+ * ones it can.
+ *
+ * **Nothing upstream reserves this name.** The only reserved-name enforcement in
+ * the stack is `RESERVED_TABLE_NAMES` in `@lunora/codegen`'s `discover-schema`,
+ * which covers TABLE names colliding with `ctx.db` members, and
+ * `SYSTEM_INDEX_FIELDS` in `@lunora/server`'s `schema`, which is the two-entry
+ * list `["_creationTime", "_id"]` of indexable system fields. Neither prohibits
+ * a user field name, and there is no `__`-prefix guard anywhere.
+ *
+ * {@link encodeDocJson} therefore refuses the name itself. That guard is
+ * **prospective**: it stops new writes, and it cannot speak for a row already on
+ * disk that carries the name from before it existed. {@link decodeDocJson}
+ * narrows the remaining exposure by claiming the key only when its value is a
+ * plain object — a scalar or array under this name is left where it is rather
+ * than spread across the document — but a pre-existing plain-object field of
+ * this exact name would still be hoisted. No released version has ever written
+ * it, so the window is a schema that declared the name independently.
  */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- "DocJson" mirrors the established `DOC_COLUMN`/`__doc__` naming this module already uses throughout.
-const encodeDocJson = (document: Record<string, unknown>): string => JSON.stringify(encodeWire(document));
+const DOC_ORIGINALS_KEY = "__originals__";
 
 /**
- * Inverse of {@link encodeDocJson}. Accepts both new tagged blobs and
- * pre-existing plain-JSON blobs unchanged — `decodeWire` is a no-op on a tree
- * with no `$lunora.wire$` sentinel, so rows written before this codec shipped
- * keep parsing exactly as they did under bare `JSON.parse`.
+ * Encode a document into the `__doc__` blob's on-disk string form.
+ *
+ * Two things happen, in this order.
+ *
+ * First, top-level `bigint` / bytes fields are projected to a SQL-comparable
+ * scalar via {@link sqlComparableProjection} — the same function the query side
+ * binds through — and their wire-tagged originals are parked under
+ * {@link DOC_ORIGINALS_KEY}. `json_extract(__doc__, '$.f')` is the only way this
+ * store reads a field — every `where`, `.index()`, `ORDER BY` and SQL-scan
+ * aggregate goes through it — and it addresses top-level fields exclusively.
+ * Storing a `bigint` in its tagged-array form put the array's raw JSON text on
+ * the other side of all of those: `filter`/`withIndex` silently matched nothing,
+ * `SUM` read 0, `MAX` handed the raw tagged string back to the caller. The
+ * projection is what makes those answers right; the parked original is what
+ * keeps the round-trip exact, since the projection is a sort key rather than the
+ * value.
+ *
+ * Second, whatever remains goes through `encodeWire` (`shared/wire-codec.ts`),
+ * which covers the nested leaves SQL never addresses — a `bigint` inside a
+ * `v.object()`, a `v.bytes()` in an array — plus `Date`/`Map`/`Set`.
+ *
+ * A document with none of those leaves is untouched by both steps and encodes
+ * byte-identically to plain `JSON.stringify` — the property the OCC
+ * compare-and-swap and every already-stored row depend on.
+ * @throws LunoraError `BAD_REQUEST` when the document declares the reserved {@link DOC_ORIGINALS_KEY} field, or holds a value no codec can store (a class instance, a cycle, nesting past the wire codec's 64-level cap)
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "DocJson" mirrors the established `DOC_COLUMN`/`__doc__` naming this module already uses throughout.
+const encodeDocJson = (document: Record<string, unknown>): string => {
+    // Refuse the reserved key rather than clobber it. Both outcomes of letting
+    // it through are silent data loss ON WRITE: a projected document overwrites
+    // the user's value with the originals map, and one with nothing to project
+    // still decodes as though the key were ours — spreading the user's own
+    // object up to the top level and dropping the field. Nothing upstream
+    // rejects the name (see DOC_ORIGINALS_KEY), so this is the only guard.
+    if (Object.hasOwn(document, DOC_ORIGINALS_KEY)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `"${DOC_ORIGINALS_KEY}" is reserved by the row store's document encoding and cannot be used as a field name — rename the field`,
+        );
+    }
+
+    let projected: Record<string, unknown> | undefined;
+    let originals: Record<string, unknown> | undefined;
+
+    for (const [field, value] of Object.entries(document)) {
+        const comparable = sqlComparableProjection(value);
+
+        if (comparable !== undefined) {
+            // Cloned lazily and in insertion order, so a document needing no
+            // projection stays byte-identical and one that does only gains the
+            // reserved key, at the end.
+            projected ??= { ...document };
+            // Null-prototype: a field literally named `__proto__` would otherwise
+            // hit `Object.prototype`'s setter and the value would vanish instead
+            // of being parked. The wire codec guards the same key for the same
+            // reason.
+            originals ??= Object.create(null) as Record<string, unknown>;
+            projected[field] = comparable;
+            originals[field] = value;
+        }
+    }
+
+    if (projected && originals) {
+        projected[DOC_ORIGINALS_KEY] = originals;
+    }
+
+    try {
+        return JSON.stringify(encodeWire(projected ?? document));
+    } catch (error: unknown) {
+        // `encodeWire` throws a bare `TypeError` for a non-plain object and a
+        // `RangeError` past its depth cap. Unwrapped, both reach the caller as
+        // an opaque redacted `RPC_FAILED`; re-thrown as a typed error the
+        // writer names what it could not store.
+        throw new LunoraError("BAD_REQUEST", `this document cannot be stored: ${error instanceof Error ? error.message : String(error)}`);
+    }
+};
+
+/**
+ * Inverse of {@link encodeDocJson}. `decodeWire` runs first and turns every
+ * tagged leaf — including the ones parked under {@link DOC_ORIGINALS_KEY} —
+ * back into real `bigint`/`ArrayBuffer`/`Date` values, so restoring the
+ * projected fields is a plain overwrite.
+ *
+ * Accepts every blob this store has ever written: a pre-codec plain-JSON row
+ * (no sentinel, no reserved key — `decodeWire` is the identity on it) and a row
+ * written while `bigint`s were stored tagged in place (the sentinel decodes;
+ * there is nothing to un-project).
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
-const decodeDocJson = (raw: string): Record<string, unknown> => decodeWire(JSON.parse(raw)) as Record<string, unknown>;
+const decodeDocJson = (raw: string): Record<string, unknown> => {
+    const decoded = decodeWire(JSON.parse(raw)) as Record<string, unknown>;
+    const { [DOC_ORIGINALS_KEY]: originals, ...fields } = decoded;
+
+    // Claim the key only when it looks like ours. `encodeDocJson` always writes
+    // a plain object here, so a scalar or array under this name predates the
+    // write guard and belongs to the user — spreading a string would explode it
+    // into `{"0":"h","1":"e",…}`, which is worse than leaving it alone.
+    if (originals === null || typeof originals !== "object" || Array.isArray(originals)) {
+        return decoded;
+    }
+
+    return { ...fields, ...(originals as Record<string, unknown>) };
+};
 
 /** The geohash-companion table name for `.geoIndex(name)` on `table` (mirrors `ftsTableName`'s `__fts_` convention). */
 const geoTableName = (table: string, indexName: string): string => `${table}__geo_${indexName}`;
@@ -65,7 +175,11 @@ const documentPath = (prefix: string, field: string): string => {
         return `${prefix}_creationTime`;
     }
 
-    return `json_extract(${prefix}${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
+    // Two grammars, both owed, in this order: `jsonPathSegment` quotes for
+    // SQLite's JSON-path grammar (`a.b` is one key, not a nested lookup), then
+    // `'` doubling escapes the finished path for the SQL string literal it sits
+    // in. Doing only the second is what let `$.a.b` read the wrong slot.
+    return `json_extract(${prefix}${DOC_COLUMN}, '$.${jsonPathSegment(field).replaceAll("'", "''")}')`;
 };
 
 const jsonPath = (field: string): string => documentPath("", field);
@@ -74,8 +188,15 @@ const jsonPath = (field: string): string => documentPath("", field);
  * Drizzle field reference for the DO store. Wraps the string {@link jsonPath} in
  * `dsql.raw` to keep the **literal** `json_extract(__doc__, '$.field')` path —
  * binding the path as a parameter would defeat SQLite's expression indexes.
- * Field names come from schema-defined query keys (already `'`-escaped), so the
- * raw embed is injection-safe.
+ *
+ * The raw embed is injection-safe because {@link documentPath} escapes the name
+ * for both grammars it crosses — not because the name is trusted. Do not read
+ * the older "field names come from schema-defined query keys" claim back into
+ * this: it holds for the schema-sourced callers (indexes, TTL, relations), but
+ * `ctx.db.<table>.findMany({ where, orderBy })` passes its keys through
+ * `where-sql.ts`'s storage-blind compiler with no `definition.shape` lookup, so
+ * a procedure that spreads an argument into `where` reaches here with a name off
+ * the wire.
  */
 const jsonPathSql = (field: string): SQL => dsql.raw(jsonPath(field));
 
@@ -224,6 +345,7 @@ export {
     createIndexSql,
     decodeDocJson,
     DOC_COLUMN,
+    DOC_ORIGINALS_KEY,
     encodeDocJson,
     geoTableName,
     isFtsAvailable,

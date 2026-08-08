@@ -80,6 +80,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `REPROJECTION_MIGRATION_PREFIX` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `ROOT_DO_SIZE_WARN_BYTES` (const)
 
 ```ts
@@ -541,6 +545,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `buildReprojectionMigration` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `countLegacyRows` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
 ### `createReadFootprint` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -594,6 +606,14 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `pullExternalSourceTick` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `reprojectionMigrationId` (const)
+
+Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `reprojectionTables` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 

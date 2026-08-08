@@ -10,7 +10,13 @@
  * identically.
  */
 
+import { LunoraError } from "@lunora/errors";
+
+import { encodeWire } from "../../../shared/wire-codec";
 import type { AggregateIndexDefinitionLike } from "./schema-types";
+
+/** `Number.MAX_SAFE_INTEGER` as a `bigint` — the largest magnitude the companion's REAL `__value__` column holds exactly. */
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. Shared with the rank twin (`rank.ts`). */
 export const compareStrings = (a: string, b: string): number => {
@@ -41,9 +47,36 @@ export const aggregateTableName = (table: string, indexName: string): string => 
  * (it neither shifts the running value nor counts toward `avg`'s divisor), so
  * the maintained companion matches the scan answer for the typical
  * always-numeric column and degrades the same way for a stray non-number.
+ *
+ * A `v.bigint()` field contributes too — without it a `sum` over a money column
+ * silently reported 0. `__value__` is a REAL column, so a value past
+ * `Number.MAX_SAFE_INTEGER` cannot be held exactly; rather than fold a rounded
+ * one into a running total, that throws. Money in minor units is nowhere near
+ * the boundary; a snowflake id is past it, and summing those is not a
+ * meaningful question anyway.
+ *
+ * **This bounds each contribution, not the total.** The running sum accumulates
+ * in the REAL column itself (`COALESCE(__value__, 0) + excluded.__value__` in
+ * `applyAggregateDelta`), so enough in-range values still carry it past 2^53 and
+ * it rounds there — exactly as a `v.number()` sum does, and for the same reason.
+ * That is the companion's precision model rather than anything specific to
+ * `bigint`: an exactly-representable large-integer total is not something a
+ * REAL column can offer, and a caller who needs one has to reduce the rows.
  * @returns the numeric value when finite, or `undefined` when not a finite number
+ * @throws LunoraError `BAD_REQUEST` when a `bigint` is too large for the companion's REAL column to hold exactly
  */
 export const coerceAggregateNumber = (value: unknown): number | undefined => {
+    if (typeof value === "bigint") {
+        if (value > MAX_SAFE_BIGINT || value < -MAX_SAFE_BIGINT) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `bigint ${value.toString()} exceeds Number.MAX_SAFE_INTEGER and cannot be aggregated exactly — aggregate a narrower column, or read the rows and reduce them in the handler`,
+            );
+        }
+
+        return Number(value);
+    }
+
     if (typeof value === "number") {
         return Number.isFinite(value) ? value : undefined;
     }
@@ -145,6 +178,11 @@ export const readAggregateValue = (op: string, row: { count: number; value: null
  * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
  * as `{ b: 2, a: 1 }`. Empty `by` (whole-table aggregate) keys on the empty
  * string.
+ *
+ * The tuple goes through `encodeWire` first so a `v.bigint()` / `v.bytes()`
+ * `by` field keys stably instead of throwing out of `JSON.stringify`. The wire
+ * codec is the identity on a tree with no such leaf, so every key already stored
+ * in a `__key__` column is byte-for-byte unchanged.
  */
 export const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
     if (by.length === 0) {
@@ -158,5 +196,5 @@ export const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<str
         ordered[field] = source[field] ?? null;
     }
 
-    return JSON.stringify(ordered);
+    return JSON.stringify(encodeWire(ordered));
 };

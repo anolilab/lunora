@@ -173,6 +173,24 @@ describe("introspect", () => {
             expect(page.rows.map((row) => row["title"])).toEqual(["alpha", "beta", "gamma"]);
         });
 
+        it("addresses a __doc__ field whose name the bare JSON-path grammar cannot carry", () => {
+            expect.assertions(2);
+
+            // `a.b` used to become `$.a.b` (the nested key) and `q"x` was escaped
+            // with the SQL-identifier `""` doubling, which is not a JSON-path
+            // escape at all — both read NULL or the wrong slot.
+            database.raw(`CREATE TABLE "odd" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER, "__doc__" TEXT)`);
+            database.raw(
+                String.raw`INSERT INTO "odd" VALUES ('o1', 1, '{"a.b":"flat","a":{"b":"nested"},"q\"x":"beta"}'), ('o2', 2, '{"a.b":"flatter","a":{"b":"nested"},"q\"x":"alpha"}')`,
+            );
+
+            const byFlat = readTablePage(database.sql, { orderBy: { column: "a.b", direction: "asc" }, table: "odd" });
+            const byQuoted = readTablePage(database.sql, { orderBy: { column: 'q"x', direction: "asc" }, table: "odd" });
+
+            expect(byFlat.rows.map((row) => row["a.b"])).toEqual(["flat", "flatter"]);
+            expect(byQuoted.rows.map((row) => row["id"])).toEqual(["o2", "o1"]);
+        });
+
         it("rejects an unknown table", () => {
             expect.assertions(1);
 

@@ -357,6 +357,49 @@ every row carries a `provider` discriminator so multiple providers can coexist
 during a migration. Captures and refunds are append-only records linked to a
 payment, not booleans.
 
+### Backfilling money columns written before the storage fix
+
+Rows written between 2026-08-03 and the `v.bigint()` storage fix stored their
+money columns in a form SQL could not read. Such a row **reads back correctly** —
+`ctx.db.get` returns the right `bigint` — but it is invisible to comparison:
+
+```ts
+// A settled session whose amountMinor was written in the affected window.
+await ctx.db
+    .query("paymentSessions")
+    .filter((q) => q.gte("amountMinor", 1000n))
+    .collect();
+// ^ silently omits it. `ORDER BY amountMinor` mis-sorts it, and `sum` counts it as 0.
+```
+
+Any write heals the row, so the exposure is the rows nobody writes again — which
+for `paymentSessions` is precisely the **settled** sessions, the ones most likely
+to be queried by amount and least likely to be touched.
+
+A reserved data migration re-projects them, one per affected table. Preview it
+first:
+
+```bash
+lunora migrate up __lunora_reproject__paymentSessions --dry-run
+lunora migrate up __lunora_reproject__paymentSessions
+lunora migrate status __lunora_reproject__paymentSessions
+```
+
+It runs through the normal writer path, so triggers fire and live subscribers are
+notified; it is resumable and safe to interrupt, and rows already in the current
+form are skipped rather than rewritten. Repeat for any other **shard-local**
+table of yours declaring a `v.bigint()` or `v.bytes()` column — the id is always
+`__lunora_reproject__<table>`.
+
+`.global()` tables were never affected: their rows live in the D1/Hyperdrive
+store, which has always had a per-column codec. Running the migration against one
+returns `MIGRATION_NOT_FOUND`, which is the expected answer, not a problem to
+work around.
+
+**Confirming it is complete**: a second `--dry-run` reporting `0` rows to change
+means nothing is left in the old form. Apps that only ever ran on the fixed
+version have nothing to do and the dry run reports `0` on the first try.
+
 ## Studio
 
 The [Studio](/docs/packages/studio) Payments panel (under **Logs**) shows synced

@@ -15,6 +15,7 @@ import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
+import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -480,6 +481,23 @@ interface MigrateDataRequest {
 
 /** Resolve the table for `options.id`, logging and returning `undefined` on any failure. */
 const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions): string | undefined => {
+    // The framework's re-projection backfill is not a `defineMigration` in the
+    // user's `lunora/`, so the AST scan below can never find it and the
+    // documented command would exit 1 without a network call. Its table is in
+    // the id, and the shard validates the id anyway (an unaffected or unknown
+    // table has no migration and answers MIGRATION_NOT_FOUND).
+    const reserved = reprojectionMigrationTable(options.id);
+
+    if (reserved !== undefined) {
+        return reserved;
+    }
+
+    if (options.id.startsWith(REPROJECTION_MIGRATION_PREFIX)) {
+        options.logger.error(`"${options.id}" names no table — use ${REPROJECTION_MIGRATION_PREFIX}<table>`);
+
+        return undefined;
+    }
+
     let table: string | undefined;
 
     try {

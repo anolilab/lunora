@@ -42,7 +42,7 @@ import { fileURLToPath } from "node:url";
  * fails when an allowlisted project is CLEAN or gone, so the entry cannot
  * outlive the fix it points at.
  */
-const KNOWN_UNMIGRATED = new Map([["packages/svelte/project.json", "plan 302 phase 6 — un-skip once its eslint findings are cleared"]]);
+const KNOWN_UNMIGRATED = new Map();
 
 /** The pnpm workspace globs, minus the trailing `/*` — every project.json lives under one. */
 const WORKSPACE_DIRECTORIES = ["apps", "examples", "packages", "tests"];
