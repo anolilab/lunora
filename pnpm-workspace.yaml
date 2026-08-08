@@ -121,7 +121,7 @@ overrides:
   # safeLoad/safeDump — we pnpm-patch it to load/dump (safe by default in v4) so
   # it works on 4.x. See patches/gray-matter@4.0.3.patch. `<=4.1.1` also folds
   # the 4.0.0–4.1.1 security bump into this single rule.
-  js-yaml@<=4.1.1: ^4.1.2
+  js-yaml@<=4.1.1: ^4.3.1
   lodash@<=4.17.23: ^4.17.24
   lodash@>=4.0.0 <=4.17.22: ^4.17.23
   lodash@>=4.0.0 <=4.17.23: ^4.17.24
@@ -704,7 +704,8 @@ minimumReleaseAgeExclude:
   - '@visulima/email@1.0.0-alpha.41'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
   - esbuild@0.28.1
-  - js-yaml@4.1.2
+  # Renovate security update: js-yaml@4.3.1
+  - js-yaml@4.1.2 || 4.3.1
   - '@opentelemetry/core@2.8.0'
   - astro@6.4.6
   - dompurify@3.4.11
