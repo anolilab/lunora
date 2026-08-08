@@ -4464,7 +4464,7 @@ abstract class ShardDO {
             // so the request log would record an empty write set.
             const tablesWritten = [...(this.pendingChangedTables ?? [])];
 
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten, dispatchTrace);
 
             // Inspect the post-write size before responding. SQLite-in-DO
             // exposes `databaseSize` as a real getter; reading it is a
@@ -4523,15 +4523,22 @@ abstract class ShardDO {
             // Flush statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely.
             this.flushStmtSamples();
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
+            this.recordRequestLog(
+                payload.functionPath,
+                payload.args ?? {},
+                durationMs,
+                "error",
+                [...(this.pendingChangedTables ?? [])],
+                dispatchTrace,
+                message,
+            );
             this.logs.push({
                 functionPath: payload.functionPath,
                 level: "error",
                 message,
                 timestamp: Date.now(),
-                // The throw's own trace, so the Traces panel can show this line
-                // against the waterfall that failed — the whole point of opening
-                // a trace after seeing a red log row.
+                // The local, not the shared field: this runs after the handler's
+                // awaits, where an interleaved dispatch may have re-set it.
                 traceId: dispatchTrace.traceId,
             });
 
@@ -6415,6 +6422,7 @@ abstract class ShardDO {
         durationMs: number,
         outcome: "error" | "ok",
         tablesWritten: string[],
+        trace: TraceAnchor,
         errorMessage?: string,
     ): void {
         const config = this.requestLogConfig();
@@ -6443,10 +6451,13 @@ abstract class ShardDO {
             shardKey: this.runner.shardKey,
             tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
             tablesWritten,
-            // Read from the shared per-request anchor rather than re-resolved, so
-            // the row lands in the SAME trace as this dispatch's `ctx.trace` spans
-            // and its `ctx.log` lines. `undefined` outside a dispatch-scoped call.
-            traceId: this.currentRequestTrace?.traceId,
+            // Passed BY VALUE, never read off `currentRequestTrace` here: this
+            // method runs after the handler's awaits, by which point an
+            // interleaved dispatch may have re-set (or cleared) that shared
+            // field — which would file this row, and the Logpush event carrying
+            // it, under another request's trace. Same hazard, and same fix, as
+            // the dispatch root span's `dispatchTrace` capture.
+            traceId: trace.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };

@@ -1,4 +1,3 @@
-import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,17 +11,16 @@ import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useOpenTrace from "../../hooks/use-open-trace";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { LogEntry, LogLevel, RequestLogEntry, RequestLogQuery, RequestOutcome } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import flooredRectObserver from "../../lib/virtual-rect";
 import { ArchiveFeed } from "./archive-feed";
 import type { BadgeVariant } from "./log-level-variant";
-import { LEVEL_VARIANT } from "./log-level-variant";
+import LogLine from "./log-line";
 import LogsErrorFilters from "./logs-error-filters";
 import LogsRequestFilters from "./logs-request-filters";
 import type { LogSummary, SummaryBucket } from "./logs-summary";
@@ -56,7 +54,6 @@ const OUTCOME_VARIANT: Record<RequestOutcome, BadgeVariant> = {
 interface TraceLinkCellProps {
     /** Open the Traces panel filtered to this row's trace. */
     readonly onOpenTrace: (traceId: string) => void;
-    readonly testId: string;
     /** Absent for a row with no ambient trace, or one predating the field. */
     readonly traceId?: string;
 }
@@ -65,27 +62,24 @@ interface TraceLinkCellProps {
  * The trailing "Trace" cell shared by both log views — the drill-down from a
  * line to the waterfall it came from, instead of matching timestamps by eye.
  *
- * Best-effort by construction on the Requests side: that log is durable while
- * the span ring is in-memory, so a row older than the current DO instance links
- * to a waterfall that has been hibernated away and the Traces panel shows its
- * ordinary empty state. The id stays valid in an external collector either way.
- *
  * Renders an empty cell rather than nothing when there is no trace, so the
- * column width stays constant down the virtualized list.
+ * column width stays constant down the virtualized list. The two views are
+ * mutually exclusive, so both use one test id.
  */
-const TraceLinkCell = ({ onOpenTrace, testId, traceId }: TraceLinkCellProps): ReactElement => {
+const TraceLinkCell = ({ onOpenTrace, traceId }: TraceLinkCellProps): ReactElement => {
     const t = useT();
-
-    const onClick = (): void => {
-        if (traceId !== undefined) {
-            onOpenTrace(traceId);
-        }
-    };
 
     return (
         <span className="w-16 shrink-0 text-right" role="gridcell">
             {traceId === undefined ? null : (
-                <button className="text-primary underline-offset-2 hover:underline" data-testid={testId} onClick={onClick} type="button">
+                <button
+                    className="text-primary underline-offset-2 hover:underline"
+                    data-testid="lg-trace-link"
+                    onClick={() => {
+                        onOpenTrace(traceId);
+                    }}
+                    type="button"
+                >
                     {t("Trace")}
                 </button>
             )}
@@ -112,9 +106,6 @@ interface LogRowProps {
  */
 const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): ReactElement => {
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
-    // Rendered once; `""` (no fields, or an empty bag from a worker predating
-    // field normalization) skips the chip entirely rather than showing a blank span.
-    const fields = formatLogFields(entry.fields);
 
     return (
         <div
@@ -125,24 +116,8 @@ const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): 
             role="row"
             style={style}
         >
-            <span className="w-44 shrink-0 tabular-nums text-muted-foreground" role="gridcell">
-                {new Date(entry.timestamp).toLocaleString()}
-            </span>
-            <span className="w-20 shrink-0" role="gridcell">
-                <Badge variant={LEVEL_VARIANT[entry.level]}>{entry.level}</Badge>
-            </span>
-            <span className="w-48 shrink-0 truncate text-muted-foreground" role="gridcell">
-                {entry.functionPath ?? "—"}
-            </span>
-            <span className="flex-1 truncate" role="gridcell">
-                {entry.message}
-                {fields === "" ? null : (
-                    <span className="ml-2 text-muted-foreground" data-testid="lg-fields">
-                        {fields}
-                    </span>
-                )}
-            </span>
-            <TraceLinkCell onOpenTrace={onOpenTrace} testId="lg-trace-link" traceId={entry.traceId} />
+            <LogLine entry={entry} />
+            <TraceLinkCell onOpenTrace={onOpenTrace} traceId={entry.traceId} />
         </div>
     );
 };
@@ -199,7 +174,7 @@ const RequestRow = ({ entry, index, measureRef, onOpenTrace, start }: RequestRow
                     ? entry.errorMessage
                     : `r:${tablesLabel(entry.tablesRead)} · w:${tablesLabel(entry.tablesWritten)}`}
             </span>
-            <TraceLinkCell onOpenTrace={onOpenTrace} testId="lg-req-trace-link" traceId={entry.traceId} />
+            <TraceLinkCell onOpenTrace={onOpenTrace} traceId={entry.traceId} />
         </div>
     );
 };
@@ -368,7 +343,6 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
-    const navigate = useNavigate();
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
     // Errors-view client-side filters: a level allow-set (empty = all levels), a
@@ -414,13 +388,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
     const { error, errorSource, isLoading: activeLoading, liveError } = activeQuery;
 
-    // Hand a log line's trace to the Traces panel and navigate there — the same
-    // one-shot handoff the Metrics panel's exemplar link uses, carrying the shard
-    // so Traces reads the ring the line came from rather than the root's.
-    const openTrace = (traceId: string): void => {
-        writePendingTraceFilter({ shardKey: queryShardKey, traceId });
-        fireAndForget(navigate({ to: "/traces" }));
-    };
+    const openTrace = useOpenTrace(queryShardKey);
 
     // Coerce each view's resolved payload into its entries array (a one-shot read
     // or live push without an `entries` array yields `[]`); an unloaded gated

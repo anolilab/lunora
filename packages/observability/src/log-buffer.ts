@@ -27,13 +27,7 @@ interface LogEntry {
     message: string;
     timestamp: number;
 
-    /**
-     * Trace the line was emitted under, when there was an ambient one. The
-     * `LogEvent` handed to a sink has always carried this; the buffer dropped it,
-     * which is why the Studio could show a trace's waterfall and the same
-     * request's log lines without being able to connect the two. Absent for lines
-     * emitted outside a dispatch (container lifecycle, hibernation-path errors).
-     */
+    /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors). What the Studio joins a log line to its waterfall on. */
     traceId?: string;
 }
 

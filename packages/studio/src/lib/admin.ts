@@ -763,12 +763,7 @@ export interface LogEntry {
     message: string;
     timestamp: number;
 
-    /**
-     * Trace the line was emitted under. Present for lines emitted inside a
-     * dispatch; absent for container-lifecycle entries, hibernation-path errors,
-     * and any worker predating the field. What the Logs panel's "Trace" link and
-     * the Traces panel's correlated-logs section both key on.
-     */
+    /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors) and on any worker predating the field. The key the Logs panel's Trace link and the Traces panel's correlated logs both join on. */
     traceId?: string;
 }
 
@@ -951,15 +946,7 @@ export interface RequestLogEntry {
     /** Tables the handler wrote; empty for a read-only dispatch. */
     tablesWritten: string[];
 
-    /**
-     * W3C trace id (32-hex) of the dispatch; absent for a row written before the
-     * column existed.
-     *
-     * The request log is durable while the span ring it links to is in-memory, so
-     * a row older than the current DO instance carries an id whose waterfall is
-     * gone. The Trace link is therefore best-effort against local traces — the id
-     * still resolves in whatever collector `otlpSink` ships to.
-     */
+    /** W3C trace id (32-hex) of the dispatch; absent on a row written before the column existed. The Trace link is best-effort — see `@lunora/observability`'s `request-log.ts` on the retention asymmetry. */
     traceId?: string;
     /** Epoch-ms the dispatch completed. */
     ts: number;

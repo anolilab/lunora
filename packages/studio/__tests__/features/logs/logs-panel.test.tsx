@@ -218,7 +218,7 @@ describe("logsPanel — trace drill-down", () => {
 
         render(renderPanel(createClient(ENTRIES, traced)));
 
-        fireEvent.click(await screen.findByTestId("lg-req-trace-link"));
+        fireEvent.click(await screen.findByTestId("lg-trace-link"));
 
         // The hand-off, not the navigation, is the contract: Traces reads it on
         // mount and pre-filters. Shard "" is the root DO the panel defaults to.
@@ -234,7 +234,7 @@ describe("logsPanel — trace drill-down", () => {
         // The shared REQUESTS fixtures carry no `traceId` — the legacy-row shape.
         await screen.findAllByTestId("lg-req-row");
 
-        expect(screen.queryByTestId("lg-req-trace-link")).toBeNull();
+        expect(screen.queryByTestId("lg-trace-link")).toBeNull();
         expect(screen.getAllByTestId("lg-req-row")).toHaveLength(2);
     });
 

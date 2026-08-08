@@ -276,16 +276,18 @@ describe("tracesPanel", () => {
     it("shows a span's kind and recorded events in its detail", async () => {
         expect.assertions(2);
 
+        // Cast the indexed reads, not the whole literal: casting the object would
+        // switch off excess-property and missing-field checking on the fixture.
         const traced: TraceSummary = {
-            ...TRACES[1],
+            ...(TRACES[1] as TraceSummary),
             spans: [
                 {
-                    ...LIST_SPANS[0],
+                    ...(LIST_SPANS[0] as TraceSpan),
                     events: [{ attributes: { "exception.type": "TimeoutError" }, name: "exception", ts: 1_700_000_001_004 }],
                     kind: "client",
                 },
             ],
-        } as TraceSummary;
+        };
 
         render(renderPanel(createClient([traced])));
 
@@ -343,8 +345,8 @@ describe("tracesPanel", () => {
         expect(screen.getByTestId("tr-row-trace-error")).toBeTruthy();
     });
 
-    it("draws an elapsed-time ruler over the waterfall, and none for a zero-duration trace", async () => {
-        expect.assertions(3);
+    it("draws an elapsed-time ruler across the expanded waterfall", async () => {
+        expect.assertions(2);
 
         render(renderPanel(createClient()));
 
@@ -354,13 +356,19 @@ describe("tracesPanel", () => {
 
         expect(ruler.textContent).toContain("25ms");
         expect(ruler.textContent).toContain("100ms");
+    });
 
+    it("draws no ruler for a zero-duration trace, whose spans are all laid out full-width", async () => {
+        expect.assertions(1);
+
+        // Its own render: asserting absence against a DOM that still holds a
+        // previous render's ruler would pass for the wrong reason.
         render(renderPanel(createClient([ZERO_TRACE])));
+
         fireEvent.click(await screen.findByTestId("tr-toggle-trace-zero"));
         await screen.findAllByTestId("tr-span-bar");
 
-        // One ruler still on screen from the first render; the zero trace adds none.
-        expect(screen.getAllByTestId("tr-ruler")).toHaveLength(1);
+        expect(screen.queryByTestId("tr-ruler")).toBeNull();
     });
 
     it("renders visible bars for a zero-duration trace rather than NaN", async () => {

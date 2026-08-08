@@ -1,4 +1,5 @@
 import type { ContextTracer } from "@lunora/observability";
+import { readRequestLog } from "@lunora/observability";
 import { describe, expect, it } from "vitest";
 
 import type { SpanEvent } from "../../../shared/span-event";
@@ -224,6 +225,55 @@ describe("shardDO trace sampling", () => {
 
             expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID).map((span) => span.name)).toContain("slow-error");
             expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID_B).map((span) => span.name)).toContain("fast-ok");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("stamps the durable request-log row with its OWN trace when a sibling dispatch interleaves", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const slowStarted = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (_trace, functionPath) => {
+                if (functionPath === "slow:ok") {
+                    markStarted();
+                    // Park inside the handler, so the sibling below runs its whole
+                    // dispatch — including the `finally` that CLEARS the shared
+                    // `currentRequestTrace` — before this one records its row.
+                    await slowGate;
+                }
+            };
+
+            const slow = shard.fetch(request("slow:ok", { sampled: true, traceId: TRACE_ID }));
+
+            await slowStarted;
+            await shard.fetch(request("fast:ok", { sampled: true, traceId: TRACE_ID_B }));
+
+            releaseSlow();
+            await slow;
+
+            const rows = readRequestLog(database.sql);
+            const byPath = new Map(rows.map((row) => [row.functionPath, row.traceId]));
+
+            // The regression: `recordRequestLog` runs after the handler's awaits, so
+            // reading the shared anchor there stamped the sibling's trace — or
+            // `undefined`, once the sibling's `finally` had cleared it. The anchor is
+            // threaded by value precisely so each row carries its own dispatch's id.
+            expect(byPath.get("slow:ok")).toBe(TRACE_ID);
+            expect(byPath.get("fast:ok")).toBe(TRACE_ID_B);
         } finally {
             database.close();
         }

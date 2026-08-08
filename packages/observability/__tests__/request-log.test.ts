@@ -110,17 +110,22 @@ describe("request-log module", () => {
         }
     });
 
-    it("never redacts the trace id — it is an opaque identifier, and masking it would destroy its only purpose", () => {
-        expect.assertions(1);
+    it("keeps the trace id intact on a row whose args were redacted", () => {
+        expect.assertions(2);
 
         const database = createSqliteExec();
 
         try {
-            // A 32-hex string is exactly the shape a redaction rule might mistake
-            // for a token, and the correlation key is worthless once masked.
             appendRequestLogEntry(database.sql, entry({ redactedArgs: { password: "hunter2" }, traceId: TRACE_ID }));
 
-            expect(readRequestLog(database.sql)[0]!.traceId).toBe(TRACE_ID);
+            const [row] = readRequestLog(database.sql);
+
+            // The masked arg proves redaction ran on THIS row, so the intact id
+            // below is a real exemption and not just an unredacted code path. The
+            // guard is against widening redaction to the whole entry: a masked
+            // correlation key joins to nothing, which is its entire purpose.
+            expect((row!.redactedArgs as Record<string, unknown>).password).not.toBe("hunter2");
+            expect(row!.traceId).toBe(TRACE_ID);
         } finally {
             database.close();
         }

@@ -1258,9 +1258,9 @@ const MESSAGE_IDS = [
     "Errors only",
     "Recent traces",
     "Trace waterfall",
-    "Errored span",
     "{count} spans",
-    "starts {offset} in, runs {duration}",
+    "{name}, {duration}, starts {offset} in{failure}",
+    ", failed: {message}",
     "Showing the {shown} most recent of {total} traces in the buffer.",
     "No traces",
     // Observability — expanded span detail + the dispatch's correlated log lines

@@ -55,6 +55,14 @@ const REQUEST_LOG_RETENTION = 1000;
 /** Stable tag on every console-emitted event so a Logpush/SIEM consumer can filter lunora request events out of the raw Workers-trace firehose. */
 const REQUEST_LOG_EVENT_SOURCE = "lunora";
 
+/**
+ * Columns added after the table's first release, as `<name> <type>` — each one
+ * `ALTER`ed in on its own so a shard created before it gains it on the next
+ * {@link ensureRequestLogTable}. A new column is one entry here plus the matching
+ * line in the `CREATE`; nothing else needs a migration.
+ */
+const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT"];
+
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
 
@@ -85,16 +93,7 @@ interface RequestLogEntry {
     /** Tables the handler wrote (from the change tracker); empty for a read-only dispatch. */
     tablesWritten: string[];
 
-    /**
-     * W3C trace id (32-hex) of the dispatch, or `undefined` for a row appended
-     * before this column existed.
-     *
-     * The correlation key, NOT a guarantee the trace is still readable: this
-     * table is durable and bounded by row count, while the `ctx.trace` span ring
-     * it would join to is in-memory and dies on hibernation. So the id reliably
-     * resolves in an external collector (whatever `otlpSink` ships to), and only
-     * opportunistically against the local waterfall — see the module docstring.
-     */
+    /** W3C trace id (32-hex) of the dispatch; `undefined` on a row appended before this column existed. See the module docstring on the retention asymmetry. */
     traceId?: string;
     /** Wall-clock millis when the dispatch completed. */
     ts: number;
@@ -272,14 +271,13 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
  * trace id, the correlation key to the span ring and to whatever collector
  * `otlpSink` ships to.
  *
- * Both are added via a guarded `ALTER TABLE` rather than baked into the
- * `CREATE`, mirroring `function-metrics.ts`'s `ensureFunctionMetricsTables`, so
- * a shard whose `__lunora_reqlog__` predates a column gains it on the next call
- * without a migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the
- * duplicate-column error from a re-run (or the freshly-created schema above) is
- * swallowed. Each `ALTER` needs its OWN try — one shared block would let the
- * first column's duplicate error skip the second column's add, leaving a shard
- * that has `error_fingerprint` but never gains `trace_id`.
+ * Both are also added via a guarded `ALTER TABLE`, mirroring
+ * `function-metrics.ts`'s `ensureFunctionMetricsTables`, so a shard whose
+ * `__lunora_reqlog__` predates a column gains it on the next call without a
+ * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
+ * error from a re-run (or from the freshly-created schema above) is swallowed
+ * per column — the loop is what keeps one column's duplicate from skipping the
+ * next column's add.
  */
 const ensureRequestLogTable = (sql: SqlExec): void => {
     runSql(
@@ -304,16 +302,12 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
         )`,
     );
 
-    try {
-        runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN error_fingerprint TEXT`);
-    } catch {
-        // Column already exists — no-op.
-    }
-
-    try {
-        runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN trace_id TEXT`);
-    } catch {
-        // Column already exists — no-op.
+    for (const column of ADDED_COLUMNS) {
+        try {
+            runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN ${column}`);
+        } catch {
+            // Column already exists — no-op.
+        }
     }
 };
 
