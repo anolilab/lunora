@@ -11,7 +11,7 @@ import { defineHandler } from "../../util/command";
 import { resolveTargetOrError } from "../../util/deploy-target";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { HealthFetch } from "../../util/health-probe";
-import { joinHealthUrl, probeHealth } from "../../util/health-probe";
+import { probeHealth } from "../../util/health-probe";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -96,7 +96,10 @@ const probeHealthIfRequested = async (options: VerifyCommandOptions, logger: Log
     const probe = await probeHealth({ baseUrl: options.healthUrl, fetchImpl: options.healthFetch });
 
     if (probe.error === undefined) {
-        logger.success(`verify: health probe ok (${joinHealthUrl(options.healthUrl)})`);
+        // Report the URL the verdict actually came from. Rebuilding it here
+        // would agree with the probe only while `verify` keeps the default
+        // `paths` — the moment it passes more, the message names the wrong one.
+        logger.success(`verify: health probe ok (${probe.url})`);
 
         return undefined;
     }

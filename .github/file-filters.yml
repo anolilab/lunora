@@ -85,6 +85,10 @@ worker_size:
     - "scripts/check-worker-size.js"
     - "worker-size.json"
     - ".github/workflows/test.yml"
+    # This file too, or the hole reopens one level up: a PR that edits the
+    # filter itself would not match it, the gate would skip, and
+    # `test-required-check` passes on skipped jobs.
+    - ".github/file-filters.yml"
 
 templates:
     - "templates/**"
