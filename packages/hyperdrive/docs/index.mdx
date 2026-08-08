@@ -183,7 +183,7 @@ import postgres from "postgres";
 
 import { api } from "@/lunora/_generated/api";
 import { action, mutation, v } from "@/lunora/_generated/server";
-import { materializeExternalRows } from "@lunora/do";
+import { materializeExternalRows } from "@lunora/shard-engine";
 
 export const refreshTenant = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
     const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
