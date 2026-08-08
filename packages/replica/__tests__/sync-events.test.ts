@@ -21,10 +21,10 @@ const createMockMirror = (): {
     const applied: TableDiff[] = [];
 
     const mirror = {
-        applyDiff: vi.fn((diff: TableDiff) => {
+        applyDiff: vi.fn<(diff: TableDiff) => void>((diff) => {
             applied.push(diff);
         }),
-        onChange: vi.fn(),
+        onChange: vi.fn<() => () => void>(),
         get eventLog(): EventLog {
             return new EventLog();
         },
@@ -61,6 +61,8 @@ const createMockLog = (
 
 describe(EventsSync, () => {
     it("starts with watermark 0", () => {
+        expect.assertions(1);
+
         const { mirror } = createMockMirror();
         const sync = new EventsSync({
             fetchEventsSince: () => Promise.resolve([]),
@@ -73,6 +75,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() fetches events and advances watermark", async () => {
+        expect.assertions(6);
+
         const { mirror } = createMockMirror();
         const { fetchEventsSince, callCount } = createMockLog([
             { seq: 0, type: "event.a", payload: { x: 1 }, timestamp: 100 },
@@ -101,6 +105,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() applies diffs to the mirror", async () => {
+        expect.assertions(4);
+
         const { mirror, applied } = createMockMirror();
         const { fetchEventsSince } = createMockLog([{ seq: 0, type: "event.a", payload: { val: "hello" }, timestamp: 100 }]);
 
@@ -123,6 +129,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() returns 0 when there are no new events", async () => {
+        expect.assertions(2);
+
         const { mirror } = createMockMirror();
         const { fetchEventsSince } = createMockLog([]);
 
@@ -140,6 +148,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() does not advance watermark when fetch throws", async () => {
+        expect.assertions(2);
+
         const { mirror } = createMockMirror();
 
         const sync = new EventsSync({
@@ -157,6 +167,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() does not advance watermark when applyEvents throws", async () => {
+        expect.assertions(2);
+
         const { mirror } = createMockMirror();
         const { fetchEventsSince } = createMockLog([{ seq: 0, type: "err", payload: null, timestamp: 100 }]);
 
@@ -177,6 +189,8 @@ describe(EventsSync, () => {
     });
 
     it("start() begins polling and stop() halts it", async () => {
+        expect.assertions(4);
+
         vi.useFakeTimers();
 
         const { mirror } = createMockMirror();
@@ -219,11 +233,20 @@ describe(EventsSync, () => {
         vi.useRealTimers();
     });
 
-    it("start() is idempotent", () => {
+    it("start() is idempotent", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
         const { mirror } = createMockMirror();
+        let calls = 0;
 
         const sync = new EventsSync({
-            fetchEventsSince: () => Promise.resolve([]),
+            fetchEventsSince: async () => {
+                calls += 1;
+
+                return [];
+            },
             applyEvents: () => {},
             getTableDiffs: () => [],
             mirror,
@@ -232,10 +255,19 @@ describe(EventsSync, () => {
 
         sync.start();
         sync.start(); // second call should no-op
+
+        await vi.advanceTimersByTimeAsync(1000);
         sync.stop();
+
+        // One timer, not two: the second `start()` did not arm a second poll loop.
+        expect(calls).toBe(1);
+
+        vi.useRealTimers();
     });
 
     it("stop() is safe when not started", () => {
+        expect.assertions(1);
+
         const { mirror } = createMockMirror();
 
         const sync = new EventsSync({
@@ -251,6 +283,8 @@ describe(EventsSync, () => {
     });
 
     it("prevents overlapping poll cycles", async () => {
+        expect.assertions(1);
+
         const { mirror } = createMockMirror();
         let activeCalls = 0;
         let maxConcurrent = 0;
@@ -279,8 +313,10 @@ describe(EventsSync, () => {
     });
 
     it("calls onError when fetch fails", async () => {
+        expect.assertions(2);
+
         const { mirror } = createMockMirror();
-        const onError = vi.fn();
+        const onError = vi.fn<(error: unknown) => void>();
 
         const sync = new EventsSync({
             fetchEventsSince: () => Promise.reject(new Error("boom")),
@@ -300,6 +336,8 @@ describe(EventsSync, () => {
     });
 
     it("callbacks are invoked with correct watermark progression", async () => {
+        expect.assertions(9);
+
         const { mirror, applied } = createMockMirror();
 
         // Two pages of events
@@ -353,6 +391,8 @@ describe(EventsSync, () => {
     // REPLICA-08 ──────────────────────────────────────────────────────────
 
     it("a mid-batch applyEvents failure does NOT advance the watermark — the next poll retries the whole batch from a clean state", async () => {
+        expect.assertions(6);
+
         const { mirror } = createMockMirror();
         const { fetchEventsSince } = createMockLog([
             { seq: 0, type: "ok", payload: "a", timestamp: 10 },
@@ -403,6 +443,8 @@ describe(EventsSync, () => {
     });
 
     it("a clean batch takes the fast path — ONE diff + ONE mirror round for the whole backlog", async () => {
+        expect.assertions(4);
+
         const { mirror, applied } = createMockMirror();
         const backlog: EventLogEntry[] = Array.from({ length: 25 }, (_, index) => ({
             seq: index,
@@ -437,6 +479,8 @@ describe(EventsSync, () => {
     });
 
     it("stateful recompute getTableDiffs: a mid-batch mirror throw strands NO diffs — the watermark holds, the next poll delivers exactly the remainder", async () => {
+        expect.assertions(6);
+
         // This is the coverage gap the old suite missed: a STATEFUL,
         // recompute-from-current-state `getTableDiffs`. Under the documented
         // idempotent contract, a mid-batch mirror failure must lose nothing —
@@ -458,7 +502,7 @@ describe(EventsSync, () => {
         let failAt: number | undefined = 3;
 
         const mirror = {
-            applyDiff: vi.fn((diff: TableDiff) => {
+            applyDiff: vi.fn<(diff: TableDiff) => void>((diff) => {
                 applyCalls += 1;
 
                 if (applyCalls === failAt) {
@@ -471,7 +515,7 @@ describe(EventsSync, () => {
                     }
                 }
             }),
-            onChange: vi.fn(),
+            onChange: vi.fn<() => () => void>(),
             get eventLog(): EventLog {
                 return new EventLog();
             },
@@ -517,6 +561,8 @@ describe(EventsSync, () => {
     });
 
     it("sync() awaits an in-flight poll instead of no-op'ing for a concurrent call", async () => {
+        expect.assertions(4);
+
         const { mirror } = createMockMirror();
         let resolveFetch: ((entries: EventLogEntry[]) => void) | undefined;
         let fetchCalls = 0;

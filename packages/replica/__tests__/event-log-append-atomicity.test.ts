@@ -91,12 +91,17 @@ const createMockState = (): EventLogDO["state"] => {
         if (upper.includes("FROM EVENTS")) {
             let rows = [...events];
 
-            if (/WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i.test(query)) {
+            const isRange = /WHERE\s+seq\s*>=\s*\?\s+AND\s+seq\s*<=\s*\?/i.test(query);
+            const isSince = !isRange && /WHERE\s+seq\s*>=\s*\?/i.test(query) && params.length > 0;
+
+            if (isRange) {
                 const from = Number(params[0]);
                 const to = Number(params[1]);
 
                 rows = rows.filter((r) => r.seq >= from && r.seq <= to);
-            } else if (/WHERE\s+seq\s*>=\s*\?/i.test(query) && params.length > 0) {
+            }
+
+            if (isSince) {
                 const since = Number(params[0]);
 
                 rows = rows.filter((r) => r.seq >= since);
@@ -158,6 +163,8 @@ const doFetch = (do_: EventLogDO, method: string, path: string, body?: unknown):
 
 describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     it("a mid-batch write failure persists nothing (all-or-nothing)", async () => {
+        expect.assertions(2);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const res = await doFetch(do_, "POST", "/append", {
@@ -180,6 +187,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("a retried batch with the same batchId returns the original entries without duplicating", async () => {
+        expect.assertions(5);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const body = {
@@ -217,6 +226,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("multiple retries of the same batchId still yield exactly one persisted copy", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const body = { batchId: "dup-key", events: [{ type: "z", payload: {} }] };
@@ -232,6 +243,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("different batchIds are independent — no false-positive dedup", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         await doFetch(do_, "POST", "/append", { batchId: "batch-a", events: [{ type: "a", payload: {} }] });
@@ -244,6 +257,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("rejects an empty-string batchId", async () => {
+        expect.assertions(1);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const res = await doFetch(do_, "POST", "/append", { batchId: "", events: [{ type: "a", payload: {} }] });
@@ -252,6 +267,8 @@ describe("eventLogDO /append — atomicity + idempotency (REPLICA-03)", () => {
     });
 
     it("reusing a batchId with a DIFFERENT event batch is rejected as a conflict, not silently dropped", async () => {
+        expect.assertions(4);
+
         const do_ = new EventLogDO(createMockState(), {});
 
         const first = await doFetch(do_, "POST", "/append", { batchId: "reused-key", events: [{ type: "a", payload: { n: 1 } }] });
