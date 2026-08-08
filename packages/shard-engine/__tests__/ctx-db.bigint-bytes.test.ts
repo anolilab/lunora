@@ -444,7 +444,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             await seed(writer);
 
             const grouped = await writer.groupBy("paymentSessions", { agg: { op: "count" }, by: ["currency"] });
-            const usd = grouped.find((group) => (group["key"])["currency"] === "usd");
+            const usd = grouped.find((group) => group["key"]["currency"] === "usd");
 
             expect(usd?.["value"]).toBe(2);
 
