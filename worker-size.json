@@ -1,0 +1,7 @@
+{
+    "$comment": "Committed size baseline for the Worker a `templates/standalone` app deploys, measured by scripts/check-worker-size.js against a production build. Cloudflare's Worker script limit is 3 MB gzipped on the Free plan and 10 MB on Paid, so this is a framework-weight regression signal, not a proximity alarm. `pnpm run worker-size:update` re-baselines an intentional increase.",
+    "template": "standalone",
+    "gzipBytes": 422840,
+    "rawBytes": 1725313,
+    "allowanceBytes": 51200
+}

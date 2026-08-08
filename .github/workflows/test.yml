@@ -307,11 +307,55 @@
                   "retention-days": 7
                   "if-no-files-found": "ignore"
 
+    # Weighs the Worker a `templates/standalone` app deploys against the committed
+    # ceiling in `worker-size.json`. Nothing else in CI measures bytes, and the
+    # cost of noticing late is a user's deploy rejected by Cloudflare for a
+    # dependency this repo added weeks earlier.
+    #
+    # Its own job, NOT the root `postinstall`: a failing postinstall gate turns
+    # every job red in its setup step and the cause is invisible in the job that
+    # reports it.
+    "worker-size":
+        "name": "Worker size budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "worker-size"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `build:packages:prod`, not `build:packages`: the reference app
+            # bundles the workspace `dist/` directories, and users install the
+            # production build. The development build measures ~25% heavier — a
+            # number nobody deploys, and a baseline nobody could reproduce.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Weigh the reference Worker"
+              "run": "pnpm run worker-size:check"
+
     # Single required check: green when every dependent job passed or was
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates"]
+        "needs": ["files-changed", "test", "test-workerd", "e2e", "templates", "worker-size"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
