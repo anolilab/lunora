@@ -96,6 +96,44 @@ describe("lunora backup", () => {
         expect(existsSync(join(directory, manifest[0]!.file))).toBe(true);
     });
 
+    it("writes the exact snapshot bytes and manifest JSON a directory backup has always produced", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+
+        await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            tables: "users",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        // Byte-for-byte, not "it worked": moving the filesystem writes behind a
+        // destination interface must not shift a single byte of what lands on
+        // disk, because these bytes are what an operator restores from.
+        const directory = join(workDir, ".lunora-backups");
+
+        expect(readFileSync(join(directory, "lunora-backup-2026-06-03T12-00-00-000Z.ndjson"), "utf8")).toBe(NDJSON);
+
+        expect(readFileSync(join(directory, "manifest.json"), "utf8")).toBe(
+            `[
+  {
+    "bytes": 37,
+    "createdAt": "2026-06-03T12:00:00.000Z",
+    "file": "lunora-backup-2026-06-03T12-00-00-000Z.ndjson",
+    "id": "2026-06-03T12:00:00.000Z",
+    "rows": 1,
+    "tables": "users"
+  }
+]
+`,
+        );
+    });
+
     it("list prints recorded backups", async () => {
         expect.assertions(1);
 

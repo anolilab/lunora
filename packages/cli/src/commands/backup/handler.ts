@@ -13,11 +13,7 @@
  * days (`getPitrBookmark` / `pitrRestore` via the admin-gated PITR endpoint),
  * no R2 read and no snapshot replay.
  */
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
-import { LunoraError } from "@lunora/errors";
 
 import { resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
@@ -28,11 +24,12 @@ import type { StreamingFetchLike } from "../data-transfer";
 import { runExportCommand, runImportCommand } from "../data-transfer";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
+import type { BackupDestination, BackupManifestEntry } from "./destination";
+import { createDirectoryDestination } from "./destination";
 import type { BackupOptions } from "./index";
 
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".lunora-backups";
-const MANIFEST_FILE = "manifest.json";
 
 /** Worker endpoint that forwards a per-shard native-PITR admin op (see `@lunora/runtime`). */
 const PITR_ENDPOINT_PATH = "/_lunora/admin/pitr";
@@ -40,16 +37,6 @@ const GET_PITR_BOOKMARK_OP = "__lunora_admin__:getPitrBookmark";
 const PITR_RESTORE_OP = "__lunora_admin__:pitrRestore";
 
 type BackupSubcommand = "create" | "list" | "pitr" | "restore";
-
-/** One recorded snapshot. `id` is the ISO timestamp; `file` is relative to the backup dir. */
-interface BackupManifestEntry {
-    bytes: number;
-    createdAt: string;
-    file: string;
-    id: string;
-    rows: number;
-    tables?: string;
-}
 
 interface BackupCommandOptions {
     /** `pitr`: restore to the bookmark nearest this time (ISO or epoch-ms), within 30 days. */
@@ -89,62 +76,25 @@ interface BackupCommandResult {
     entry?: BackupManifestEntry;
 }
 
-const isManifestEntry = (value: unknown): value is BackupManifestEntry =>
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as BackupManifestEntry).id === "string" &&
-    typeof (value as BackupManifestEntry).file === "string";
-
 /**
- * Read the backup index. A *missing* manifest is fine — start fresh with `[]`.
- * But a manifest that exists yet fails to parse (or isn't an array) is the
- * recovery index the feature exists to protect: throw rather than silently
- * treating it as empty, so the next `backup create` can't overwrite it and
- * destroy the historical index. (`isManifestEntry` still drops malformed
- * entries from an otherwise-valid array — those carry no recoverable id/file).
+ * Export every selected table and land the snapshot at `destination`. The
+ * export itself is destination-blind — it always streams NDJSON to a local
+ * path — so the only thing that varies is where `stage` puts that path and
+ * what `commit` then does with it. The manifest entry is recorded LAST, after
+ * the bytes are known to have landed, so the index never points at a snapshot
+ * that is not there.
  */
-const readManifest = async (directory: string): Promise<BackupManifestEntry[]> => {
-    const path = join(directory, MANIFEST_FILE);
-
-    if (!existsSync(path)) {
-        return [];
-    }
-
-    let parsed: unknown;
-
-    try {
-        parsed = JSON.parse(await readFile(path, "utf8"));
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        throw new LunoraError("INTERNAL", `backup: ${path} exists but is not valid JSON (${message}) — refusing to overwrite it; fix or remove it manually`, {
-            cause: error,
-        });
-    }
-
-    if (!Array.isArray(parsed)) {
-        throw new TypeError(`backup: ${path} exists but is not a JSON array — refusing to overwrite it; fix or remove it manually`);
-    }
-
-    return parsed.filter(isManifestEntry);
-};
-
-const writeManifest = async (directory: string, entries: ReadonlyArray<BackupManifestEntry>): Promise<void> => {
-    await writeFile(join(directory, MANIFEST_FILE), `${JSON.stringify(entries, undefined, 2)}\n`, "utf8");
-};
-
-const runBackupCreate = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
-    await mkdir(directory, { recursive: true });
-
+const runBackupCreate = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
     const timestamp = (options.now ?? (() => new Date()))().toISOString();
-    // Colons/periods are awkward in filenames across platforms; keep the raw id.
-    const file = `lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
+    // Colons/periods are awkward in filenames and object keys alike; keep the raw id.
+    const name = `lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
+    const staged = await destination.stage(name);
 
     const result = await runExportCommand({
         cwd: options.cwd,
         fetchImpl: options.fetchImpl,
         logger: options.logger,
-        out: join(directory, file),
+        out: staged,
         prod: options.prod,
         tables: options.tables,
         token: options.token,
@@ -155,22 +105,24 @@ const runBackupCreate = async (options: BackupCommandOptions, directory: string)
         return { code: result.code };
     }
 
-    const entry: BackupManifestEntry = { bytes: result.bytes, createdAt: timestamp, file, id: timestamp, rows: result.rows, tables: options.tables };
-    const manifest = await readManifest(directory);
+    const file = destination.locate(name);
 
-    manifest.push(entry);
-    await writeManifest(directory, manifest);
+    await destination.commit(file, staged);
+
+    const entry: BackupManifestEntry = { bytes: result.bytes, createdAt: timestamp, file, id: timestamp, rows: result.rows, tables: options.tables };
+
+    await destination.record(entry);
 
     options.logger.success(`backup created: ${file} (${result.rows.toString()} rows, ${result.bytes.toString()} bytes)`);
 
     return { code: 0, entry };
 };
 
-const runBackupList = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
-    const manifest = await readManifest(directory);
+const runBackupList = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
+    const manifest = await destination.list();
 
     if (manifest.length === 0) {
-        options.logger.info(`no backups found in ${directory}`);
+        options.logger.info(`no backups found in ${destination.label}`);
 
         return { code: 0 };
     }
@@ -182,7 +134,7 @@ const runBackupList = async (options: BackupCommandOptions, directory: string): 
     return { code: 0 };
 };
 
-const runBackupRestore = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
+const runBackupRestore = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
     const { target } = options;
 
     if (target === undefined || target.length === 0) {
@@ -192,32 +144,36 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
     }
 
     // Resolve the target: a manifest id maps to its recorded file; otherwise
-    // treat it as a direct path (absolute, or relative to cwd).
-    const manifest = await readManifest(directory);
+    // treat it as a direct path (absolute, or relative to cwd) / object key.
+    const manifest = await destination.list();
     const matched = manifest.find((entry) => entry.id === target);
-    const file = matched ? join(directory, matched.file) : target;
+    const snapshot = await destination.materialize(matched?.file ?? target, matched !== undefined);
 
-    if (!existsSync(file)) {
+    if (snapshot === undefined) {
         options.logger.error(`backup not found: ${target}`);
 
         return { code: 1 };
     }
 
-    const result = await runImportCommand({
-        cwd: options.cwd,
-        fetchImpl: options.fetchImpl,
-        file,
-        logger: options.logger,
-        prod: options.prod,
-        token: options.token,
-        url: options.url,
-        yes: options.yes,
-    });
+    try {
+        const result = await runImportCommand({
+            cwd: options.cwd,
+            fetchImpl: options.fetchImpl,
+            file: snapshot.path,
+            logger: options.logger,
+            prod: options.prod,
+            token: options.token,
+            url: options.url,
+            yes: options.yes,
+        });
 
-    // Plain snapshot import — the off-platform / portable restore. For in-place
-    // time-travel to an arbitrary moment in the last 30 days, use native PITR
-    // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
-    return { code: result.code };
+        // Plain snapshot import — the off-platform / portable restore. For in-place
+        // time-travel to an arbitrary moment in the last 30 days, use native PITR
+        // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
+        return { code: result.code };
+    } finally {
+        await snapshot.release();
+    }
 };
 
 /**
@@ -323,22 +279,25 @@ const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupComma
 
 const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const directory = join(cwd, options.dir ?? DEFAULT_BACKUP_DIR);
 
     try {
-        if (options.subcommand === "create") {
-            return await runBackupCreate(options, directory);
-        }
-
-        if (options.subcommand === "list") {
-            return await runBackupList(options, directory);
-        }
-
+        // `pitr` is the in-place tier and reads no snapshot at all, so it is
+        // answered before any destination exists.
         if (options.subcommand === "pitr") {
             return await runBackupPitr(options);
         }
 
-        return await runBackupRestore(options, directory);
+        const destination = createDirectoryDestination(join(cwd, options.dir ?? DEFAULT_BACKUP_DIR));
+
+        if (options.subcommand === "create") {
+            return await runBackupCreate(options, destination);
+        }
+
+        if (options.subcommand === "list") {
+            return await runBackupList(options, destination);
+        }
+
+        return await runBackupRestore(options, destination);
     } catch (error: unknown) {
         // Surface a corrupt-manifest (or other) failure as a clean non-zero exit
         // instead of an unhandled rejection — and never clobber an unreadable index.
@@ -381,5 +340,5 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ a
 });
 
 export { execute };
-export type { BackupCommandOptions, BackupCommandResult, BackupManifestEntry, BackupSubcommand };
+export type { BackupCommandOptions, BackupCommandResult, BackupSubcommand };
 export { runBackupCommand };
