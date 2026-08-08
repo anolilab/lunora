@@ -5,7 +5,6 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import { runDataMigration } from "../src/data-migration";
 import { encodeDocJson } from "../src/do-sql";
 import { buildReprojectionMigration, countLegacyRows, reprojectableFields, reprojectionMigrationId, reprojectionTables } from "../src/reprojection-backfill";
-import { serializeSqlValue } from "../src/serialize-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -64,6 +63,14 @@ const seedLegacy = (id: string, fields: Record<string, unknown>): void => {
 /** Wire-tagged forms as the legacy codec stored them. */
 const taggedBigint = (digits: string): unknown[] => ["$lunora.wire$", "bigint", digits];
 const taggedBytes = (base64: string): unknown[] => ["$lunora.wire$", "bytes", base64, "ArrayBuffer"];
+
+/**
+ * The literal on-disk projection, spelled out rather than obtained from
+ * `serializeSqlValue`. Comparing the stored text against the same function that
+ * produced it passes even if the projection reverts to `String(value)` — the
+ * exact defect this branch had two commits ago.
+ */
+const BIGINT_KEY = (digits: string): string => `1${digits.padStart(39, "0")}`;
 
 const storedDoc = (id: string): Record<string, unknown> =>
     JSON.parse(harness.raw(`SELECT "__doc__" FROM paymentSessions WHERE id = ?`, id)[0]?.["__doc__"] as string) as Record<string, unknown>;
@@ -160,7 +167,7 @@ describe("reprojection backfill", () => {
             const after = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
 
             expect(after.page.map((row) => row["_id"])).toStrictEqual(["legacy-1"]);
-            expect(storedDoc("legacy-1")["amountMinor"]).toBe(serializeSqlValue(10n));
+            expect(storedDoc("legacy-1")["amountMinor"]).toBe(BIGINT_KEY("10"));
         });
 
         it("re-projects a v.bytes() column too", async () => {
@@ -176,7 +183,7 @@ describe("reprojection backfill", () => {
             const row = await writer.get("legacy-b", "paymentSessions");
 
             expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(payload);
-            expect(storedDoc("legacy-b")["receipt"]).toBe(serializeSqlValue(payload.buffer));
+            expect(storedDoc("legacy-b")["receipt"]).toBe("AQID/w==");
         });
 
         it("leaves a row already in the current projection untouched", async () => {
@@ -250,18 +257,22 @@ describe("reprojection backfill", () => {
             expect(second.changed).toBe(5);
         });
 
-        it("is a no-op on a second full run", async () => {
-            expect.assertions(1);
+        it("changes nothing on a second full run", async () => {
+            expect.assertions(3);
 
             const writer = setup();
 
             seedLegacy("legacy-1", { amountMinor: taggedBigint("10"), currency: "usd" });
 
-            await run(writer);
+            const first = await run(writer);
+            const stored = storedDoc("legacy-1");
+            const second = await run(writer);
 
-            // Completed migrations are idempotent in the runner, so this returns
-            // the recorded counts without touching a row.
-            expect(countLegacyRows(harness.sql, "paymentSessions", ["amountMinor", "receipt"])).toBe(0);
+            expect(first.changed).toBe(1);
+            // The runner short-circuits a completed migration, so the second run
+            // reports the recorded counts and rewrites nothing.
+            expect(second.changed).toBe(1);
+            expect(storedDoc("legacy-1")).toStrictEqual(stored);
         });
     });
 
@@ -307,7 +318,7 @@ describe("reprojection backfill", () => {
 
             expect(after).toStrictEqual(before);
             // …and the projected columns really did move to the queryable form.
-            expect(storedDoc("legacy-rich")["amountMinor"]).toBe(serializeSqlValue(42n));
+            expect(storedDoc("legacy-rich")["amountMinor"]).toBe(BIGINT_KEY("42"));
         });
     });
 });

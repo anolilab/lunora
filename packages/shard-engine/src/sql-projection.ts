@@ -45,12 +45,14 @@
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../shared/base64";
+import type { KindedValidator } from "../../../shared/effective-kind";
+import { effectiveKind } from "../../../shared/effective-kind";
 
 /**
- * Digits of magnitude a projected `bigint` may carry. 39 covers the whole
- * unsigned 128-bit range (`< 1.7e38`), so every ordinary use — money in minor
- * units, snowflake ids, epoch nanoseconds, UUID-as-integer — fits with room to
- * spare.
+ * Digits of magnitude a projected `bigint` may carry. 39 digits reach 1e39,
+ * clearing the unsigned 128-bit maximum (~3.4e38), so every ordinary use — money
+ * in minor units, snowflake ids, epoch nanoseconds, UUID-as-integer — fits with
+ * room to spare.
  *
  * ponytail: a fixed width means a hard ceiling, and a value past it is refused
  * rather than silently mis-sorted. Widening is a stored-format change; the
@@ -110,4 +112,38 @@ const sqlComparableProjection = (value: unknown): string | undefined => {
     return ArrayBuffer.isView(value) ? toBase64(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)) : undefined;
 };
 
-export { BIGINT_KEY_DIGITS, sqlComparableProjection };
+/**
+ * Whether a column of this validator is stored as a projected sort key rather
+ * than as its value — i.e. whether SQL reading `$.field` gets a comparison key
+ * instead of something it can reduce or hand back.
+ *
+ * Reads the **effective** kind, so `v.optional(v.bigint())` answers the same as
+ * `v.bigint()`. Dispatching on `validator.kind` directly is the mistake this
+ * exists to stop: the projection keys off the runtime JS type, so an optional
+ * column is projected exactly like its inner one while its declared kind says
+ * `"optional"`, and every guard that missed that returned a confident wrong
+ * number.
+ */
+const isProjectedKind = (validator: KindedValidator): boolean => {
+    const kind = effectiveKind(validator);
+
+    return kind === "bigint" || kind === "bytes";
+};
+
+/**
+ * Whether a column of this validator **could** hold a projected value.
+ *
+ * Wider than {@link isProjectedKind} because a `v.any()` / `v.union()` /
+ * `v.from()` field is declared without committing to a type and can perfectly
+ * well hold a `bigint` or an `ArrayBuffer` — which the projection then projects,
+ * on runtime type, exactly as it would a declared one. Used where missing a
+ * field means missing data (the re-projection backfill's scan), not where
+ * over-matching would be harmful.
+ */
+const mayHoldProjectedValue = (validator: KindedValidator): boolean => {
+    const kind = effectiveKind(validator);
+
+    return isProjectedKind(validator) || kind === "any" || kind === "union" || kind === "from";
+};
+
+export { BIGINT_KEY_DIGITS, isProjectedKind, mayHoldProjectedValue, sqlComparableProjection };

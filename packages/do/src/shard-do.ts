@@ -308,11 +308,23 @@ const adminResponse = (result: unknown): Response => jsonResponse({ result: enco
  * @throws LunoraError `BAD_REQUEST` when the args are malformed — `decodeWire` raises a bare `RangeError` past its depth / bigint-digit bounds, and these are caller-supplied, so that is a 400 rather than the unmapped 500 it would otherwise become
  */
 const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unknown> => {
+    let decoded: unknown;
+
     try {
-        return decodeWire(rawArgs) as Record<string, unknown>;
+        decoded = decodeWire(rawArgs);
     } catch {
         throw new LunoraError("BAD_REQUEST", "malformed admin RPC arguments");
     }
+
+    // Decoding can change the SHAPE, not just the leaves: a top-level tagged
+    // `undefined` decodes to a primitive and a root array stays an array.
+    // Handlers index `args` before validating it, so the object-ness has to be
+    // re-established here rather than assumed from the parameter type.
+    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+        throw new LunoraError("BAD_REQUEST", "malformed admin RPC arguments");
+    }
+
+    return decoded as Record<string, unknown>;
 };
 
 const WS_KEEPALIVE_PING = "lunora-ping";

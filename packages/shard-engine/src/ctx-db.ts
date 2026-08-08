@@ -51,6 +51,7 @@ import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
@@ -111,6 +112,7 @@ import type {
     TableDefinitionLike,
     TableReaderLike,
 } from "./schema-types";
+import { isProjectedKind } from "./sql-projection";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
 import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
@@ -943,6 +945,30 @@ const runPlainFetch = (
 
 /** DO drizzle `where` strategy (flat): fields via `json_extract`, values via {@link serializeSqlValue}. */
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
+
+/**
+ * Refuse a SQL-side reduce or group over a column stored as a projected sort
+ * key. `json_extract` hands SQL the key, not the value: `SUM` over a
+ * zero-padded bigint key coerces to nonsense (2e+39 for a couple of small
+ * amounts), `MIN`/`MAX` return the padded string, and a `GROUP BY` key comes
+ * back as 40 characters of padding. All three look like answers.
+ *
+ * The maintained companion is exact for these, so the error names it rather
+ * than just refusing. Applied at every SQL-reducing entry point —
+ * `aggregate`'s scan and both halves of `groupBy` — because guarding one and
+ * not its sibling is how the first version of this shipped.
+ * @throws LunoraError `BAD_REQUEST` when `field` is stored as a projected key
+ */
+const assertReducibleBySql = (definition: TableDefinitionLike, field: string, label: string): void => {
+    const validator = definition.shape[field];
+
+    if (validator && isProjectedKind(validator)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
+        );
+    }
+};
 
 /**
  * Per-query `where` strategy that compiles correlated-EXISTS markers (Phase 2
@@ -2487,12 +2513,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // of small values) and `MIN`/`MAX` hand back the padded string. The
             // maintained companion above answers these correctly, so name it
             // rather than return a number that looks plausible and is not.
-            if (definition.shape[aggOptions.field]?.kind === "bigint") {
-                throw new LunoraError(
-                    "BAD_REQUEST",
-                    `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" }): a v.bigint() column is stored as an order-preserving key, which SQL cannot reduce — declare an aggregateIndex for this (by, field, op) so the maintained companion answers it`,
-                );
-            }
+            assertReducibleBySql(definition, aggOptions.field, `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" })`);
 
             const whereCondition = compileWhereSql(resolved, doWhereSqlStrategy);
             const aggregateSql = aggregateSqlFunction(aggOptions.op);
@@ -3155,13 +3176,24 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     ).toArray();
 
                     for (const row of rowsIndexed) {
-                        const decoded = JSON.parse(row.key) as Record<string, unknown>;
+                        // `encodeAggregateKey` writes `JSON.stringify(encodeWire(tuple))`,
+                        // so a bare `JSON.parse` hands the caller the tagged array
+                        // for a bigint/bytes `by` field instead of the value.
+                        const decoded = decodeWire(JSON.parse(row.key)) as Record<string, unknown>;
 
                         indexedResult.push({ key: decoded, value: readAggregateValue(agg.op, row) });
                     }
 
                     return indexedResult;
                 }
+            }
+
+            for (const field of groupOptions.by) {
+                assertReducibleBySql(definition, field, `groupBy(${tableName}, { by: [..."${field}"] })`);
+            }
+
+            if (agg.field !== undefined) {
+                assertReducibleBySql(definition, agg.field, `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${agg.field}" } })`);
             }
 
             const whereCondition = compileWhereSql(resolved, doWhereSqlStrategy);

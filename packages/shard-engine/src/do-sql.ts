@@ -104,7 +104,11 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
             // projection stays byte-identical and one that does only gains the
             // reserved key, at the end.
             projected ??= { ...document };
-            originals ??= {};
+            // Null-prototype: a field literally named `__proto__` would otherwise
+            // hit `Object.prototype`'s setter and the value would vanish instead
+            // of being parked. The wire codec guards the same key for the same
+            // reason.
+            originals ??= Object.create(null) as Record<string, unknown>;
             projected[field] = comparable;
             originals[field] = value;
         }

@@ -51,9 +51,17 @@ export const aggregateTableName = (table: string, indexName: string): string => 
  * A `v.bigint()` field contributes too — without it a `sum` over a money column
  * silently reported 0. `__value__` is a REAL column, so a value past
  * `Number.MAX_SAFE_INTEGER` cannot be held exactly; rather than fold a rounded
- * one into a running total nobody can audit, that throws. Money in minor units
- * is nowhere near the boundary; a snowflake id is past it, and summing those is
- * not a meaningful question anyway.
+ * one into a running total, that throws. Money in minor units is nowhere near
+ * the boundary; a snowflake id is past it, and summing those is not a
+ * meaningful question anyway.
+ *
+ * **This bounds each contribution, not the total.** The running sum accumulates
+ * in the REAL column itself (`COALESCE(__value__, 0) + excluded.__value__` in
+ * `applyAggregateDelta`), so enough in-range values still carry it past 2^53 and
+ * it rounds there — exactly as a `v.number()` sum does, and for the same reason.
+ * That is the companion's precision model rather than anything specific to
+ * `bigint`: an exactly-representable large-integer total is not something a
+ * REAL column can offer, and a caller who needs one has to reduce the rows.
  * @returns the numeric value when finite, or `undefined` when not a finite number
  * @throws LunoraError `BAD_REQUEST` when a `bigint` is too large for the companion's REAL column to hold exactly
  */

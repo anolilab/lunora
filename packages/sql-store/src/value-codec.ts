@@ -12,6 +12,8 @@
  */
 import type { ValidatorLike } from "@lunora/shard-engine";
 
+import { effectiveKind } from "../../../shared/effective-kind";
+
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 export const sqliteEncode = (value: unknown): unknown => {
     if (typeof value === "boolean") {
@@ -63,22 +65,15 @@ export const decodeBigint = (raw: unknown): unknown => {
 };
 
 /**
- * Resolve the *effective* storage kind of a column validator. Encoding keys off
- * the runtime value's JS type, so a `v.optional(inner)` column stores its
- * present value exactly as `inner` would. The validator's own `kind` is
- * `"optional"`, which hides that — unwrap to the inner validator's kind so the
- * decode reverses the real storage form. The inner validator is stashed on
- * `_meta.inner` by `@lunora/values`' `createValidator`.
+ * Resolve the *effective* storage kind of a column validator: `v.optional(inner)`
+ * unwrapped to `inner`'s kind, since encoding keys off the runtime value's JS
+ * type and the validator's own `kind` of `"optional"` hides that.
+ *
+ * A thin alias over `shared/effective-kind`, which is where the rule lives so
+ * the DO row store applies the identical one — it reads the same validators and
+ * has the same failure mode, and two copies drifted the last time.
  */
-export const effectiveColumnKind = (validator: ValidatorLike): string | undefined => {
-    if (validator.kind !== "optional") {
-        return validator.kind;
-    }
-
-    const inner = (validator._meta as { inner?: ValidatorLike } | undefined)?.inner;
-
-    return inner ? effectiveColumnKind(inner) : validator.kind;
-};
+export const effectiveColumnKind = (validator: ValidatorLike): string | undefined => effectiveKind(validator);
 
 /**
  * Inverse of {@link sqliteEncode}: map a SQLite storage value back onto its JS

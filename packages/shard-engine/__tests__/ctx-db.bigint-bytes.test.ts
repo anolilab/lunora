@@ -5,7 +5,6 @@ import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { encodeDocJson } from "../src/do-sql";
 import { estimateBytes } from "../src/estimate-bytes";
-import { serializeSqlValue } from "../src/serialize-sql";
 import { TransactionHeadroomTracker } from "../src/transaction-headroom";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -56,6 +55,9 @@ const schema: SchemaLike = {
                 capturedMinor: { kind: "bigint" },
                 currency: { kind: "string" },
                 externalId: { kind: "bigint" },
+                // Declared `optional`, projected like a bigint. Every guard that
+                // read `validator.kind` directly was blind to exactly this.
+                feeMinor: { _meta: { inner: { kind: "bigint" } }, kind: "optional" },
                 receipt: { kind: "bytes" },
                 refundedMinor: { kind: "bigint" },
             },
@@ -87,6 +89,14 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 };
 
 const ids = (rows: Record<string, unknown>[]): unknown[] => rows.map((row) => row["_id"]);
+
+/**
+ * The literal on-disk projection for a bigint. Spelled out rather than taken
+ * from `serializeSqlValue`: comparing the stored text against the same function
+ * that produced it passes even if the projection reverts to `String(value)`,
+ * which is precisely the defect this suite exists to prevent recurring.
+ */
+const BIGINT_KEY = (digits: string): string => `1${digits.padStart(39, "0")}`;
 
 describe("ctx-db bigint/bytes doc-blob round-trip", () => {
     beforeEach(() => {
@@ -183,7 +193,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             expect(row?.["amountMinor"]).toBe(10n);
             // `{"amountMinor":"10"}` — 20 characters. A bigint charged as `{}`
             // (the pre-fix shape) would be 17, and `undefined` fails the insert.
-            expect(estimateBytes({ amountMinor: 10n })).toBe(20);
+            // A projected bigint is stored TWICE — the 40-char key plus the tagged
+            // original — so the estimate has to cover both, not just the digits.
+            expect(estimateBytes({ amountMinor: 10n })).toBe(100);
         });
     });
 
@@ -355,6 +367,37 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(19);
         });
 
+        it("refuses to reduce an OPTIONAL bigint column too", async () => {
+            expect.assertions(2);
+
+            // `v.optional(v.bigint())` has `kind === "optional"` with the real
+            // validator on `_meta.inner`. A guard reading `kind` directly let
+            // this through and the scan reduced the padded keys: two rows of
+            // 100n and 250n summed to 2e+39, silently.
+            const writer = setup();
+
+            await writer.insert("paymentSessions", { _id: "o1", currency: "usd", feeMinor: 100n }, { allowExplicitId: true });
+            await writer.insert("paymentSessions", { _id: "o2", currency: "usd", feeMinor: 250n }, { allowExplicitId: true });
+
+            const error = await writer.aggregate("paymentSessions", { field: "feeMinor", op: "sum" }).catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error)).toBe(true);
+            expect((error as Error).message).toContain("aggregateIndex");
+        });
+
+        it("filters an optional bigint column by value", async () => {
+            expect.assertions(1);
+
+            const writer = setup();
+
+            await writer.insert("paymentSessions", { _id: "o1", currency: "usd", feeMinor: 100n }, { allowExplicitId: true });
+            await writer.insert("paymentSessions", { _id: "o2", currency: "usd", feeMinor: 250n }, { allowExplicitId: true });
+
+            const { page } = await writer.findMany("paymentSessions", { where: { feeMinor: 250n } });
+
+            expect(ids(page)).toStrictEqual(["o2"]);
+        });
+
         it("refuses to reduce a bigint column on the SQL scan path", async () => {
             expect.assertions(2);
 
@@ -391,15 +434,25 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
         });
 
         it("groups by a bigint column instead of throwing out of the key encoder", async () => {
-            expect.assertions(1);
+            expect.assertions(2);
 
+            // Named for `groupBy` and previously asserting `count`, which is why
+            // it never noticed that the indexed group key came back as the raw
+            // tagged array and the scan path returned the 40-char padded key.
             const writer = setup();
 
             await seed(writer);
 
-            // `encodeAggregateKey` used a bare `JSON.stringify`, which throws on
-            // a bigint `by`-field value.
-            await expect(writer.count("paymentSessions", { where: { amountMinor: 9n } })).resolves.toBe(1);
+            const grouped = await writer.groupBy("paymentSessions", { agg: { op: "count" }, by: ["currency"] });
+            const usd = grouped.find((group) => (group["key"])["currency"] === "usd");
+
+            expect(usd?.["value"]).toBe(2);
+
+            // Grouping BY the bigint column itself: the scan cannot hand back a
+            // sort key as if it were the value, so it names the limitation.
+            const error = await writer.groupBy("paymentSessions", { agg: { op: "count" }, by: ["amountMinor"] }).catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error)).toBe(true);
         });
     });
 
@@ -515,9 +568,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const view = new Uint8Array(buffer, 1, 2);
             const stored = JSON.parse(encodeDocJson({ amountMinor: 10n, capturedMinor: view, receipt: buffer })) as Record<string, unknown>;
 
-            expect(stored["amountMinor"]).toStrictEqual(serializeSqlValue(10n));
-            expect(stored["receipt"]).toStrictEqual(serializeSqlValue(buffer));
-            expect(stored["capturedMinor"]).toStrictEqual(serializeSqlValue(view));
+            expect(stored["amountMinor"]).toStrictEqual(BIGINT_KEY("10"));
+            expect(stored["receipt"]).toBe("AQID");
+            expect(stored["capturedMinor"]).toBe("AgM=");
         });
 
         it("a doc with no bigint/bytes/Date leaves encodes byte-identically to plain JSON.stringify", () => {
@@ -558,7 +611,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
         it("refuses a document carrying the reserved key rather than eating it", () => {
             expect.assertions(4);
 
-            // Nothing stops a schema from declaring a `__sql__` field: the only
+            // Nothing stops a schema from declaring a `__originals__` field: the only
             // reserved-name enforcement in the stack is `RESERVED_TABLE_NAMES`
             // in `packages/codegen/src/discover-schema.ts:64`, which covers
             // TABLE names, and `SYSTEM_INDEX_FIELDS`
@@ -661,7 +714,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             >;
 
             expect(ids(after.page)).toStrictEqual(["tagged-1"]);
-            expect(stored["amountMinor"]).toBe(serializeSqlValue(10n));
+            expect(stored["amountMinor"]).toBe(BIGINT_KEY("10"));
         });
     });
 });
