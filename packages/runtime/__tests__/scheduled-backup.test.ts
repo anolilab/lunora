@@ -99,7 +99,13 @@ const memoryBackupStore = (): BackupStore & { checksums: Map<string, string>; ob
         objects.delete(key);
     });
 
-    return { checksums, delete: remove, list, objects, put };
+    const get = vi.fn<(key: string) => Promise<{ text: () => Promise<string> } | null>>(async (key) => {
+        const stored = objects.get(key);
+
+        return stored === undefined ? null : { text: async () => stored };
+    });
+
+    return { checksums, delete: remove, get, list, objects, put };
 };
 
 /** Lowercase-hex SHA-256 of a UTF-8 string — the same digest the runtime computes over the snapshot. */
@@ -177,31 +183,78 @@ describe("createWorker — scheduled backup", () => {
         expect(store.checksums.has(`${ndjsonKey}.manifest.json`)).toBe(false);
     });
 
-    it("refuses a snapshot past the in-memory limit instead of running the isolate out of memory", async () => {
-        expect.assertions(3);
+    it("refuses a snapshot past the size limit, mid-export, without writing anything", async () => {
+        expect.assertions(4);
 
         const store = memoryBackupStore();
-        // ~1 KiB per row × 200k rows is comfortably past the 64 MiB bound, and
-        // the guard trips while rows are still arriving rather than after the
-        // whole export has been held.
         const wide = "x".repeat(1024);
-        const rows = Array.from({ length: 200_000 }, (_unused, index) => {
-            return { doc: { _id: `u${String(index)}`, blob: wide }, table: "users" };
-        });
+        let yielded = 0;
+
+        // Driven through `exportGlobals`, the one branch that reaches the
+        // encoder incrementally — the shard fan-out resolves its rows before
+        // the first check runs, so it could not show the guard stopping
+        // anything early. `yielded` is the assertion that it does: the
+        // generator is abandoned well before it could produce 24 MiB.
+        const exportGlobals: WorkerOptions["exportGlobals"] = async function* () {
+            for (let index = 0; index < 1_000_000; index += 1) {
+                yielded += 1;
+                yield { doc: { _id: `p${String(index)}`, blob: wide }, table: "plans" };
+            }
+        };
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
             backupCron: BACKUP_CRON,
             backupStore: store,
-            queryCoordinator: coordinatorWithExport(rows),
+            exportGlobals,
+            queryCoordinator: coordinatorWithExport([]),
             shardDO: noopNamespace,
         });
 
-        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/in-memory limit/u);
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/past the \d+-byte limit/u);
 
+        // Stopped as soon as the budget was exceeded, not after draining 1M rows.
+        expect(yielded).toBeLessThan(30_000);
         // Nothing written, so no manifest can point at a snapshot that is not there.
         expect(store.objects.size).toBe(0);
         expect(store.put).not.toHaveBeenCalled();
+    });
+
+    it("prunes its own snapshots and leaves operator-taken ones alone", async () => {
+        expect.assertions(4);
+
+        const store = memoryBackupStore();
+        // What `lunora backup create --bucket` writes: the same prefix and the
+        // same sidecar suffix, deliberately, so one bucket reads as one
+        // history — and with no `scheduledTime`, because no cron took it.
+        const operatorKey = "backups/lunora-backup-2026-06-01T09-00-00-000Z.ndjson";
+
+        store.objects.set(operatorKey, '{"table":"users","doc":{"_id":"u0"}}\n');
+        store.objects.set(
+            `${operatorKey}.manifest.json`,
+            `${JSON.stringify({ bytes: 36, createdAt: "2026-06-01T09:00:00.000Z", file: operatorKey, id: "2026-06-01T09:00:00.000Z", rows: 1 })}\n`,
+        );
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        // Two cron fires with `backupRetain: 1`: the older cron snapshot goes,
+        // the operator's stays. Deleting a snapshot somebody took by hand —
+        // silently, from the bucket the docs recommend — is the failure mode
+        // that comes with sharing the prefix.
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+
+        expect(store.objects.has(operatorKey)).toBe(true);
+        expect(store.objects.has(`${operatorKey}.manifest.json`)).toBe(true);
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(false);
+        expect(store.objects.has("backups/lunora-backup-2026-06-04T12-00-00-000Z.ndjson")).toBe(true);
     });
 
     it("includes `.global()` rows from exportGlobals in the snapshot", async () => {
@@ -326,11 +379,18 @@ describe("createWorker — scheduled backup", () => {
         expect.assertions(3);
 
         const store = memoryBackupStore();
-        // Two pre-existing snapshots already on the store (older + newer).
-        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
-        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
-        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson", "mid\n");
-        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson.manifest.json", "{}");
+        // Two pre-existing snapshots already on the store (older + newer). Their
+        // sidecars carry `scheduledTime`, because retention only ever removes
+        // snapshots this cron took — see the operator-snapshot test below.
+        const seed = (id: string, body: string): void => {
+            const key = `backups/lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
+
+            store.objects.set(key, body);
+            store.objects.set(`${key}.manifest.json`, JSON.stringify({ cron: BACKUP_CRON, file: key, id, scheduledTime: Date.parse(id) }));
+        };
+
+        seed("2026-06-01T00:00:00.000Z", "old\n");
+        seed("2026-06-02T00:00:00.000Z", "mid\n");
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
