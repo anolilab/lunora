@@ -278,10 +278,12 @@ describe(bindMutators, () => {
 
             const settled = configs[0]?.mutationFn();
             let done = false;
-
-            void settled?.then(() => {
+            // Observe settlement without awaiting it — the assertions below read `done`
+            // synchronously to prove the overlay is still held at each step.
+            const tracked = (async () => {
+                await settled;
                 done = true;
-            });
+            })();
 
             // The push is acked but no poke echoes the watermark: still held.
             await vi.advanceTimersByTimeAsync(2000);
@@ -291,7 +293,7 @@ describe(bindMutators, () => {
             // Past the fallback window the overlay is released and reported, instead
             // of `isPersisted` hanging forever on a dropped poke.
             await vi.advanceTimersByTimeAsync(1500);
-            await settled;
+            await tracked;
 
             expect(done).toBe(true);
             expect(fallbacks).toStrictEqual([{ kind: "mutationId", waitedMs: 3000, watermark: 1 }]);
@@ -411,10 +413,12 @@ describe(bindMutators, () => {
 
         const settled = configs[0]?.mutationFn();
         let done = false;
-
-        void settled?.then(() => {
+        // Observe settlement without awaiting it — `done` is read synchronously below
+        // to prove the overlay is still held.
+        const tracked = (async () => {
+            await settled;
             done = true;
-        });
+        })();
 
         await Promise.resolve();
         await Promise.resolve();
@@ -424,7 +428,7 @@ describe(bindMutators, () => {
         // The teardown path resolves the parked waiter instead of leaving it pending
         // for the lifetime of the page.
         checkpoints.resolve({ mutationId: Number.POSITIVE_INFINITY });
-        await settled;
+        await tracked;
 
         expect(done).toBe(true);
     });
@@ -434,8 +438,8 @@ describe(bindMutators, () => {
         // literal is pinned in `@lunora/db`. Read the upstream module off disk (via the
         // one path its exports map does expose) so an upstream rename fails HERE, with
         // a clear message, instead of silently reverting every optimistic edit.
-        const require_ = createRequire(import.meta.url);
-        const packageJsonPath = require_.resolve("@tanstack/db/package.json");
+        const requireFromTest = createRequire(import.meta.url);
+        const packageJsonPath = requireFromTest.resolve("@tanstack/db/package.json");
         const source = readFileSync(join(dirname(packageJsonPath), "dist", "esm", "collection", "transaction-metadata.js"), "utf8");
 
         expect(source).toContain(DIRECT_TRANSACTION_METADATA_KEY);
@@ -845,7 +849,7 @@ describe(bindMutators, () => {
                 serverRef: api.mutators.setText,
             });
 
-            const callMutator = vi.fn(async () => {
+            const callMutator = vi.fn<() => Promise<{ applied: boolean; result: unknown }>>(async () => {
                 return { applied: true, result: undefined };
             });
             const bound = bindTyped({ callMutator, confirmedMutationWatermark: () => 0 } as never, { checkpoints: false, collections: { nodes } }, { setText });

@@ -41,6 +41,15 @@ import type { Collection } from "@tanstack/db";
 
 import type { Row } from "./internals";
 
+/** Merge a plan's row lists in application order, so both appliers walk the same sequence. */
+const ordered = (plan: ChangePlan): { deletes: ReadonlyArray<PlanDelete>; inserts: ReadonlyArray<PlanInsert>; patches: ReadonlyArray<PlanPatch> } => {
+    return {
+        deletes: plan.deletes ?? [],
+        inserts: plan.inserts ?? [],
+        patches: plan.patches ?? [],
+    };
+};
+
 /** One row to insert. `_id` may be pre-minted client-side so the optimistic row keys match the persisted one. */
 export interface PlanInsert {
     /** Row body. Include `_id` to key the row yourself (the server honors it as the `clientId`). */
@@ -97,13 +106,6 @@ export interface PlanWriter {
     patch: (id: never, patch: Record<string, unknown>) => Promise<void>;
 }
 
-/** Merge a plan's row lists in application order, so both appliers walk the same sequence. */
-const ordered = (plan: ChangePlan): { deletes: ReadonlyArray<PlanDelete>; inserts: ReadonlyArray<PlanInsert>; patches: ReadonlyArray<PlanPatch> } => ({
-    deletes: plan.deletes ?? [],
-    inserts: plan.inserts ?? [],
-    patches: plan.patches ?? [],
-});
-
 /**
  * Apply `plan` to a map of TanStack collections — the client (optimistic) half.
  *
@@ -159,6 +161,7 @@ export const applyPlanToCollections = (collections: Record<string, Collection<Ro
  * rolls the whole plan back. An insert carrying an `_id` forwards it as `clientId`,
  * which is how a client-minted key becomes the persisted primary key.
  */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public API name mirroring the framework's own `ctx.db`; renaming would break consumers and diverge from the writer it applies to
 export const applyPlanToDb = async (db: PlanWriter, plan: ChangePlan): Promise<void> => {
     const { deletes, inserts, patches } = ordered(plan);
 
@@ -173,9 +176,9 @@ export const applyPlanToDb = async (db: PlanWriter, plan: ChangePlan): Promise<v
     }
 
     for (const entry of inserts) {
-        const { _id, ...body } = entry.row;
+        const { _id: clientId, ...body } = entry.row;
 
         // eslint-disable-next-line no-await-in-loop -- see above
-        await db.insert(entry.table as never, body, ...(typeof _id === "string" ? [{ clientId: _id }] : []));
+        await db.insert(entry.table as never, body, ...(typeof clientId === "string" ? [{ clientId }] : []));
     }
 };

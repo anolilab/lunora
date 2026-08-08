@@ -93,7 +93,7 @@ const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
     // this function is to turn a bad `serverRef` into the LunoraError below, and an
     // untyped caller (plain JS, `any`, a stale generated file) passing null/undefined
     // would otherwise get a bare `TypeError` about `__lunoraRef` instead.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untyped JS callers despite the non-nullable type
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition, no-underscore-dangle -- guards untyped JS callers despite the non-nullable type; `__lunoraRef` is the field codegen stamps on a function reference
     const path = typeof serverRef === "string" ? serverRef : serverRef?.__lunoraRef;
 
     if (typeof path !== "string" || path.length === 0) {
@@ -186,7 +186,7 @@ export interface BindMutatorsContext<TCollections extends CollectionMap = Collec
      * `lastMutationId >= clientSeq` (via {@link CheckpointRegistry.resolve}), so the
      * row never flashes out and back.
      *
-     * Defaults to the shared per-shard registry for `client` + {@link shardKey}
+     * Defaults to the shared per-shard registry for `client` + {@link BindMutatorsContext.shardKey}
      * ({@link getShardCheckpoints}) — the same one
      * {@link import("./collection-options").lunoraCollectionOptions} defaults to, so
      * a shard's collections and its mutators gate on one watermark line without the
