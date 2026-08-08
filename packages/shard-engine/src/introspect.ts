@@ -842,6 +842,16 @@ const MAX_FACET_LIMIT = 200;
 const DOC_COLUMN = "__doc__";
 
 /**
+ * `encodeDocJson`'s reserved key inside the blob (`do-sql.ts`'s
+ * `DOC_ORIGINALS_KEY`), holding the wire-tagged originals of the fields it
+ * projected to a SQL-comparable scalar. Storage bookkeeping, not a user field,
+ * so the data browser drops it — the projected value already sits in the
+ * field's own column, in the JSON-safe form this read path requires (see
+ * {@link safeParseObject}).
+ */
+const DOC_ORIGINALS_KEY = "__sql__";
+
+/**
  * JSON-parse a stored `__doc__` blob to a plain object, or `undefined` when the
  * text isn't a JSON object.
  *
@@ -899,8 +909,9 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
         }
 
         const meta = Object.fromEntries(Object.entries(row).filter(([column]) => column !== DOC_COLUMN));
+        const fields = Object.fromEntries(Object.entries(documentData).filter(([column]) => column !== DOC_ORIGINALS_KEY));
 
-        parsed.push({ ...meta, ...documentData });
+        parsed.push({ ...meta, ...fields });
     }
 
     const metaColumns = columns.filter((name) => name !== DOC_COLUMN);

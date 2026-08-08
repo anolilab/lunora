@@ -10,6 +10,7 @@
  * identically.
  */
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { AggregateIndexDefinitionLike } from "./schema-types";
 
 /** Code-point-stable string comparator (no locale dependence) for canonical key ordering. Shared with the rank twin (`rank.ts`). */
@@ -41,9 +42,20 @@ export const aggregateTableName = (table: string, indexName: string): string => 
  * (it neither shifts the running value nor counts toward `avg`'s divisor), so
  * the maintained companion matches the scan answer for the typical
  * always-numeric column and degrades the same way for a stray non-number.
+ *
+ * A `v.bigint()` field contributes too, coerced through `Number` — the same
+ * projection `encodeDocJson` stores and the SQL scan path therefore reads, so
+ * the maintained companion and the scan agree. Without it a `sum` over a money
+ * column silently reported 0.
  * @returns the numeric value when finite, or `undefined` when not a finite number
  */
 export const coerceAggregateNumber = (value: unknown): number | undefined => {
+    if (typeof value === "bigint") {
+        const asNumber = Number(value);
+
+        return Number.isFinite(asNumber) ? asNumber : undefined;
+    }
+
     if (typeof value === "number") {
         return Number.isFinite(value) ? value : undefined;
     }
@@ -145,6 +157,11 @@ export const readAggregateValue = (op: string, row: { count: number; value: null
  * the same `{ a: 1, b: 2 }` lookup never misses for an insert that stored it
  * as `{ b: 2, a: 1 }`. Empty `by` (whole-table aggregate) keys on the empty
  * string.
+ *
+ * The tuple goes through `encodeWire` first so a `v.bigint()` / `v.bytes()`
+ * `by` field keys stably instead of throwing out of `JSON.stringify`. The wire
+ * codec is the identity on a tree with no such leaf, so every key already stored
+ * in a `__key__` column is byte-for-byte unchanged.
  */
 export const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<string, unknown>): string => {
     if (by.length === 0) {
@@ -158,5 +175,5 @@ export const encodeAggregateKey = (by: ReadonlyArray<string>, source: Record<str
         ordered[field] = source[field] ?? null;
     }
 
-    return JSON.stringify(ordered);
+    return JSON.stringify(encodeWire(ordered));
 };

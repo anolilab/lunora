@@ -5569,15 +5569,27 @@ abstract class ShardDO {
                 // Read-only: page this shard's change-data-capture log past the
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
+                //
+                // `encodeWire` because `readCdcChanges` returns DECODED
+                // post-images: a `v.bigint()` column reaches here as a real
+                // bigint, and `jsonResponse` is plain `Response.json` — it would
+                // throw on the bigint and flatten a `v.bytes()` `ArrayBuffer` to
+                // `{}` in a consumer's backup. The tagged form is JSON-safe and
+                // lossless, and `applyCdc` below decodes it back, so
+                // export → replay round-trips. Identity for a payload with no
+                // such leaf, so the streaming-export bytes are unchanged.
                 const result = this.runShardCdcSync(parseCdcSyncArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return jsonResponse({ result: encodeWire(result) }, 200);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.applyCdc) {
                 // Replay a CDC batch into this shard (point-in-time recovery).
                 // The writer mutates rows, so flush touched tables afterward.
-                const result = await this.runShardApplyCdc(parseApplyCdcArgs(args));
+                // `decodeWire` is the ingress half of `cdcSync`'s egress encode
+                // (identity for pure-JSON batches, so an older export replays
+                // unchanged).
+                const result = await this.runShardApplyCdc(parseApplyCdcArgs(decodeWire(args) as Record<string, unknown>));
 
                 await this.flushChangedTables();
 
