@@ -10,12 +10,13 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
+import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";
 
@@ -162,6 +163,45 @@ const importedDocuments = (imported: ReadonlyArray<string>): unknown[] =>
         .map((line) => (decodeWire(JSON.parse(line)) as { doc: unknown }).doc);
 
 let workDir: string;
+
+describe("the local file name for a downloaded object", () => {
+    // An object key comes off a `.manifest.json` in the bucket, so it is data.
+    // CI runs on Linux only, and `split("/")` looks safe there while
+    // `path.win32.join` walks out of the directory on Windows — so the rule is
+    // exercised against both platforms' semantics explicitly.
+    it.each([
+        ["a plain key", "backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson", "lunora-backup-2026-06-03T12-00-00-000Z.ndjson"],
+        ["a backslash traversal", String.raw`backups/..\..\evil.txt`, "evil.txt"],
+        ["a forward-slash traversal", "backups/../../evil.txt", "evil.txt"],
+        // `basename` strips a trailing separator and hands back the segment
+        // before it, which is a perfectly good file name.
+        ["a key ending in a separator", "backups/", "backups"],
+        ["a key that is only a separator", "/", "snapshot.ndjson"],
+        ["a dot segment", "backups/.", "snapshot.ndjson"],
+        ["a parent segment", "backups/..", "snapshot.ndjson"],
+    ])("stays inside the temp directory on Windows: %s", (_label, key, expected) => {
+        expect.assertions(2);
+
+        const directory = String.raw`C:\tmp\lunora`;
+
+        expect(temporaryFileName(key, win32)).toBe(expected);
+        // Whatever name comes out, joining it must not leave the directory.
+        expect(win32.join(directory, temporaryFileName(key, win32)).startsWith(`${directory}${win32.sep}`)).toBe(true);
+    });
+
+    it.each([
+        ["a plain key", "backups/snapshot.ndjson", "snapshot.ndjson"],
+        ["a traversal", "backups/../../evil.txt", "evil.txt"],
+        ["a parent segment", "backups/..", "snapshot.ndjson"],
+    ])("stays inside the temp directory on POSIX: %s", (_label, key, expected) => {
+        expect.assertions(2);
+
+        const directory = "/var/lib/lunora";
+
+        expect(temporaryFileName(key, posix)).toBe(expected);
+        expect(posix.join(directory, temporaryFileName(key, posix)).startsWith(`${directory}/`)).toBe(true);
+    });
+});
 
 describe("lunora backup --bucket", () => {
     beforeEach(() => {

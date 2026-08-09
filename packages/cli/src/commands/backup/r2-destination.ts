@@ -19,7 +19,7 @@
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import nodePath, { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -38,6 +38,29 @@ const STORAGE_ENDPOINT_PATH = "/_lunora/admin/storage";
 
 /** Sidecar reads in flight while listing. Enough to hide round-trip latency without opening a socket per snapshot. */
 const MANIFEST_READ_CONCURRENCY = 8;
+
+/** The subset of `node:path` {@link temporaryFileName} needs, so the rule can be exercised against another platform's semantics. */
+type PathApi = Pick<typeof nodePath, "basename">;
+
+/**
+ * A local file name for the object at `key`, safe to `join` onto a directory
+ * this process owns.
+ *
+ * `key` reaches here from a `.manifest.json` in the bucket, which is data — the
+ * shape guard that accepted it only knows `file` is a string. So take the last
+ * segment with `basename`, which is separator-correct **per platform**:
+ * splitting on `"/"` leaves `..\..\evil.txt` intact as one "segment", which is
+ * harmless on POSIX and walks out of the directory on Windows.
+ *
+ * `basename` can still hand back `.`, `..` or `""` (a key ending in a
+ * separator), each of which resolves to the directory or its parent rather than
+ * a file in it, so those become a fixed name instead.
+ */
+const temporaryFileName = (key: string, pathApi: PathApi = nodePath): string => {
+    const name = pathApi.basename(key);
+
+    return name === "" || name === "." || name === ".." ? "snapshot.ndjson" : name;
+};
 
 interface R2DestinationOptions {
     /** Where to reach the worker's admin storage routes, and which bucket to address (`context.bucket`). */
@@ -150,11 +173,7 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
             // whole snapshot, and it is exactly the case where the snapshot is
             // large.
             const directory = await mkdtemp(join(tmpdir(), "lunora-backup-"));
-            // Basename only — a key is not a path, and this one is data. A key
-            // ending in `/` yields an empty last segment, which would resolve to
-            // the directory itself, so treat it as unnamed.
-            const name = key.split("/").at(-1);
-            const path = join(directory, name === undefined || name === "" ? "snapshot.ndjson" : name);
+            const path = join(directory, temporaryFileName(key));
 
             try {
                 await pipeline(Readable.from(response.body as AsyncIterable<Uint8Array>), createWriteStream(path));
@@ -195,4 +214,4 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
 };
 
 export type { R2DestinationOptions };
-export { createR2Destination };
+export { createR2Destination, temporaryFileName };
