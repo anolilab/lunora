@@ -715,6 +715,8 @@ minimumReleaseAgeExclude:
   - undici@6.27.0 || 6.28.0
   # Renovate security update: hono@4.12.34
   - hono@4.12.34
+  # Renovate security update: nuxt@4.0.3
+  - nuxt@4.0.3
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
