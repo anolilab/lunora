@@ -3203,7 +3203,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation && (!groupScope || scanRefusesAny(definition, groupSqlFields))) {
                 const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
-                if (planned) {
+                // A request that pins SOME of the index's `by` tuple but not all
+                // of it cannot be served from the companion: the full-walk below
+                // reads every companion row, so `by: ["a", "b"]` with
+                // `where: { a: 1 }` would return the `a !== 1` groups too. The
+                // single-row lookup needs the whole tuple, and there is no
+                // companion-side filter for the rest — so hand a partial pin to
+                // the scan, which compiles the predicate properly. Checked
+                // before `ensureBackfilled` so a request that cannot use the
+                // companion does not pay for rebuilding it.
+                const plannedPartialKeys = planned === undefined ? 0 : Object.keys(planned.partial).length;
+                const plannedByLength = planned?.index.by?.length ?? 0;
+
+                if (planned && (plannedPartialKeys === 0 || plannedPartialKeys === plannedByLength)) {
                     ensureBackfilled(tableName, planned.index);
 
                     const aggTable = aggregateTableName(tableName, planned.index.name);
@@ -3228,9 +3240,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         return indexedResult;
                     }
 
-                    // Unfiltered (or partially-filtered, future work) → walk
-                    // the whole companion. Each row's __key__ is the
-                    // canonical-JSON encoding written by encodeAggregateKey.
+                    // Unfiltered → walk the whole companion. A partial pin never
+                    // reaches here (it was routed to the scan above), so every
+                    // companion row belongs in the answer. Each row's __key__ is
+                    // the canonical-JSON encoding written by encodeAggregateKey.
                     const rowsIndexed = runDrizzle<{ count: number; key: string; value: null | number }>(
                         sql,
                         dsql`SELECT ${AGG_KEY} AS key, ${AGG_VALUE} AS value, ${AGG_COUNT} AS count FROM ${dsql.identifier(aggTable)}`,
