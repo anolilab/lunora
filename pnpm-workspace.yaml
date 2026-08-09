@@ -51,7 +51,7 @@ overrides:
   # brace-expansion; these needed a cross-range nudge. (astro's XSS fix needs a
   # major bump to 7.0.10 — handled separately, it breaks the adapter.)
   adm-zip: ">=0.6.0"
-  js-yaml: ">=4.3.0"
+  js-yaml: ">=4.3.1"
   shell-quote: ">=1.8.5"
   axios: ">=1.18.0"
   protobufjs: ">=7.6.5"
@@ -704,7 +704,8 @@ minimumReleaseAgeExclude:
   - '@visulima/email@1.0.0-alpha.41'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
   - esbuild@0.28.1
-  - js-yaml@4.1.2
+  # Renovate security update: js-yaml@4.3.1
+  - js-yaml@4.1.2 || 4.3.1
   - '@opentelemetry/core@2.8.0'
   - astro@6.4.6
   # Renovate security update: dompurify@3.4.13
