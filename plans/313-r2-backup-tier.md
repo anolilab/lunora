@@ -1,7 +1,7 @@
 # Plan 313 — Put the long-term backup tier on object storage instead of someone's disk
 
 **Baseline:** `38ffc2ea7` (2026-08-08)
-**Status:** PHASES 0-1 + WS5 SHIPPED in #375 (12 commits, three thermo rounds). WS4 deliberately deviated from — see §10. WS6 docs shipped.
+**Status:** PHASES 0-1 + WS5 SHIPPED in #375 (12 commits, three thermo rounds). WS4 part-shipped: the retention **preview** landed separately; the explicit operator-invoked prune remains open — see §10. WS6 docs shipped.
 **Priority:** P2 · **Effort:** M · **Risk:** MED · **Category:** data/durability
 
 > **Executor instructions**: almost everything this needs already exists — the
@@ -86,11 +86,13 @@ that: no new auth surface for this.
    into a second store.
 4. **Retention is explicit**, not clever: a `--keep <n>` / age-based prune the
    operator invokes or schedules. No silent deletion of anything.
-   **Amended 2026-08-09 — this is not what shipped.** `backupRetain` still
-   deletes inside the cron run. It only prunes snapshots carrying its own
-   cron expression and keeps anything ambiguous, so it is safe, but it is
-   narrower rather than explicit. §10 has the reasoning; WS4 remains open
-   and is the work that would make this decision true.
+   **Amended 2026-08-09 — half of this shipped.** `backupRetain` still deletes
+   inside the cron run, so the deletion is not yet something an operator
+   invokes. It only prunes snapshots carrying its own cron expression and keeps
+   anything ambiguous, so it is safe but narrower rather than explicit. The
+   _preview_ half is done: `lunora backup retention` reports what the next run
+   would delete, from the same selection the prune uses. What remains of WS4 is
+   the deletion becoming an invoked step. §10 has the reasoning.
 5. **Phase 2's scheduled backup runs in-platform** (cron trigger → action →
    export → R2), which is the point of the plan: no external machine in the
    durability path.
@@ -102,7 +104,7 @@ that: no new auth surface for this.
 | 1   | Destination interface + fs implementation refactored behind it, no behaviour change (`create`/`list`/`restore` identical output)                      | S    |
 | 2   | R2 implementation via `@lunora/storage`; bucket/prefix from config or flag                                                                            | M    |
 | 3   | `--verify` on restore: checksum the object before importing, mirroring plan 304's verified upload                                                     | S    |
-| 4   | Retention (`--keep`, `--older-than`), prune as its own verb so it is never implicit                                                                   | S    |
+| 4   | Retention: **preview shipped** (`lunora backup retention`, read-only); an operator-invoked prune verb remains open                                    | S    |
 | 5   | Phase 2 — in-platform scheduled backup: a cron-triggered action that exports and writes to R2, with failures surfaced as issues rather than swallowed | M    |
 | 6   | Docs: which tier answers which question (30-day in-place vs long-term portable), and how to restore from a bucket when the CLI machine is gone        | S    |
 
@@ -182,9 +184,21 @@ and read off the listing, so two deployments sharing a prefix keep the retention
 each configured and pre-marker sidecars are never pruned. That is safe. It is
 still not what §4.4 promised.
 
-**Left open deliberately**, as either a follow-up plan or a WS4 phase: a `prune`
-verb with a dry run, so the destructive step is something an operator invokes
-and can preview rather than a side effect of a backup succeeding.
+**The preview half has since shipped** as `lunora backup retention`
+(`GET /_lunora/admin/backup/retention`): a read-only answer to "what would
+retention delete right now", computed by the same selection the prune runs, so
+the two cannot disagree. That closes the half of §4.4 about being able to _see_
+the deletion coming — and it was the half worth doing first, because both
+data-loss defects in this branch were in retention and both were silent, and
+because eligibility depends on a metadata marker that legacy sidecars lack, so
+the behaviour on a pre-existing bucket is not deducible from the config.
+
+**Still open**, as a follow-up plan or a later WS4 phase: retention as a step an
+operator _invokes_. `backupRetain` still deletes inside every cron run, which is
+what §4.4 rules out; the preview makes it visible in advance and #387's log makes
+it visible afterwards, but neither makes it explicit. The remaining work is a
+verb that performs the deletion on demand, and a way to run the cron backup
+without the prune attached to it.
 
 ### Three rounds of review, and the pattern worth carrying forward
 
