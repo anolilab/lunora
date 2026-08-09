@@ -1,3 +1,5 @@
+## @lunora/platform [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform%401.0.0-alpha.7...%40lunora%2Fplatform%401.0.0-alpha.8) (2026-08-09)
+
 ## @lunora/platform [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform%401.0.0-alpha.6...%40lunora%2Fplatform%401.0.0-alpha.7) (2026-08-07)
 
 ## @lunora/platform [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform%401.0.0-alpha.5...%40lunora%2Fplatform%401.0.0-alpha.6) (2026-08-04)
