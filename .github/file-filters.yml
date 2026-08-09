@@ -101,6 +101,19 @@ worker_size:
     # `test-required-check` passes on skipped jobs.
     - ".github/file-filters.yml"
 
+# The non-JS SDK conformance suites. `protocol/**` is listed because the golden
+# frames under `protocol/fixtures/` ARE the contract those SDKs are tested
+# against — a wire change lands there first, and this is the only gate that
+# catches a non-JS port drifting off it. The workflow and this file are listed
+# for the same anti-hole reason as `worker_size` above.
+sdks:
+    - "sdks/**"
+    - "protocol/**"
+    - "shared/wire-codec.ts"
+    - "shared/stable-key.ts"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 templates:
     - "templates/**"
     - "registry/**"
