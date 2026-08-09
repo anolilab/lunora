@@ -78,6 +78,7 @@ export interface Doc_usageEvents {
     createdAt: number;
     featureId: string;
     idempotencyKey: string;
+    mode?: string;
     provider: string;
     quantity: number;
     referenceId: string;
@@ -200,6 +201,7 @@ export interface Insert_usageEvents {
     createdAt: number;
     featureId: string;
     idempotencyKey: string;
+    mode?: string;
     provider: string;
     quantity: number;
     referenceId: string;

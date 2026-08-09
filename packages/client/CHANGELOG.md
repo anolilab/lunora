@@ -1,3 +1,12 @@
+## @lunora/client [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.43...%40lunora%2Fclient%401.0.0-alpha.44) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.17
+* **@lunora/do:** upgraded to 1.0.0-alpha.76
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.58
+
 ## @lunora/client [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.42...%40lunora%2Fclient%401.0.0-alpha.43) (2026-08-07)
 
 

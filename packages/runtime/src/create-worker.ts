@@ -24,7 +24,6 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
-import type { ExportRow } from "./export-stream";
 import { streamExportRows } from "./export-stream";
 import type { ExportCursorStore, ExportSink } from "./export-tap";
 import type { HealthProbe } from "./health-routes";
@@ -50,6 +49,7 @@ import { createResourceAttributeResolver } from "./resource-detect";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
+import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
@@ -362,6 +362,22 @@ type StorageUploadFunction = (
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
 
 /**
+ * Reads one object's bytes back out of a storage bucket. Structurally the part
+ * of `@lunora/storage`'s `Storage["download"]` the admin endpoint needs — the
+ * body stream plus enough metadata to set the response headers. `null` means
+ * "no such object", which the route turns into a 404.
+ *
+ * This is the read half of {@link StorageUploadFunction}: `lunora backup
+ * restore --bucket` pulls a snapshot back through it under the same admin
+ * bearer that wrote it, so restoring from a bucket does not depend on signed
+ * URLs (which need a signing secret the deployment may not have configured).
+ */
+type StorageDownloadFunction = (
+    key: string,
+    options?: { bucket?: string },
+) => Promise<{ body: ReadableStream | null; httpMetadata?: { contentType?: string }; size?: number } | null>;
+
+/**
  * Mints a (signed or public) URL for one object so the admin file browser can
  * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
  * a share-link lifetime (the host clamps it); `bucket` selects a named bucket.
@@ -546,33 +562,28 @@ interface CronJobInfo {
  */
 interface BackupStore {
     delete: (key: string) => Promise<unknown>;
-    list: (options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{
+
+    /**
+     * List objects under a prefix. `include: ["customMetadata"]` is how
+     * retention tells its own snapshots from an operator's without a request
+     * per object — R2 returns custom metadata on a listing only when asked, and
+     * may return fewer than `limit` results when it is, which the cursor loop
+     * already handles.
+     */
+    list: (options?: { cursor?: string; include?: ("customMetadata" | "httpMetadata")[]; limit?: number; prefix?: string }) => Promise<{
         cursor?: string;
-        objects: ReadonlyArray<{ key: string }>;
+        objects: ReadonlyArray<{ customMetadata?: Record<string, string>; key: string }>;
         truncated?: boolean;
     }>;
     put: (
         key: string,
-        body: ArrayBuffer | Blob | null | ReadableStream | string,
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
+        body: ArrayBuffer | ArrayBufferView | Blob | null | ReadableStream | string,
+        // `sha256` (hex or bytes) is what makes R2 record a checksum for the
+        // object; without it `list()`/`head()` report none and every later
+        // integrity check degrades to comparing sizes. `customMetadata` carries
+        // the marker retention prunes on.
+        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string }; sha256?: ArrayBuffer | string },
     ) => Promise<unknown>;
-}
-
-/**
- * Manifest sidecar written next to each scheduled backup's NDJSON object (at
- * `<file>.manifest.json`). Mirrors the manifest entry the CLI records for local
- * backups so both backup planes describe a snapshot the same way;
- * `cron`/`scheduledTime` additionally record which trigger produced it.
- */
-interface BackupManifest {
-    bytes: number;
-    createdAt: string;
-    cron: string;
-    file: string;
-    id: string;
-    rows: number;
-    scheduledTime: number;
-    tables?: string;
 }
 
 /**
@@ -1226,6 +1237,18 @@ interface WorkerOptions {
     storageDelete?: StorageDeleteFunction;
 
     /**
+     * Reads one object back, backing the admin-gated
+     * `GET /_lunora/admin/storage/object` endpoint that `lunora backup restore
+     * --bucket` pulls snapshots through. Wrap the storage call — the generated
+     * app worker emits
+     * `(key, opts) => pick(opts?.bucket).download(key)` — rather than passing
+     * `createStorage(...).download` itself, whose second parameter is a byte
+     * range, not a bucket. Omit it and the endpoint responds
+     * `STORAGE_DOWNLOAD_NOT_CONFIGURED`.
+     */
+    storageDownload?: StorageDownloadFunction;
+
+    /**
      * Storage lister backing the admin-gated `GET /_lunora/admin/storage`
      * endpoint the studio's file browser calls. The structural shape matches
      * `@lunora/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
@@ -1342,13 +1365,6 @@ interface RpcContext {
     request: Request;
     shardKey: string;
 }
-
-/**
- * Shared, stateless `TextEncoder` for NDJSON export/backup streaming. `encode()`
- * is reusable across calls, so a single module-scope instance avoids allocating
- * a fresh encoder per export/backup stream.
- */
-const NDJSON_ENCODER = new TextEncoder();
 
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
@@ -2906,6 +2922,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         storage: {
             storageBuckets: options.storageBuckets,
             storageDelete: options.storageDelete,
+            storageDownload: options.storageDownload,
             storageList: options.storageList,
             storageSignedUrl: options.storageSignedUrl,
             storageUpload: options.storageUpload,
@@ -4018,150 +4035,6 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    /** Safety bound on the retention list loop — far above any realistic backup count. */
-    const MAX_PRUNE_PAGES = 1000;
-
-    /**
-     * Enforce {@link WorkerOptions.backupRetain} by keeping only the newest N
-     * snapshots under `prefix` and deleting the older NDJSON objects + their
-     * manifests. Backup keys embed an ISO timestamp (colons swapped for dashes),
-     * which sorts lexicographically by recency, so a descending key sort is a
-     * recency sort. A no-op when retention is unset or non-positive.
-     */
-    const pruneBackups = async (store: BackupStore, prefix: string): Promise<void> => {
-        const retain = options.backupRetain;
-
-        if (retain === undefined || retain <= 0) {
-            return;
-        }
-
-        const manifestKeys: string[] = [];
-        let cursor: string | undefined;
-
-        for (let page = 0; page < MAX_PRUNE_PAGES; page += 1) {
-            // eslint-disable-next-line no-await-in-loop -- R2 list is paged; each request resumes from the prior page's cursor.
-            const listing = await store.list({ cursor, prefix });
-
-            for (const object of listing.objects) {
-                if (object.key.endsWith(".manifest.json")) {
-                    manifestKeys.push(object.key);
-                }
-            }
-
-            if (!listing.truncated || listing.cursor === undefined) {
-                break;
-            }
-
-            cursor = listing.cursor;
-        }
-
-        // Newest first; everything past the retention window is pruned.
-        const stale = manifestKeys.toSorted((a, b) => b.localeCompare(a)).slice(retain);
-
-        await Promise.all(
-            stale.flatMap((manifestKey) => {
-                const ndjsonKey = manifestKey.slice(0, -".manifest.json".length);
-
-                return [store.delete(manifestKey), store.delete(ndjsonKey)];
-            }),
-        );
-    };
-
-    /**
-     * Run the built-in backup: export every selected table to NDJSON and write
-     * it (plus a manifest sidecar) to {@link WorkerOptions.backupStore}. The
-     * snapshot is keyed by the trigger's `scheduledTime` so it's named after the
-     * moment it represents. Requires `backupStore`, `queryCoordinator`, and
-     * `adminToken` — the export fans out to each shard's admin gate, which the
-     * bearer authenticates. Missing prerequisites throw so the platform records
-     * the failed cron invocation rather than silently skipping the backup.
-     */
-    const runScheduledBackup = async (controller: ScheduledControllerLike): Promise<void> => {
-        const store = options.backupStore;
-        const coordinator = options.queryCoordinator;
-
-        if (!store) {
-            throw new LunoraError("scheduled backup requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
-        }
-
-        if (!coordinator) {
-            throw new LunoraError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
-        }
-
-        // Match the request-time admin gates: fall back to `env.LUNORA_ADMIN_TOKEN`
-        // when no explicit `options.adminToken` is threaded (the composed-worker
-        // default). `handleScheduled` resolves the env token before calling this,
-        // so `effectiveAdminToken()` sees it. Without the fallback, every composed
-        // deployment's backup cron would throw BACKUP_NOT_CONFIGURED despite a
-        // token existing in env.
-        const adminToken = effectiveAdminToken();
-
-        if (!adminToken || adminToken.length === 0) {
-            throw new LunoraError("scheduled backup requires an `adminToken` (or `env.LUNORA_ADMIN_TOKEN`) to authenticate the per-shard export gate", {
-                code: "BACKUP_NOT_CONFIGURED",
-                status: 500,
-            });
-        }
-
-        // The export fans out to each shard's `/rpc` admin op; the shard gate
-        // checks this bearer. No end-user identity is involved.
-        const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
-        const tables = options.backupTables;
-
-        // Stream the NDJSON straight into R2 so the concatenated body is never
-        // held in worker memory at once. `put` resolves after the stream is
-        // fully consumed, so the row/byte counters are final by the time we
-        // write the manifest. Caveat: the shard fan-out is materialised per
-        // shard (one envelope each) and collected before the stream drains, so
-        // peak memory still scales with the total shard-local row count — the
-        // streaming bounds the response bytes, not the source data.
-        let rows = 0;
-        let bytes = 0;
-        const parts: string[] = [];
-
-        const writeRow = (row: ExportRow): void => {
-            const line = `${JSON.stringify(row)}\n`;
-
-            rows += 1;
-            // Count real UTF-8 bytes for the manifest, not UTF-16 string length.
-            bytes += NDJSON_ENCODER.encode(line).byteLength;
-            parts.push(line);
-        };
-
-        // Collect the NDJSON before writing it. R2 `put` requires a known-length
-        // body (a raw ReadableStream of unknown length is rejected by workerd),
-        // and the per-shard fan-out already materialises every row in memory
-        // before the export drains, so a Blob here adds no meaningful peak-memory
-        // cost over the source data. An error from the export propagates
-        // directly, so no partial object is ever written.
-        await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
-
-        const prefix = options.backupPrefix ?? "backups/";
-        const timestamp = new Date(controller.scheduledTime).toISOString();
-        // Colons/periods are awkward in object keys; keep the raw id for the manifest.
-        const fileKey = `${prefix}lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
-        const manifestKey = `${fileKey}.manifest.json`;
-
-        await store.put(fileKey, new Blob(parts, { type: "application/x-ndjson" }), {
-            httpMetadata: { contentType: "application/x-ndjson" },
-        });
-
-        const manifest: BackupManifest = {
-            bytes,
-            createdAt: timestamp,
-            cron: controller.cron,
-            file: fileKey,
-            id: timestamp,
-            rows,
-            scheduledTime: controller.scheduledTime,
-            ...(tables ? { tables: tables.join(",") } : {}),
-        };
-
-        await store.put(manifestKey, `${JSON.stringify(manifest, undefined, 2)}\n`, { httpMetadata: { contentType: "application/json" } });
-
-        await pruneBackups(store, prefix);
-    };
-
     /**
      * The worker's `scheduled()` entry: dispatch the firing cron trigger to the
      * matching {@link WorkerOptions.crons} handler (if any) and run the built-in
@@ -4243,7 +4116,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (options.backupStore && options.backupCron !== undefined && options.backupCron === controller.cron) {
             try {
-                await runScheduledBackup(controller);
+                await runScheduledBackup(options, shardDO, effectiveAdminToken(), controller);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
@@ -4843,9 +4716,18 @@ export type {
 } from "./auth-admin-routes";
 export type { AuthAuditEntry, AuthAuditLogResult, AuthAuditOutcome, AuthAuditReader, ReadAuthAuditQuery } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
+// Identity-resolver layer lives in its own module; re-export the public names
+// here so `@lunora/runtime`'s import surface is unchanged.
+export type {
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
+    ResolvedIdentity,
+} from "./identity-resolvers";
 export type {
     AdminTableResolver,
-    BackupManifest,
     BackupStore,
     CronHandler,
     CronJobDispatch,
@@ -4877,6 +4759,7 @@ export type {
     ScheduledControllerLike,
     ShardingInfo,
     StorageDeleteFunction as StorageDeleteFn,
+    StorageDownloadFunction as StorageDownloadFn,
     StorageListFunction as StorageListFn,
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,
@@ -4887,15 +4770,6 @@ export type {
     WorkerOptions,
 };
 
-// Identity-resolver layer lives in its own module; re-export the public names
-// here so `@lunora/runtime`'s import surface is unchanged.
-export type {
-    ComposeIdentityResolversErrorMode,
-    ComposeIdentityResolversOptions,
-    IdentityContractLike,
-    IdentityResolver,
-    IdentityValidation,
-    ResolvedIdentity,
-} from "./identity-resolvers";
 export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";
 export type { KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./kv-admin-routes";
+export type { BackupManifest } from "./scheduled-backup";

@@ -48,6 +48,17 @@ export interface PlatformCapabilities {
         mail?: Capability;
         /** Object storage (R2 / S3 / MinIO). */
         objectStorage?: Capability;
+
+        /**
+         * Snapshot backups kept in object storage rather than on the machine
+         * that took them — `lunora backup create|list|restore --bucket`, and
+         * the platform's own `backupCron`. Distinct from
+         * `objectStorage` above because it needs three things a
+         * bucket alone does not imply: an admin-gated read of one object
+         * (`GET /_lunora/admin/storage/object`), a checksum-verified write, and
+         * a scheduler to run the unattended half.
+         */
+        objectStorageBackups?: Capability;
         /** Pipelines / streaming data. */
         pipelines?: Capability;
         /** Queue-backed workpools. */
@@ -96,6 +107,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         workflows: { level: "native", note: "Cloudflare Workflows" },
         scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
         objectStorage: { level: "native", note: "R2" },
+        objectStorageBackups: {
+            level: "native",
+            note: "`lunora backup create|list|restore --bucket` writes NDJSON snapshots + a manifest sidecar per snapshot through the admin storage routes (checksum-verified upload, admin-gated object read), and `backupCron`/`backupStore` runs the same layout unattended on a Cron Trigger. Both are bounded by what a single request body / a Worker isolate can hold, not by R2",
+        },
         keyValueStore: { level: "native", note: "Workers KV" },
         vectorStore: {
             level: "native",
@@ -188,6 +203,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         scheduler: {
             level: "emulated",
             note: "SQLite job table dispatched to onDispatch and re-armed on construction, with retry backoff and a dead-letter queue; the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer",
+        },
+        objectStorageBackups: {
+            level: "emulated",
+            note: "The commands work unchanged, but the bucket underneath is createNodeR2Bucket — a directory on the same machine the CLI runs on, so a bucket-backed backup here is not the separate failure domain it is on Cloudflare. The scheduled half additionally needs this host's scheduler, which exists but is not a shipping target",
         },
         objectStorage: {
             level: "emulated",

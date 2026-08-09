@@ -188,7 +188,7 @@ Each run writes two objects under `backupPrefix`:
   (the same NDJSON shape the `/_lunora/admin/export` endpoint and
   `lunora backup create` produce).
 - `lunora-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
-  (`{ id, createdAt, cron, file, rows, bytes, scheduledTime, tables? }`).
+  (`{ id, createdAt, cron, file, rows, bytes, sha256, scheduledTime, tables? }`).
 
 The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
 is named after the moment it represents. The backup requires `adminToken`
@@ -199,6 +199,62 @@ recorded rather than silently skipped.
 Register your own cron handlers via `crons` (keyed by the exact expression);
 they run independently of — and, on a shared expression, alongside — the
 built-in backup.
+
+Retention only ever removes snapshots **this** cron wrote: each sidecar is
+stamped with its cron expression, and the prune matches on it. Snapshots taken
+by hand, and snapshots from a second deployment sharing the bucket, are left
+alone — so two workers on one bucket each keep the retention they configured.
+(Sidecars written before this marker existed are never pruned automatically;
+delete those by hand once.) A failed prune is reported and does not fail the
+backup that already landed.
+
+`lunora backup list --bucket <name>` reads the same layout, so scheduled
+snapshots and ones taken by hand with `lunora backup create --bucket <name>`
+appear as one history — and `lunora backup restore <id> --bucket <name> --verify`
+works on either, because both tiers record the snapshot's SHA-256 in the
+manifest. The scheduled run also hands the digest to R2, which verifies it on
+write and reports it from `head`/`list` afterwards. (Snapshots written by a
+release before this one carry no checksum; `--verify` refuses those rather than
+reporting an unverified restore as a verified one.)
+
+### Size
+
+The backup is built in the isolate: `orchestrateExport` resolves every shard's
+rows into memory before the first row is encoded, so the snapshot has to fit
+alongside them in a Worker's ~128 MB. The run **refuses past 24 MiB of NDJSON**
+(`BACKUP_TOO_LARGE`) — the cron invocation fails loudly and nothing is written.
+
+Read that cap for what it is: a bound on the snapshot, not on peak memory. For
+shard-local tables the row set is already resident when the first check runs, so
+it only bounds anything incrementally for `.global()` tables, which stream from
+a generator. The number is set well under the isolate's limit precisely because
+it cannot bound the larger allocation, and a backup comfortably under it can
+still exhaust a Worker if the row set behind it is large.
+
+Narrow it with `backupTables`, or move the job off-platform with
+`lunora backup create --bucket` (32 MiB, and it runs on a machine). Backing up
+more often does not help — every run is a full snapshot, not an increment.
+
+Raising the ceiling means making the export fan-out stream per shard. A bigger
+object or a multipart upload would not help: the rows are already in memory
+before the upload starts.
+
+### Reading objects back
+
+`lunora backup restore --bucket` pulls a snapshot down through the admin-gated
+`GET /_lunora/admin/storage/object?key=…`, which streams one object's body
+under the same bearer as every other admin route. It needs a `storageDownload`
+function on the worker — wrap the storage call, as the generated app worker
+does:
+
+```ts
+storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
+```
+
+`createStorage(...).download` cannot be passed directly: its second parameter is
+a byte range, not a bucket. Without it the endpoint
+answers `STORAGE_DOWNLOAD_NOT_CONFIGURED` and a bucket restore is not
+available — the snapshot is still readable with `wrangler r2 object get`.
 
 ### Wrangler bindings
 

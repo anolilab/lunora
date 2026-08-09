@@ -3581,7 +3581,15 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `BACKUP_KEY_PREFIX` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `BackupManifest` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `BackupManifestEntry` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4081,6 +4089,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `STORAGE_UPLOAD_MAX_BODY_BYTES` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ScheduledControllerLike` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4245,6 +4257,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `backupManifestKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `backupObjectKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `buildHealthRoutes` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4349,6 +4369,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `isBackupManifestEntry` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `isBackupManifestKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `memoizeIdentity` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4358,6 +4386,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `mergeStrategyForAggregate` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `normalizeBackupPrefix` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

@@ -7,11 +7,12 @@
  */
 import { createReadStream } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 import AdmZip from "adm-zip";
 
+import isInsideDirectory from "../util/path-containment";
 import openZipEntryStream from "./zip-entry-stream";
 
 /**
@@ -197,7 +198,7 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
         const storageRoot = await realpath(join(snapshot.root, "_storage"));
         const blobPath = await realpath(resolve(storageRoot, blobId)).catch(() => undefined);
 
-        if (blobPath === undefined || (blobPath !== storageRoot && !blobPath.startsWith(storageRoot + sep))) {
+        if (blobPath === undefined || !isInsideDirectory(storageRoot, blobPath)) {
             throw new Error(`blob ${blobId} resolves outside the snapshot's _storage directory`);
         }
 
