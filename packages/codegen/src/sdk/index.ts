@@ -14,6 +14,7 @@ import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunction
 import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
 import javaTarget from "./targets/java";
+import kotlinTarget from "./targets/kotlin";
 import pythonTarget from "./targets/python";
 import rubyTarget from "./targets/ruby";
 import rustTarget from "./targets/rust";
@@ -23,6 +24,7 @@ import swiftTarget from "./targets/swift";
 const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = {
     go: goTarget,
     java: javaTarget,
+    kotlin: kotlinTarget,
     python: pythonTarget,
     ruby: rubyTarget,
     rust: rustTarget,

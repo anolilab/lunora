@@ -22,18 +22,20 @@ public final class Api {
         }
 
         /** query: messages:list */
-        public Object list(MessagesListArgs args, String shardKey) {
+        public Object list(java.util.Map<String, Object> args, String shardKey) {
             return client.call(Client.Verb.QUERY, "messages:list", args, shardKey);
         }
 
         /** live query: messages:list — re-runs on every write to the tables it reads. */
         public Runnable subscribeList(
-                MessagesListArgs args, java.util.function.Consumer<Object> onData, java.util.function.Consumer<Client.SubscriptionError> onError) {
+                java.util.Map<String, Object> args,
+                java.util.function.Consumer<Object> onData,
+                java.util.function.Consumer<Client.SubscriptionError> onError) {
             return client.subscribe("messages:list", args, onData, onError);
         }
 
         /** mutation: messages:send */
-        public Object send(MessagesSendArgs args, String shardKey) {
+        public Object send(java.util.Map<String, Object> args, String shardKey) {
             return client.call(Client.Verb.MUTATION, "messages:send", args, shardKey);
         }
     }

@@ -404,7 +404,13 @@
                       "directory": "sdks/java"
                       "run": "bash build.sh"
                       "generatedOut": "sdks/java/generated_check/lunoraapi"
-                      "buildGenerated": "javac -Xlint:all -d /tmp/javacheck src/dev/lunora/*.java generated_check/lunoraapi/*.java"
+                      "buildGenerated": "javac -Xlint:all -d /tmp/javacheck src/dev/lunora/*.java generated_check/lunoraapi/*.java generated_check/GeneratedSmoke.java && java -cp /tmp/javacheck GeneratedSmoke"
+                    - "language": "kotlin"
+                      "runner": "ubuntu-latest"
+                      "directory": "sdks/kotlin"
+                      "run": "bash build.sh"
+                      "generatedOut": "sdks/kotlin/generated_check"
+                      "buildGenerated": "kotlinc src generated_check -include-runtime -d /tmp/kcheck.jar -nowarn"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
@@ -444,6 +450,24 @@
               "with":
                   "distribution": "temurin"
                   "java-version": "21"
+
+            # Kotlin needs a JVM plus the compiler. setup-java supplies the
+            # former; the latter comes straight from the pinned JetBrains
+            # release rather than a third-party action, so there is no
+            # unverifiable action SHA in the chain.
+            - "name": "Setup java for kotlin"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
+              "with":
+                  "distribution": "temurin"
+                  "java-version": "21"
+
+            - "name": "Install the Kotlin compiler"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/kotlin.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+                  unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+                  echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
 
             - "name": "Setup ruby"
               "if": "matrix.sdk.language == 'ruby'"

@@ -2,11 +2,26 @@
  * Java SDK target. Emits `Api.java` plus one file per generated model, against
  * the hand-written runtime in `sdks/java` (package `dev.lunora`).
  *
- * The per-model files are not a style choice: Java permits one public class per
- * source file, and quicktype's Java backend concatenates every class into a
- * single stream delimited by `// Name.java` markers. Emitting that verbatim
- * produces a file that cannot compile, so the marker is what this target splits
- * on.
+ * ## Why this target emits no typed models
+ *
+ * quicktype's JVM backends RENAME fields — a wire `channelId` becomes a Java
+ * field `channelID` — and under `just-types` they emit no mapping metadata at
+ * all. So a generated model cannot be projected back onto the wire: reflection
+ * over its accessors yields `channelID`, which the server rejects, and
+ * recovering the real name would mean replicating quicktype's renaming rules,
+ * exactly the re-derivation this design forbids everywhere else.
+ *
+ * A typed model that silently sends wrong keys is worse than none, so the
+ * surface takes wire-shaped arguments and no model file is written. Two things
+ * would unlock typed arguments here: dropping `just-types` so the backend emits
+ * `@JsonProperty` (which then requires Jackson at runtime), or extending
+ * `SdkMethod` to carry the schema's property names so this target can emit an
+ * explicit projection. Neither is speculative work to do before someone needs
+ * typed JVM arguments.
+ *
+ * The compile check does not catch this class of bug — the generated code type
+ * checks perfectly and throws at the first call — which is why it was found by
+ * running an encode, not by building.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
@@ -85,35 +100,34 @@ const memberName = (raw: string): string => {
 /** The runtime verb constant for a method's kind. */
 const verbConstant = (verb: string): string => `Client.Verb.${verb.toUpperCase()}`;
 
-/** One function as a method posting the RPC envelope. */
-const renderCall = (method: SdkMethod): string => {
-    const parameters = method.argsType === undefined ? "String shardKey" : `${method.argsType} args, String shardKey`;
-    const payload = method.argsType === undefined ? "null" : "args";
-
-    return [
+/**
+ * One function as a method posting the RPC envelope.
+ *
+ * Arguments are a wire-shaped `Map` rather than a generated model — see the
+ * file header for why the JVM backends cannot supply one that round-trips.
+ */
+const renderCall = (method: SdkMethod): string =>
+    [
         `    /** ${method.summary} */`,
-        `    public Object ${memberName(method.functionName)}(${parameters}) {`,
-        `        return client.call(${verbConstant(method.verb)}, "${method.functionPath}", ${payload}, shardKey);`,
+        `    public Object ${memberName(method.functionName)}(java.util.Map<String, Object> args, String shardKey) {`,
+        `        return client.call(${verbConstant(method.verb)}, "${method.functionPath}", args, shardKey);`,
         `    }`,
     ].join("\n");
-};
 
 /**
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod): string => {
-    const argument = method.argsType === undefined ? "" : `${method.argsType} args, `;
-    const payload = method.argsType === undefined ? "null" : "args";
-
-    return [
+const renderSubscribe = (method: SdkMethod): string =>
+    [
         `    /** live ${method.summary} — re-runs on every write to the tables it reads. */`,
         `    public Runnable subscribe${toPascalCase(method.functionName)}(`,
-        `            ${argument}java.util.function.Consumer<Object> onData, java.util.function.Consumer<Client.SubscriptionError> onError) {`,
-        `        return client.subscribe("${method.functionPath}", ${payload}, onData, onError);`,
+        `            java.util.Map<String, Object> args,`,
+        `            java.util.function.Consumer<Object> onData,`,
+        `            java.util.function.Consumer<Client.SubscriptionError> onError) {`,
+        `        return client.subscribe("${method.functionPath}", args, onData, onError);`,
         `    }`,
     ].join("\n");
-};
 
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
@@ -136,35 +150,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
-/**
- * Split quicktype's concatenated Java stream on its `// Name.java` markers.
- *
- * Returns an empty map when the stream carries no marker, which is how a
- * deployment with no typed schemas arrives.
- */
-const splitJavaFiles = (models: string): Record<string, string> => {
-    const files: Record<string, string> = {};
-    const pattern = /^\/\/ (\w+\.java)$/gmu;
-    const markers = [...models.matchAll(pattern)];
-
-    for (const [index, marker] of markers.entries()) {
-        const name = marker[1];
-
-        if (name === undefined) {
-            continue;
-        }
-
-        const start = marker.index + marker[0].length;
-        const next = markers[index + 1];
-        const end = next === undefined ? models.length : next.index;
-
-        files[name] = `${GENERATED_HEADER}${models.slice(start, end).trim()}\n`;
-    }
-
-    return files;
-};
-
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
     const fields = namespaces.map((namespace) => `    public final ${toPascalCase(namespace.name)}Api ${memberName(namespace.name)};`).join("\n");
     const assignments = namespaces
         .map((namespace) => `        this.${memberName(namespace.name)} = new ${toPascalCase(namespace.name)}Api(client);`)
@@ -187,11 +173,12 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         `\n}\n`,
     ].join("");
 
-    return { "Api.java": api, ...splitJavaFiles(models) };
+    return { "Api.java": api };
 };
 
 const javaTarget: SdkTarget = {
     id: "java",
+    // Models are not emitted, so the backend choice only has to be valid.
     quicktype: { lang: "java", rendererOptions: { "just-types": "true", package: PACKAGE_NAME } },
     render,
     runtimePackage: ["dev.lunora:lunora (Maven Central)"],
@@ -199,4 +186,4 @@ const javaTarget: SdkTarget = {
 
 export default javaTarget;
 
-export { memberName, splitJavaFiles };
+export { memberName };
