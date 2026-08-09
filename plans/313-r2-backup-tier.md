@@ -1,7 +1,7 @@
 # Plan 313 — Put the long-term backup tier on object storage instead of someone's disk
 
 **Baseline:** `38ffc2ea7` (2026-08-08)
-**Status:** PHASES 0-1 + WS5 SHIPPED in #375 (12 commits, three thermo rounds). WS4 deliberately deviated from — see §10. WS6 docs shipped.
+**Status:** SHIPPED. Phases 0-1 + WS5 in #375 (12 commits, three thermo rounds); WS4 across the retention preview (#388) and the `prune` verb that finished it (#389) — see §10 for how it got there. WS6 docs shipped.
 **Priority:** P2 · **Effort:** M · **Risk:** MED · **Category:** data/durability
 
 > **Executor instructions**: almost everything this needs already exists — the
@@ -86,11 +86,6 @@ that: no new auth surface for this.
    into a second store.
 4. **Retention is explicit**, not clever: a `--keep <n>` / age-based prune the
    operator invokes or schedules. No silent deletion of anything.
-   **Amended 2026-08-09 — this is not what shipped.** `backupRetain` still
-   deletes inside the cron run. It only prunes snapshots carrying its own
-   cron expression and keeps anything ambiguous, so it is safe, but it is
-   narrower rather than explicit. §10 has the reasoning; WS4 remains open
-   and is the work that would make this decision true.
 5. **Phase 2's scheduled backup runs in-platform** (cron trigger → action →
    export → R2), which is the point of the plan: no external machine in the
    durability path.
@@ -102,7 +97,7 @@ that: no new auth surface for this.
 | 1   | Destination interface + fs implementation refactored behind it, no behaviour change (`create`/`list`/`restore` identical output)                      | S    |
 | 2   | R2 implementation via `@lunora/storage`; bucket/prefix from config or flag                                                                            | M    |
 | 3   | `--verify` on restore: checksum the object before importing, mirroring plan 304's verified upload                                                     | S    |
-| 4   | Retention (`--keep`, `--older-than`), prune as its own verb so it is never implicit                                                                   | S    |
+| 4   | Retention: `lunora backup retention` previews, `lunora backup prune` deletes, the cron only reports — nothing deletes implicitly                      | S    |
 | 5   | Phase 2 — in-platform scheduled backup: a cron-triggered action that exports and writes to R2, with failures surfaced as issues rather than swallowed | M    |
 | 6   | Docs: which tier answers which question (30-day in-place vs long-term portable), and how to restore from a bucket when the CLI machine is gone        | S    |
 
@@ -182,9 +177,26 @@ and read off the listing, so two deployments sharing a prefix keep the retention
 each configured and pre-marker sidecars are never pruned. That is safe. It is
 still not what §4.4 promised.
 
-**Left open deliberately**, as either a follow-up plan or a WS4 phase: a `prune`
-verb with a dry run, so the destructive step is something an operator invokes
-and can preview rather than a side effect of a backup succeeding.
+**Both halves have since shipped, in that order.**
+
+`lunora backup retention` (`GET /_lunora/admin/backup/retention`) came first: a
+read-only answer to "what would retention delete right now", computed by the
+same selection the prune runs. It was the half worth doing first, because both
+data-loss defects in this branch were in retention and both were silent, and
+because eligibility depends on a metadata marker that legacy sidecars lack — so
+the behaviour on a pre-existing bucket is not deducible from the config.
+
+`lunora backup prune` (`POST /_lunora/admin/backup/prune`) finished it, and the
+scheduled backup stopped deleting. `backupRetain` is now the window and nothing
+more: a cron run writes its snapshot, reports how many sit past the window and
+names the command that removes them, and leaves them alone. One selection, three
+consumers — preview, prune, and the cron's report — so a prediction, a
+confirmation and an aftermath record cannot disagree.
+
+The cost is real and was accepted deliberately: a bucket grows until somebody
+prunes it. Swapping "unexpected deletion" for "unbounded storage nobody
+mentioned" would not have been an improvement, which is why the report is not
+optional. §4.4 now reads as originally written.
 
 ### Three rounds of review, and the pattern worth carrying forward
 

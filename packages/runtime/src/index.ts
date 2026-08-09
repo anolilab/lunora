@@ -1,5 +1,13 @@
 export type { BackupManifestEntry } from "./backup-layout";
-export { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, isBackupManifestEntry, isBackupManifestKey, normalizeBackupPrefix } from "./backup-layout";
+export {
+    BACKUP_KEY_PREFIX,
+    backupManifestKey,
+    backupObjectKey,
+    backupObjectKeyOfManifest,
+    isBackupManifestEntry,
+    isBackupManifestKey,
+    normalizeBackupPrefix,
+} from "./backup-layout";
 export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format";
 export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {
@@ -155,6 +163,7 @@ export { applyJurisdiction, resolveShard } from "./resolve-shard";
 export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./rest-cache";
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
+export type { BackupRetentionPreview, PrunedBackups } from "./scheduled-backup";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 export type {

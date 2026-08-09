@@ -362,6 +362,18 @@ interface BackupManifestEntry {
 }
 ```
 
+### `BackupRetentionPreview` (interface)
+
+```ts
+interface BackupRetentionPreview {
+    cron?: string;
+    eligible: number;
+    keep: number;
+    prefix: string;
+    wouldDelete: string[];
+}
+```
+
 ### `BackupStore` (interface)
 
 ```ts
@@ -1474,6 +1486,17 @@ interface PipelineLogSinkOptions {
 }
 ```
 
+### `PrunedBackups` (interface)
+
+```ts
+interface PrunedBackups {
+    deleted: string[];
+    failed: string[];
+    ignored: number;
+    remaining: number;
+}
+```
+
 ### `QueryCoordinator` (interface)
 
 ```ts
@@ -2217,6 +2240,12 @@ const backupManifestKey: (objectKey: string) => string;
 
 ```ts
 const backupObjectKey: (prefix: string, id: string) => string;
+```
+
+### `backupObjectKeyOfManifest` (const)
+
+```ts
+const backupObjectKeyOfManifest: (manifestKey: string) => string;
 ```
 
 ### `buildHealthRoutes` (const)

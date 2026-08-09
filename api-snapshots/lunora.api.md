@@ -3593,6 +3593,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `BackupRetentionPreview` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `BackupStore` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -3997,6 +4001,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `PrunedBackups` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `QueryCoordinator` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4262,6 +4270,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `backupObjectKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `backupObjectKeyOfManifest` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

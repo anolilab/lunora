@@ -171,7 +171,7 @@ const build = (env: Env): LunoraWorker =>
         // it (plus a manifest sidecar) to the bound R2 bucket.
         backupStore: env.BACKUPS, // any R2 bucket binding
         backupCron: "0 3 * * *", // must match a wrangler triggers.crons entry
-        backupRetain: 14, // keep the newest 14 snapshots; prune older ones
+        backupRetain: 14, // the window: `lunora backup prune` keeps the newest 14
         // backupPrefix: "backups/", // key prefix (default)
         // backupTables: ["users"],  // omit to back up every table
     });
@@ -200,13 +200,47 @@ Register your own cron handlers via `crons` (keyed by the exact expression);
 they run independently of — and, on a shared expression, alongside — the
 built-in backup.
 
-Retention only ever removes snapshots **this** cron wrote: each sidecar is
+### Retention does not delete on its own
+
+`backupRetain` is the window — how many snapshots this cron keeps — and nothing
+more. **The scheduled backup never deletes.** It writes the snapshot, reports
+how many sit past the window, and leaves them there; removing them is
+`lunora backup prune`, which is the only thing in Lunora that deletes a backup.
+
+```bash
+lunora backup retention --url https://api.example.com   # what would go; deletes nothing
+lunora backup prune --url https://api.example.com       # deletes it, after confirming
+```
+
+The trade is deliberate. An R2 delete has no undo, the thing deleted is the
+backup, and a config mistake surfaces when someone reaches for a snapshot that
+is not there — so the destructive step is one an operator takes, not a side
+effect of a backup succeeding. The cost is that a bucket grows until somebody
+prunes it, which is why every run that has snapshots past the window says so and
+names the command.
+
+Both commands answer from the worker, because the worker is the only party that
+knows its own `backupCron` and `backupRetain`, and because eligibility depends
+on a marker that is not visible in a plain object listing. They share one
+selection, so what `retention` predicts is what `prune` removes.
+
+`prune` prints the list and asks before deleting; `--yes` skips the prompt for
+scripts, and without a TTY it refuses rather than assuming. It needs a window:
+with no `backupRetain` there is nothing past it, and a default is deliberately
+not invented.
+
+Run the preview on any bucket that predates the marker: those sidecars are never
+eligible, so retention may own far fewer snapshots than the bucket contains — it
+says exactly how many.
+
+A prune only ever removes snapshots **this** cron wrote: each sidecar is
 stamped with its cron expression, and the prune matches on it. Snapshots taken
 by hand, and snapshots from a second deployment sharing the bucket, are left
 alone — so two workers on one bucket each keep the retention they configured.
-(Sidecars written before this marker existed are never pruned automatically;
-delete those by hand once.) A failed prune is reported and does not fail the
-backup that already landed.
+(Sidecars written before this marker existed are never eligible; delete those by
+hand once.) A failed retention _report_ is warned about and does not
+fail the backup that already landed — the run itself deletes nothing to fail
+at.
 
 `lunora backup list --bucket <name>` reads the same layout, so scheduled
 snapshots and ones taken by hand with `lunora backup create --bucket <name>`

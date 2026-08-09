@@ -588,6 +588,8 @@ Managed snapshot backups and native point-in-time recovery (PITR):
 lunora backup create                   # snapshot the running shard
 lunora backup list                     # list available snapshots
 lunora backup restore <id>             # restore a snapshot
+lunora backup retention                # what a prune would delete
+lunora backup prune                    # delete it — the only command that removes a backup
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
 lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
 ```

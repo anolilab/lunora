@@ -19,6 +19,7 @@ import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { AuthAuditReader } from "./auth-audit-rpc";
 import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
+import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
@@ -2929,6 +2930,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         },
     });
 
+    // The `/_lunora/admin/backup/*` handlers live in a sibling module; they reach
+    // the admin gate, the worker options and the body reader through injected deps.
+    const backupAdminRoutes = buildBackupAdminRoutes({
+        options,
+        readJsonBody: readJsonBodyWithLimit,
+        requireAdminOption,
+    });
+
     const vectorAdminRoutes = buildVectorAdminRoutes({
         readJsonBody: readJsonBodyWithLimit,
         requireAdminOption,
@@ -4289,6 +4298,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return Response.json(minted, { headers: { "cache-control": "no-store" } });
         },
+
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
         // pitr), data-movement (export / import / sync / connector-sync / apply),
@@ -4299,6 +4309,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ...scheduledAdminRoutes,
         ...workflowsAdminRoutes,
         ...storageAdminRoutes,
+        ...backupAdminRoutes,
         ...vectorAdminRoutes,
         ...kvAdminRoutes,
         ...logArchiveAdminRoutes,

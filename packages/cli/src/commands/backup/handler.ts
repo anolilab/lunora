@@ -8,6 +8,10 @@
  * or a cron-triggered action) for automated backups — this is the off-platform
  * / portable / >30-day tier.
  *
+ * `retention` and `prune` are the platform's own retention: what a prune would
+ * remove, and the removal itself. `prune` is the only verb here that deletes a
+ * backup — the scheduled backup reports what is past the window and leaves it.
+ *
  * Where a snapshot lands is a destination, not a format: with no `--bucket` it
  * is a local directory, with one it is an R2 bucket reached through the admin
  * storage routes (`./destination`, `./r2-destination`). The NDJSON and the
@@ -20,7 +24,9 @@
  */
 import { join } from "node:path";
 
-import type { BackupManifestEntry } from "@lunora/runtime";
+import { isInteractive, promptYesNo } from "@lunora/config";
+import type { BackupManifestEntry, BackupRetentionPreview, PrunedBackups } from "@lunora/runtime";
+import { backupObjectKeyOfManifest } from "@lunora/runtime";
 
 import { resolveAdminBearer } from "../../util/admin-token";
 import { resolveAdminBaseUrl } from "../../util/admin-url";
@@ -40,16 +46,25 @@ import { createR2Destination } from "./r2-destination";
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".lunora-backups";
 
+/** Read-only worker endpoint reporting what the platform's retention would delete next (see `@lunora/runtime`). */
+const RETENTION_ENDPOINT_PATH = "/_lunora/admin/backup/retention";
+
+/** The only endpoint that deletes a backup (see `@lunora/runtime`). */
+const PRUNE_ENDPOINT_PATH = "/_lunora/admin/backup/prune";
+
 /** Worker endpoint that forwards a per-shard native-PITR admin op (see `@lunora/runtime`). */
 const PITR_ENDPOINT_PATH = "/_lunora/admin/pitr";
 const GET_PITR_BOOKMARK_OP = "__lunora_admin__:getPitrBookmark";
 const PITR_RESTORE_OP = "__lunora_admin__:pitrRestore";
 
-type BackupSubcommand = "create" | "list" | "pitr" | "restore";
+type BackupSubcommand = "create" | "list" | "pitr" | "prune" | "restore" | "retention";
 
 interface BackupCommandOptions {
+    /** Injectable fetch for the JSON admin endpoints — `pitr`, `retention`, `prune` (not the streaming export fetch). */
+    adminFetch?: FetchLike;
     /** `pitr`: restore to the bookmark nearest this time (ISO or epoch-ms), within 30 days. */
     at?: string;
+
     /** `pitr restore`: an explicit bookmark to restore to (e.g. an undo bookmark). Wins over `--at`. */
     bookmark?: string;
 
@@ -59,6 +74,8 @@ interface BackupCommandOptions {
      * them); pass `default` for a single-bucket deployment.
      */
     bucket?: string;
+    /** Injectable confirmer for `prune` (tests, non-TTY callers). Returns `true` on confirmation. */
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
@@ -66,8 +83,6 @@ interface BackupCommandOptions {
     logger: Logger;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
-    /** Injectable fetch for the `pitr` admin endpoint (plain JSON, not the streaming export fetch). */
-    pitrFetch?: FetchLike;
     /** Key prefix bucket-backed backups live under. Defaults to `backups/`. */
     prefix?: string;
     prod?: boolean;
@@ -86,14 +101,18 @@ interface BackupCommandOptions {
     url?: string;
     /** `restore`: check the snapshot's SHA-256 against the manifest before importing a byte of it. */
     verify?: boolean;
-    /** Required alongside `--prod` for `pitr restore` — confirms restoring production in place. */
+    /** Confirm a destructive step without prompting: `pitr restore --prod`, or `prune`. */
     yes?: boolean;
 }
 
 interface BackupCommandResult {
     code: number;
+    /** Set on `prune` — the sidecar keys the worker reported it deleted. */
+    deleted?: string[];
     /** Set on `create` — the written backup's manifest entry. */
     entry?: BackupManifestEntry;
+    /** Set on `retention` — what the worker reported it would delete next. */
+    preview?: BackupRetentionPreview;
 }
 
 /**
@@ -310,7 +329,7 @@ const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefi
         return undefined;
     }
 
-    const fetchImpl: FetchLike = options.pitrFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+    const fetchImpl: FetchLike = options.adminFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
 
     if (typeof fetchImpl !== "function") {
         throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
@@ -412,14 +431,264 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
     });
 };
 
+/**
+ * Resolve the admin bearer + base URL for the two worker-answered backup verbs
+ * (`retention`, `prune`). Logs and returns `undefined` on any failure.
+ */
+const resolveBackupAdminRequest = (options: BackupCommandOptions): { baseUrl: string; fetchImpl: FetchLike; token: string } | undefined => {
+    // `--bucket` / `--prefix` / `--dir` choose a destination for the snapshot
+    // verbs; these two ask the worker about its own configured store, so a
+    // destination flag would be silently ignored. On the command with no undo,
+    // that is worth refusing over: `prune --bucket archive-2024` reads as
+    // "prune that bucket" and would prune whatever the worker is wired to.
+    const ignored = [
+        options.bucket === undefined ? undefined : "--bucket",
+        options.prefix === undefined ? undefined : "--prefix",
+        options.dir === undefined ? undefined : "--dir",
+    ].filter((flag) => flag !== undefined);
+
+    if (ignored.length > 0) {
+        options.logger.error(
+            `${ignored.join(" / ")} ${ignored.length === 1 ? "does" : "do"} not apply here — retention and prune act on the store the worker itself is configured with (\`backupStore\`), not a destination you name.`,
+        );
+
+        return undefined;
+    }
+
+    if (options.prod === true && options.url === undefined) {
+        options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
+
+        return undefined;
+    }
+
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    // The same resolution `backup list --bucket` uses, so one command does not
+    // have two token stories: against a local dev worker `list` reads
+    // `.dev.vars` and these would have failed without a flag.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return undefined;
+    }
+
+    const fetchImpl: FetchLike = options.adminFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+
+    if (typeof fetchImpl !== "function") {
+        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
+    }
+
+    return { baseUrl, fetchImpl, token };
+};
+
+/** Print a retention selection the way the cron reports it and the prune records it. */
+const reportSelection = (options: BackupCommandOptions, preview: BackupRetentionPreview): void => {
+    options.logger.info(
+        `backup retention would keep the newest ${preview.keep.toString()} of ${preview.eligible.toString()} under ${preview.prefix} and delete ${preview.wouldDelete.length.toString()}`,
+    );
+
+    for (const key of preview.wouldDelete) {
+        options.logger.info(`  ${backupObjectKeyOfManifest(key)}`);
+    }
+};
+
+/**
+ * `lunora backup retention` — what the platform's own retention would delete on
+ * its next run, and nothing else.
+ *
+ * A read. Retention itself stays on the cron; there is no `--apply` here and no
+ * code path in this command deletes an object. The worker answers because it is
+ * the only party that knows its own `backupCron` and `backupRetain`, and
+ * because eligibility turns on a marker the CLI cannot see from a listing.
+ */
+const runBackupRetention = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const request = resolveBackupAdminRequest(options);
+
+    if (request === undefined) {
+        return { code: 1 };
+    }
+
+    const response = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "GET",
+    });
+
+    if (!response.ok) {
+        await readAndLogBody(response, options.logger);
+
+        return { code: 1 };
+    }
+
+    const preview = (await response.json()) as BackupRetentionPreview;
+
+    if (preview.cron === undefined) {
+        options.logger.info("no scheduled backup is configured (`backupCron`), so retention would delete nothing");
+
+        return { code: 0, preview };
+    }
+
+    if (preview.keep <= 0) {
+        options.logger.info(`retention is off for cron "${preview.cron}" (\`backupRetain\` unset) — every snapshot under ${preview.prefix} is kept`);
+
+        return { code: 0, preview };
+    }
+
+    // Phrased like the line the cron writes and the prune records, so a
+    // prediction, a confirmation and an aftermath read as one story.
+    reportSelection(options, preview);
+
+    if (preview.eligible === 0) {
+        // The likeliest surprise on a real bucket: snapshots exist, but none
+        // carry this cron's marker, so retention owns none of them.
+        options.logger.info(`no snapshot under ${preview.prefix} was written by this cron, so retention has nothing of its own to remove`);
+    }
+
+    return { code: 0, preview };
+};
+
+/**
+ * Say what a prune actually did — which is not always what it predicted, and
+ * every way it can differ matters to whoever is reading.
+ */
+const reportPruneResult = (options: BackupCommandOptions, result: PrunedBackups): void => {
+    options.logger.success(`deleted ${result.deleted.length.toString()} backup(s)`);
+
+    for (const key of result.deleted) {
+        options.logger.info(`  ${backupObjectKeyOfManifest(key)}`);
+    }
+
+    if (result.failed.length > 0) {
+        options.logger.warn(
+            `${result.failed.length.toString()} could not be removed — the snapshot may be gone with its manifest left behind; run again to retry`,
+        );
+    }
+
+    if (result.ignored > 0) {
+        options.logger.info(`${result.ignored.toString()} were already gone by the time the delete ran`);
+    }
+
+    if (result.remaining > 0) {
+        options.logger.info(`${result.remaining.toString()} more are past the window — run \`lunora backup prune\` again`);
+    }
+};
+
+/**
+ * `lunora backup prune` — delete every snapshot past the retention window.
+ *
+ * The only command that deletes a backup. Nothing else does: the scheduled
+ * backup reports what is past the window and leaves it, so the destructive step
+ * is one an operator takes deliberately.
+ *
+ * It prints what will go before asking, and asks by default. Without a TTY it
+ * refuses rather than proceeding — a prune that deletes silently because it
+ * happened to run in a pipeline is the failure this whole workstream exists to
+ * prevent — so a script says `--yes` and means it.
+ */
+const runBackupPrune = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const request = resolveBackupAdminRequest(options);
+
+    if (request === undefined) {
+        return { code: 1 };
+    }
+
+    // Show it first, from the same endpoint `lunora backup retention` reads, so
+    // the prediction an operator confirms is the one they were shown.
+    const previewResponse = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "GET",
+    });
+
+    if (!previewResponse.ok) {
+        await readAndLogBody(previewResponse, options.logger);
+
+        return { code: 1 };
+    }
+
+    const preview = (await previewResponse.json()) as BackupRetentionPreview;
+
+    if (preview.keep <= 0 || preview.cron === undefined) {
+        options.logger.error(
+            "backup prune needs a retention window: set `backupRetain` (and `backupCron`) on the worker. Without one there is nothing past the window to remove.",
+        );
+
+        return { code: 1, preview };
+    }
+
+    if (preview.wouldDelete.length === 0) {
+        options.logger.info(
+            `nothing to prune — ${preview.eligible.toString()} snapshot(s) under ${preview.prefix} and retention keeps the newest ${preview.keep.toString()}`,
+        );
+
+        return { code: 0, preview };
+    }
+
+    reportSelection(options, preview);
+
+    if (options.yes !== true) {
+        const confirmer = options.confirm ?? (isInteractive() ? promptYesNo : undefined);
+
+        if (confirmer === undefined) {
+            options.logger.error("refusing to delete backups without confirmation — re-run with --yes (there is no undo for an object-store delete)");
+
+            return { code: 1, preview };
+        }
+
+        const confirmed = await confirmer(`delete ${preview.wouldDelete.length.toString()} backup(s)? This cannot be undone. [y/N] `);
+
+        if (!confirmed) {
+            options.logger.info("nothing was deleted");
+
+            return { code: 0, preview };
+        }
+    }
+
+    // Send back exactly what was shown and agreed to. The worker deletes the
+    // intersection of that with what is still eligible, so a snapshot that
+    // became eligible while the prompt was open — a cron fire is enough — is
+    // not swept up in a confirmation that never covered it.
+    const response = await request.fetchImpl(`${request.baseUrl}${PRUNE_ENDPOINT_PATH}`, {
+        body: JSON.stringify({ confirm: preview.wouldDelete }),
+        headers: { authorization: `Bearer ${request.token}`, "content-type": "application/json" },
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        await readAndLogBody(response, options.logger);
+
+        return { code: 1, preview };
+    }
+
+    // Report what actually went, which is not always what was predicted.
+    const result = (await response.json()) as PrunedBackups;
+
+    reportPruneResult(options, result);
+
+    return { code: result.failed.length > 0 ? 1 : 0, deleted: result.deleted, preview };
+};
+
 const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
 
     try {
-        // `pitr` is the in-place tier and reads no snapshot at all, so it is
-        // answered before any destination exists.
+        // `pitr` is the in-place tier and reads no snapshot at all, and
+        // `retention` asks the worker about its own config — neither reads a
+        // destination, so both are answered before one exists.
         if (options.subcommand === "pitr") {
             return await runBackupPitr(options);
+        }
+
+        if (options.subcommand === "retention") {
+            return await runBackupRetention(options);
+        }
+
+        if (options.subcommand === "prune") {
+            return await runBackupPrune(options);
         }
 
         const destination = resolveDestination(options, cwd);
@@ -447,14 +716,15 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
 };
 
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
-const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
+    value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
 
 /** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 
     if (!isBackupSubcommand(sub)) {
-        logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | pitr`);
+        logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | retention | prune | pitr`);
 
         return { code: 1 };
     }
