@@ -332,17 +332,32 @@ interface AuthUserFieldSpec {
 }
 ```
 
+### `BACKUP_KEY_PREFIX` (const)
+
+```ts
+const BACKUP_KEY_PREFIX = "backups/";
+```
+
 ### `BackupManifest` (interface)
 
 ```ts
-interface BackupManifest {
+interface BackupManifest extends BackupManifestEntry {
+    cron: string;
+    scheduledTime: number;
+    sha256: string;
+}
+```
+
+### `BackupManifestEntry` (interface)
+
+```ts
+interface BackupManifestEntry {
     bytes: number;
     createdAt: string;
-    cron: string;
     file: string;
     id: string;
     rows: number;
-    scheduledTime: number;
+    sha256?: string;
     tables?: string;
 }
 ```
@@ -354,20 +369,23 @@ interface BackupStore {
     delete: (key: string) => Promise<unknown>;
     list: (options?: {
         cursor?: string;
+        include?: ("customMetadata" | "httpMetadata")[];
         limit?: number;
         prefix?: string;
     }) => Promise<{
         cursor?: string;
         objects: ReadonlyArray<{
+            customMetadata?: Record<string, string>;
             key: string;
         }>;
         truncated?: boolean;
     }>;
-    put: (key: string, body: ArrayBuffer | Blob | null | ReadableStream | string, options?: {
+    put: (key: string, body: ArrayBuffer | ArrayBufferView | Blob | null | ReadableStream | string, options?: {
         customMetadata?: Record<string, string>;
         httpMetadata?: {
             contentType?: string;
         };
+        sha256?: ArrayBuffer | string;
     }) => Promise<unknown>;
 }
 ```
@@ -1685,6 +1703,12 @@ interface RunExportTapOptions {
 const SHARD_REGISTRY_DO_NAME: string;
 ```
 
+### `STORAGE_UPLOAD_MAX_BODY_BYTES` (const)
+
+```ts
+const STORAGE_UPLOAD_MAX_BODY_BYTES: number;
+```
+
 ### `ScheduledControllerLike` (interface)
 
 ```ts
@@ -2146,6 +2170,7 @@ interface WorkerOptions {
     storage?: (env: unknown) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
+    storageDownload?: StorageDownloadFunction;
     storageList?: StorageListFunction;
     storageSignedUrl?: StorageSignedUrlFunction;
     storageUpload?: StorageUploadFunction;
@@ -2180,6 +2205,18 @@ const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, 
 
 ```ts
 const argsFromQuery: (url: URL) => Record<string, unknown>;
+```
+
+### `backupManifestKey` (const)
+
+```ts
+const backupManifestKey: (objectKey: string) => string;
+```
+
+### `backupObjectKey` (const)
+
+```ts
+const backupObjectKey: (prefix: string, id: string) => string;
 ```
 
 ### `buildHealthRoutes` (const)
@@ -2349,6 +2386,18 @@ const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response 
 const handleCorsPreflight: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
 ```
 
+### `isBackupManifestEntry` (const)
+
+```ts
+const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
+```
+
+### `isBackupManifestKey` (const)
+
+```ts
+const isBackupManifestKey: (key: string) => boolean;
+```
+
 ### `memoizeIdentity` (const)
 
 ```ts
@@ -2375,6 +2424,12 @@ const mergeStrategyForAggregate: (input: {
     kind: "scalar";
     op: "avg" | "count" | "max" | "min" | "sum";
 }) => MergeStrategy;
+```
+
+### `normalizeBackupPrefix` (const)
+
+```ts
+const normalizeBackupPrefix: (prefix: string) => string;
 ```
 
 ### `otlpSink` (const)

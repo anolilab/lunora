@@ -38,35 +38,76 @@ const coordinatorWithExport = (rows: ExportRows): QueryCoordinator => {
     };
 };
 
+/**
+ * Decode the body shapes the backup actually writes — a `Uint8Array` for the
+ * snapshot, a string for the sidecar. Anything else throws rather than being
+ * tolerated, so the double cannot silently record an empty object if the write
+ * path changes shape.
+ */
+const bodyText = (body: unknown): string => {
+    if (typeof body === "string") {
+        return body;
+    }
+
+    if (ArrayBuffer.isView(body)) {
+        return new TextDecoder().decode(body);
+    }
+
+    throw new TypeError(`backup store double received an unsupported body: ${Object.prototype.toString.call(body)}`);
+};
+
 /** An in-memory {@link BackupStore} double that records put/delete and serves list pages. */
-const memoryBackupStore = (): BackupStore & { objects: Map<string, string> } => {
+const memoryBackupStore = (): BackupStore & {
+    checksums: Map<string, string>;
+    metadata: Map<string, Record<string, string>>;
+    objects: Map<string, string>;
+} => {
     const objects = new Map<string, string>();
+    const checksums = new Map<string, string>();
+    const metadata = new Map<string, Record<string, string>>();
 
-    const put = vi.fn<(key: string, body: unknown) => Promise<{ etag: string; key: string; size: number }>>(async (key, body) => {
-        let text: string;
-
-        if (typeof body === "string") {
-            text = body;
-        } else if (body instanceof Blob) {
-            text = await body.text();
-        } else if (body instanceof ReadableStream) {
-            text = await new Response(body).text();
-        } else {
-            text = "";
-        }
+    const put = vi.fn<
+        (
+            key: string,
+            body: unknown,
+            putOptions?: { customMetadata?: Record<string, string>; sha256?: ArrayBuffer | string },
+        ) => Promise<{ etag: string; key: string; size: number }>
+    >(async (key, body, putOptions) => {
+        const text = bodyText(body);
 
         objects.set(key, text);
+
+        if (putOptions?.customMetadata !== undefined) {
+            metadata.set(key, putOptions.customMetadata);
+        }
+
+        // R2 records a checksum only when the writer supplies one; the double
+        // keeps that distinction so a test can tell them apart.
+        if (typeof putOptions?.sha256 === "string") {
+            checksums.set(key, putOptions.sha256);
+        }
 
         return { etag: "e", key, size: text.length };
     });
 
-    const list = vi.fn<(listOptions?: { cursor?: string; limit?: number; prefix?: string }) => Promise<{ objects: { key: string }[] }>>(async (listOptions) => {
+    const list = vi.fn<
+        (listOptions?: {
+            cursor?: string;
+            include?: ("customMetadata" | "httpMetadata")[];
+            limit?: number;
+            prefix?: string;
+        }) => Promise<{ objects: { customMetadata?: Record<string, string>; key: string }[] }>
+    >(async (listOptions) => {
         const prefix = listOptions?.prefix ?? "";
         const keys = [...objects.keys()].filter((key) => key.startsWith(prefix)).toSorted((a, b) => a.localeCompare(b));
+        // R2 returns custom metadata on a listing only when it is asked for.
+        const withMetadata = listOptions?.include?.includes("customMetadata") ?? false;
 
         return {
             objects: keys.map((key) => {
-                return { key };
+                const custom = withMetadata ? metadata.get(key) : undefined;
+
+                return custom === undefined ? { key } : { customMetadata: custom, key };
             }),
         };
     });
@@ -75,8 +116,12 @@ const memoryBackupStore = (): BackupStore & { objects: Map<string, string> } => 
         objects.delete(key);
     });
 
-    return { delete: remove, list, objects, put };
+    return { checksums, delete: remove, list, metadata, objects, put };
 };
+
+/** Lowercase-hex SHA-256 of a UTF-8 string — the same digest the runtime computes over the snapshot. */
+const sha256Hex = async (text: string): Promise<string> =>
+    [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 const fire = async (worker: ReturnType<typeof createWorker>, controller: ScheduledControllerLike): Promise<void> => {
     await worker.scheduled(controller, {}, { passThroughOnException: () => undefined, waitUntil: () => undefined });
@@ -120,6 +165,174 @@ describe("createWorker — scheduled backup", () => {
 
         expect(manifest.rows).toBe(2);
         expect(manifest).toMatchObject({ createdAt: "2026-06-03T12:00:00.000Z", cron: BACKUP_CRON, file: ndjsonKey, scheduledTime: SCHEDULED_TIME });
+    });
+
+    it("records the snapshot's checksum on the object and in the manifest", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        const ndjsonKey = "backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson";
+        const manifest = JSON.parse(store.objects.get(`${ndjsonKey}.manifest.json`) ?? "") as BackupManifest;
+        const expected = await sha256Hex(store.objects.get(ndjsonKey) ?? "");
+
+        // Without a recorded checksum the unattended tier is the one nobody can
+        // check — `lunora backup restore --verify` would have nothing to compare
+        // a cron-written snapshot against.
+        expect(manifest.sha256).toBe(expected);
+        // Handed to R2 as well, which verifies it on write and reports it later.
+        expect(store.checksums.get(ndjsonKey)).toBe(expected);
+        expect(store.checksums.has(`${ndjsonKey}.manifest.json`)).toBe(false);
+    });
+
+    it("refuses a snapshot past the size limit, mid-export, without writing anything", async () => {
+        expect.assertions(4);
+
+        const store = memoryBackupStore();
+        const wide = "x".repeat(1024);
+        let yielded = 0;
+
+        // Driven through `exportGlobals`, the one branch that reaches the
+        // encoder incrementally — the shard fan-out resolves its rows before
+        // the first check runs, so it could not show the guard stopping
+        // anything early. `yielded` is the assertion that it does: the
+        // generator is abandoned well before it could produce 24 MiB.
+        const exportGlobals: WorkerOptions["exportGlobals"] = async function* () {
+            for (let index = 0; index < 1_000_000; index += 1) {
+                yielded += 1;
+                yield { doc: { _id: `p${String(index)}`, blob: wide }, table: "plans" };
+            }
+        };
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            exportGlobals,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/past the \d+-byte limit/u);
+
+        // Stopped as soon as the budget was exceeded, not after draining 1M rows.
+        expect(yielded).toBeLessThan(30_000);
+        // Nothing written, so no manifest can point at a snapshot that is not there.
+        expect(store.objects.size).toBe(0);
+        expect(store.put).not.toHaveBeenCalled();
+    });
+
+    it("prunes its own snapshots and leaves operator-taken ones alone", async () => {
+        expect.assertions(4);
+
+        const store = memoryBackupStore();
+        // What `lunora backup create --bucket` writes: the same prefix and the
+        // same sidecar suffix, deliberately, so one bucket reads as one
+        // history — and with no `scheduledTime`, because no cron took it.
+        const operatorKey = "backups/lunora-backup-2026-06-01T09-00-00-000Z.ndjson";
+
+        store.objects.set(operatorKey, '{"table":"users","doc":{"_id":"u0"}}\n');
+        store.objects.set(
+            `${operatorKey}.manifest.json`,
+            `${JSON.stringify({ bytes: 36, createdAt: "2026-06-01T09:00:00.000Z", file: operatorKey, id: "2026-06-01T09:00:00.000Z", rows: 1 })}\n`,
+        );
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        // Two cron fires with `backupRetain: 1`: the older cron snapshot goes,
+        // the operator's stays. Deleting a snapshot somebody took by hand —
+        // silently, from the bucket the docs recommend — is the failure mode
+        // that comes with sharing the prefix.
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+
+        expect(store.objects.has(operatorKey)).toBe(true);
+        expect(store.objects.has(`${operatorKey}.manifest.json`)).toBe(true);
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(false);
+        expect(store.objects.has("backups/lunora-backup-2026-06-04T12-00-00-000Z.ndjson")).toBe(true);
+    });
+
+    it("leaves another deployment's snapshots alone, and costs no per-object reads", async () => {
+        expect.assertions(4);
+
+        const store = memoryBackupStore();
+        // A second worker backing up into the same bucket and prefix, on its own
+        // schedule. "Written by a cron" is not a narrow enough test: pruning on
+        // that would have each deployment deleting the other's snapshots, and
+        // both quietly getting half the retention they configured.
+        const otherKey = "backups/lunora-backup-2026-06-01T09-30-00-000Z.ndjson";
+
+        store.objects.set(otherKey, "other\n");
+        store.objects.set(`${otherKey}.manifest.json`, JSON.stringify({ cron: "*/30 * * * *", file: otherKey, id: "2026-06-01T09:30:00.000Z" }));
+        store.metadata.set(`${otherKey}.manifest.json`, { lunoraBackupCron: "*/30 * * * *" });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+
+        expect(store.objects.has(otherKey)).toBe(true);
+        expect(store.objects.has(`${otherKey}.manifest.json`)).toBe(true);
+        // Its own older snapshot still goes.
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(false);
+
+        // The writer check rides on the listing. A read per sidecar would scale
+        // with the whole bucket and burn the Worker subrequest budget.
+        expect(vi.mocked(store.list).mock.calls.every(([listOptions]) => listOptions?.include?.includes("customMetadata") === true)).toBe(true);
+    });
+
+    it("reports a successful backup even when retention fails", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        vi.mocked(store.delete).mockRejectedValue(new Error("R2 unavailable"));
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
+        store.metadata.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", { lunoraBackupCron: BACKUP_CRON });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        // The snapshot and its manifest have both landed before retention runs.
+        // Failing the invocation here would show an operator a broken backup
+        // cron over a backup that is fine, and bury the real symptom.
+        await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).resolves.toBeUndefined();
+
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("retention failed"), expect.anything());
+
+        warn.mockRestore();
     });
 
     it("includes `.global()` rows from exportGlobals in the snapshot", async () => {
@@ -244,11 +457,19 @@ describe("createWorker — scheduled backup", () => {
         expect.assertions(3);
 
         const store = memoryBackupStore();
-        // Two pre-existing snapshots already on the store (older + newer).
-        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
-        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
-        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson", "mid\n");
-        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson.manifest.json", "{}");
+        // Two pre-existing snapshots already on the store (older + newer). Their
+        // sidecars carry `scheduledTime`, because retention only ever removes
+        // snapshots this cron took — see the operator-snapshot test above.
+        const seed = (id: string, body: string): void => {
+            const key = `backups/lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
+
+            store.objects.set(key, body);
+            store.objects.set(`${key}.manifest.json`, JSON.stringify({ cron: BACKUP_CRON, file: key, id, scheduledTime: Date.parse(id) }));
+            store.metadata.set(`${key}.manifest.json`, { lunoraBackupCron: BACKUP_CRON });
+        };
+
+        seed("2026-06-01T00:00:00.000Z", "old\n");
+        seed("2026-06-02T00:00:00.000Z", "mid\n");
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,

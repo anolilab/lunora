@@ -240,6 +240,17 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";
     };
+    readonly BACKUP_TOO_LARGE: {
+        readonly hint: readonly [
+            "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
+            "",
+            "The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.",
+            "",
+            "Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot."
+        ];
+        readonly status: 507;
+        readonly title: "Backup too large to assemble in a Worker";
+    };
     readonly CRON_JOBS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Cron jobs not configured";
@@ -289,9 +300,22 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage delete not configured";
     };
+    readonly STORAGE_DOWNLOAD_NOT_CONFIGURED: {
+        readonly hint: readonly [
+            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.",
+            "",
+            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`."
+        ];
+        readonly status: 400;
+        readonly title: "Storage download not configured";
+    };
     readonly STORAGE_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Storage not configured";
+    };
+    readonly STORAGE_OBJECT_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Storage object not found";
     };
     readonly STORAGE_UPLOAD_NOT_CONFIGURED: {
         readonly status: 400;

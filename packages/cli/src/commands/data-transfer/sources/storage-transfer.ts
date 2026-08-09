@@ -19,6 +19,7 @@ import { relative, resolve, sep } from "node:path";
 import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../../util/logger";
+import isInsideDirectory from "../../../util/path-containment";
 import type { StreamingFetchLike } from "../shared";
 import type { BlobUploadContext, StorageMetadataRow } from "../storage-blobs";
 import { listStorageObjects, uploadStorageBlob } from "../storage-blobs";
@@ -188,7 +189,7 @@ const listLocalObjects = async (directory: string): Promise<SourceObject[]> => {
         for (const entry of entries) {
             const full = resolve(current, entry.name);
 
-            if (full !== root && !full.startsWith(root + sep)) {
+            if (!isInsideDirectory(root, full)) {
                 throw new LunoraError("INTERNAL", `${entry.name} resolves outside ${directory} — refusing to upload it`);
             }
 
@@ -226,7 +227,7 @@ const moveOneObject = async (
     if (alreadyStored.get(key)?.size !== bytes.length) {
         const metadata: StorageMetadataRow = { contentType: entry.contentType, id: entry.path, sha256, size: bytes.length };
 
-        await uploadStorageBlob(context, bytes, metadata, options.keyPrefix, logger);
+        await uploadStorageBlob(context, key, bytes, metadata, logger);
     }
 
     await recordTransfer(options.cwd, options.source, { key, path: entry.path, size: bytes.length });

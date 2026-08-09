@@ -260,6 +260,7 @@ interface PlatformCapabilities {
         localSql?: Capability;
         mail?: Capability;
         objectStorage?: Capability;
+        objectStorageBackups?: Capability;
         pipelines?: Capability;
         queues?: Capability;
         scheduler?: Capability;
@@ -377,6 +378,7 @@ interface R2BucketLike {
         httpMetadata?: {
             contentType?: string;
         };
+        sha256?: ArrayBuffer | string;
     }) => Promise<R2ObjectLike>;
     resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
 }

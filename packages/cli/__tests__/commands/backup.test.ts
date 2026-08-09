@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -94,6 +94,45 @@ describe("lunora backup", () => {
         expect(manifest).toHaveLength(1);
         expect(manifest[0]?.rows).toBe(1);
         expect(existsSync(join(directory, manifest[0]!.file))).toBe(true);
+    });
+
+    it("writes exactly these snapshot bytes and this manifest JSON", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+
+        await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            tables: "users",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        // Byte-for-byte, not "it worked": moving the filesystem writes behind a
+        // destination interface must not shift a single byte of what lands on
+        // disk, because these bytes are what an operator restores from.
+        const directory = join(workDir, ".lunora-backups");
+
+        expect(readFileSync(join(directory, "lunora-backup-2026-06-03T12-00-00-000Z.ndjson"), "utf8")).toBe(NDJSON);
+
+        expect(readFileSync(join(directory, "manifest.json"), "utf8")).toBe(
+            `[
+  {
+    "bytes": 37,
+    "createdAt": "2026-06-03T12:00:00.000Z",
+    "file": "lunora-backup-2026-06-03T12-00-00-000Z.ndjson",
+    "id": "2026-06-03T12:00:00.000Z",
+    "rows": 1,
+    "sha256": "84528e00c324faff7e650ef1fb502f3afef91ae32a542c2130ae415c242e1708",
+    "tables": "users"
+  }
+]
+`,
+        );
     });
 
     it("list prints recorded backups", async () => {
@@ -212,6 +251,199 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(0);
         expect(importCalls[0]).toContain("/_lunora/admin/import");
+    });
+
+    it("restore --verify refuses a directory snapshot that no longer matches its manifest", async () => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const importCalls: string[] = [];
+
+        const verified = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+        });
+
+        expect(verified.code).toBe(0);
+
+        // Bit rot on the operator's disk is exactly what the portable tier has
+        // to survive being lied to about.
+        writeFileSync(join(workDir, ".lunora-backups", created.entry!.file), `${NDJSON}${NDJSON}`, "utf8");
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(logs.some((line) => line.includes("does not match its recorded checksum"))).toBe(true);
+    });
+
+    it.each([
+        ["a relative escape", "../../outside.ndjson"],
+        ["an absolute path", "/etc/hosts"],
+        ["a sibling directory sharing the prefix", "../.lunora-backups-evil/snapshot.ndjson"],
+    ])("restore refuses a manifest entry that points outside the backup directory (%s)", async (_label, file) => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+        const directory = join(workDir, ".lunora-backups");
+
+        mkdirSync(directory, { recursive: true });
+        // A manifest is data: `file` reaching out of the directory would make
+        // `restore <id>` read and import a file from anywhere on disk. The shape
+        // guard that accepts the entry only knows it is a string.
+        writeFileSync(
+            join(directory, "manifest.json"),
+            `${JSON.stringify([{ bytes: 1, createdAt: "2026-06-03T12:00:00.000Z", file, id: "2026-06-03T12:00:00.000Z", rows: 1 }], undefined, 2)}\n`,
+            "utf8",
+        );
+
+        const importCalls: string[] = [];
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(importCalls).toHaveLength(0);
+        expect(logs.some((line) => line.includes("points outside"))).toBe(true);
+    });
+
+    it("restore refuses a symlink that leaves the backup directory", async () => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+        const directory = join(workDir, ".lunora-backups");
+        const outside = join(workDir, "outside.ndjson");
+
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(outside, NDJSON, "utf8");
+        // Nothing about this entry is suspicious as text — no `..`, not
+        // absolute, and the file is right there in the directory. `resolve()`
+        // is pure string manipulation and makes no filesystem query, so only
+        // canonicalising both sides catches it.
+        symlinkSync(outside, join(directory, "snapshot.ndjson"));
+        writeFileSync(
+            join(directory, "manifest.json"),
+            `${JSON.stringify(
+                [{ bytes: 1, createdAt: "2026-06-03T12:00:00.000Z", file: "snapshot.ndjson", id: "2026-06-03T12:00:00.000Z", rows: 1 }],
+                undefined,
+                2,
+            )}\n`,
+            "utf8",
+        );
+
+        const importCalls: string[] = [];
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(importCalls).toHaveLength(0);
+        expect(logs.some((line) => line.includes("points outside"))).toBe(true);
+    });
+
+    it("restores through a symlink that stays inside the backup directory", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+        const directory = join(workDir, ".lunora-backups");
+
+        mkdirSync(join(directory, "archive"), { recursive: true });
+        writeFileSync(join(directory, "archive", "real.ndjson"), NDJSON, "utf8");
+        // The containment check canonicalises the backup directory too — on
+        // macOS every temp directory is itself reached through a symlink, so
+        // resolving only the candidate would reject perfectly good paths.
+        symlinkSync(join(directory, "archive", "real.ndjson"), join(directory, "snapshot.ndjson"));
+        writeFileSync(
+            join(directory, "manifest.json"),
+            `${JSON.stringify(
+                [{ bytes: 1, createdAt: "2026-06-03T12:00:00.000Z", file: "snapshot.ndjson", id: "2026-06-03T12:00:00.000Z", rows: 1 }],
+                undefined,
+                2,
+            )}\n`,
+            "utf8",
+        );
+
+        const importCalls: string[] = [];
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls[0]).toContain("/_lunora/admin/import");
+    });
+
+    it("leaves no partial snapshot behind when the export fails", async () => {
+        expect.assertions(3);
+
+        const { logger } = capturingLogger();
+        const failingExport: StreamingFetchLike = async () => {
+            return { body: null, json: async () => undefined, ok: false, status: 500, text: async () => "boom" };
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: failingExport,
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+
+        // A half-written `.ndjson` with no manifest entry is invisible to
+        // `list`, so it would sit in the operator's directory forever.
+        const directory = join(workDir, ".lunora-backups");
+
+        expect(existsSync(directory) ? readdirSync(directory) : []).toStrictEqual([]);
+        expect(existsSync(join(directory, "lunora-backup-2026-06-03T12-00-00-000Z.ndjson"))).toBe(false);
     });
 
     it("restore fails for an unknown target", async () => {

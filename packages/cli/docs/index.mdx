@@ -65,7 +65,7 @@ lunora migrate <generate|create|up|down|status> [name|id]
 lunora env <list|get|set|unset|push|diff|doctor>
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
 lunora import <file> [--table <name>] [--batch-size n]
-lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
+lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
 lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
             [--seed n] [--dry-run] [--reset]
 lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
@@ -591,6 +591,37 @@ lunora backup restore <id>             # restore a snapshot
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
 lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
 ```
+
+`create`, `list` and `restore` write to a directory (`--dir`, default
+`.lunora-backups`) or to an R2 bucket in your account (`--bucket <name>`,
+`--prefix`, default prefix `backups/`). The snapshot is identical either way;
+only the destination changes, and bucket traffic goes through the worker's
+admin storage routes under the admin bearer, so the CLI holds no R2
+credentials. `restore --verify` checks the snapshot's SHA-256 against the
+manifest before importing anything, and fails when no checksum was recorded.
+One invocation reads one destination — a bucket and a directory are never
+merged into one listing.
+
+```bash
+lunora backup create --bucket default --tables users,messages
+lunora backup list --bucket default
+lunora backup restore 2026-06-01T12:00:00.000Z --bucket default --verify
+```
+
+A backup **id** is the ISO timestamp the snapshot was taken at
+(`2026-06-01T12:00:00.000Z`) — that is what `list` prints first and what
+`restore` matches. The **filename / object key** is the same timestamp with `:`
+and `.` swapped for `-`, because those characters are awkward in filenames
+(`lunora-backup-2026-06-01T12-00-00-000Z.ndjson`). `restore` takes either: an id
+it finds in the manifest, or a path/key you name directly.
+
+A bucket-backed snapshot goes through the checksum-verified admin upload route,
+which takes one body and caps it at 32 MiB. Above that `create --bucket` refuses
+and names the workaround (`--tables` to narrow the snapshot, or `--dir` plus
+`wrangler r2 object put` to move the file yourself). The alternative — the
+signed-PUT fallback the blob importer uses for large files — is not
+checksum-verified and needs URL signing configured, which is not what the copy
+you restore from should depend on.
 
 See [Backups, export & import](/docs/concepts/backups) for the full picture —
 snapshot format, restore drills, and moving data between deployments.
