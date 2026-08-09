@@ -15,7 +15,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { BackupManifestEntry } from "@lunora/runtime";
@@ -159,23 +159,49 @@ const writeManifest = async (directory: string, entries: ReadonlyArray<BackupMan
 };
 
 /**
- * Backups in a local directory: the snapshot is written straight to its final
- * path (staging *is* committing) and the index is a single `manifest.json`
- * beside the snapshots.
+ * Resolve a manifest entry's `file` inside the backup directory, refusing
+ * anything that escapes it.
+ *
+ * A manifest is data, and `file` is a path taken from it: `"../../../etc/hosts"`
+ * or an absolute path would otherwise make `restore <id>` read and import a file
+ * from anywhere on disk. The shape guard that accepted the entry only knows it
+ * is a string — a shape check is not a safety check, and it is shared with
+ * retention, which compares object keys where path semantics do not apply.
+ *
+ * Compared with a separator, not by raw prefix: `/backups-evil/x` starts with
+ * `/backups` and is not inside it.
+ */
+const resolveInsideDirectory = (directory: string, entry: BackupManifestEntry): string => {
+    const root = resolve(directory);
+    const path = resolve(root, entry.file);
+
+    if (path !== root && !path.startsWith(`${root}${sep}`)) {
+        throw new LunoraError("INTERNAL", `backup: entry ${entry.id} points outside ${root} (${entry.file}) — refusing to read it`);
+    }
+
+    return path;
+};
+
+/**
+ * Backups in a local directory: snapshots and a single `manifest.json` index
+ * beside them.
  */
 const createDirectoryDestination = (directory: string): BackupDestination => {
     const locate = (id: string): string => backupObjectKey("", id);
 
     return {
-        commit: async (): Promise<void> => {
-            // The export already wrote the file at its final path — there is
-            // nowhere for it to travel to.
+        commit: async (file, stagedPath) => {
+            // Rename within the directory — atomic, so `manifest.json` never
+            // names a file that is half-written.
+            await rename(stagedPath, join(directory, file));
         },
         label: directory,
         list: async () => readManifest(directory),
         locate,
         materialize: (entry, target) => {
-            const path = entry === undefined ? target : join(directory, entry.file);
+            // With no entry, `target` is a path the operator typed, and naming
+            // any file they can read is the point of that form.
+            const path = entry === undefined ? target : resolveInsideDirectory(directory, entry);
 
             // The snapshot is already a local file — nothing to fetch and
             // nothing to clean up afterwards.
@@ -190,9 +216,14 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
         stage: async (id) => {
             await mkdir(directory, { recursive: true });
 
-            // The staged file IS the backup here, so releasing it must not
-            // delete anything — this path is inside the operator's directory.
-            return { path: join(directory, locate(id)), release: () => Promise.resolve() };
+            // Staged under a temporary name in the same directory, so a failed
+            // export/digest/commit leaves nothing behind that `list` cannot see:
+            // a partial `.ndjson` with no manifest entry is invisible and
+            // accumulates. `commit` renames it into place; `release` removes it
+            // if it is still there.
+            const path = join(directory, `${locate(id)}.${randomUUID()}.partial`);
+
+            return { path, release: () => rm(path, { force: true }) };
         },
     };
 };

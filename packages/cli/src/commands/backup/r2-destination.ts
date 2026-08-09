@@ -150,7 +150,11 @@ const createR2Destination = (options: R2DestinationOptions): BackupDestination =
             // whole snapshot, and it is exactly the case where the snapshot is
             // large.
             const directory = await mkdtemp(join(tmpdir(), "lunora-backup-"));
-            const path = join(directory, key.split("/").at(-1) ?? "snapshot.ndjson");
+            // Basename only — a key is not a path, and this one is data. A key
+            // ending in `/` yields an empty last segment, which would resolve to
+            // the directory itself, so treat it as unnamed.
+            const name = key.split("/").at(-1);
+            const path = join(directory, name === undefined || name === "" ? "snapshot.ndjson" : name);
 
             try {
                 await pipeline(Readable.from(response.body as AsyncIterable<Uint8Array>), createWriteStream(path));

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -300,6 +300,71 @@ describe("lunora backup", () => {
 
         expect(result.code).toBe(1);
         expect(logs.some((line) => line.includes("does not match its recorded checksum"))).toBe(true);
+    });
+
+    it.each([
+        ["a relative escape", "../../outside.ndjson"],
+        ["an absolute path", "/etc/hosts"],
+        ["an escape wearing a plausible name", "../lunora-backups-evil/snapshot.ndjson"],
+    ])("restore refuses a manifest entry that points outside the backup directory (%s)", async (_label, file) => {
+        expect.assertions(3);
+
+        const { logger, logs } = capturingLogger();
+        const directory = join(workDir, ".lunora-backups");
+
+        mkdirSync(directory, { recursive: true });
+        // A manifest is data: `file` reaching out of the directory would make
+        // `restore <id>` read and import a file from anywhere on disk. The shape
+        // guard that accepts the entry only knows it is a string.
+        writeFileSync(
+            join(directory, "manifest.json"),
+            `${JSON.stringify([{ bytes: 1, createdAt: "2026-06-03T12:00:00.000Z", file, id: "2026-06-03T12:00:00.000Z", rows: 1 }], undefined, 2)}\n`,
+            "utf8",
+        );
+
+        const importCalls: string[] = [];
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: capturingImportFetch(importCalls),
+            logger,
+            subcommand: "restore",
+            target: "2026-06-03T12:00:00.000Z",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+        expect(importCalls).toHaveLength(0);
+        expect(logs.some((line) => line.includes("points outside"))).toBe(true);
+    });
+
+    it("leaves no partial snapshot behind when the export fails", async () => {
+        expect.assertions(3);
+
+        const { logger } = capturingLogger();
+        const failingExport: StreamingFetchLike = async () => {
+            return { body: null, json: async () => undefined, ok: false, status: 500, text: async () => "boom" };
+        };
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: failingExport,
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(1);
+
+        // A half-written `.ndjson` with no manifest entry is invisible to
+        // `list`, so it would sit in the operator's directory forever.
+        const directory = join(workDir, ".lunora-backups");
+
+        expect(existsSync(directory) ? readdirSync(directory) : []).toStrictEqual([]);
+        expect(existsSync(join(directory, "lunora-backup-2026-06-03T12-00-00-000Z.ndjson"))).toBe(false);
     });
 
     it("restore fails for an unknown target", async () => {
