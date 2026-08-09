@@ -55,6 +55,12 @@ export const aggregateTableName = (table: string, indexName: string): string => 
  * the boundary; a snowflake id is past it, and summing those is not a
  * meaningful question anyway.
  *
+ * The throw fires on the WRITE, which is why the message names the
+ * `aggregateIndex` rather than the read that will never happen: declaring one
+ * over a bigint column is what caps that column at 2^53, and an insert failing
+ * with an aggregate error is otherwise a puzzle. Why the cap was kept rather
+ * than lifted is recorded once, in `plans/312-bigint-aggregate-gaps.md` §10.
+ *
  * **This bounds each contribution, not the total.** The running sum accumulates
  * in the REAL column itself (`COALESCE(__value__, 0) + excluded.__value__` in
  * `applyAggregateDelta`), so enough in-range values still carry it past 2^53 and
@@ -70,7 +76,7 @@ export const coerceAggregateNumber = (value: unknown): number | undefined => {
         if (value > MAX_SAFE_BIGINT || value < -MAX_SAFE_BIGINT) {
             throw new LunoraError(
                 "BAD_REQUEST",
-                `bigint ${value.toString()} exceeds Number.MAX_SAFE_INTEGER and cannot be aggregated exactly — aggregate a narrower column, or read the rows and reduce them in the handler`,
+                `bigint ${value.toString()} exceeds Number.MAX_SAFE_INTEGER, so an aggregateIndex declared over this column cannot tally it exactly (the companion's value column is a REAL) — drop the aggregateIndex, aggregate a narrower column, or read the rows and reduce them in the handler`,
             );
         }
 
