@@ -980,7 +980,7 @@ const isProjectedField = (definition: TableDefinitionLike, field: string | undef
  * returns `false` for it and it keeps the scan unconditionally.
  *
  * The gate is a workaround for the rebuild being per-instance rather than
- * durable; make that marker durable (plan 314) and every caller of this can go
+ * durable; make that marker durable (plan 315) and every caller of this can go
  * back to taking the companion unconditionally.
  * @returns `true` when at least one of `fields` is a projected column
  */

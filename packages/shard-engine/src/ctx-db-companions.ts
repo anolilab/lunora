@@ -216,7 +216,7 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * the incremental deltas it maintains are discarded and recomputed each
      * time. That cost is why `ctx-db.ts`'s readers gate the companion behind
      * `scanRefusesAny` on a soft-delete table rather than always preferring it.
-     * Making this marker durable (plan 314) is what retires that gate.
+     * Making this marker durable (plan 315) is what retires that gate.
      */
     const ensureBackfilledIndex = (tableName: string, index: AggregateIndexDefinitionLike): void => {
         const cacheKey = `${tableName}::${index.name}`;
