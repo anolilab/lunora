@@ -14,7 +14,7 @@
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -159,8 +159,18 @@ const writeManifest = async (directory: string, entries: ReadonlyArray<BackupMan
 };
 
 /**
+ * Is `path` the directory `root` itself, or something under it?
+ *
+ * Compared with a separator rather than by raw prefix — `/backups-evil/x`
+ * starts with `/backups` and is not inside it — and without appending one when
+ * `root` already ends in a separator, which is what a directory at the
+ * filesystem root looks like (`resolve("/")` is `/`, and `//` matches nothing).
+ */
+const isInside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
+
+/**
  * Resolve a manifest entry's `file` inside the backup directory, refusing
- * anything that escapes it.
+ * anything that escapes it. `undefined` when there is simply no such file.
  *
  * A manifest is data, and `file` is a path taken from it: `"../../../etc/hosts"`
  * or an absolute path would otherwise make `restore <id>` read and import a file
@@ -168,18 +178,38 @@ const writeManifest = async (directory: string, entries: ReadonlyArray<BackupMan
  * is a string — a shape check is not a safety check, and it is shared with
  * retention, which compares object keys where path semantics do not apply.
  *
- * Compared with a separator, not by raw prefix: `/backups-evil/x` starts with
- * `/backups` and is not inside it.
+ * Two checks, because they catch different things. `resolve` is pure text
+ * manipulation and makes no filesystem query at all, so it closes `../` and
+ * absolute paths — including for a file that does not exist, which is still an
+ * attack signal worth naming — and is blind to a symlink sitting inside the
+ * directory that points out of it. `realpath` is what actually asks the
+ * filesystem, on BOTH sides: the backup directory can itself be reached through
+ * a symlink (every macOS temp directory is), so canonicalising only the
+ * candidate would reject legitimate paths.
+ *
+ * Order matters: `realpath` throws on a missing path, and a missing snapshot is
+ * ordinary — "not found" and "escaped" must not collapse into one answer.
  */
-const resolveInsideDirectory = (directory: string, entry: BackupManifestEntry): string => {
-    const root = resolve(directory);
-    const path = resolve(root, entry.file);
+const resolveInsideDirectory = async (directory: string, entry: BackupManifestEntry): Promise<string | undefined> => {
+    const lexicalRoot = resolve(directory);
+    const lexicalPath = resolve(lexicalRoot, entry.file);
+    const refuse = (): never => {
+        throw new LunoraError("INTERNAL", `backup: entry ${entry.id} points outside ${lexicalRoot} (${entry.file}) — refusing to read it`);
+    };
 
-    if (path !== root && !path.startsWith(`${root}${sep}`)) {
-        throw new LunoraError("INTERNAL", `backup: entry ${entry.id} points outside ${root} (${entry.file}) — refusing to read it`);
+    if (!isInside(lexicalRoot, lexicalPath)) {
+        refuse();
     }
 
-    return path;
+    if (!existsSync(lexicalPath)) {
+        return undefined;
+    }
+
+    if (!isInside(await realpath(lexicalRoot), await realpath(lexicalPath))) {
+        refuse();
+    }
+
+    return lexicalPath;
 };
 
 /**
@@ -198,14 +228,19 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
         label: directory,
         list: async () => readManifest(directory),
         locate,
-        materialize: (entry, target) => {
+        materialize: async (entry, target) => {
             // With no entry, `target` is a path the operator typed, and naming
-            // any file they can read is the point of that form.
-            const path = entry === undefined ? target : resolveInsideDirectory(directory, entry);
+            // any file they can read is the point of that form — so it is
+            // checked for existence and nothing else.
+            const path = entry === undefined ? target : await resolveInsideDirectory(directory, entry);
+
+            if (path === undefined || !existsSync(path)) {
+                return undefined;
+            }
 
             // The snapshot is already a local file — nothing to fetch and
             // nothing to clean up afterwards.
-            return Promise.resolve(existsSync(path) ? { path, release: () => Promise.resolve() } : undefined);
+            return { path, release: () => Promise.resolve() };
         },
         record: async (entry) => {
             const manifest = await readManifest(directory);
