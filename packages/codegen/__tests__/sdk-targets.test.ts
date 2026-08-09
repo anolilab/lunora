@@ -130,18 +130,18 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
     it.each(Object.entries(RESULT_SHAPES))("never references a model the backend did not declare (%s result)", async (_shape, resultSchema) => {
         expect.assertions(1);
 
-        const { files } = await generateSdk(document(resultSchema), target);
-        const sources = Object.entries(files);
-        const models = sources.find(([path]) => path.toLowerCase().includes("models"))?.[1] ?? "";
-        const surfaces = sources.filter(([path]) => !path.toLowerCase().includes("models")).map(([, contents]) => contents);
+        const { files, undeclared } = await generateSdk(document(resultSchema), target);
 
-        // Model names are the namespace and function in Pascal case, suffixed
-        // Args or Result. Any the surface mentions must exist in the models
-        // file, or the generated SDK cannot import or compile.
-        const referenced = surfaces.flatMap((source) => [...source.matchAll(/\bMessagesCount(?:Args|Result)\b/gu)].map((match) => match[0]));
-        const dangling = [...new Set(referenced)].filter((name) => !models.includes(name));
+        // Deliberately does NOT try to identify "the models file": targets name
+        // it differently (`models.py`, `Models.swift`) and Java emits one file
+        // per model with no models file at all. The invariant is simpler and
+        // language-agnostic — a name the backend did not declare must appear
+        // NOWHERE in the output, because the surface should have degraded it to
+        // an untyped return instead of referencing a type that does not exist.
+        const everything = Object.values(files).join("\n");
+        const leaked = undeclared.filter((name) => everything.includes(name));
 
-        expect(dangling).toStrictEqual([]);
+        expect(leaked).toStrictEqual([]);
     });
 
     it("is deterministic — a second run is byte-identical", async () => {

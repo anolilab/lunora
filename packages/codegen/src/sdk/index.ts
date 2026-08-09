@@ -13,13 +13,21 @@ import type { OpenRpcDocument } from "./spec";
 import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunctions, withDeclaredModels } from "./spec";
 import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
+import javaTarget from "./targets/java";
 import pythonTarget from "./targets/python";
 import rubyTarget from "./targets/ruby";
 import rustTarget from "./targets/rust";
 import swiftTarget from "./targets/swift";
 
 /** Every language `lunora sdk generate --lang` accepts, keyed by id. */
-const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = { go: goTarget, python: pythonTarget, ruby: rubyTarget, rust: rustTarget, swift: swiftTarget };
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = {
+    go: goTarget,
+    java: javaTarget,
+    python: pythonTarget,
+    ruby: rubyTarget,
+    rust: rustTarget,
+    swift: swiftTarget,
+};
 
 /** The accepted `--lang` values, sorted — for help text and error messages. */
 const SDK_LANGUAGES: ReadonlyArray<string> = Object.keys(SDK_TARGETS).toSorted((a, b) => a.localeCompare(b));
