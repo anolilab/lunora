@@ -456,6 +456,112 @@ describe("lunora backup", () => {
         expect(result.code).toBe(1);
     });
 
+    describe("retention", () => {
+        const previewFetch =
+            (body: unknown, calls: { method: string; url: string }[] = []): FetchLike =>
+            async (url, init) => {
+                calls.push({ method: init?.method ?? "GET", url });
+
+                return {
+                    headers: new Headers({ "content-type": "application/json" }),
+                    json: async () => body,
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify(body),
+                };
+            };
+
+        it("prints what retention would delete, phrased like the cron's own record", async () => {
+            expect.assertions(4);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                pitrFetch: previewFetch(
+                    {
+                        cron: "0 3 * * *",
+                        eligible: 5,
+                        keep: 3,
+                        prefix: "backups/",
+                        wouldDelete: ["backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json"],
+                    },
+                    calls,
+                ),
+                subcommand: "retention",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(0);
+            // A read, and only a read.
+            expect(calls).toStrictEqual([{ method: "GET", url: "http://localhost:8787/_lunora/admin/backup/retention" }]);
+            expect(logs.some((line) => line.includes("would keep the newest 3 of 5 under backups/ and delete 1"))).toBe(true);
+            // The snapshot is named, not its sidecar — that is the file an
+            // operator would go looking for.
+            expect(logs.some((line) => line.includes("  backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson"))).toBe(true);
+        });
+
+        it("says so when retention is off rather than reporting an empty deletion", async () => {
+            expect.assertions(2);
+
+            const { logger, logs } = capturingLogger();
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                pitrFetch: previewFetch({ cron: "0 3 * * *", eligible: 4, keep: 0, prefix: "backups/", wouldDelete: [] }),
+                subcommand: "retention",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(0);
+            expect(logs.some((line) => line.includes("retention is off"))).toBe(true);
+        });
+
+        it("explains an empty selection on a bucket this cron never wrote to", async () => {
+            expect.assertions(2);
+
+            const { logger, logs } = capturingLogger();
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                // The legacy-bucket case: snapshots exist, none carry the marker.
+                pitrFetch: previewFetch({ cron: "0 3 * * *", eligible: 0, keep: 3, prefix: "backups/", wouldDelete: [] }),
+                subcommand: "retention",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(0);
+            expect(logs.some((line) => line.includes("was written by this cron"))).toBe(true);
+        });
+
+        it("requires an admin token", async () => {
+            expect.assertions(2);
+
+            const { logger, logs } = capturingLogger();
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
+
+            delete process.env.LUNORA_ADMIN_TOKEN;
+
+            try {
+                const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "retention", url: "http://localhost:8787" });
+
+                expect(result.code).toBe(1);
+                expect(logs.some((line) => line.includes("admin token required"))).toBe(true);
+            } finally {
+                if (previous !== undefined) {
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
+                }
+            }
+        });
+    });
+
     describe("pitr", () => {
         interface PitrCall {
             body: string;

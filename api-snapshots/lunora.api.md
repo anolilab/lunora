@@ -3589,6 +3589,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `BackupRetentionPreview` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `BackupStore` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

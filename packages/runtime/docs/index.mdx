@@ -200,6 +200,25 @@ Register your own cron handlers via `crons` (keyed by the exact expression);
 they run independently of — and, on a shared expression, alongside — the
 built-in backup.
 
+### Seeing what retention will do
+
+`backupRetain` deletes, R2 deletes have no undo, and the thing being deleted is
+a backup — so before trusting a retention setting on a real bucket, ask what it
+would do:
+
+```bash
+lunora backup retention --url https://api.example.com   # reads; deletes nothing
+```
+
+It answers from the worker, because the worker is the only party that knows its
+own `backupCron` and `backupRetain`, and because eligibility depends on a marker
+that is not visible in a plain object listing. The answer comes from the same
+selection the prune itself runs, so the two cannot disagree.
+
+This is worth doing on any bucket that predates the marker: those sidecars are
+never eligible, so retention may own far fewer snapshots than the bucket
+contains — the preview says exactly how many.
+
 Retention only ever removes snapshots **this** cron wrote: each sidecar is
 stamped with its cron expression, and the prune matches on it. Snapshots taken
 by hand, and snapshots from a second deployment sharing the bucket, are left

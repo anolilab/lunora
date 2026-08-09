@@ -53,6 +53,27 @@ const BACKUP_CRON_METADATA_KEY = "lunoraBackupCron";
  */
 const MAX_SCHEDULED_BACKUP_BYTES: number = 24 * 1_048_576;
 
+/** What {@link selectStaleBackups} found: every sidecar this cron owns, and the subset past the retention window. */
+interface StaleBackups {
+    /** Sidecars under the prefix carrying this cron's marker — the population retention chooses from. */
+    eligible: number;
+    /** The ones past the window, newest-first ordering already applied. */
+    stale: string[];
+}
+
+/** What retention would delete on the next run, and the configuration that decides it. */
+interface BackupRetentionPreview {
+    /** The trigger retention belongs to. `undefined` when no scheduled backup is configured. */
+    cron?: string;
+    /** Snapshots this cron owns — legacy sidecars and other writers' are not counted, because retention never touches them. */
+    eligible: number;
+    /** `backupRetain`; `0` when unset, which is what makes the selection empty. */
+    keep: number;
+    prefix: string;
+    /** Sidecar keys, newest-first. Each names a snapshot at the same key without the suffix. */
+    wouldDelete: string[];
+}
+
 /** A snapshot the scheduled backup took: the shared fields plus which trigger produced it. */
 interface BackupManifest extends BackupManifestEntry {
     cron: string;
@@ -74,8 +95,13 @@ const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Ui
 };
 
 /**
- * Enforce `backupRetain` by keeping only the newest N snapshots **this cron**
- * wrote, deleting the older ones plus their sidecars.
+ * The sidecars this cron's retention would delete, newest-first ordering
+ * already applied — the selection, with no deletion in it.
+ *
+ * Retention and `GET /_lunora/admin/backup/retention` both call this, and that
+ * is the point: a preview that can disagree with the prune is worse than no
+ * preview, and this branch has already shown twice what happens when one rule
+ * gets written in two places. Nothing here deletes, so the preview cannot.
  *
  * The writer check is the whole point. Both backup writers share this prefix
  * and this sidecar suffix so `lunora backup list --bucket` shows one history —
@@ -97,12 +123,13 @@ const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Ui
  * the safe direction. Delete those by hand once.
  *
  * Backup keys embed an ISO timestamp with `:`/`.` swapped for `-`, which sorts
- * lexicographically by recency, so a descending sort is a recency sort. A
- * no-op when retention is unset or non-positive.
+ * lexicographically by recency, so a descending sort is a recency sort. Empty
+ * when retention is unset or non-positive — nothing is ever deleted without
+ * `backupRetain`.
  */
-const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<void> => {
+const selectStaleBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<StaleBackups> => {
     if (retain === undefined || retain <= 0) {
-        return;
+        return { eligible: 0, stale: [] };
     }
 
     const mine: string[] = [];
@@ -126,21 +153,55 @@ const pruneBackups = async (store: BackupStore, prefix: string, retain: number |
     }
 
     // Newest first; everything past the retention window goes.
+    return { eligible: mine.length, stale: mine.toSorted((a, b) => b.localeCompare(a)).slice(retain) };
+};
+
+/**
+ * Enforce `backupRetain` by deleting every snapshot {@link selectStaleBackups}
+ * picks, plus its sidecar.
+ */
+const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<void> => {
+    const { stale } = await selectStaleBackups(store, prefix, retain, cron);
+
     await Promise.all(
-        mine
-            .toSorted((a, b) => b.localeCompare(a))
-            .slice(retain)
-            .map(async (manifestKey) => {
-                // Snapshot first, sidecar second. A sidecar without its snapshot
-                // is a listable entry that fails to restore; a snapshot without
-                // its sidecar is invisible to retention forever, because the
-                // marker retention prunes on lives on the sidecar. If only one
-                // delete lands, this order is the recoverable one — the next run
-                // sees the sidecar again and retries.
-                await store.delete(backupObjectKeyOfManifest(manifestKey));
-                await store.delete(manifestKey);
-            }),
+        stale.map(async (manifestKey) => {
+            // Snapshot first, sidecar second. A sidecar without its snapshot
+            // is a listable entry that fails to restore; a snapshot without
+            // its sidecar is invisible to retention forever, because the
+            // marker retention prunes on lives on the sidecar. If only one
+            // delete lands, this order is the recoverable one — the next run
+            // sees the sidecar again and retries.
+            await store.delete(backupObjectKeyOfManifest(manifestKey));
+            await store.delete(manifestKey);
+        }),
     );
+};
+
+/**
+ * What retention would do on the next run, without doing any of it.
+ *
+ * The worker is the only party that knows its own `backupCron` and
+ * `backupRetain`, so this cannot be computed client-side — and the answer is
+ * not obvious even to an operator reading the config, because eligibility turns
+ * on the `lunoraBackupCron` marker that legacy sidecars lack. Until now the only
+ * way to find out was to let a run happen and read what was gone.
+ */
+const previewBackupRetention = async (options: WorkerOptions): Promise<BackupRetentionPreview> => {
+    const store = options.backupStore;
+
+    if (!store) {
+        throw new LunoraError("backup retention preview requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+    }
+
+    const prefix = normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX);
+    const cron = options.backupCron;
+    // No cron means no scheduled backup, so nothing carries this worker's
+    // marker and retention has nothing of its own to delete. Reported as an
+    // empty selection rather than an error: "it would delete nothing" is the
+    // true answer, and the config it comes from is in the response.
+    const { eligible, stale } = cron === undefined ? { eligible: 0, stale: [] } : await selectStaleBackups(store, prefix, options.backupRetain, cron);
+
+    return { cron, eligible, keep: options.backupRetain ?? 0, prefix, wouldDelete: stale };
 };
 
 /**
@@ -258,5 +319,5 @@ const runScheduledBackup = async (
     }
 };
 
-export type { BackupManifest };
-export { runScheduledBackup };
+export type { BackupManifest, BackupRetentionPreview };
+export { previewBackupRetention, runScheduledBackup };

@@ -49,7 +49,7 @@ import { createResourceAttributeResolver } from "./resource-detect";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
-import { runScheduledBackup } from "./scheduled-backup";
+import { previewBackupRetention, runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
@@ -1365,6 +1365,9 @@ interface RpcContext {
     request: Request;
     shardKey: string;
 }
+
+/** Read-only: what backup retention would delete on its next run. Never deletes anything. */
+const BACKUP_RETENTION_PATH = "/_lunora/admin/backup/retention";
 
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
@@ -4288,6 +4291,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const minted = await mintWsAdminToken(signingSecret);
 
             return Response.json(minted, { headers: { "cache-control": "no-store" } });
+        },
+
+        /**
+         * What `backupRetain` would remove on the next cron fire, computed by
+         * the same selection the prune itself runs.
+         *
+         * A read, and only a read — the deletes stay on the cron, and this
+         * route calls no code that can delete. It exists because retention's
+         * deletes are irreversible and its eligibility rule is genuinely
+         * non-obvious on a real bucket (legacy sidecars carry no marker and are
+         * never eligible), so "let it run and see what is gone" was the only
+         * way to find out. Admin-gated before it reads anything, so an
+         * unauthenticated caller learns nothing about which objects exist.
+         */
+        [BACKUP_RETENTION_PATH]: async (request) => {
+            assertMethod(request, "GET", "Backup-retention");
+
+            requireAdminOption(request, options.backupStore, {
+                code: "BACKUP_NOT_CONFIGURED",
+                message: "backup retention preview requires a `backupStore` on the worker",
+            });
+
+            return Response.json(await previewBackupRetention(options), { headers: { "cache-control": "no-store" } });
         },
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
