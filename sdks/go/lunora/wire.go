@@ -17,7 +17,6 @@ package lunora
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -167,9 +166,9 @@ func encodeWire(v any, depth int) (any, error) {
 	case float32:
 		return encodeFloat(float64(value)), nil
 	case int:
-		return float64(value), nil
+		return encodeInteger(int64(value), false)
 	case int64:
-		return float64(value), nil
+		return encodeInteger(value, false)
 	case []any:
 		encoded, err := encodeSlice(value, depth)
 		if err != nil {
@@ -203,44 +202,154 @@ func encodeWire(v any, depth int) (any, error) {
 
 		return result, nil
 	default:
-		// A generated model is a plain struct (or a typed map/slice) with json
-		// tags. Normalise it into the map/slice shape the cases above handle,
-		// rather than rejecting every generated args type.
+		// A generated model is a plain struct (or a typed map/slice/integer).
+		// Walk it reflectively, recursing through encodeWire for every element,
+		// so a wrapper NESTED inside it still reaches its own branch above.
 		//
-		// This cannot capture a wrapper: BigInt, Date, URL, Map, Set, Bytes and
-		// Error are all matched by value above, and pointers are dereferenced
-		// before the switch. Anything that still fails to normalise — a channel,
-		// a func — is a genuine encode error and is reported as one.
-		normalized, ok := normalizeForWire(v)
-		if !ok {
-			return nil, fmt.Errorf("wire-codec: cannot encode a %T over the Lunora wire — only plain values, map/slice, []byte, struct models, and the wrapper types round-trip", v)
-		}
-
-		return encodeWire(normalized, depth)
+		// Deliberately NOT a `json.Marshal` bounce. Marshalling flattens every
+		// wrapper into its Go field layout before this codec sees it: a []byte
+		// becomes a base64 string instead of a bytes tag, a Date becomes
+		// {"EpochMs":…}, and a BigInt becomes a JSON number — which silently
+		// truncated 9007199254740993 to …992. Nesting is the normal case, since
+		// every generated args model is a struct.
+		return encodeReflected(v, depth)
 	}
 }
 
-// normalizeForWire reshapes a struct or typed map/slice into the generic
-// map[string]any / []any tree via its JSON representation, which is exactly the
-// projection the generated models declare through their json tags.
-func normalizeForWire(v any) (any, bool) {
-	kind := reflect.ValueOf(v).Kind()
-	if kind != reflect.Struct && kind != reflect.Map && kind != reflect.Slice && kind != reflect.Array {
-		return nil, false
+// encodeReflected encodes a struct, map, slice, array, or sized integer by
+// walking it, recursing through encodeWire so nested wrappers keep their tags.
+func encodeReflected(v any, depth int) (any, error) {
+	value := reflect.ValueOf(v)
+
+	switch value.Kind() {
+	case reflect.Struct:
+		return encodeStruct(value, depth)
+	case reflect.Map:
+		return encodeReflectedMap(value, depth)
+	case reflect.Slice, reflect.Array:
+		items := make([]any, 0, value.Len())
+
+		for index := 0; index < value.Len(); index++ {
+			encoded, err := encodeWire(value.Index(index).Interface(), depth+1)
+			if err != nil {
+				return nil, err
+			}
+
+			items = append(items, encoded)
+		}
+
+		// The same sentinel escape the []any branch applies.
+		if len(items) > 0 && items[0] == Tag {
+			return []any{Tag, "arr", items}, nil
+		}
+
+		return items, nil
+	// Named scalar types — quicktype renders every enum as one (`type Kind
+	// string`). Their reflect.Kind is String/Bool/Float, but the type switch
+	// above matches only the exact builtin, so they land here.
+	case reflect.String:
+		return value.String(), nil
+	case reflect.Bool:
+		return value.Bool(), nil
+	case reflect.Float32, reflect.Float64:
+		return encodeFloat(value.Float()), nil
+	case reflect.Int:
+		return encodeInteger(value.Int(), false)
+	case reflect.Int64:
+		return encodeInteger(value.Int(), false)
+	case reflect.Int8, reflect.Int16, reflect.Int32:
+		return float64(value.Int()), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32:
+		return float64(value.Uint()), nil
+	case reflect.Uint64:
+		return encodeInteger(int64(value.Uint()), value.Uint() > maxExactInteger)
+	default:
+		return nil, fmt.Errorf("wire-codec: cannot encode a %T over the Lunora wire — only plain values, map/slice, []byte, struct models, and the wrapper types round-trip", v)
+	}
+}
+
+// encodeStruct projects a struct through its json tags — the field names the
+// generated models declare, and therefore the names the server expects.
+func encodeStruct(value reflect.Value, depth int) (any, error) {
+	result := make(map[string]any)
+	fields := value.Type()
+
+	for index := 0; index < fields.NumField(); index++ {
+		field := fields.Field(index)
+		if field.PkgPath != "" {
+			continue // unexported
+		}
+
+		name, omitEmpty := jsonFieldName(field)
+		if name == "-" {
+			continue
+		}
+
+		item := value.Field(index)
+		if omitEmpty && item.IsZero() {
+			continue
+		}
+
+		// A nil pointer field is JSON null, matching encoding/json.
+		if item.Kind() == reflect.Ptr && item.IsNil() {
+			result[name] = nil
+
+			continue
+		}
+
+		encoded, err := encodeWire(item.Interface(), depth+1)
+		if err != nil {
+			return nil, err
+		}
+
+		result[name] = encoded
 	}
 
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, false
+	return result, nil
+}
+
+func encodeReflectedMap(value reflect.Value, depth int) (any, error) {
+	if value.Type().Key().Kind() != reflect.String {
+		return nil, fmt.Errorf("wire-codec: cannot encode a map with %s keys — the wire needs string keys (use Map for arbitrary ones)", value.Type().Key())
 	}
 
-	var normalized any
+	result := make(map[string]any, value.Len())
 
-	if err := json.Unmarshal(raw, &normalized); err != nil {
-		return nil, false
+	for _, key := range value.MapKeys() {
+		encoded, err := encodeWire(value.MapIndex(key).Interface(), depth+1)
+		if err != nil {
+			return nil, err
+		}
+
+		result[key.String()] = encoded
 	}
 
-	return normalized, true
+	return result, nil
+}
+
+// jsonFieldName reads a field's wire name and omitempty flag from its json tag,
+// falling back to the Go field name as encoding/json does.
+func jsonFieldName(field reflect.StructField) (string, bool) {
+	tag := field.Tag.Get("json")
+	if tag == "" {
+		return field.Name, false
+	}
+
+	parts := strings.Split(tag, ",")
+	name := parts[0]
+	omitEmpty := false
+
+	if name == "" {
+		name = field.Name
+	}
+
+	for _, option := range parts[1:] {
+		if option == "omitempty" {
+			omitEmpty = true
+		}
+	}
+
+	return name, omitEmpty
 }
 
 func encodeError(value Error, depth int) (any, error) {
@@ -287,6 +396,23 @@ func encodeSlice(items []any, depth int) ([]any, error) {
 	}
 
 	return encoded, nil
+}
+
+// maxExactInteger is the largest integer a float64 represents exactly (2^53-1).
+// JSON numbers are float64, so an integer above this cannot cross the wire as a
+// number without changing value — v.bigint() and its tag exist for that case.
+const maxExactInteger = 1<<53 - 1
+
+// encodeInteger emits a Go integer as a JSON number, refusing values a float64
+// cannot hold exactly rather than silently rounding them. The TS reference never
+// faces this — JavaScript numbers ARE float64, so an out-of-range integer is
+// already a bigint there and takes the tagged path.
+func encodeInteger(value int64, unsignedOverflow bool) (any, error) {
+	if unsignedOverflow || value > maxExactInteger || value < -maxExactInteger {
+		return nil, fmt.Errorf("wire-codec: integer %d exceeds the exact float64 range — wrap it in BigInt so it crosses the wire as a bigint tag", value)
+	}
+
+	return float64(value), nil
 }
 
 // encodeFloat tags the three float values JSON cannot carry.

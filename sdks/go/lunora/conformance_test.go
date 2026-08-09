@@ -195,7 +195,7 @@ func TestRPCResponses(t *testing.T) {
 		t.Run("ok/"+name, func(t *testing.T) {
 			raw, _ := json.Marshal(testCase["response"])
 
-			value, err := ParseRPCResponse(raw)
+			value, err := ParseRPCResponse(200, raw)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
@@ -220,7 +220,7 @@ func TestRPCResponses(t *testing.T) {
 		t.Run("error/"+name, func(t *testing.T) {
 			raw, _ := json.Marshal(testCase["response"])
 
-			_, err := ParseRPCResponse(raw)
+			_, err := ParseRPCResponse(400, raw)
 
 			apiError, ok := err.(APIError)
 			if !ok {

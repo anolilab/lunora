@@ -10,7 +10,7 @@
 
 import renderModels from "./models";
 import type { OpenRpcDocument } from "./spec";
-import { parseSpec } from "./spec";
+import { assertGeneratable, parseSpec, undeclaredModels, withDeclaredModels } from "./spec";
 import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
 import pythonTarget from "./targets/python";
@@ -24,21 +24,44 @@ const SDK_LANGUAGES: ReadonlyArray<string> = Object.keys(SDK_TARGETS).toSorted((
 /** The files a generation run writes, keyed by path relative to the output directory. */
 type SdkFiles = Record<string, string>;
 
+/** What a generation run produced, plus what it had to weaken and why. */
+interface SdkResult {
+    files: SdkFiles;
+
+    /**
+     * Model names predicted from the schema that the chosen backend did not
+     * declare, so their call sites fell back to an untyped return. Surfaced
+     * rather than swallowed — silently weaker types are how an SDK looks
+     * finished while returning `Any` everywhere.
+     */
+    undeclared: ReadonlyArray<string>;
+}
+
 /**
  * Generate the SDK for `document` in `target`'s language.
  *
  * Async only because the model layer is: quicktype's renderer is promise-based.
  * The surface itself is pure, so a target's `render` stays synchronous and
  * unit-testable without touching quicktype.
+ *
+ * Models are rendered BEFORE the surface because the surface's model references
+ * depend on what the backend actually declared — see {@link withDeclaredModels}.
  */
-const generateSdk = async (document: OpenRpcDocument, target: SdkTarget): Promise<SdkFiles> => {
-    const models = await renderModels(document, target);
+const generateSdk = async (document: OpenRpcDocument, target: SdkTarget): Promise<SdkResult> => {
+    const parsed = parseSpec(document);
 
-    return target.render({ models, namespaces: parseSpec(document) });
+    // Fail before rendering anything: an ambiguous or invalid name produces
+    // source that does not compile, and the cause is far clearer here.
+    assertGeneratable(parsed);
+
+    const models = await renderModels(document, target);
+    const namespaces = withDeclaredModels(parsed, models);
+
+    return { files: target.render({ models, namespaces }), undeclared: undeclaredModels(parsed, models) };
 };
 
 export { generateSdk, SDK_LANGUAGES, SDK_TARGETS };
-export type { SdkFiles };
+export type { SdkFiles, SdkResult };
 export type { OpenRpcDocument, OpenRpcMethod, RuntimeVerb, SdkMethod, SdkNamespace } from "./spec";
-export { allMethods, isTypedSchema, modelSources, parseSpec, referencedModels, verbForKind } from "./spec";
+export { isTypedSchema } from "./spec";
 export type { SdkRenderInput, SdkTarget } from "./target";

@@ -378,9 +378,13 @@
                     - "language": "python"
                       "directory": "sdks/python"
                       "run": "python -m unittest discover -s tests -t . -v"
+                      "generatedOut": "sdks/python/generated_check/lunora_api"
+                      "buildGenerated": "python -c 'import generated_check.lunora_api.api'"
                     - "language": "go"
                       "directory": "sdks/go"
-                      "run": "go test ./... -v"
+                      "run": "go test ./... -v -race"
+                      "generatedOut": "sdks/go/generatedcheck"
+                      "buildGenerated": "go build ./..."
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -405,6 +409,36 @@
             - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
               "working-directory": "${{ matrix.sdk.directory }}"
               "run": "${{ matrix.sdk.run }}"
+
+            # The generated surface hardcodes the runtime's call signatures, and
+            # `target.ts` deliberately keeps that coupling out of the contract so
+            # the two can version independently. Nothing else pins it: change a
+            # runtime signature and every language suite above still passes while
+            # every generated SDK is broken. So generate against the committed
+            # fixture and make the result build.
+            - "name": "Setup node"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "sdk-generate"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build the generator"
+              "run": "pnpm --filter '@lunora/cli...' run build"
+
+            - "name": "Generate an SDK from the committed fixture"
+              "run": |
+                  node packages/cli/dist/bin.mjs sdk generate \
+                    --lang "${{ matrix.sdk.language }}" \
+                    --spec packages/codegen/__tests__/fixtures/simple/expected/_generated/openrpc.json \
+                    --out "${{ matrix.sdk.generatedOut }}"
+
+            - "name": "Build the generated ${{ matrix.sdk.language }} SDK against the runtime"
+              "working-directory": "${{ matrix.sdk.directory }}"
+              "run": "${{ matrix.sdk.buildGenerated }}"
 
     # Single required check: green when every dependent job passed or was
     # skipped (so a no-package-change PR with all jobs skipped still passes).

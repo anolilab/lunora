@@ -14,6 +14,12 @@
  * misses functions"), and the failure mode here is the same in a new costume: a
  * target that re-derives a model name renders an import pointing at a class
  * quicktype never emitted.
+ *
+ * Deriving names in one place is necessary but NOT sufficient, because only
+ * half the decision is ours: quicktype chooses whether a predicted name becomes
+ * a declared type, and different backends answer differently for the same
+ * schema. {@link withDeclaredModels} reconciles the two halves before a target
+ * renders anything.
  */
 
 /** One OpenRPC method as {@link file://../openrpc.ts} emits it. */
@@ -72,13 +78,6 @@ const toPascalCase = (value: string): string =>
 
 /** `listMessages` → `list_messages`. */
 const toSnakeCase = (value: string): string => value.replaceAll(CAMEL_BOUNDARY, "$1_$2").replaceAll(NON_ALPHANUMERIC, "_").toLowerCase();
-
-/** `list_messages` → `listMessages`. */
-const toCamelCase = (value: string): string => {
-    const pascal = toPascalCase(value);
-
-    return pascal.charAt(0).toLowerCase() + pascal.slice(1);
-};
 
 /**
  * True when a schema actually describes a shape.
@@ -173,8 +172,134 @@ const modelSources = (document: OpenRpcDocument): ReadonlyArray<{ name: string; 
         .filter((source): source is { name: string; schema: Record<string, unknown> } => source.name !== undefined && source.schema !== undefined)
         .toSorted((a, b) => a.name.localeCompare(b.name));
 
+/** A generated identifier must start with a letter and continue alphanumerically. */
+const VALID_IDENTIFIER = /^[A-Za-z][A-Za-z0-9]*$/u;
+
+/** Whether `candidate` is a legal identifier in every target language. */
+const isValidIdentifier = (candidate: string): boolean => VALID_IDENTIFIER.test(candidate);
+
+/**
+ * Reject a document that cannot produce valid, unambiguous source.
+ *
+ * Two failures, both of which emit code that does not compile rather than code
+ * that is merely wrong, and neither of which any downstream gate would catch:
+ *
+ * **Invalid identifiers.** A namespace may legally begin with a digit
+ * (`lunora/2fa.ts` → `2fa`, see `paths.ts`), and `toPascalCase` preserves it.
+ * `class 2faApi:` and `type 2faAPI struct` are syntax errors everywhere.
+ *
+ * **Collisions.** `toPascalCase` is not injective: `user_profile` and
+ * `userProfile` both yield `UserProfile`. That renders two classes of the same
+ * name — a duplicate declaration in Go, and in Python a silent shadow where the
+ * second definition wins and one namespace's methods vanish.
+ *
+ * Throwing beats emitting: a caller renames the file, where the ambiguity
+ * actually lives, instead of debugging generated source.
+ */
+const assertGeneratable = (namespaces: ReadonlyArray<SdkNamespace>): void => {
+    const seenNamespace = new Map<string, string>();
+
+    for (const namespace of namespaces) {
+        const typeName = toPascalCase(namespace.name);
+
+        if (!isValidIdentifier(typeName)) {
+            throw new Error(`sdk: namespace "${namespace.name}" produces the invalid identifier "${typeName}" — rename the file so it starts with a letter.`);
+        }
+
+        const clash = seenNamespace.get(typeName);
+
+        if (clash !== undefined) {
+            throw new Error(
+                `sdk: namespaces "${clash}" and "${namespace.name}" both generate "${typeName}" — rename one so the generated types stay distinct.`,
+            );
+        }
+
+        seenNamespace.set(typeName, namespace.name);
+
+        const seenMethod = new Map<string, string>();
+
+        for (const method of namespace.methods) {
+            const memberBase = toPascalCase(method.functionName);
+
+            if (!isValidIdentifier(memberBase)) {
+                throw new Error(
+                    `sdk: function "${method.functionPath}" produces the invalid identifier "${memberBase}" — rename the export so it starts with a letter.`,
+                );
+            }
+
+            const memberClash = seenMethod.get(memberBase);
+
+            if (memberClash !== undefined) {
+                throw new Error(
+                    `sdk: functions "${memberClash}" and "${method.functionPath}" both generate "${memberBase}" — rename one so the generated methods stay distinct.`,
+                );
+            }
+
+            seenMethod.set(memberBase, method.functionPath);
+        }
+    }
+};
+
 /** Every method in the document, flattened — for imports and summary counts. */
 const allMethods = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArray<SdkMethod> => namespaces.flatMap((namespace) => namespace.methods);
+
+/**
+ * The two sentences every generated file opens with.
+ *
+ * Returned as lines rather than formatted text because the wrapper differs by
+ * language in ways a comment prefix cannot express — Python wants a module
+ * docstring, Go a `//` run. Sharing the sentences is the point; N copies of one
+ * sentence drift, and the wrapper is one `map` at the call site.
+ */
+const generatedHeaderLines = (languageId: string): ReadonlyArray<string> => [
+    `GENERATED by \`lunora sdk generate --lang ${languageId}\` — do not edit.`,
+    `Run the command again to regenerate.`,
+];
+
+/**
+ * Clear model references the rendered models do not actually declare.
+ *
+ * {@link parseMethod} predicts a name for every typed schema, but quicktype —
+ * not this package — decides whether that name becomes a declared type, and the
+ * answer differs by backend. A `.output(v.string())` renders as
+ * `type MessagesCountResult string` in Go (a real named type) but in Python as
+ * a bare `messages_count_result_from_dict()` helper with NO class of that name.
+ * Emitting the prediction regardless produces an SDK that fails to import.
+ *
+ * So the prediction is reconciled against the rendered source rather than
+ * trusted. The test is deliberately the weakest one that is still sound: a name
+ * that appears nowhere in the models text is certainly not declared, and that
+ * is exactly the failure. Anything stricter would mean parsing generated source
+ * per language — nine more things to get wrong — and anything that instead
+ * narrowed the prediction would bake one backend's current behaviour into the
+ * language-neutral layer.
+ *
+ * A cleared reference degrades to the untyped return the surface already
+ * renders for an undeclared `.output()`, so the worst case is a weaker type,
+ * never a broken build.
+ */
+const withDeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
+    const declared = (name: string | undefined): string | undefined => (name !== undefined && models.includes(name) ? name : undefined);
+
+    return namespaces.map((namespace) => {
+        return {
+            methods: namespace.methods.map((method) => {
+                return { ...method, argsType: declared(method.argsType), resultType: declared(method.resultType) };
+            }),
+            name: namespace.name,
+        };
+    });
+};
+
+/** Model names that were predicted but not declared — reported by the CLI. */
+const undeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<string> =>
+    [
+        ...new Set(
+            allMethods(namespaces)
+                .flatMap((method) => [method.argsType, method.resultType])
+                .filter((name): name is string => name !== undefined && !models.includes(name)),
+        ),
+    ].toSorted((a, b) => a.localeCompare(b));
 
 /** The model names a surface actually references, de-duplicated and sorted. */
 const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArray<string> =>
@@ -186,5 +311,19 @@ const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArra
         ),
     ].toSorted((a, b) => a.localeCompare(b));
 
-export { allMethods, isTypedSchema, modelSources, parseMethod, parseSpec, referencedModels, toCamelCase, toPascalCase, toSnakeCase, verbForKind };
+export {
+    allMethods,
+    assertGeneratable,
+    generatedHeaderLines,
+    isTypedSchema,
+    modelSources,
+    parseMethod,
+    parseSpec,
+    referencedModels,
+    toPascalCase,
+    toSnakeCase,
+    undeclaredModels,
+    verbForKind,
+    withDeclaredModels,
+};
 export type { OpenRpcDocument, OpenRpcMethod, RuntimeVerb, SdkMethod, SdkNamespace };

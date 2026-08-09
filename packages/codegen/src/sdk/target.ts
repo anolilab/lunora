@@ -10,6 +10,25 @@
  * hand-written runtime under `sdks/<lang>/` is a separate artifact with its own
  * conformance suite — generated code imports it, so the two version
  * independently and a wire fix does not force a regeneration.
+ *
+ * ## Conventions every target must follow
+ *
+ * Decisions, not preferences: a target that resolves them differently produces
+ * an SDK that behaves unlike its siblings against the same deployment.
+ *
+ * **Shard key.** Optional where the language has optionals (Python's
+ * `shard_key=None`), an empty-string sentinel where it does not (Go's
+ * `shardKey string`). Absent means "the default shard", and the key is then
+ * OMITTED from the RPC body rather than sent as null or empty.
+ *
+ * **Subscriptions are queries only.** A write has nothing for the server to
+ * re-run, so a `subscribe_*` on one generates a call the server rejects.
+ *
+ * **Verbs cross into the runtime as typed constants**, never bare strings, so a
+ * template typo cannot silently route a read over the write path.
+ *
+ * **Untyped results degrade, never guess.** When the backend does not declare a
+ * predicted model, the call site returns the language's `any`.
  */
 
 import type { LanguageName } from "quicktype-core";
@@ -28,9 +47,6 @@ interface SdkRenderInput {
 interface SdkTarget {
     /** The `--lang` value (`"python"`, `"go"`, …). */
     id: string;
-
-    /** How this language spells a method/member name (`list_messages` / `ListMessages` / `listMessages`). */
-    memberName: (raw: string) => string;
 
     /**
      * The quicktype backend + renderer options that produce this target's

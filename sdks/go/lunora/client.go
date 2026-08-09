@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 const (
@@ -12,6 +13,20 @@ const (
 	RPCPath = "/_lunora/rpc"
 	// WSPath is the live-subscription endpoint.
 	WSPath = "/_lunora/ws"
+)
+
+// Verb selects which RPC method Call dispatches to. Generated code emits these
+// constants rather than raw strings, so a typo in a target template is a
+// compile error instead of a read silently sent over the write path.
+type Verb string
+
+const (
+	// VerbQuery is a read.
+	VerbQuery Verb = "query"
+	// VerbMutation is a write, optionally carrying an idempotency key.
+	VerbMutation Verb = "mutation"
+	// VerbAction is an external side effect; never idempotency-keyed.
+	VerbAction Verb = "action"
 )
 
 // HTTPPoster performs one POST. Injected rather than assumed so the conformance
@@ -65,6 +80,14 @@ type Client struct {
 	// Post performs the HTTP round-trip.
 	Post HTTPPoster
 
+	// mu guards subscriptions, nextID, and send.
+	//
+	// Not optional in Go. The normal topology is a socket read loop calling
+	// HandleFrame on one goroutine while application code calls Subscribe on
+	// another, and Go's map runtime answers a concurrent read/write with
+	// `fatal error: concurrent map read and map write` — which no recover()
+	// catches. An unsynchronised map here kills the consumer's process.
+	mu            sync.Mutex
 	send          FrameSender
 	subscriptions map[string]*subscription
 	nextID        int
@@ -74,7 +97,6 @@ type subscription struct {
 	id           string
 	functionPath string
 	args         any
-	shardKey     string
 	onData       DataHandler
 	onError      ErrorHandler
 	cursor       any
@@ -89,7 +111,12 @@ func NewClient(baseURL string, post HTTPPoster) *Client {
 
 // AttachSocket registers the sender used for subscription frames. Call it once
 // the socket is open; buffered subscriptions are (re)sent by ResendSubscriptions.
-func (c *Client) AttachSocket(send FrameSender) { c.send = send }
+func (c *Client) AttachSocket(send FrameSender) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.send = send
+}
 
 // BuildRPCBody assembles the POST /_lunora/rpc body. shardKey is omitted when
 // empty, which routes to the default shard.
@@ -111,11 +138,21 @@ func BuildRPCBody(functionPath string, args any, shardKey string) (map[string]an
 	return body, nil
 }
 
-// ParseRPCResponse returns the decoded result, or an APIError from an error envelope.
-func ParseRPCResponse(raw []byte) (any, error) {
+// ParseRPCResponse returns the decoded result, or an APIError built from the
+// response.
+//
+// status is required, not decorative: protocol/README.md §4.2 says a non-2xx
+// whose body carries no `error` envelope surfaces as an INTERNAL transport
+// error. Without it a 502 with body `{"message":"bad gateway"}` would decode to
+// a nil result and a nil error — a caller would believe its mutation committed.
+func ParseRPCResponse(status int, raw []byte) (any, error) {
 	var body map[string]any
 
 	if err := json.Unmarshal(raw, &body); err != nil {
+		if status < 200 || status > 299 {
+			return nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status)}
+		}
+
 		return nil, fmt.Errorf("lunora: malformed RPC response: %w", err)
 	}
 
@@ -143,6 +180,10 @@ func ParseRPCResponse(raw []byte) (any, error) {
 		}
 
 		return nil, APIError{Code: code, Data: data, Message: message}
+	}
+
+	if status < 200 || status > 299 {
+		return nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status)}
 	}
 
 	return DecodeWire(body["result"])
@@ -192,12 +233,12 @@ func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID 
 		headers["x-lunora-mutation-id"] = mutationID
 	}
 
-	_, raw, err := c.Post(joinURL(c.BaseURL, RPCPath), headers, payload)
+	status, raw, err := c.Post(joinURL(c.BaseURL, RPCPath), headers, payload)
 	if err != nil {
 		return nil, err
 	}
 
-	return ParseRPCResponse(raw)
+	return ParseRPCResponse(status, raw)
 }
 
 // Call invokes functionPath and decodes the result into T.
@@ -205,7 +246,7 @@ func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID 
 // A free function rather than a method because Go methods cannot take type
 // parameters — this is what lets a generated method declare a concrete return
 // type while the decode stays generic.
-func Call[T any](c *Client, verb string, functionPath string, args any, shardKey string) (T, error) {
+func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey string) (T, error) {
 	var zero T
 
 	var (
@@ -214,12 +255,17 @@ func Call[T any](c *Client, verb string, functionPath string, args any, shardKey
 	)
 
 	switch verb {
-	case "query":
+	case VerbQuery:
 		result, err = c.Query(functionPath, args, shardKey)
-	case "action":
+	case VerbAction:
 		result, err = c.Action(functionPath, args, shardKey)
-	default:
+	case VerbMutation:
 		result, err = c.Mutation(functionPath, args, shardKey, "")
+	default:
+		// Not a silent fallthrough to the write path: an unrecognised verb means
+		// the generator and this runtime disagree, and guessing would send a
+		// read as a write.
+		return zero, fmt.Errorf("lunora: unknown verb %q", verb)
 	}
 
 	if err != nil {
@@ -292,23 +338,43 @@ func BuildUnsubscribeFrame(id string) map[string]any {
 
 // Subscribe opens a live query. The returned Unsubscribe stops delivery and
 // tells the server to drop it.
+//
+// shardKey does NOT ride the subscribe frame: the protocol selects a shard per
+// SOCKET, via the `?shard=` parameter WSURL builds. This client holds one
+// socket, so shardKey must match the shard that socket was opened against — it
+// is accepted here to keep the generated surface uniform across languages, and
+// validated rather than silently ignored.
 func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, onError ErrorHandler, shardKey string) Unsubscribe {
+	c.mu.Lock()
+
+	if c.subscriptions == nil {
+		// A literal-constructed Client (&lunora.Client{...}) has a nil map;
+		// initialise lazily rather than panicking on first Subscribe.
+		c.subscriptions = map[string]*subscription{}
+	}
+
 	c.nextID++
 	id := fmt.Sprintf("sub_%d", c.nextID)
-	entry := &subscription{args: args, functionPath: functionPath, id: id, onData: onData, onError: onError, shardKey: shardKey}
-	c.subscriptions[id] = entry
+	c.subscriptions[id] = &subscription{args: args, functionPath: functionPath, id: id, onData: onData, onError: onError}
+	send := c.send
+	c.mu.Unlock()
 
-	if c.send != nil {
+	// Sent outside the lock: the caller's FrameSender does socket I/O, and
+	// holding the mutex across it would serialise every subscription behind it.
+	if send != nil {
 		if frame, err := BuildSubscribeFrame(id, functionPath, args, "", nil, nil); err == nil {
-			_ = c.send(frame)
+			_ = send(frame)
 		}
 	}
 
 	return func() {
+		c.mu.Lock()
 		delete(c.subscriptions, id)
+		sender := c.send
+		c.mu.Unlock()
 
-		if c.send != nil {
-			_ = c.send(BuildUnsubscribeFrame(id))
+		if sender != nil {
+			_ = sender(BuildUnsubscribeFrame(id))
 		}
 	}
 }
@@ -316,17 +382,27 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 // ResendSubscriptions re-subscribes everything after a reconnect, carrying each
 // subscription's resume cursor so the server can skip unchanged results.
 func (c *Client) ResendSubscriptions() error {
-	if c.send == nil {
+	c.mu.Lock()
+	send := c.send
+	entries := make([]*subscription, 0, len(c.subscriptions))
+
+	for _, entry := range c.subscriptions {
+		entries = append(entries, entry)
+	}
+
+	c.mu.Unlock()
+
+	if send == nil {
 		return nil
 	}
 
-	for _, entry := range c.subscriptions {
+	for _, entry := range entries {
 		frame, err := BuildSubscribeFrame(entry.id, entry.functionPath, entry.args, "", entry.cursor, entry.epoch)
 		if err != nil {
 			return err
 		}
 
-		if err := c.send(frame); err != nil {
+		if err := send(frame); err != nil {
 			return err
 		}
 	}
@@ -352,7 +428,10 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 	kind, _ := frame["type"].(string)
 	id, _ := frame["id"].(string)
+
+	c.mu.Lock()
 	entry := c.subscriptions[id]
+	c.mu.Unlock()
 
 	switch kind {
 	case "ack":
@@ -406,7 +485,9 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 		return kind, nil
 	case "complete":
+		c.mu.Lock()
 		delete(c.subscriptions, id)
+		c.mu.Unlock()
 
 		return kind, nil
 	default:
@@ -415,6 +496,9 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 }
 
 func (c *Client) advance(entry *subscription, frame map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if cursor, ok := frame["cursor"]; ok {
 		entry.cursor = cursor
 	}

@@ -68,13 +68,24 @@ def build_rpc_body(function_path: str, args: Any, shard_key: Optional[str] = Non
     return body
 
 
-def parse_rpc_response(body: dict) -> Any:
-    """Return ``decode_wire(result)`` or raise :class:`LunoraError` from an ``error`` envelope."""
+def parse_rpc_response(body: dict, status: int = 200) -> Any:
+    """Return ``decode_wire(result)`` or raise :class:`LunoraError`.
+
+    ``status`` is required for correctness, not diagnostics: ``protocol/README.md``
+    §4.2 says a non-2xx response whose body carries no ``error`` envelope is
+    surfaced as an ``INTERNAL`` transport error. Without the check, a 502 with
+    body ``{"message": "bad gateway"}`` returns ``None`` and no exception — the
+    caller believes its mutation committed.
+    """
 
     if "error" in body:
         err = body["error"]
         data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
         raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data)
+
+    if not 200 <= status <= 299:
+        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope")
+
     return decode_wire(body.get("result"))
 
 
@@ -226,7 +237,7 @@ class LunoraClient:
         status, parsed = await asyncio.get_event_loop().run_in_executor(
             None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body)
         )
-        return parse_rpc_response(parsed)
+        return parse_rpc_response(parsed, status)
 
     # --- WS credential ------------------------------------------------------
 

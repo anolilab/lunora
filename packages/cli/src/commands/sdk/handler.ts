@@ -59,7 +59,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         return { code: 0 };
     }
 
-    const files = await generateSdk(document, target);
+    const { files, undeclared } = await generateSdk(document, target);
 
     for (const [relativePath, contents] of Object.entries(files)) {
         const destination = join(outputDirectory, relativePath);
@@ -75,6 +75,12 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     logger.success(`Generated ${language} SDK for ${String(document.methods.length)} function(s) → ${outputDirectory}`);
     logger.info(`The generated code imports the ${target.runtimePackage} runtime — add it to the consuming project.`);
+
+    if (undeclared.length > 0) {
+        // The schema declared a shape, but this language's backend did not turn
+        // it into a named type — the call site fell back to an untyped return.
+        logger.warn(`${String(undeclared.length)} declared result type(s) are not expressible as a named ${language} model, so those calls return untyped: ${undeclared.join(", ")}`);
+    }
 
     if (untypedResults > 0) {
         logger.warn(

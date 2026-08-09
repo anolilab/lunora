@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { OpenRpcDocument } from "../src/sdk";
 import { generateSdk, isTypedSchema } from "../src/sdk";
-import pythonTarget from "../src/sdk/targets/python";
+import pythonTarget, { memberName } from "../src/sdk/targets/python";
 
 const fixture = (): OpenRpcDocument =>
     JSON.parse(readFileSync(join(__dirname, "fixtures", "simple", "expected", "_generated", "openrpc.json"), "utf8")) as OpenRpcDocument;
@@ -14,10 +14,10 @@ describe("python memberName", () => {
     it("splits camelCase and escapes Python keywords", () => {
         expect.assertions(3);
 
-        expect(pythonTarget.memberName("listMessages")).toBe("list_messages");
-        expect(pythonTarget.memberName("sendMessage")).toBe("send_message");
+        expect(memberName("listMessages")).toBe("list_messages");
+        expect(memberName("sendMessage")).toBe("send_message");
         // `import` is a Python keyword — an un-escaped `def import(...)` is a SyntaxError.
-        expect(pythonTarget.memberName("import")).toBe("import_");
+        expect(memberName("import")).toBe("import_");
     });
 });
 
@@ -37,7 +37,7 @@ describe("generateSdk (python)", () => {
         expect.assertions(9);
 
         const document = fixture();
-        const files = await generateSdk(document, pythonTarget);
+        const { files } = await generateSdk(document, pythonTarget);
 
         expect(Object.keys(files).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["__init__.py", "api.py", "models.py"]);
 
@@ -64,7 +64,7 @@ describe("generateSdk (python)", () => {
     it("renders the model layer from the args schemas", async () => {
         expect.assertions(5);
 
-        const generated = await generateSdk(fixture(), pythonTarget);
+        const { files: generated } = await generateSdk(fixture(), pythonTarget);
         const models = generated["models.py"] ?? "";
 
         // quicktype maps the wire's camelCase onto snake_case fields and back.
@@ -80,8 +80,8 @@ describe("generateSdk (python)", () => {
         expect.assertions(1);
 
         const document = fixture();
-        const first = await generateSdk(document, pythonTarget);
-        const second = await generateSdk(document, pythonTarget);
+        const { files: first } = await generateSdk(document, pythonTarget);
+        const { files: second } = await generateSdk(document, pythonTarget);
 
         expect(second).toStrictEqual(first);
     });
@@ -90,7 +90,7 @@ describe("generateSdk (python)", () => {
         expect.assertions(4);
 
         const document = fixture();
-        const files = await generateSdk(document, pythonTarget);
+        const { files } = await generateSdk(document, pythonTarget);
         const api = files["api.py"] ?? "";
 
         // `messages:list` is a query — it gets a live subscription.
@@ -112,7 +112,7 @@ describe("generateSdk (python)", () => {
                 { name: "billing:total", "x-lunora-function-kind": "query" },
             ],
         };
-        const files = await generateSdk(document, pythonTarget);
+        const { files } = await generateSdk(document, pythonTarget);
         const api = files["api.py"] ?? "";
 
         // `action` must NOT fold into `mutation`: only `mutation` carries an
@@ -134,7 +134,7 @@ describe("generateSdk (python)", () => {
                 },
             ],
         };
-        const files = await generateSdk(document, pythonTarget);
+        const { files } = await generateSdk(document, pythonTarget);
         const api = files["api.py"] ?? "";
 
         expect(api).toContain("-> MessagesCountResult:");
@@ -146,7 +146,7 @@ describe("generateSdk (python)", () => {
         expect.assertions(2);
 
         const document = fixture();
-        const files = await generateSdk(document, pythonTarget);
+        const { files } = await generateSdk(document, pythonTarget);
         const api = files["api.py"] ?? "";
 
         // Both fixture functions lack `.output()`, so nothing is typed on return.

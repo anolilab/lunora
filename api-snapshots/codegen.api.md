@@ -777,12 +777,20 @@ interface SdkRenderInput {
 }
 ```
 
+### `SdkResult` (interface)
+
+```ts
+interface SdkResult {
+    files: SdkFiles;
+    undeclared: ReadonlyArray<string>;
+}
+```
+
 ### `SdkTarget` (interface)
 
 ```ts
 interface SdkTarget {
     id: string;
-    memberName: (raw: string) => string;
     quicktype: {
         lang: LanguageName;
         rendererOptions?: Record<string, string>;
@@ -1266,7 +1274,7 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 ### `generateSdk` (const)
 
 ```ts
-const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkFiles>;
+const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
 ```
 
 ### `isTypedSchema` (const)

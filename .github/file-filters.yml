@@ -111,6 +111,10 @@ sdks:
     - "protocol/**"
     - "shared/wire-codec.ts"
     - "shared/stable-key.ts"
+    # The generator too: a target template hardcodes the runtime's call
+    # signatures (`lunora.Call[T](client, verb, path, args, shardKey)`), so an
+    # edit here can break every generated SDK while every other gate stays green.
+    - "packages/codegen/src/sdk/**"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 

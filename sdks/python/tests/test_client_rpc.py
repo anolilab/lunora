@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient  # noqa: E402
+from lunora.client import LunoraClient, LunoraError  # noqa: E402
 
 
 def _record():
@@ -46,6 +46,27 @@ class TestRpcVerbs(unittest.TestCase):
         asyncio.run(client.mutation("messages:send", {"text": "hi"}, mutation_id="m1"))
 
         self.assertEqual(calls[-1]["headers"]["x-lunora-mutation-id"], "m1")
+
+    def test_non_2xx_without_an_error_envelope_raises(self):
+        # protocol/README.md §4.2. Without the status check this returned None
+        # and no exception — a caller would believe its mutation committed.
+        def post(url, headers, body):
+            return 502, {"message": "bad gateway"}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        with self.assertRaises(LunoraError) as caught:
+            asyncio.run(client.mutation("messages:send", {"text": "hi"}))
+
+        self.assertEqual(caught.exception.code, "INTERNAL")
+
+    def test_2xx_without_an_error_envelope_still_returns_the_result(self):
+        def post(url, headers, body):
+            return 200, {"result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+
+        self.assertEqual(asyncio.run(client.query("messages:list")), {"ok": True})
 
     def test_shard_key_is_omitted_when_absent(self):
         calls, post = _record()

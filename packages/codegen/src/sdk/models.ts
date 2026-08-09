@@ -8,8 +8,6 @@
  * name and renderer options; everything else is shared.
  */
 
-import { FetchingJSONSchemaStore, InputData, JSONSchemaInput, quicktype } from "quicktype-core";
-
 import type { OpenRpcDocument } from "./spec";
 import { modelSources } from "./spec";
 import type { SdkTarget } from "./target";
@@ -27,6 +25,13 @@ const renderModels = async (document: OpenRpcDocument, target: SdkTarget): Promi
     if (sources.length === 0) {
         return "";
     }
+
+    // Loaded on demand, not at module scope. `@lunora/codegen`'s barrel is
+    // imported by the Vite plugin and every CLI command, and quicktype is a
+    // multi-megabyte dependency that exists solely for `lunora sdk generate` —
+    // a command most projects never run. A static import would put it on the
+    // dev-server boot path for everyone.
+    const { FetchingJSONSchemaStore, InputData, JSONSchemaInput, quicktype } = await import("quicktype-core");
 
     const schemaInput = new JSONSchemaInput(new FetchingJSONSchemaStore());
 
