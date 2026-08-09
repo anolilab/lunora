@@ -132,8 +132,8 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
 
         const { files } = await generateSdk(document(resultSchema), target);
         const sources = Object.entries(files);
-        const models = sources.find(([path]) => path.includes("models"))?.[1] ?? "";
-        const surfaces = sources.filter(([path]) => !path.includes("models")).map(([, contents]) => contents);
+        const models = sources.find(([path]) => path.toLowerCase().includes("models"))?.[1] ?? "";
+        const surfaces = sources.filter(([path]) => !path.toLowerCase().includes("models")).map(([, contents]) => contents);
 
         // Model names are the namespace and function in Pascal case, suffixed
         // Args or Result. Any the surface mentions must exist in the models
@@ -175,7 +175,7 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         // Whatever the backend does, the report must agree with the output: a
         // name is either declared in the models, or listed as undeclared.
         const { files, undeclared } = await generateSdk(document(RESULT_SHAPES.scalar), target);
-        const models = Object.entries(files).find(([path]) => path.includes("models"))?.[1] ?? "";
+        const models = Object.entries(files).find(([path]) => path.toLowerCase().includes("models"))?.[1] ?? "";
 
         expect(undeclared.every((name) => !models.includes(name))).toBe(true);
     });

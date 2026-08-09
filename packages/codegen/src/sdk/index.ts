@@ -15,9 +15,10 @@ import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
 import pythonTarget from "./targets/python";
 import rubyTarget from "./targets/ruby";
+import swiftTarget from "./targets/swift";
 
 /** Every language `lunora sdk generate --lang` accepts, keyed by id. */
-const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = { go: goTarget, python: pythonTarget, ruby: rubyTarget };
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = { go: goTarget, python: pythonTarget, ruby: rubyTarget, swift: swiftTarget };
 
 /** The accepted `--lang` values, sorted — for help text and error messages. */
 const SDK_LANGUAGES: ReadonlyArray<string> = Object.keys(SDK_TARGETS).toSorted((a, b) => a.localeCompare(b));

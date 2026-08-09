@@ -369,27 +369,38 @@
         "name": "SDK conformance (${{ matrix.sdk.language }})"
         "if": "needs.files-changed.outputs.sdks == 'true'"
         "needs": "files-changed"
-        "runs-on": "ubuntu-latest"
-        "timeout-minutes": 10
+        "runs-on": "${{ matrix.sdk.runner }}"
+        "timeout-minutes": 15
         "strategy":
             "fail-fast": false
             "matrix":
                 "sdk":
                     - "language": "python"
+                      "runner": "ubuntu-latest"
                       "directory": "sdks/python"
                       "run": "python -m unittest discover -s tests -t . -v"
                       "generatedOut": "sdks/python/generated_check/lunora_api"
                       "buildGenerated": "python -c 'import generated_check.lunora_api.api'"
                     - "language": "go"
+                      "runner": "ubuntu-latest"
                       "directory": "sdks/go"
                       "run": "go test ./... -v -race"
                       "generatedOut": "sdks/go/generatedcheck"
                       "buildGenerated": "go build ./..."
                     - "language": "ruby"
+                      "runner": "ubuntu-latest"
                       "directory": "sdks/ruby"
                       "run": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }'"
                       "generatedOut": "sdks/ruby/generated_check"
                       "buildGenerated": "ruby -Ilib -c generated_check/api.rb && ruby -Ilib -c generated_check/models.rb"
+                    - "language": "swift"
+                      # Swift ships with the macOS image, so this leg needs no
+                      # third-party setup action.
+                      "runner": "macos-latest"
+                      "directory": "sdks/swift"
+                      "run": "swift test"
+                      "generatedOut": "sdks/swift/Sources/GeneratedCheck"
+                      "buildGenerated": "swift build"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
