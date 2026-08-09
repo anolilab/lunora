@@ -318,6 +318,28 @@ describe("tracesPanel", () => {
         expect(rows[0]?.textContent).toContain("retrying");
     });
 
+    it("does not read the log ring until a trace is actually expanded", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+        const readsLogs = (): boolean => mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.getLogs);
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("tr-row-trace-send");
+
+        // The page starts fully collapsed, so the correlated-log section is not on
+        // screen; reading it unconditionally would open a second live subscription
+        // and stream the whole ring on every visit for nothing.
+        expect(readsLogs()).toBe(false);
+
+        fireEvent.click(screen.getByTestId("tr-toggle-trace-send"));
+
+        await waitFor(() => {
+            expect(readsLogs()).toBe(true);
+        });
+    });
+
     it("omits the log section for a trace whose dispatch logged nothing", async () => {
         expect.assertions(1);
 
