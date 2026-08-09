@@ -154,6 +154,41 @@ any shard is incomplete or unreachable (the run stays resumable). The roll-up
 also reports summed `processed` / `changed` counts and the number of `ok` vs
 `failed` shards.
 
+### The built-in re-projection backfill
+
+One migration id is reserved by the framework rather than declared in your
+`lunora/`: `__lunora_reproject__<table>`. It rewrites rows whose `v.bigint()` /
+`v.bytes()` columns are still stored in the pre-projection form — such a row
+reads back correctly, but SQL never matches it, so `filter`, `withIndex`,
+`ORDER BY` and `SUM` silently skip it. Only rows written before the storage
+codec was fixed are affected, and any ordinary write heals a row, so what is
+left is whatever nobody rewrites.
+
+`--dry-run` answers whether you need it, per shard, without rewriting anything:
+
+```bash
+lunora migrate up __lunora_reproject__paymentSessions --dry-run
+lunora migrate up __lunora_reproject__paymentSessions
+```
+
+The transform skips a row already in the current projection, and the runner
+counts only the rows it would rewrite — so a dry run's `changed` **is** the
+legacy-row count for that shard. `migrate status` reports run-state for a
+backfill that has already run; use the dry run before one, since a shard that
+never ran it has no run-state to report.
+
+One caveat on reading `changed: 0` as "done": the transform also skips a row it
+cannot re-project at all — a bigint wider than the projection's 39-digit key,
+which is reachable for a uint256-shaped value — and such a row is counted
+processed, not changed. It logs a warning naming the row id, and that warning is
+the only signal. So `changed: 0` means "nothing left that this backfill can fix",
+which is the same thing as "fully re-projected" only when the shard's logs are
+clean.
+
+The backfill is deliberately **not** automatic on deploy: every rewritten row
+pokes its live subscribers, so an all-legacy shard would turn a deploy into a
+broadcast storm on a path nobody asked for.
+
 ## Inspecting run-state in the Studio
 
 The Studio's **Database → Migrations** panel (see
