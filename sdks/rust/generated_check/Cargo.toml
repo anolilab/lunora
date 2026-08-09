@@ -1,0 +1,13 @@
+# Compile-only: proves the generated surface still builds against the runtime,
+# a coupling the target contract deliberately keeps out of itself. CI
+# regenerates `src/`; the committed copy is a sample from the codegen fixture.
+[package]
+name = "lunora-generated-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+lunora = { path = ".." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

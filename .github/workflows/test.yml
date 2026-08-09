@@ -393,6 +393,12 @@
                       "run": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }'"
                       "generatedOut": "sdks/ruby/generated_check"
                       "buildGenerated": "ruby -Ilib -c generated_check/api.rb && ruby -Ilib -c generated_check/models.rb"
+                    - "language": "rust"
+                      "runner": "ubuntu-latest"
+                      "directory": "sdks/rust"
+                      "run": "cargo test"
+                      "generatedOut": "sdks/rust/generated_check/src"
+                      "buildGenerated": "cargo build --manifest-path generated_check/Cargo.toml"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
