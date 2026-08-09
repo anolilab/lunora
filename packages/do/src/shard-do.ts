@@ -496,6 +496,21 @@ interface ContextLogger {
 }
 
 /**
+ * The only part of a trace anchor an alarm-path log site needs: the id it files
+ * the line under.
+ *
+ * Declared here as a structural projection rather than re-exporting
+ * `@lunora/observability`'s `TraceAnchor`, because `@lunora/do` deliberately
+ * does not re-export observability (see this package's index) and the generated
+ * shard — which forwards this value into `recordExternalSourceError` — must be
+ * able to name the type without taking on that dependency. A real `TraceAnchor`
+ * satisfies it, so internal callers pass theirs unchanged.
+ */
+interface TraceRefLike {
+    traceId: string;
+}
+
+/**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.
  * Declared structurally so unit tests can pass in plain object doubles
  * without depending on the workers runtime.
@@ -3184,8 +3199,8 @@ abstract class ShardDO {
      * `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor for a source whose `refresh.everyMs`
      * is, say, an hour away.
      */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll
-    protected pollExternalSources(): Promise<number | undefined> {
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll, and is the only consumer of `_trace`
+    protected pollExternalSources(_trace?: TraceRefLike): Promise<number | undefined> {
         return Promise.resolve(undefined);
     }
 
@@ -3237,7 +3252,7 @@ abstract class ShardDO {
      * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
      * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
      */
-    protected async pollTtlSweeps(trace?: TraceAnchor): Promise<number | undefined> {
+    protected async pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined> {
         const specs = this.ttlSweeps();
 
         if (specs.length === 0) {
@@ -3287,9 +3302,39 @@ abstract class ShardDO {
         return this.runner.shardKey ?? ROOT_SHARD_NAME;
     }
 
-    /** Record a contained external-source ingest failure (one sourced table's poll) into the log ring without aborting the others. */
-    protected recordExternalSourceError(table: string, error: unknown): void {
-        this.recordShapeError(`source:${table}`, error);
+    /**
+     * Record a contained external-source ingest failure (one sourced table's
+     * poll) into the log ring without aborting the others.
+     *
+     * `trace` is the alarm's anchor, forwarded by the generated
+     * `pollExternalSources` override from the value it was handed. Optional so a
+     * subclass generated before this parameter existed still compiles and simply
+     * records an uncorrelated line.
+     */
+    protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`source:${table}`, error, trace);
+    }
+
+    /**
+     * Record a contained external-source BACK-OFF — a transaction-limit hit
+     * mid-batch, which is "batch full" rather than a failure, so it lands at
+     * `warn` and does NOT group as an Issue the way
+     * {@link ShardDO.recordExternalSourceError} does.
+     *
+     * Exists because the generated poll loop needs to write this line and the log
+     * ring is private: emitting `this.logs.push(...)` into the subclass does not
+     * compile, which went unnoticed only because no fixture or example declares a
+     * `.source()` table. A protected seam keeps the buffer encapsulated and gives
+     * the line the same trace correlation as its sibling above.
+     */
+    protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void {
+        this.logs.push({
+            functionPath: `source:${table}`,
+            level: "warn",
+            message,
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
     }
 
     /* eslint-disable no-secrets/no-secrets -- JSDoc names the `AsyncIterable<unknown>` type, not a credential */
@@ -4672,7 +4717,7 @@ abstract class ShardDO {
         // base hook returns `undefined` (dormant); the codegen subclass overrides
         // it to materialize each sourced table and report the earliest NEXT-DUE
         // timestamp across every non-manual source.
-        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources());
+        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources(trace));
 
         // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
         // returns `undefined` (no TTL tables); the codegen subclass overrides
@@ -8489,7 +8534,7 @@ abstract class ShardDO {
      * on an ordinary successful delete. Any OTHER thrown error still propagates —
      * only the meter's own signal is contained here.
      */
-    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceAnchor): Promise<boolean> {
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
         try {
             await this.deleteRowThroughWriter(table, id, headroom);
 
@@ -8524,7 +8569,7 @@ abstract class ShardDO {
      * than a field read so an alarm interleaving with a socket frame cannot file
      * one path's failure under the other's trace.
      */
-    private recordShapeError(context: string, error: unknown, trace?: TraceAnchor): void {
+    private recordShapeError(context: string, error: unknown, trace?: TraceRefLike): void {
         this.logs.push({
             functionPath: context,
             level: "error",
@@ -8564,7 +8609,7 @@ abstract class ShardDO {
      * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
-    private async pollGlobalShapes(trace?: TraceAnchor): Promise<number> {
+    private async pollGlobalShapes(trace?: TraceRefLike): Promise<number> {
         const sockets = [...this.runner.sockets()];
         let remaining = 0;
 
@@ -8603,7 +8648,7 @@ abstract class ShardDO {
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         connectionId: string,
-        trace?: TraceAnchor,
+        trace?: TraceRefLike,
     ): Promise<number> {
         let count = 0;
 
@@ -9264,4 +9309,4 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { HibernatableWebSocket, LogSink, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink };
+export type { HibernatableWebSocket, LogSink, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };

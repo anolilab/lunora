@@ -45,7 +45,7 @@ describe("emitShard — external-source ingest", () => {
 
         const shard = emitShard({ schema: discover(SOURCED) });
 
-        expect(shard).toContain("protected override async pollExternalSources()");
+        expect(shard).toContain("protected override async pollExternalSources(trace?: TraceRefLike)");
         // The per-table work delegates to the tested @lunora/do helper, not an inline projection.
         expect(shard).toContain("pullExternalSourceTick(this.sql as SqlExec, writer, client");
         // Incremental mode (plan 136) branches to the durable-watermark helper.
@@ -62,7 +62,7 @@ describe("emitShard — external-source ingest", () => {
         // Plan 148: the override reports the earliest NEXT-DUE timestamp (not a
         // bare active count), so the shared alarm can sleep until a source is
         // actually due instead of spinning at the 2 s global-shape floor.
-        expect(shard).toContain("protected override async pollExternalSources(): Promise<number | undefined>");
+        expect(shard).toContain("protected override async pollExternalSources(trace?: TraceRefLike): Promise<number | undefined>");
         expect(shard).toContain("nextDueAt = nextDueAt === undefined ? sourceNextDueAt : Math.min(nextDueAt, sourceNextDueAt);");
         // Plan 207 step 2: each table's writer gets its OWN fresh per-work-item
         // meter — an alarm tick has no `/rpc` dispatch to fall back to.
@@ -71,7 +71,39 @@ describe("emitShard — external-source ingest", () => {
         // warns (not `recordExternalSourceError`) and leaves the table due so the
         // shared alarm re-arms promptly instead of throttling to `refresh.everyMs`.
         expect(shard).toContain('error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED"');
-        expect(shard).toContain('level: "warn"');
+        // The `warn` level itself is the base class's (`recordExternalSourceWarning`);
+        // what the emitter owns is routing the back-off there rather than to
+        // `recordExternalSourceError`, which would group it as a real Issue.
+        expect(shard).toContain("this.recordExternalSourceWarning(");
+    });
+
+    it("forwards the alarm's trace to every contained ingest failure it records", () => {
+        expect.assertions(4);
+
+        const shard = emitShard({ schema: discover(SOURCED) });
+
+        // The parameter is only worth having if all three log sites in the
+        // generated poll loop actually pass it on — a signature that accepts a
+        // trace and drops it would leave these lines uncorrelated exactly as
+        // before, and the type-checker would not notice.
+        expect(shard).toContain("this.recordExternalSourceError(table, error, trace);");
+        // A regex so the emitted `${source.binding}` interpolation stays out of a
+        // string literal (`no-template-curly-in-string`).
+        expect(shard).toMatch(/no sourceClient resolved for binding[^\n]*, trace\);/u);
+        expect(shard).toContain("this.recordExternalSourceWarning(");
+        // Structural projection from the base package, so a generated app never
+        // takes on an `@lunora/observability` dependency for this.
+        expect(shard).toContain("import type { ExternalSourceLike, SourceClientLike, TraceRefLike }");
+    });
+
+    it("never reaches into the base class's private log ring", () => {
+        expect.assertions(1);
+
+        // `logs` is private on `ShardDO`, so `this.logs.push(...)` in the emitted
+        // subclass does not type-check. Nothing caught it for the life of the
+        // feature because no fixture or example declares a `.source()` table, and
+        // the emitted string is never compiled — so assert the shape directly.
+        expect(emitShard({ schema: discover(SOURCED) })).not.toContain("this.logs");
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {
