@@ -155,14 +155,9 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
             required: true,
         },
         responses: {
-            "200": {
-                content: {
-                    "application/json": {
-                        schema: { description: "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON." },
-                    },
-                },
-                description: "Successful RPC result (TypeScript-inferred return shape, documented best-effort).",
-            },
+            // Same `.output()`-or-placeholder rule the `httpRouter()` operations
+            // use — an RPC function that declares a return shape documents it.
+            "200": successResponse(definition.output),
             default: { $ref: ERROR_COMPONENT_REF },
         },
         summary: `${definition.kind}: ${functionPath}`,
