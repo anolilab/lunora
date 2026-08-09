@@ -23,6 +23,9 @@ const NDJSON_ENCODER = new TextEncoder();
 /** Safety bound on the retention list loop — far above any realistic backup count. */
 const MAX_PRUNE_PAGES = 1000;
 
+/** How many deleted keys the retention log names before summarising the rest. */
+const MAX_LOGGED_PRUNED_KEYS = 10;
+
 /**
  * Custom-metadata key stamped on every sidecar this backup writes, holding the
  * cron expression that produced it.
@@ -59,6 +62,11 @@ interface StaleBackups {
     eligible: number;
     /** The ones past the window, newest-first ordering already applied. */
     stale: string[];
+}
+
+/** What a prune removed: the sidecar keys it deleted, each naming a snapshot at the same key without the suffix. */
+interface PrunedBackups {
+    deleted: string[];
 }
 
 /** What retention would delete on the next run, and the configuration that decides it. */
@@ -160,8 +168,12 @@ const selectStaleBackups = async (store: BackupStore, prefix: string, retain: nu
  * Enforce `backupRetain` by deleting every snapshot {@link selectStaleBackups}
  * picks, plus its sidecar.
  */
-const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<void> => {
+const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<PrunedBackups> => {
     const { stale } = await selectStaleBackups(store, prefix, retain, cron);
+
+    if (stale.length === 0) {
+        return { deleted: [] };
+    }
 
     await Promise.all(
         stale.map(async (manifestKey) => {
@@ -175,6 +187,23 @@ const pruneBackups = async (store: BackupStore, prefix: string, retain: number |
             await store.delete(manifestKey);
         }),
     );
+
+    // Say what was destroyed. Both retention defects found in review (pruning
+    // an operator's snapshots, then another deployment's) were silent
+    // successes, reconstructed afterwards from a missing file — so a prune
+    // leaves a record even though an operator asked for this one.
+    //
+    // Keys are capped because a first prune on an old bucket can remove many,
+    // and a log line nobody can read is its own kind of silence.
+    const shown = stale.slice(0, MAX_LOGGED_PRUNED_KEYS);
+    const rest = stale.length - shown.length;
+
+    // eslint-disable-next-line no-console -- server-side diagnostic, same channel as the retention-failure warning; a Worker has no other operator-visible sink here.
+    console.info(
+        `[lunora] backup prune kept the newest ${String(retain)} and deleted ${String(stale.length)}: ${shown.join(", ")}${rest > 0 ? ` (+${String(rest)} more)` : ""}`,
+    );
+
+    return { deleted: stale };
 };
 
 /**
