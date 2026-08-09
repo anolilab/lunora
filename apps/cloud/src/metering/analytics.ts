@@ -95,6 +95,22 @@ interface AnalyticsReaderOptions {
  * HTTP `AnalyticsUsageReader` over the Analytics Engine SQL API (via
  * `@lunora/bindings/analytics`'s read client). Runs at the edge (needs the account API
  * token); the SQL groups request counts per script over the window.
+ *
+ * **The aggregation must be `SUM(_sample_interval)`, not `SUM(double1)`.**
+ * Analytics Engine applies weighted adaptive sampling at write time: past a
+ * write rate it keeps one row in place of many, and each retained row carries
+ * the `_sample_interval` it stands in for. Summing `double1` bare therefore
+ * under-counts by the sample factor — and sampling engages precisely when a
+ * tenant's request rate spikes, i.e. in the runaway/compromised-account case
+ * the spend cap downstream of this ledger exists to stop. Cloudflare's own
+ * usage-based-billing recipe uses exactly this form.
+ *
+ * Because the dispatcher writes `index1 = scriptName` and one data point per
+ * request, summing the sample interval grouped by that index is not an
+ * approximation — it is the exact request count. Grouping on `blob1` would have
+ * been the sampled-and-therefore-approximate form; the index is also what makes
+ * per-tenant sampling equitable, so one enormous tenant cannot sample a small
+ * tenant's rows down to zero.
  */
 export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): AnalyticsUsageReader => {
     const sql = createAnalyticsSqlClient({ accountId: options.accountId, apiToken: options.apiToken, fetch: options.fetch });
@@ -103,7 +119,7 @@ export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): Anal
         readRequestUsage: async (sinceMs) => {
             const sinceSeconds = Math.floor(sinceMs / 1000);
             const result = await sql.query(
-                `SELECT blob1 AS scriptName, SUM(double1) AS requests FROM ${options.dataset} WHERE timestamp > toDateTime(${String(sinceSeconds)}) GROUP BY scriptName`,
+                `SELECT index1 AS scriptName, SUM(_sample_interval) AS requests FROM ${options.dataset} WHERE timestamp > toDateTime(${String(sinceSeconds)}) GROUP BY scriptName`,
             );
 
             return result.rows.map((row) => {

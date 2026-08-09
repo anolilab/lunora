@@ -37,7 +37,9 @@ describe(buildOverageReconcileData, () => {
                 { kind: "requests", organizationId: "org_a", periodStart: 500, quantity: 12 },
                 { kind: "cpuMs", organizationId: "org_a", periodStart: 500, quantity: 7 },
                 { kind: "requests", organizationId: "org_a", periodStart: 499, quantity: 999 }, // other period → ignored
-                { kind: "storageBytes", organizationId: "org_a", periodStart: 500, quantity: 5 }, // wrong kind → ignored
+                // A real meter, but not one the overage rate card prices — the
+                // cap counts it, credits never do. See `buildOverageReconcileData`.
+                { kind: "r2StorageGbMonths", organizationId: "org_a", periodStart: 500, quantity: 5 },
             ],
         });
 

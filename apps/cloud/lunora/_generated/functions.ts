@@ -776,8 +776,8 @@ export interface Caller {
         record: (args: { deploymentId?: Id<"deployments">; kind: unknown; organizationId: Id<"organizations">; periodStart: number; quantity: number }) => Promise<Id<"platformUsage">>;
         recordOverageDebit: (args: { debitedCredits: number; organizationId: Id<"organizations">; periodStart: number }) => Promise<void>;
         rollup: (args?: {}) => Promise<{ compacted: number; }>;
-        series: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ cpuMs: number; day: number; requests: number; }[]>;
-        summary: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<Record<"requests" | "cpuMs" | "storageBytes", number>>;
+        series: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ costMinor: number; cpuMs: number; day: number; requests: number; }[]>;
+        summary: (args: { organizationId: Id<"organizations">; periodStart: number }) => Promise<{ aeDataPoints: number; aeReadQueries: number; browserHours: number; containerCpuSeconds: number; containerDiskGbSeconds: number; containerMemoryGibSeconds: number; cpuMs: number; d1RowsRead: number; d1RowsWritten: number; d1StorageGbMonths: number; doDurationGbS: number; doRequests: number; doRowsRead: number; doRowsWritten: number; doStorageGbMonths: number; imagesDelivered: number; imagesStored: number; imagesTransformations: number; kvDeletes: number; kvLists: number; kvReads: number; kvStorageGbMonths: number; kvWrites: number; logEvents: number; logpushRequests: number; queueOperations: number; r2ClassAOps: number; r2ClassBOps: number; r2StorageGbMonths: number; requests: number; vectorizeQueriedDimensions: number; vectorizeStoredDimensions: number; workersAiNeurons: number; workflowSteps: number; workflowStorageGbMonths: number }>;
     };
 }
 

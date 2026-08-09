@@ -15,6 +15,53 @@ import { defineSchema, defineTable, v } from "@lunora/server";
 
 const plan = v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"));
 
+/**
+ * Every billable Cloudflare dimension the platform meters into `platformUsage`.
+ *
+ * This list is spelled out here rather than imported because codegen reads this
+ * file statically — a computed union would emit nothing. The pairing with
+ * `UsageMeter` in `src/billing/spend.ts` (which prices each meter) is held by a
+ * type-level assertion in `__tests__/spend.test.ts`, so adding a meter in one
+ * place and forgetting the other fails `lint:types`, not production.
+ */
+const usageMeter = v.union(
+    v.literal("aeDataPoints"),
+    v.literal("aeReadQueries"),
+    v.literal("browserHours"),
+    v.literal("containerCpuSeconds"),
+    v.literal("containerDiskGbSeconds"),
+    v.literal("containerMemoryGibSeconds"),
+    v.literal("cpuMs"),
+    v.literal("d1RowsRead"),
+    v.literal("d1RowsWritten"),
+    v.literal("d1StorageGbMonths"),
+    v.literal("doDurationGbS"),
+    v.literal("doRequests"),
+    v.literal("doRowsRead"),
+    v.literal("doRowsWritten"),
+    v.literal("doStorageGbMonths"),
+    v.literal("imagesDelivered"),
+    v.literal("imagesStored"),
+    v.literal("imagesTransformations"),
+    v.literal("kvDeletes"),
+    v.literal("kvLists"),
+    v.literal("kvReads"),
+    v.literal("kvStorageGbMonths"),
+    v.literal("kvWrites"),
+    v.literal("logEvents"),
+    v.literal("logpushRequests"),
+    v.literal("queueOperations"),
+    v.literal("r2ClassAOps"),
+    v.literal("r2ClassBOps"),
+    v.literal("r2StorageGbMonths"),
+    v.literal("requests"),
+    v.literal("vectorizeQueriedDimensions"),
+    v.literal("vectorizeStoredDimensions"),
+    v.literal("workersAiNeurons"),
+    v.literal("workflowSteps"),
+    v.literal("workflowStorageGbMonths"),
+);
+
 const cellStatus = v.union(v.literal("active"), v.literal("draining"), v.literal("suspended"));
 
 const memberRole = v.union(v.literal("owner"), v.literal("admin"), v.literal("member"), v.literal("viewer"));
@@ -476,11 +523,13 @@ export default defineSchema({
     // for quota + overage billing. Written by the platform metering ingestion
     // endpoint (`POST /v1/usage`) and the Analytics-Engine stream. Distinct from
     // the `@lunora/payment` `usageEvents` ledger below (which meters *billing*
-    // features); this one meters platform resources (requests/CPU/storage).
+    // features); this one meters platform resources — every Cloudflare billing
+    // dimension in `usageMeter`, not just compute, so a storage- or
+    // DO-duration-shaped runaway is visible to the spend cap.
     platformUsage: defineTable({
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
-        kind: v.union(v.literal("requests"), v.literal("cpuMs"), v.literal("storageBytes")),
+        kind: usageMeter,
         organizationId: v.id("organizations"),
         periodStart: v.number(),
         quantity: v.number(),

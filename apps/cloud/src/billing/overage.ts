@@ -18,7 +18,16 @@
 
 import type { PeriodUsage } from "./spend";
 
-/** Usage included in each plan per period before overage debits start. */
+/**
+ * Usage included in each plan per period before overage debits start.
+ *
+ * Deliberately narrower than the cost model's meter set: the *cap*
+ * (`src/billing/spend.ts`) prices the whole Cloudflare bill because its job is
+ * blast-radius control, whereas what a customer is *charged* for is a pricing
+ * decision. Today customers are charged on requests + CPU only, so an org can
+ * be capped for spend (storage, DO duration) it was never invoiced for — which
+ * is the intended asymmetry for a prepaid model, not an oversight.
+ */
 export const INCLUDED_USAGE: Record<string, PeriodUsage> = {
     enterprise: { cpuMs: 3_000_000_000, requests: 1_000_000_000 },
     free: { cpuMs: 3_000_000, requests: 1_000_000 },
@@ -40,8 +49,8 @@ export const includedUsageFor = (plan: string): PeriodUsage => INCLUDED_USAGE[pl
  */
 export const overageCreditsOwed = (plan: string, usage: PeriodUsage): number => {
     const included = includedUsageFor(plan);
-    const overRequests = Math.max(0, usage.requests - included.requests);
-    const overCpuMs = Math.max(0, usage.cpuMs - included.cpuMs);
+    const overRequests = Math.max(0, (usage.requests ?? 0) - (included.requests ?? 0));
+    const overCpuMs = Math.max(0, (usage.cpuMs ?? 0) - (included.cpuMs ?? 0));
 
     return Math.floor((overRequests * REQUEST_CREDITS_PER_MILLION + overCpuMs * CPU_MS_CREDITS_PER_MILLION) / 1_000_000);
 };

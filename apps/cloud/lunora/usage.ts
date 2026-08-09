@@ -1,6 +1,8 @@
 import { LunoraError } from "@lunora/server";
 
-import { evaluateSpendCap } from "../src/billing/spend";
+import type { PeriodUsage, UsageMeter } from "../src/billing/spend";
+import { estimatedSpendMinor, evaluateSpendCap, isUsageMeter } from "../src/billing/spend";
+import type { UsageTotals } from "../src/billing/usage";
 import { aggregateUsage } from "../src/billing/usage";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
@@ -14,9 +16,55 @@ import { boundedString, LIMITS } from "./validators";
  * stream; `summary` rolls a period up for the dashboard/billing. The roll-up
  * logic is the pure `aggregateUsage`. (Distinct from `@lunora/payment`'s usage
  * ledger, which meters billing features via `ctx.payments`.)
+ *
+ * The meter set is the full Cloudflare rate card (`src/billing/spend.ts`), so
+ * the cap sees storage, Durable Object duration, D1 rows, and R2 operations —
+ * not only requests and CPU.
  */
 
-const kind = v.union(v.literal("requests"), v.literal("cpuMs"), v.literal("storageBytes"));
+/**
+ * The metered dimension. Mirrors `usageMeter` in `schema.ts` (which codegen
+ * reads statically) and `UsageMeter` in `src/billing/spend.ts` (which prices
+ * it); the three are pinned together by the type assertion in
+ * `__tests__/spend.test.ts`.
+ */
+const kind = v.union(
+    v.literal("aeDataPoints"),
+    v.literal("aeReadQueries"),
+    v.literal("browserHours"),
+    v.literal("containerCpuSeconds"),
+    v.literal("containerDiskGbSeconds"),
+    v.literal("containerMemoryGibSeconds"),
+    v.literal("cpuMs"),
+    v.literal("d1RowsRead"),
+    v.literal("d1RowsWritten"),
+    v.literal("d1StorageGbMonths"),
+    v.literal("doDurationGbS"),
+    v.literal("doRequests"),
+    v.literal("doRowsRead"),
+    v.literal("doRowsWritten"),
+    v.literal("doStorageGbMonths"),
+    v.literal("imagesDelivered"),
+    v.literal("imagesStored"),
+    v.literal("imagesTransformations"),
+    v.literal("kvDeletes"),
+    v.literal("kvLists"),
+    v.literal("kvReads"),
+    v.literal("kvStorageGbMonths"),
+    v.literal("kvWrites"),
+    v.literal("logEvents"),
+    v.literal("logpushRequests"),
+    v.literal("queueOperations"),
+    v.literal("r2ClassAOps"),
+    v.literal("r2ClassBOps"),
+    v.literal("r2StorageGbMonths"),
+    v.literal("requests"),
+    v.literal("vectorizeQueriedDimensions"),
+    v.literal("vectorizeStoredDimensions"),
+    v.literal("workersAiNeurons"),
+    v.literal("workflowSteps"),
+    v.literal("workflowStorageGbMonths"),
+);
 
 /** Record a metered event. SYSTEM only (internalMutation — cron/metering writer). */
 export const record = internalMutation
@@ -82,7 +130,7 @@ export const ingest = mutation
 interface PlatformUsageRow {
     _id: Id<"platformUsage">;
     createdAt: number;
-    kind: "cpuMs" | "requests" | "storageBytes";
+    kind: UsageMeter;
     organizationId: Id<"organizations">;
     periodStart: number;
     quantity: number;
@@ -153,7 +201,7 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
 /** Summed usage for an org over a billing period (members only). */
 export const summary = query
     .input({ organizationId: v.id("organizations"), periodStart: v.number() })
-    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<Record<"cpuMs" | "requests" | "storageBytes", number>> => {
+    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<UsageTotals> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
@@ -172,16 +220,21 @@ export const summary = query
 export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context }): Promise<{ suspended: number; unsuspended: number }> => {
     const periodStart = currentPeriodStart();
     const { page: usageRows } = await context.db.platformUsage.findMany({});
-    const byOrg = new Map<string, { cpuMs: number; requests: number }>();
+    const byOrg = new Map<string, PeriodUsage>();
 
+    // Every meter counts toward the cap, not just requests/CPU — a tenant can
+    // run away on Durable Object duration or R2 operations without moving the
+    // compute meters at all. Unknown kinds (a row from a newer writer) are
+    // skipped rather than throwing: the sweep that protects the platform from a
+    // runaway bill must never be the thing that crashes.
     for (const row of usageRows as unknown as PlatformUsageRow[]) {
-        if (row.periodStart < periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
+        if (row.periodStart < periodStart || !isUsageMeter(row.kind)) {
             continue;
         }
 
-        const bucket = byOrg.get(row.organizationId) ?? { cpuMs: 0, requests: 0 };
+        const bucket = byOrg.get(row.organizationId) ?? {};
 
-        bucket[row.kind] += row.quantity;
+        bucket[row.kind] = (bucket[row.kind] ?? 0) + row.quantity;
         byOrg.set(row.organizationId, bucket);
     }
 
@@ -198,7 +251,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     let unsuspended = 0;
 
     for (const organization of organizations) {
-        const usage = byOrg.get(organization._id) ?? { cpuMs: 0, requests: 0 };
+        const usage = byOrg.get(organization._id) ?? {};
         const decision = evaluateSpendCap({ capMinorOverride: organization.spendCapMinor, plan: organization.plan, usage });
 
         if (decision.suspend && organization.suspendedAt == null) {
@@ -273,31 +326,36 @@ export const recordOverageDebit = internalMutation
  * chart (GAPS.md ring 3). Buckets raw `platformUsage` events by UTC day of
  * their `createdAt`; compacted history keeps period totals correct, so the
  * series is best-effort recent detail, not an invoice.
+ *
+ * `requests`/`cpuMs` stay as named columns because they are the two the chart
+ * plots, but `costMinor` prices the day's *whole* bucket across the rate card —
+ * otherwise a day whose spend was all Durable Object duration would draw as a
+ * flat line at zero.
  */
 export const series = query
     .input({ organizationId: v.id("organizations"), periodStart: v.number() })
-    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ cpuMs: number; day: number; requests: number }[]> => {
+    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ costMinor: number; cpuMs: number; day: number; requests: number }[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
         const dayMs = 24 * 60 * 60 * 1000;
-        const buckets = new Map<number, { cpuMs: number; requests: number }>();
+        const buckets = new Map<number, PeriodUsage>();
 
         for (const row of page as unknown as PlatformUsageRow[]) {
-            if (row.periodStart !== periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
+            if (row.periodStart !== periodStart || !isUsageMeter(row.kind)) {
                 continue;
             }
 
             const day = Math.floor(row.createdAt / dayMs) * dayMs;
-            const bucket = buckets.get(day) ?? { cpuMs: 0, requests: 0 };
+            const bucket = buckets.get(day) ?? {};
 
-            bucket[row.kind] += row.quantity;
+            bucket[row.kind] = (bucket[row.kind] ?? 0) + row.quantity;
             buckets.set(day, bucket);
         }
 
         return [...buckets.entries()]
             .map(([day, bucket]) => {
-                return { day, ...bucket };
+                return { costMinor: estimatedSpendMinor(bucket), cpuMs: bucket.cpuMs ?? 0, day, requests: bucket.requests ?? 0 };
             })
             .toSorted((a, b) => a.day - b.day);
     });

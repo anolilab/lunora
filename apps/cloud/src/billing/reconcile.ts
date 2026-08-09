@@ -51,6 +51,10 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
     const { page: usagePage } = await database.findMany("platformUsage", {});
     const usageByOrg = new Map<string, PeriodUsage>();
 
+    // Only the customer-priced meters are folded in: `overageCreditsOwed` bills
+    // requests + CPU, so summing storage or DO duration here would put usage in
+    // the bucket that no rate ever converts into credits. The *cap* prices the
+    // whole bill (`src/billing/spend.ts`) — that asymmetry is deliberate.
     for (const row of usagePage as UsageRow[]) {
         if (row.periodStart !== periodStart || (row.kind !== "requests" && row.kind !== "cpuMs")) {
             continue;
@@ -58,7 +62,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
 
         const bucket = usageByOrg.get(row.organizationId) ?? { cpuMs: 0, requests: 0 };
 
-        bucket[row.kind] += row.quantity;
+        bucket[row.kind] = (bucket[row.kind] ?? 0) + row.quantity;
         usageByOrg.set(row.organizationId, bucket);
     }
 

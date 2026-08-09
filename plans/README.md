@@ -1658,29 +1658,44 @@ against what `apps/cloud` already ships. Four of the five have a working seam
 already; recursion protection has none.
 
 **The pass also turned up a live defect,** which is why this is a plan and not a
-memo: the spend-cap chain meters off Analytics Engine and sums `double1` without
-the `_sample_interval` multiplier (`apps/cloud/src/metering/analytics.ts:55`), so
-the `platformUsage` ledger under-counts exactly when AE starts sampling — i.e.
-during the runaway-tenant scenario the hard cap exists to stop. The same repo
-already documents AE as "not for billing math"
-(`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
+memo: the spend-cap chain metered off Analytics Engine and summed `double1`
+without the `_sample_interval` multiplier, so the `platformUsage` ledger
+under-counted exactly when AE starts sampling — i.e. during the runaway-tenant
+scenario the hard cap exists to stop. The same repo already documented AE as "not
+for billing math" (`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
 
-| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status |
-| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ------ |
-| 306  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | TODO   |
+| Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status                        |
+| ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ----------------------------- |
+| 306  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | IN PROGRESS — W0 + W1 shipped |
 
 ### Notes
 
-- **W1 gates most of the wave.** The metering fix (W1) is a one-line query change
-  and every ledger-reading workstream (soft cap, fast-path breach, anomaly score,
-  agent-queryable usage) depends on it. A hard cap on a lying meter is not a hard
-  cap.
-- **Recursion protection (W5) is fully independent** — no existing seam, no
-  dependency on W1 — so it is the item to run in parallel.
+- **W0 + W1 shipped.** The metering aggregation is fixed
+  (`SUM(_sample_interval)` over `index1`, pinned by a test on the emitted SQL —
+  a wrong aggregation returns a plausible number, never an error), and
+  `src/billing/spend.ts` went from two hard-coded constants to a 35-meter rate
+  card covering the whole Cloudflare bill: Durable Objects (requests / duration /
+  rows / SQL storage), D1, R2, KV, Queues, Workflows, Vectorize, Workers AI,
+  Analytics Engine, Logs, Browser Rendering, Containers, Images. The ledger's
+  `kind` union widened to match, so a storage-shaped runaway is now visible to
+  the cap at all. 464/464 cloud tests, `tsc --noEmit` clean.
+- **Cloudflare has no hard cap to borrow.** Budget alerts and usage notifications
+  are both documented as informational — "they do not pause or cap usage" — so
+  the stop is Lunora's to build. Since only requests that reach a Worker are
+  billed, today's dispatcher 503 pays a Workers-for-Platforms request for every
+  request of an attack, while a WAF block in the `http_request_firewall_custom`
+  phase costs nothing. §2.5 of the plan is the full interception ladder; W8 is
+  the promotion.
+- **Recursion protection (W5) moved to an Outbound Worker.** The WfP docs make it
+  a first-class seam: it sees every `fetch()` a tenant Worker makes, takes
+  context from the dispatch Worker via the binding's `parameters`, and disables
+  `connect()` — closing the exact hole Vercel documents as unprotected. Still
+  fully independent of the rest of the wave.
 - **DDoS is not a build.** L3/L4/L7 is inherited by construction (every tenant is
-  behind Cloudflare); the work is visibility (firewall events in the console),
-  per-org L7 sensitivity via the account-level managed-ruleset API, and closing
-  the CrowdSec-shaped detect→enforce loop with Cloudflare as the bouncer.
+  behind Cloudflare — "all customers on all plans and services"); the work is
+  visibility (firewall events in the console), per-org L7 sensitivity via the
+  account-level managed-ruleset API, and closing the CrowdSec-shaped
+  detect→enforce loop with Cloudflare as the bouncer.
 - **"OpenCloud" was assessed and is not prior art** — `opencloud-eu` is a Go
   rewrite of ownCloud Infinite Scale (file sync & share) with no metering,
   spend-cap, or DDoS surface. The relevant OSS neighbourhood is the

@@ -7,6 +7,7 @@ import type { ExecutionContextLike } from "@lunora/runtime";
 import { api, internal } from "../../lunora/_generated/api.js";
 import type { AlertDelivery } from "../../lunora/telemetry";
 import { proxyAdminRequest } from "../admin/proxy";
+import type { UsageMeter as UsageKind } from "../billing/spend";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { createDohResolver, verifyDomain } from "../domains/verify";
 import { handleGitHubWebhook } from "../github/webhook";
@@ -72,8 +73,6 @@ interface AdminBody {
     organizationId?: string;
     path?: string;
 }
-
-type UsageKind = "cpuMs" | "requests" | "storageBytes";
 
 interface UsageBody {
     deployKey?: string;
