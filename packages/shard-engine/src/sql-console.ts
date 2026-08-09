@@ -49,6 +49,12 @@ const assertReadonly = (query: string): void => {
  *
  * Rows are capped at {@link MAX_SQL_ROWS}; `rowCount` reports the true total and
  * `truncated` flags when more rows existed than were returned.
+ *
+ * **Values are returned verbatim — deliberately not wire-decoded.** This surface
+ * shows the DATABASE; the studio's data browser shows the MODEL and decodes
+ * there. Decoding here would disagree with the `json_extract(__doc__, …)` the
+ * same operator types next, and would change what an existing saved query
+ * returns. Reasoning in full in `plans/README.md`, row 303.
  */
 const runReadonlySql = (sql: SqlExec, query: string): SqlConsoleResult => {
     assertReadonly(query);
