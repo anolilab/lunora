@@ -125,7 +125,7 @@ overrides:
   lodash@<=4.17.23: ^4.17.24
   lodash@>=4.0.0 <=4.17.22: ^4.17.23
   lodash@>=4.0.0 <=4.17.23: ^4.17.24
-  postcss@<8.5.10: ^8.5.10
+  postcss@<8.5.10: ^8.5.26
   react: 19.2.8
   react-dom: 19.2.8
   tmp@<0.2.6: ^0.2.6
@@ -689,7 +689,8 @@ minimumReleaseAgeExclude:
   - 'wrangler@4.97.0'
   - tmp@0.2.4
   - lodash@4.17.24
-  - postcss@8.5.10
+  # Renovate security update: postcss@8.5.26
+  - postcss@8.5.10 || 8.5.26
   - tmp@0.2.6
   - lodash@4.17.23
   - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43'
