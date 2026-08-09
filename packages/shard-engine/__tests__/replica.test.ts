@@ -28,8 +28,8 @@ interface Owner {
     /** `undefined` models an empty log; a number models a log compacted up to it. */
     floor: number | undefined;
     pulls: number;
-    /** The owner half of the control channel, as a replica reaches it. */
-    serve: (frame: unknown) => Promise<Response>;
+    /** The owner half of the control channel, reached with the follower's real body and headers. */
+    serve: (body: string, headers: HeadersInit | undefined) => Promise<Response>;
     snapshot: ExportRow[];
     snapshots: number;
 }
@@ -37,13 +37,13 @@ interface Owner {
 const createOwner = (): Owner => {
     const owner: Owner = {
         changes: [],
-        env: {},
+        env: { LUNORA_RELAY_SECRET: "s3cret" },
         epoch: "epoch-1",
         floor: undefined,
         pulls: 0,
         snapshot: [],
         snapshots: 0,
-        serve: async (frame: unknown): Promise<Response> => {
+        serve: async (body: string, headers: HeadersInit | undefined): Promise<Response> => {
             const host: ReplicaOwnerHost = {
                 doName: () => "tenant-7",
                 env: () => owner.env,
@@ -62,11 +62,16 @@ const createOwner = (): Owner => {
 
                     return { changes: page, cursor: page.at(-1)?.seq ?? sinceSeq };
                 },
+                rowCount: () => owner.snapshot.length,
                 shardBinding: () => "SHARD",
                 sql: () => ({}) as SqlExec,
             };
 
-            return handleReplicaControl(host, new Request("https://replica.internal/_lunora/replica", { body: JSON.stringify(frame), method: "POST" }));
+            // The follower's bytes and headers verbatim: the control channel
+            // authenticates the exact body it received, so a harness that
+            // re-serialized the frame or dropped the signature would be testing
+            // a request no replica ever sends.
+            return handleReplicaControl(host, new Request("https://replica.internal/_lunora/replica", { body, headers, method: "POST" }));
         },
     };
 
@@ -101,9 +106,9 @@ describe("read replicas", () => {
         // The follow loop addresses its owner through `env[binding]`, which is
         // exactly the seam a test can stand in for: this namespace routes every
         // sibling hop into the owner double.
-        const toOwner = { fetch: async (_url: string, init?: RequestInit) => owner.serve(JSON.parse(typeof init?.body === "string" ? init.body : "{}")) };
+        const toOwner = { fetch: async (_url: string, init?: RequestInit) => owner.serve(typeof init?.body === "string" ? init.body : "{}", init?.headers) };
 
-        env = { SHARD: { get: () => toOwner, getByName: () => toOwner, idFromName: (name: string) => name } };
+        env = { LUNORA_RELAY_SECRET: "s3cret", SHARD: { get: () => toOwner, getByName: () => toOwner, idFromName: (name: string) => name } };
 
         host = {
             applyChanges: async (changes: ReadonlyArray<CdcChange>) => {
@@ -271,22 +276,6 @@ describe("read replicas", () => {
         await expect(replica?.ensureFresh(100)).resolves.toBe("unavailable");
     });
 
-    it("refuses a snapshot too large to copy in one response", async () => {
-        expect.assertions(2);
-
-        owner.env["LUNORA_REPLICA_MAX_BOOTSTRAP_ROWS"] = "1";
-        owner.snapshot = [
-            { doc: { _id: "a" }, table: "posts" },
-            { doc: { _id: "b" }, table: "posts" },
-        ];
-
-        const replica = createReplicaLink(host);
-
-        await expect(replica?.ensureFresh()).resolves.toBe("unavailable");
-        // A partial copy of the shard is worse than no replica at all.
-        expect(imported).toStrictEqual([]);
-    });
-
     it("refuses a snapshot whose rows did not all land", async () => {
         expect.assertions(2);
 
@@ -336,16 +325,20 @@ describe("read replicas", () => {
 
         const unreachable: ReplicaFollowerHost = {
             ...host,
-            env: () => {return {
-                SHARD: {
-                    get: () => {return {
-                        fetch: async () => {
-                            throw new Error("no route to owner");
+            env: () => {
+                return {
+                    SHARD: {
+                        get: () => {
+                            return {
+                                fetch: async () => {
+                                    throw new Error("no route to owner");
+                                },
+                            };
                         },
-                    }},
-                    idFromName: (name: string) => name,
-                },
-            }},
+                        idFromName: (name: string) => name,
+                    },
+                };
+            },
         };
 
         // Nothing bootstrapped means no rows at all, so there is nothing here to
@@ -365,7 +358,10 @@ describe("read replicas", () => {
                 ownerCursor: () => 0,
                 ownerEpoch: () => "e",
                 ownerFloor: () => undefined,
-                readChanges: () => {return { changes: [], cursor: 0 }},
+                readChanges: () => {
+                    return { changes: [], cursor: 0 };
+                },
+                rowCount: () => 0,
             },
             new Request("https://replica.internal/_lunora/replica", { body: JSON.stringify({ sinceSeq: 0, type: "replica_pull" }), method: "POST" }),
         );
@@ -373,17 +369,55 @@ describe("read replicas", () => {
         expect(response.status).toBe(409);
     });
 
+    it("refuses to replicate at all when no control-channel secret is configured", async () => {
+        expect.assertions(2);
+
+        // The relay channel tolerates a missing secret for back-compat; this one
+        // hands back every row of the shard, and the feature is new, so an
+        // unconfigured deployment gets no replication rather than an
+        // unauthenticated snapshot endpoint.
+        owner.env = {};
+
+        const replica = createReplicaLink(host);
+
+        await expect(replica?.ensureFresh()).resolves.toBe("unavailable");
+        expect(imported).toStrictEqual([]);
+    });
+
+    it("refuses a snapshot larger than the cap without building it", async () => {
+        expect.assertions(2);
+
+        owner.env["LUNORA_REPLICA_MAX_BOOTSTRAP_ROWS"] = "1";
+        owner.snapshot = [
+            { doc: { _id: "a" }, table: "posts" },
+            { doc: { _id: "b" }, table: "posts" },
+        ];
+
+        const replica = createReplicaLink(host);
+
+        await expect(replica?.ensureFresh()).resolves.toBe("unavailable");
+        // The cap protects the OWNER's memory budget, so it has to be decided
+        // from a row count — materializing the snapshot first and measuring it
+        // afterwards would have already spent what the cap exists to save.
+        expect(owner.snapshots).toBe(0);
+    });
+
     it("rejects an unsigned frame when a control-channel secret is configured", async () => {
         expect.assertions(1);
 
         const ownerHost: ReplicaOwnerHost = {
             doName: () => "tenant-7",
-            env: () => {return { LUNORA_RELAY_SECRET: "s3cret" }},
+            env: () => {
+                return { LUNORA_RELAY_SECRET: "s3cret" };
+            },
             exportRows: async () => [],
             ownerCursor: () => 0,
             ownerEpoch: () => "epoch-1",
             ownerFloor: () => undefined,
-            readChanges: () => {return { changes: [], cursor: 0 }},
+            readChanges: () => {
+                return { changes: [], cursor: 0 };
+            },
+            rowCount: () => 0,
             shardBinding: () => "SHARD",
             sql: () => sql,
         };
@@ -412,7 +446,9 @@ describe("replica dispatch gate", () => {
         return {
             applyChanges: async () => 0,
             doName: () => "tenant-7::replica::weur",
-            env: () => {return {}},
+            env: () => {
+                return {};
+            },
             importRows: async () => {
                 return { errors: [] };
             },

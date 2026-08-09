@@ -52,9 +52,26 @@ the caller's region:
 ```ts
 export default createWorker({
     shardDO: env.SHARD,
+    // The registry is what tells the worker which calls are queries. Codegen
+    // threads it for you; a hand-written worker must pass it, or nothing is
+    // eligible and every read stays on the owner.
+    functions: LUNORA_FUNCTIONS,
     replicaReads: true,
 });
 ```
+
+Four things all have to hold before a read is served from a replica, and each
+one falls back to the owner rather than failing:
+
+1. `replicaReads: true`.
+2. `functions` is passed, and the call is a registered **query** — a mutation,
+   action or stream is never eligible.
+3. Cloudflare could geolocate the request. A caller it cannot place has no
+   region to be near, so there is no replica to prefer.
+4. The shard has a changelog (see below) and its replica is caught up.
+
+Set the whole thing up and watch reads still go to the owner, and it is almost
+always (2) or (4).
 
 A replica is a second Durable Object, named after the shard it follows, that
 replays the shard's CDC changelog into its own SQLite. It is a follower in the

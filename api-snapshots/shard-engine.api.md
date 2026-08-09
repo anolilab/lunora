@@ -1905,6 +1905,7 @@ interface ReplicaOwnerHost extends ShardSiblingHost {
         changes: CdcChange[];
         cursor: number;
     };
+    rowCount: () => number;
 }
 ```
 

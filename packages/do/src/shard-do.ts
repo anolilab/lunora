@@ -1535,6 +1535,10 @@ abstract class ShardDO {
             ownerEpoch: () => this.currentCdcEpoch(),
             ownerFloor: () => (this.cdcEnabled() ? minCdcSeq(this.sql as SqlExec) : undefined),
             readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
+            // `COUNT(*)` per user table — cheap next to building the snapshot,
+            // which is the whole point: the bootstrap cap has to be decided
+            // before the rows are materialized, not after.
+            rowCount: () => listTables(this.sql as SqlExec).reduce((total, table) => total + table.rowCount, 0),
         };
         this.replica = createReplicaLink({
             ...sibling,

@@ -1904,6 +1904,24 @@ class LunoraClient {
             throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
         }
 
+        // Each entry is dispatched as an independent single call server-side, so
+        // each carries its own commit cursor — recorded under its OWN shard, or a
+        // batched write would leave no read-your-writes requirement behind at
+        // all. Read off the raw envelopes because `demuxBatchResults` keeps only
+        // the result value.
+        //
+        // No outbound `x-lunora-min-seq` per entry: the batch route forwards
+        // straight to the owner shard and is never replica-served, so a
+        // per-entry freshness requirement would constrain nothing. What these
+        // cursors constrain is the SINGLE reads that follow.
+        for (const entry of body.results ?? []) {
+            const commitCursor = (entry.body as { commitCursor?: unknown } | undefined)?.commitCursor;
+
+            if (typeof entry.id === "number" && typeof commitCursor === "number") {
+                this.recordShardCursor(calls[entry.id]?.shardKey, commitCursor);
+            }
+        }
+
         return demuxBatchResults(body.results ?? [], calls.length);
     }
 

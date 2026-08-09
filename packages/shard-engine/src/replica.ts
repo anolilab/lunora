@@ -153,6 +153,7 @@ interface ShardSiblingHost {
 interface ReplicaOwnerHost extends ShardSiblingHost {
     /** Every row of the shard, for a bootstrap snapshot. */
     exportRows: () => Promise<ExportRow[]>;
+
     /** The changelog high-watermark, or `undefined` when this shard has no changelog. */
     ownerCursor: () => number | undefined;
     /** This shard's CDC epoch, or `undefined` when this shard has no changelog. */
@@ -161,6 +162,17 @@ interface ReplicaOwnerHost extends ShardSiblingHost {
     ownerFloor: () => number | undefined;
     /** One page of the changelog past `sinceSeq`. */
     readChanges: (sinceSeq: number, limit: number) => { changes: CdcChange[]; cursor: number };
+
+    /**
+     * How many rows a snapshot would carry, WITHOUT building one.
+     *
+     * The cap exists to protect the owner's memory budget, and checking it
+     * against an already-materialized `exportRows()` would protect nothing: an
+     * over-cap shard exhausts memory producing the snapshot, long before the
+     * refusal could be returned. A count is a `COUNT(*)` per table, which is
+     * what makes the refusal arrive first.
+     */
+    rowCount: () => number;
 }
 
 /**
@@ -180,7 +192,22 @@ interface ReplicaState {
     syncedAtMs: number;
 }
 
+/**
+ * SQL handles whose replica-state table is known to exist.
+ *
+ * The DDL is idempotent, but it is not free, and it sits on the hot path: the
+ * fast "already caught up" check reads the follow position on every
+ * replica-routed request, which is the one path the whole tier exists to keep
+ * short. A DO's handle is stable for its lifetime, so one statement per DO is
+ * enough; keyed weakly so a discarded handle does not pin an entry.
+ */
+const migratedHandles = new WeakSet<object>();
+
 const migrateReplicaState = (sql: SqlExec): void => {
+    if (migratedHandles.has(sql)) {
+        return;
+    }
+
     sql.exec(
         `CREATE TABLE IF NOT EXISTS ${REPLICA_STATE_TABLE} (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -189,6 +216,8 @@ const migrateReplicaState = (sql: SqlExec): void => {
             synced_at REAL NOT NULL
         )`,
     );
+
+    migratedHandles.add(sql);
 };
 
 const readReplicaState = (sql: SqlExec): ReplicaState | undefined => {
@@ -216,31 +245,58 @@ const writeReplicaState = (sql: SqlExec, state: ReplicaState): void => {
 };
 
 /**
- * Serve the owner half of the `/_lunora/replica` control channel: authenticate
- * the frame, then answer a pull or a bootstrap. Stateless — an owner keeps no
- * per-replica bookkeeping, because a replica's position lives with the replica
- * and the changelog it reads is the one the shard already keeps.
+ * Whether this DO may serve the control channel at all, decided before a byte
+ * of the request is read. Three refusals, none of which depend on the frame.
  *
- * A replica must never serve this route: it holds a *copy* of a timeline, and
- * its local `seq` numbers are its own, so answering a pull would hand a
- * follower cursors that mean nothing on the owner's log.
+ * **A replica cannot serve replicas.** It holds a *copy* of a timeline, so its
+ * local `seq` numbers are its own and would mean nothing to a follower.
+ *
+ * **No changelog, nothing to follow.** CDC is opt-in, so this is the DEFAULT
+ * shape of a shard, and it must be refused at the source: a follower handed a
+ * synthetic epoch would bootstrap once, agree with every later empty page that
+ * it is caught up, and serve that first snapshot forever.
+ *
+ * **No control-channel secret.** Unlike the relay channel — which treats a
+ * missing `LUNORA_RELAY_SECRET` as legacy network-trust, because tightening it
+ * would break deployments predating the secret — replica reads have no such
+ * history, and the prize is different in kind: a forged relay frame delivers a
+ * bogus poke, a forged frame here returns **every row of the shard**. An
+ * unconfigured deployment gets no replication rather than a weaker default.
+ * @returns the refusal, or `undefined` when the channel may proceed
  */
-const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): Promise<Response> => {
+const replicaControlRefusal = (host: ReplicaOwnerHost): Response | undefined => {
     const name = host.doName();
 
     if (name !== undefined && parseReplicaName(name) !== undefined) {
         return new Response("replica cannot serve replicas", { status: 409 });
     }
 
-    // No changelog, nothing to follow. CDC is opt-in, so this is the DEFAULT
-    // shape of a shard, and it has to be refused at the source: a follower given
-    // a synthetic epoch would bootstrap once, then agree with every later empty
-    // page that it is caught up, and serve that first snapshot forever.
-    const epoch = host.ownerEpoch();
-
-    if (epoch === undefined) {
+    if (host.ownerEpoch() === undefined) {
         return new Response("shard has no changelog to replicate", { status: 409 });
     }
+
+    if (siblingSecretOf(host.env()) === undefined) {
+        return new Response("replica control requires LUNORA_RELAY_SECRET", { status: 403 });
+    }
+
+    return undefined;
+};
+
+/**
+ * Serve the owner half of the `/_lunora/replica` control channel: authenticate
+ * the frame, then answer a pull or a bootstrap. Stateless — an owner keeps no
+ * per-replica bookkeeping, because a replica's position lives with the replica
+ * and the changelog it reads is the one the shard already keeps.
+ */
+const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): Promise<Response> => {
+    const refusal = replicaControlRefusal(host);
+
+    if (refusal !== undefined) {
+        return refusal;
+    }
+
+    // Non-`undefined` past the preflight, which is what checked it.
+    const epoch = host.ownerEpoch() as string;
 
     let raw: string;
 
@@ -265,16 +321,19 @@ const handleReplicaControl = async (host: ReplicaOwnerHost, request: Request): P
     }
 
     if (frame.type === "replica_bootstrap") {
+        // Refuse BEFORE building the snapshot: the cap is the owner's memory
+        // budget, and a shard past it would exhaust that budget producing rows
+        // nobody is allowed to receive.
+        if (host.rowCount() > maxBootstrapRows(host.env())) {
+            return Response.json({ cursor: 0, epoch, rows: [], truncated: true } satisfies ReplicaBootstrapResult);
+        }
+
         // Read the cursor BEFORE the snapshot: a write that lands mid-export may
         // or may not be in `rows`, and replaying it again from `cursor` is
         // harmless (both the upsert and the delete replay are idempotent).
         // Reading it after would skip anything committed during the export.
         const cursor = host.ownerCursor() ?? 0;
         const rows = await host.exportRows();
-
-        if (rows.length > maxBootstrapRows(host.env())) {
-            return Response.json({ cursor, epoch, rows: [], truncated: true } satisfies ReplicaBootstrapResult);
-        }
 
         return Response.json({ cursor, epoch, rows } satisfies ReplicaBootstrapResult);
     }
