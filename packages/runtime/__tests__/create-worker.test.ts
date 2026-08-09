@@ -677,6 +677,61 @@ describe("createWorker", () => {
             expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur"]);
         });
 
+        it("names the shard it resolved, so the client can key one cursor for it", async () => {
+            expect.assertions(2);
+
+            const { namespace } = createReplicaNamespace(() => Response.json({ commitCursor: 4, result: null }));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, defaultShardKey: "__root__", functions, shardDO: namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ functionPath: "posts:add" }), method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            // The caller named no shard; the worker resolved its configured
+            // default, and only the worker knows those are the same shard.
+            expect(response.headers.get("x-lunora-shard-key")).toBe("__root__");
+            // The shard's own response headers survive the stamp.
+            await expect(response.json()).resolves.toStrictEqual({ commitCursor: 4, result: null });
+        });
+
+        it("does not send a region hint when the deployment is pinned to a jurisdiction", async () => {
+            expect.assertions(2);
+
+            const placements: unknown[] = [];
+            const pinned: ShardNamespaceLike = {
+                get: (_id, options) => {
+                    placements.push(options);
+
+                    return { fetch: async () => Response.json({ result: [] }) };
+                },
+                idFromName: (name: string) => name,
+            };
+            const namespace: ShardNamespaceLike = {
+                get: () => {return { fetch: async () => new Response("unused") }},
+                idFromName: (name: string) => name,
+                jurisdiction: () => pinned,
+            };
+
+            const worker = createWorker({
+                allowUnauthenticatedShardAccess: true,
+                functions,
+                jurisdiction: "eu",
+                shardDO: namespace,
+                shardRegion: () => "weur",
+            });
+
+            await worker.fetch(geoRpc("posts:list"), {}, fakeContext);
+
+            // Residency is a hard constraint and the region only a hint, and the
+            // pairing cannot be exercised on any runtime available to us
+            // (workerd does not implement jurisdictions at all). The hint is
+            // dropped rather than shipped untested.
+            expect(placements).toHaveLength(1);
+            expect(placements[0]).toBeUndefined();
+        });
+
         it("stays on the owner when replica reads are off", async () => {
             expect.assertions(1);
 

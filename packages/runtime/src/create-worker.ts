@@ -2284,12 +2284,50 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * where `options.shardRegion` says instead of wherever the creating request
      * happened to run.
      */
+    /** One log line per isolate when a residency pin makes the placement hints inert. */
+    let warnedPlacementUnderResidency = false;
+
+    /**
+     * Drop a region hint when the deployment is pinned to a jurisdiction.
+     *
+     * A jurisdiction is a hard residency constraint; a region is an advisory
+     * hint. Composing them would mean asking the platform to honour both, and
+     * that pairing is not something any runtime available here can answer:
+     * workerd rejects `.jurisdiction()` outright ("Jurisdiction restrictions are
+     * not implemented in workerd" — see `placement.workerd.test.ts`), so the
+     * combination is unreachable in dev, in CI, and in every test, and would
+     * first execute in production on exactly the deployments that chose
+     * residency because correctness matters most to them.
+     *
+     * Shipping the untested pairing risks failing every dispatch to buy a
+     * placement refinement; dropping the hint costs only the refinement, and the
+     * jurisdiction already constrains placement to the region that matters. So
+     * residency wins, and the operator is told once rather than left to wonder
+     * why `shardRegion` reads as ignored.
+     */
+    const placementUnderResidency = (locationHint: RegionHint | undefined): RegionHint | undefined => {
+        if (locationHint === undefined || options.jurisdiction === undefined) {
+            return locationHint;
+        }
+
+        if (!warnedPlacementUnderResidency) {
+            warnedPlacementUnderResidency = true;
+
+            // eslint-disable-next-line no-console -- a silently ignored placement policy is worse than a log line
+            console.warn(
+                `[lunora] jurisdiction "${options.jurisdiction}" pins placement, so region hints (\`shardRegion\`, replica and relay placement) are not sent. Residency wins.`,
+            );
+        }
+
+        return undefined;
+    };
+
     const forwardToShard = async (
         namespace: ShardNamespaceLike,
         shardKey: string,
         request: Request,
         locationHint: RegionHint | undefined = options.shardRegion?.(shardKey),
-    ): Promise<Response> => resolveShard(namespace, shardKey, locationHint).fetch(request);
+    ): Promise<Response> => resolveShard(namespace, shardKey, placementUnderResidency(locationHint)).fetch(request);
 
     // Effective admin bearer for the request-time `/_lunora/admin/*` gates: the
     // explicit `options.adminToken`, or — when unset (the `composeWorker` default,
@@ -3743,11 +3781,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
 
             // The DO's `x-d1-bookmark` header (which lets the client pin reads
-            // after a write) is already on the shard `response`, so returning it
-            // verbatim propagates the bookmark. No rebuild is needed — copying the
-            // headers only to re-set that same header would be a pure allocation
-            // (and would drop `statusText`).
-            return response;
+            // after a write) is already on the shard `response`. The one thing
+            // the shard cannot know is which key the WORKER resolved it under:
+            // a caller that omits `shardKey` and one that spells out the
+            // configured default reach the same shard, and only this side knows
+            // they are the same. Stamping it lets the client file its
+            // read-your-writes cursor under one canonical key instead of two —
+            // which is the difference between a bookmark that constrains the
+            // next read and one that quietly does not.
+            //
+            // `response.headers` is immutable on a `fetch` result, so this is
+            // the one place a rebuild is warranted; `statusText` is carried over
+            // explicitly because a bare `Response(body, { status })` drops it.
+            const stamped = new Response(response.body, { headers: response.headers, status: response.status, statusText: response.statusText });
+
+            stamped.headers.set("x-lunora-shard-key", shardKey);
+
+            return stamped;
         } catch (error) {
             emitRpcEvent(
                 observability,

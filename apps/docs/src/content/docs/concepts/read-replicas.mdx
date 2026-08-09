@@ -38,6 +38,12 @@ This is placement, not residency. If you need a hard guarantee about where data
 lives, use [`.jurisdiction()`](/docs/concepts/data-residency), which constrains
 rather than hints.
 
+<Callout type="warn">
+    **A jurisdiction turns every region hint off.** On a deployment pinned with `.jurisdiction(...)`, `shardRegion` and the replica/relay hints are not sent —
+    the jurisdiction already constrains placement, and it is the constraint that must hold. The worker logs this once so an ignored `shardRegion` is never a
+    silent surprise.
+</Callout>
+
 ## Replica reads
 
 `replicaReads` serves one-shot **queries** from a copy of the shard placed in

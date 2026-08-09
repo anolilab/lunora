@@ -760,6 +760,14 @@ class LunoraClient {
     private readonly shardCursors = new Map<string, number>();
 
     /**
+     * The server's own name for the default shard (`defaultShardKey`), learned
+     * from the first response to a call that named no shard. `undefined` until
+     * then, which is why `cursorKeyFor` falls back to a placeholder entry that
+     * `learnDefaultShardKey` folds in once the name arrives.
+     */
+    private defaultShardKey: string | undefined;
+
+    /**
      * `true` when the constructor's hydration microtask has finished loading the
      * durable read cache (Pillar 2) into `hydratedQueryCache`. Signals that
      * the cache is ready for synchronous `peekHydratedQuery` reads.
@@ -4189,7 +4197,7 @@ class LunoraClient {
         // to it; everywhere else the header is inert. Sent on every call rather
         // than only on reads — a write is routed to the owner regardless, so
         // there is no branch here that could get the two out of step.
-        const shardCursor = this.shardCursors.get(shardKey ?? "");
+        const shardCursor = this.shardCursors.get(this.cursorKeyFor(shardKey));
 
         if (shardCursor !== undefined) {
             headers["x-lunora-min-seq"] = shardCursor.toString();
@@ -4299,9 +4307,9 @@ class LunoraClient {
         flags.onCommitCursor?.(body.commitCursor);
 
         // Remember how far this shard had committed, so a later read can demand
-        // at least this much from a replica. Monotonic: responses can land out
-        // of order, and moving the requirement BACKWARDS would let a read be
-        // answered from a copy that predates a write this client already saw.
+        // at least this much from a replica — filed under the one key both an
+        // implicit call and an explicit default-shard call resolve to.
+        this.learnDefaultShardKey(response, shardKey);
         this.recordShardCursor(shardKey, body.commitCursor);
 
         return decodeWire(body.result);
@@ -5824,6 +5832,47 @@ class LunoraClient {
     }
 
     /**
+     * The entry a shard's cursor lives under.
+     *
+     * Only the server knows that an omitted `shardKey` and an explicit one
+     * spelling out its configured default name are the same shard — the default
+     * is server-side configuration the client never sees. Keying on what was
+     * SENT would split one shard's cursor across two entries, so a write under
+     * one spelling would stop constraining a read under the other. Resolving
+     * `undefined` through the learned name is what keeps both spellings on one
+     * entry.
+     */
+    private cursorKeyFor(shardKey: string | undefined): string {
+        return shardKey ?? this.defaultShardKey ?? "";
+    }
+
+    /**
+     * Learn the server's own name for the default shard from a response to a
+     * call that named no shard.
+     *
+     * Any cursor recorded before the name was known sits under the placeholder
+     * entry, so it is folded in rather than stranded — otherwise the requirement
+     * from a client's first write would be lost exactly once, which is the kind
+     * of gap that only shows up as a stale read under load.
+     */
+    private learnDefaultShardKey(response: { headers: { get: (name: string) => null | string } }, shardKey: string | undefined): void {
+        const canonical = response.headers.get("x-lunora-shard-key");
+
+        if (canonical === null || shardKey !== undefined || this.defaultShardKey === canonical) {
+            return;
+        }
+
+        this.defaultShardKey = canonical;
+
+        const pending = this.shardCursors.get("");
+
+        if (pending !== undefined) {
+            this.shardCursors.set(canonical, Math.max(this.shardCursors.get(canonical) ?? 0, pending));
+            this.shardCursors.delete("");
+        }
+    }
+
+    /**
      * Record the cursor a write committed at as this shard's read-your-writes
      * requirement.
      *
@@ -5836,7 +5885,7 @@ class LunoraClient {
             return;
         }
 
-        const key = shardKey ?? "";
+        const key = this.cursorKeyFor(shardKey);
 
         this.shardCursors.set(key, Math.max(this.shardCursors.get(key) ?? 0, commitCursor));
     }

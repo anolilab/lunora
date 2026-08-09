@@ -75,6 +75,33 @@ describe("replica read-your-writes bookmark", () => {
         expect(minSeqOf(fetchMock, 2)).toBe("30");
     });
 
+    it("treats an implicit shard and the server's default-shard name as one shard", async () => {
+        expect.assertions(2);
+
+        // Only the server knows that omitting `shardKey` and naming its
+        // configured default are the same shard, so it says which key it
+        // resolved. Without that, one shard's cursor splits across two client
+        // entries and a write under one spelling stops constraining a read under
+        // the other.
+        const fetchMock = vi.fn<typeof fetch>(
+            async () => Response.json({ commitCursor: 21, result: null }, { headers: { "x-lunora-shard-key": "__root__" } }),
+        );
+        const instance = client(fetchMock);
+
+        // Write with no shard key at all; the response names the shard.
+        await instance.mutation(fnRef("posts:add"), {});
+
+        // Read naming that same shard explicitly — the requirement must carry.
+        await instance.query(fnRef("posts:list"), {}, { shardKey: "__root__" });
+
+        expect(minSeqOf(fetchMock, 1)).toBe("21");
+
+        // …and the other way around, from the explicit name back to the implicit call.
+        await instance.query(fnRef("posts:list"), {});
+
+        expect(minSeqOf(fetchMock, 2)).toBe("21");
+    });
+
     it("keeps the cursor per shard", async () => {
         expect.assertions(2);
 

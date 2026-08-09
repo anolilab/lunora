@@ -548,11 +548,28 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
     return forbiddenOriginResponse("cross-origin websocket upgrade", source, selfOrigin);
 };
 
+/**
+ * Response headers a cross-origin caller may READ.
+ *
+ * A browser hides every response header except the CORS-safelisted ones unless
+ * it is named here, and `response.headers.get(...)` then returns `null` with no
+ * error anywhere. That failure is silent by construction, so this list is not a
+ * policy knob: it is exactly the set of headers `@lunora/client` reads back,
+ * and a header the SDK consumes but that is missing here does not break loudly
+ * — it degrades the guarantee the header exists to provide.
+ *
+ * `x-d1-bookmark` carries D1 read-your-writes; `x-lunora-shard-key` is the
+ * canonical shard a dispatch resolved to, which the client keys its replica
+ * bookmark by.
+ */
+const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Shard-Key"];
+
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {
     const headers = new Headers();
 
     headers.set("access-control-allow-origin", origin);
+    headers.set("access-control-expose-headers", DEFAULT_CORS_EXPOSED_HEADERS.join(", "));
     headers.append("vary", "Origin");
 
     if (cors.allowCredentials) {
