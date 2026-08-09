@@ -260,6 +260,11 @@ catalogs:
     "@opentelemetry/api": ^1.9.1
   tooling:
     dockerode: ^5.0.1
+    # Model-layer renderer for `lunora sdk generate`: JSON Schema -> dataclasses
+    # in 19 languages. Only the generated SDK's *models* come from quicktype —
+    # the method surface is emitted by `emit-python-sdk.ts` and the transport is
+    # the hand-written per-language runtime under `sdks/`.
+    quicktype-core: ^26.0.0
     ts-morph: ^28.0.0
   vite:
     # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`

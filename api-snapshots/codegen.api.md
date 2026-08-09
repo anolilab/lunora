@@ -477,12 +477,42 @@ interface OpenApiEmitInput {
 }
 ```
 
+### `OpenRpcDocument` (interface)
+
+```ts
+interface OpenRpcDocument {
+    info?: {
+        title?: string;
+        version?: string;
+    };
+    methods: ReadonlyArray<OpenRpcMethod>;
+}
+```
+
 ### `OpenRpcEmitInput` (interface)
 
 ```ts
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     version?: string;
+}
+```
+
+### `OpenRpcMethod` (interface)
+
+```ts
+interface OpenRpcMethod {
+    name: string;
+    params?: ReadonlyArray<{
+        name: string;
+        schema?: Record<string, unknown>;
+    }>;
+    result?: {
+        name: string;
+        schema?: Record<string, unknown>;
+    };
+    summary?: string;
+    "x-lunora-function-kind"?: string;
 }
 ```
 
@@ -509,6 +539,21 @@ interface ProjectIR {
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
 }
+```
+
+### `PythonSdkEmitInput` (interface)
+
+```ts
+interface PythonSdkEmitInput {
+    document: OpenRpcDocument;
+    models: string;
+}
+```
+
+### `PythonSdkFiles` (type)
+
+```ts
+type PythonSdkFiles = Record<string, string>;
 ```
 
 ### `QUEUES_FILENAME` (const)
@@ -1099,6 +1144,12 @@ const emitOpenRpc: (input: OpenRpcEmitInput) => string;
 const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ```
 
+### `emitPythonSdk` (const)
+
+```ts
+const emitPythonSdk: (input: PythonSdkEmitInput) => PythonSdkFiles;
+```
+
 ### `emitServer` (const)
 
 ```ts
@@ -1202,6 +1253,12 @@ const redact: (value: string) => string;
 
 ```ts
 const refreshCodegenProject: (project: Project, lunoraDirectory: string) => void;
+```
+
+### `renderPythonModels` (const)
+
+```ts
+const renderPythonModels: (document: OpenRpcDocument) => Promise<string>;
 ```
 
 ### `resolveCodegenTarget` (const)

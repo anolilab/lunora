@@ -37,6 +37,7 @@ import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
 import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
+import { sdkCommand } from "./commands/sdk";
 import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import { viewCommand } from "./commands/view";
@@ -171,6 +172,7 @@ const CLI_COMMANDS = [
     registryCommand,
     rulesCommand,
     mcpCommand,
+    sdkCommand,
 ];
 
 /**

@@ -62,6 +62,8 @@ export {
 } from "./emit";
 export type { EmitAppOptions } from "./emit-app";
 export { emitApp } from "./emit-app";
+export type { OpenRpcDocument, OpenRpcMethod, PythonSdkEmitInput, PythonSdkFiles } from "./emit-python-sdk";
+export { emitPythonSdk, renderPythonModels } from "./emit-python-sdk";
 export type {
     AgentIR,
     AuthApiCallIR,

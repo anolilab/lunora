@@ -205,6 +205,17 @@ class LunoraClient:
     ) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=mutation_id)
 
+    async def action(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
+        """Invoke an ``action``.
+
+        Same RPC envelope as a mutation, but no ``x-lunora-mutation-id``: an
+        action performs external side effects (it is not replayed against the
+        shard), so an idempotency key would promise a de-duplication the server
+        does not do for it.
+        """
+
+        return await self._rpc(function_path, args, shard_key, mutation_id=None)
+
     async def _rpc(self, function_path: str, args: Any, shard_key: Optional[str], mutation_id: Optional[str]) -> Any:
         headers = {"content-type": "application/json"}
         if self.auth_token:
