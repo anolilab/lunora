@@ -86,6 +86,11 @@ that: no new auth surface for this.
    into a second store.
 4. **Retention is explicit**, not clever: a `--keep <n>` / age-based prune the
    operator invokes or schedules. No silent deletion of anything.
+   **Amended 2026-08-09 — this is not what shipped.** `backupRetain` still
+   deletes inside the cron run. It only prunes snapshots carrying its own
+   cron expression and keeps anything ambiguous, so it is safe, but it is
+   narrower rather than explicit. §10 has the reasoning; WS4 remains open
+   and is the work that would make this decision true.
 5. **Phase 2's scheduled backup runs in-platform** (cron trigger → action →
    export → R2), which is the point of the plan: no external machine in the
    durability path.

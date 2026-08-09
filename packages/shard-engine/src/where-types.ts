@@ -45,8 +45,16 @@ interface WhereInput {
  * Reserved `WhereInput` key carrying a correlated-EXISTS marker (the relation
  * push-down). The semijoin pre-resolver emits it for a co-located relation node;
  * `compileWhereSql`'s `relationExists` hook compiles it into `[NOT] EXISTS (...)`.
- * The `__`-prefix keeps it disjoint from user field names (the codegen
- * reserved-name guard blocks `__`-prefixed columns).
+ *
+ * The `__`-prefix is a convention, **not** a guarantee: nothing upstream
+ * reserves it. Codegen's field-name rule (`FIELD_NAME_RE` in
+ * `parse-validator.ts`) is `/^[A-Za-z_$][\w$]*$/u`, which admits `_` and
+ * therefore admits this exact name, and `WhereInput`'s index signature treats
+ * every unrecognised key as a field. A table declaring a column literally named
+ * `__relationExists` would have a filter on it read as the marker. No such
+ * schema is known to exist and the collision has never been reported; it is
+ * recorded here rather than guarded because the fix belongs in codegen's
+ * field-name validation, alongside the other reserved names, not in a comment.
  */
 const RELATION_EXISTS_KEY = "__relationExists";
 
