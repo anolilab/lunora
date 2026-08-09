@@ -199,11 +199,21 @@ class Client(
         return parseRpcResponse(Json.parse(response.body) as Map<*, *>, response.status)
     }
 
+    /**
+     * Opens a live query.
+     *
+     * [shardKey] does NOT ride the subscribe frame: the protocol selects a
+     * shard per SOCKET, via the `?shard=` parameter [wsUrl] builds. It is
+     * accepted so the generated surface is identical across languages, and is
+     * otherwise unused — this client holds one socket, so it must already be
+     * the shard that socket was opened against.
+     */
     fun subscribe(
         functionPath: String,
         args: WireValue?,
         onData: ((WireValue) -> Unit)?,
         onError: ((SubscriptionError) -> Unit)? = null,
+        shardKey: String? = null,
     ): () -> Unit {
         nextId++
 

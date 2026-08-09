@@ -78,9 +78,13 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     if (undeclared.length > 0) {
         // The schema declared a shape, but this language's backend did not turn
-        // it into a named type — the call site fell back to an untyped return.
+        // it into a named type — the call site fell back to an untyped value.
+        //
+        // Deliberately not worded as a *result* problem: `undeclared` spans
+        // argument models too, and pointing the reader at `.output()` for what
+        // is actually an input schema sends them to the wrong place.
         logger.warn(
-            `${String(undeclared.length)} declared result type(s) are not expressible as a named ${language} model, so those calls return untyped: ${undeclared.join(", ")}`,
+            `${String(undeclared.length)} schema(s) are not expressible as a named ${language} model, so those arguments or returns stay untyped: ${undeclared.join(", ")}`,
         );
     }
 

@@ -406,10 +406,10 @@ func BuildUnsubscribeFrame(id string) map[string]any {
 // tells the server to drop it.
 //
 // shardKey does NOT ride the subscribe frame: the protocol selects a shard per
-// SOCKET, via the `?shard=` parameter WSURL builds. This client holds one
-// socket, so shardKey must match the shard that socket was opened against — it
-// is accepted here to keep the generated surface uniform across languages, and
-// validated rather than silently ignored.
+// SOCKET, via the `?shard=` parameter WSURL builds. It is accepted here so the
+// generated surface is identical across languages, and is otherwise unused —
+// this client holds one socket, so it must already be the shard that socket was
+// opened against.
 func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, onError ErrorHandler, shardKey string) Unsubscribe {
 	c.mu.Lock()
 

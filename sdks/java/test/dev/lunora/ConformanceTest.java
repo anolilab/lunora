@@ -41,7 +41,7 @@ public final class ConformanceTest {
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
 
-        System.out.println("OK — " + checks + " assertions across 16 cases");
+        System.out.println("OK — " + checks + " assertions");
     }
 
     private static void check(boolean condition, String message) {
@@ -299,7 +299,7 @@ public final class ConformanceTest {
             Map<String, Object> args = new LinkedHashMap<>();
 
             args.put("channel", "general");
-            client.subscribe("messages:list", args, seen::add, errors::add);
+            client.subscribe("messages:list", args, seen::add, errors::add, null);
 
             String kind = client.handleFrame(Json.write(testCase.get("frame")));
             Map<String, Object> expect = (Map<String, Object>) testCase.get("expect");

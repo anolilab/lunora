@@ -20,6 +20,13 @@ import type { SdkTarget } from "./target";
  * could emit the same types in a different sequence and churn the diff.
  */
 const renderModels = async (document: OpenRpcDocument, target: SdkTarget): Promise<string> => {
+    // A target with no model backend emits no models, so there is nothing to
+    // render — and skipping it also keeps the multi-megabyte quicktype off the
+    // path entirely for those languages.
+    if (target.quicktype === undefined) {
+        return "";
+    }
+
     const sources = modelSources(document);
 
     if (sources.length === 0) {

@@ -19,7 +19,8 @@ class MessagesApi(private val client: Client) {
         args: WireValue? = null,
         onData: ((WireValue) -> Unit)?,
         onError: ((SubscriptionError) -> Unit)? = null,
-    ): () -> Unit = client.subscribe("messages:list", args, onData, onError)
+        shardKey: String? = null,
+    ): () -> Unit = client.subscribe("messages:list", args, onData, onError, shardKey)
 
     /** mutation: messages:send */
     fun send(args: WireValue? = null, shardKey: String? = null): WireValue =

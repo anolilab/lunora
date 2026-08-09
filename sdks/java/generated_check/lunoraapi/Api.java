@@ -30,8 +30,9 @@ public final class Api {
         public Runnable subscribeList(
                 java.util.Map<String, Object> args,
                 java.util.function.Consumer<Object> onData,
-                java.util.function.Consumer<Client.SubscriptionError> onError) {
-            return client.subscribe("messages:list", args, onData, onError);
+                java.util.function.Consumer<Client.SubscriptionError> onError,
+                String shardKey) {
+            return client.subscribe("messages:list", args, onData, onError, shardKey);
         }
 
         /** mutation: messages:send */

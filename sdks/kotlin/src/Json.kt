@@ -170,7 +170,7 @@ object Json {
                     '\\' -> out.append('\\')
                     '/' -> out.append('/')
                     'b' -> out.append('\b')
-                    'f' -> out.append('')
+                    'f' -> out.append('\u000C')
                     'n' -> out.append('\n')
                     'r' -> out.append('\r')
                     't' -> out.append('\t')
@@ -316,7 +316,7 @@ object Key {
                 '\r' -> out.append("\\r")
                 '\t' -> out.append("\\t")
                 '\b' -> out.append("\\b")
-                '' -> out.append("\\f")
+                '\u000C' -> out.append("\\f")
                 else ->
                     if (character < ' ') {
                         out.append(String.format(Locale.ROOT, "\\u%04x", character.code))

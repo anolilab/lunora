@@ -312,5 +312,5 @@ fun main() {
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
 
-    println("OK — $checks assertions across 16 cases")
+    println("OK — $checks assertions")
 }

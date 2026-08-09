@@ -1,6 +1,7 @@
 /**
- * Java SDK target. Emits `Api.java` plus one file per generated model, against
- * the hand-written runtime in `sdks/java` (package `dev.lunora`).
+ * Java SDK target. Emits `Api.java` — and no model files — against the
+ * hand-written runtime in `sdks/java` (package `dev.lunora`). The next section
+ * is why there are no models.
  *
  * ## Why this target emits no typed models
  *
@@ -124,8 +125,9 @@ const renderSubscribe = (method: SdkMethod): string =>
         `    public Runnable subscribe${toPascalCase(method.functionName)}(`,
         `            java.util.Map<String, Object> args,`,
         `            java.util.function.Consumer<Object> onData,`,
-        `            java.util.function.Consumer<Client.SubscriptionError> onError) {`,
-        `        return client.subscribe("${method.functionPath}", args, onData, onError);`,
+        `            java.util.function.Consumer<Client.SubscriptionError> onError,`,
+        `            String shardKey) {`,
+        `        return client.subscribe("${method.functionPath}", args, onData, onError, shardKey);`,
         `    }`,
     ].join("\n");
 
@@ -178,8 +180,6 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
 
 const javaTarget: SdkTarget = {
     id: "java",
-    // Models are not emitted, so the backend choice only has to be valid.
-    quicktype: { lang: "java", rendererOptions: { "just-types": "true", package: PACKAGE_NAME } },
     render,
     runtimePackage: ["dev.lunora:lunora (Maven Central)"],
 };

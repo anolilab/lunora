@@ -7,6 +7,7 @@ const sdkCommand: Command = {
     examples: [
         ["lunora sdk generate --lang python", "Emit a Python SDK into ./sdk/python"],
         ["lunora sdk generate --lang go --out ./clients/go", "Choose the language and output directory"],
+        ["lunora sdk generate --lang kotlin", "Any of the registered targets; --lang lists them"],
     ],
     group: "Project",
     loader: () =>

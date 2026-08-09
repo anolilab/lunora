@@ -133,8 +133,8 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         const { files, undeclared } = await generateSdk(document(resultSchema), target);
 
         // Deliberately does NOT try to identify "the models file": targets name
-        // it differently (`models.py`, `Models.swift`) and Java emits one file
-        // per model with no models file at all. The invariant is simpler and
+        // it differently (`models.py`, `Models.swift`) and the JVM targets emit
+        // no models at all. The invariant is simpler and
         // language-agnostic — a name the backend did not declare must appear
         // NOWHERE in the output, because the surface should have degraded it to
         // an untyped return instead of referencing a type that does not exist.
@@ -142,6 +142,84 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         const leaked = undeclared.filter((name) => everything.includes(name));
 
         expect(leaked).toStrictEqual([]);
+    });
+
+    // The conventions `target.ts` documents as binding were prose, and every one
+    // of them was violated by at least one target without anything failing:
+    // Rust emitted no subscriptions at all, Rust discarded every result type,
+    // and Java and Kotlin dropped the shard key. A doc comment does not run —
+    // these do.
+
+    it("renders a live subscription for every query", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // Naming differs per language (`subscribe_list`, `subscribeList`), so
+        // match the shared stem rather than any one convention.
+        expect(/subscribe/iu.test(surface)).toBe(true);
+    });
+
+    it("renders no subscription for a write, which the server cannot re-run", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:send", "x-lunora-function-kind": "mutation" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        expect(/subscribe/iu.test(surface)).toBe(false);
+    });
+
+    it("accepts a shard key on every generated call and subscription", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // Spelt `shard_key` or `shardKey` depending on the language.
+        const mentions = [...surface.matchAll(/shard_?key/giu)].length;
+
+        // One for the call, one for the subscription, at minimum.
+        expect(mentions).toBeGreaterThanOrEqual(2);
+    });
+
+    it("uses a declared result model at its call site rather than emitting it unused", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [
+                {
+                    name: "messages:count",
+                    result: { name: "result", schema: { properties: { total: { type: "number" } }, type: "object" } },
+                    "x-lunora-function-kind": "query",
+                },
+            ],
+        };
+
+        const { files, undeclared } = await generateSdk(spec, target);
+        const surface = Object.entries(files)
+            .filter(([path]) => !path.toLowerCase().includes("models"))
+            .map(([, contents]) => contents)
+            .join("\n");
+
+        // Either the backend could not declare the model (reported), or the
+        // surface must actually reference it — a model emitted and never used
+        // is dead weight the caller cannot reach.
+        const declared = !undeclared.includes("MessagesCountResult");
+
+        expect(declared ? surface.includes("MessagesCountResult") : true).toBe(true);
     });
 
     it("is deterministic — a second run is byte-identical", async () => {

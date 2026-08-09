@@ -60,14 +60,14 @@ class TestRpcFixtures(unittest.TestCase):
     def test_response_ok(self):
         for case in load("rpc.json")["responseOk"]:
             with self.subTest(case=case["name"]):
-                value = parse_rpc_response(case["response"])
+                value = parse_rpc_response(case["response"], 200)
                 self.assertEqual(encode_wire(value), case["response"]["result"])
 
     def test_response_error(self):
         for case in load("rpc.json")["responseError"]:
             with self.subTest(case=case["name"]):
                 with self.assertRaises(LunoraError) as ctx:
-                    parse_rpc_response(case["response"])
+                    parse_rpc_response(case["response"], 400)
                 self.assertEqual(ctx.exception.code, case["code"])
                 self.assertEqual(ctx.exception.message, case["message"])
                 if "dataWire" in case:

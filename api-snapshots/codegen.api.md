@@ -792,7 +792,7 @@ interface SdkResult {
 ```ts
 interface SdkTarget {
     id: string;
-    quicktype: {
+    quicktype?: {
         lang: LanguageName;
         rendererOptions?: Record<string, string>;
     };

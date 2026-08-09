@@ -3,20 +3,31 @@
 
 #![allow(dead_code, unused_imports)]
 
-use lunora::client::{Client, ClientError, Verb};
-use lunora::wire::{from_json, WireValue};
+use lunora::client::{Client, ClientError, SubscriptionError, Verb};
+use lunora::wire::{encode_wire, from_json, WireValue};
 
 use crate::models::*;
 
 /// Functions declared in `messages`.
 pub struct MessagesApi<'client> {
-    client: &'client Client,
+    client: &'client mut Client,
 }
 
 impl<'client> MessagesApi<'client> {
     /// query: messages:list
     pub fn list(&self, args: &MessagesListArgs, shard_key: Option<&str>) -> Result<WireValue, ClientError> {
         self.client.call(Verb::Query, "messages:list", &from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), shard_key)
+    }
+
+    /// live query: messages:list — re-runs on every write to the tables it reads.
+    pub fn subscribe_list(
+        &mut self,
+        args: &MessagesListArgs, on_data: Option<Box<dyn Fn(&WireValue)>>,
+        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
+        shard_key: Option<&str>,
+    ) -> Result<String, ClientError> {
+        let _ = shard_key;
+        Ok(self.client.subscribe("messages:list", from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), on_data, on_error))
     }
 
     /// mutation: messages:send
@@ -27,16 +38,16 @@ impl<'client> MessagesApi<'client> {
 
 /// Typed entry point: `Api::new(&client).<namespace>().<function>(args)`.
 pub struct Api<'client> {
-    client: &'client Client,
+    client: &'client mut Client,
 }
 
 impl<'client> Api<'client> {
-    pub fn new(client: &'client Client) -> Self {
+    pub fn new(client: &'client mut Client) -> Self {
         Self { client }
     }
 
     /// Functions declared in `messages`.
-    pub fn messages(&self) -> MessagesApi<'_> {
+    pub fn messages(&mut self) -> MessagesApi<'_> {
         MessagesApi { client: self.client }
     }
 }

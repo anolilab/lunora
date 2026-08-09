@@ -36,11 +36,11 @@ module Lunora
 
   # Return the decoded result, or raise ApiError.
   #
-  # +status+ is required for correctness, not diagnostics: protocol/README.md
+  # +status+ is required — not defaulted — for correctness: protocol/README.md
   # §4.2 says a non-2xx whose body carries no +error+ envelope surfaces as an
   # INTERNAL transport error. Without it a 502 with body {"message":"..."}
   # returns nil and raises nothing — the caller believes its mutation committed.
-  def parse_rpc_response(body, status = 200)
+  def parse_rpc_response(body, status)
     if body.key?("error")
       envelope = body["error"]
       data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
@@ -117,12 +117,18 @@ module Lunora
     # claiming mutation-style de-duplication for it would be a lie.
     def action(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
 
+    # +shard_key+ does NOT ride the subscribe frame: the protocol selects a
+    # shard per SOCKET, via the +?shard=+ parameter +ws_url+ builds. It is
+    # accepted so the generated surface is identical across languages, and is
+    # otherwise unused — this client holds one socket, so it must already be the
+    # shard that socket was opened against.
     def subscribe(function_path, args, on_data, on_error = nil, shard_key = nil)
       @next_id += 1
       id = "sub_#{@next_id}"
+      _ = shard_key
       @subscriptions[id] = {
         args: args, cursor: nil, epoch: nil, function_path: function_path,
-        on_data: on_data, on_error: on_error, shard_key: shard_key
+        on_data: on_data, on_error: on_error
       }
       @send&.call(Lunora.build_subscribe_frame(id, function_path, args))
 
@@ -144,6 +150,24 @@ module Lunora
       lambda do
         @shapes.delete(id)
         @send&.call(Lunora.build_shape_unsubscribe_frame(id))
+      end
+    end
+
+    # Re-subscribe everything after a reconnect, carrying each subscription's
+    # resume cursor so the server can skip results that have not changed.
+    #
+    # Without this the cursor/epoch tracked on every +data+ frame would be
+    # write-only state and a reconnect would silently re-seed from scratch.
+    def resend_subscriptions
+      return if @send.nil?
+
+      @subscriptions.each do |id, entry|
+        @send.call(
+          Lunora.build_subscribe_frame(
+            id, entry[:function_path], entry[:args],
+            since_seq: entry[:cursor], since_epoch: entry[:epoch]
+          ),
+        )
       end
     end
 
@@ -286,7 +310,6 @@ module Lunora
       "#{endpoint}#{endpoint.include?("?") ? "&" : "?"}#{params.join("&")}"
     end
 
-    public :ws_url
 
     def join_url(path) = "#{@url.sub(%r{/\z}, "")}#{path}"
   end

@@ -68,10 +68,10 @@ def build_rpc_body(function_path: str, args: Any, shard_key: Optional[str] = Non
     return body
 
 
-def parse_rpc_response(body: dict, status: int = 200) -> Any:
+def parse_rpc_response(body: dict, status: int) -> Any:
     """Return ``decode_wire(result)`` or raise :class:`LunoraError`.
 
-    ``status`` is required for correctness, not diagnostics: ``protocol/README.md``
+    ``status`` is required — not defaulted — for correctness: ``protocol/README.md``
     §4.2 says a non-2xx response whose body carries no ``error`` envelope is
     surfaced as an ``INTERNAL`` transport error. Without the check, a 502 with
     body ``{"message": "bad gateway"}`` returns ``None`` and no exception — the

@@ -50,10 +50,17 @@ interface SdkTarget {
 
     /**
      * The quicktype backend + renderer options that produce this target's
-     * models. `LanguageName` is quicktype's own union, so a target naming a
-     * backend quicktype does not ship fails to compile rather than at run time.
+     * models, or absent when the target emits none.
+     *
+     * `LanguageName` is quicktype's own union, so a target naming a backend
+     * quicktype does not ship fails to compile rather than at run time.
+     *
+     * Optional because the JVM targets genuinely have no model layer — see
+     * their headers. Declaring a backend they discard cost a full render pass
+     * per invocation and made every predicted name look declared, so the CLI
+     * reported nothing while the surface referenced nothing.
      */
-    quicktype: { lang: LanguageName; rendererOptions?: Record<string, string> };
+    quicktype?: { lang: LanguageName; rendererOptions?: Record<string, string> };
 
     /**
      * Render the SDK. Returns file contents keyed by path relative to the

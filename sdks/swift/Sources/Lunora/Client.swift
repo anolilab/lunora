@@ -278,6 +278,27 @@ public final class LunoraClient {
         }
     }
 
+    /// Re-subscribes everything after a reconnect, carrying each subscription's
+    /// resume cursor so the server can skip results that have not changed.
+    ///
+    /// Without this the `cursor`/`epoch` tracked on every `data` frame would be
+    /// write-only state and a reconnect would silently re-seed from scratch.
+    public func resendSubscriptions() {
+        guard let send else { return }
+
+        for (id, entry) in subscriptions {
+            if let frame = try? LunoraClient.buildSubscribeFrame(
+                id: id,
+                functionPath: entry.functionPath,
+                args: entry.args,
+                sinceSeq: entry.cursor,
+                sinceEpoch: entry.epoch
+            ) {
+                send(frame)
+            }
+        }
+    }
+
     // MARK: - Inbound frames
 
     /// Applies one server frame and returns its type. Unknown types are ignored,

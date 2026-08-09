@@ -296,7 +296,18 @@ public final class Client {
         return frame;
     }
 
-    public Runnable subscribe(String functionPath, Object args, Consumer<Object> onData, Consumer<SubscriptionError> onError) {
+    /**
+     * Opens a live query.
+     *
+     * <p>{@code shardKey} does NOT ride the subscribe frame: the protocol
+     * selects a shard per SOCKET, via the {@code ?shard=} parameter
+     * {@link #wsUrl} builds. It is accepted so the generated surface is
+     * identical across languages, and is otherwise unused — this client holds
+     * one socket, so it must already be the shard that socket was opened
+     * against.
+     */
+    public Runnable subscribe(
+            String functionPath, Object args, Consumer<Object> onData, Consumer<SubscriptionError> onError, String shardKey) {
         nextId++;
 
         String id = "sub_" + nextId;

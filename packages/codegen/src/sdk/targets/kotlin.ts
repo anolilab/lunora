@@ -90,7 +90,8 @@ const renderSubscribe = (method: SdkMethod): string =>
         `        args: WireValue? = null,`,
         `        onData: ((WireValue) -> Unit)?,`,
         `        onError: ((SubscriptionError) -> Unit)? = null,`,
-        `    ): () -> Unit = client.subscribe("${method.functionPath}", args, onData, onError)`,
+        `        shardKey: String? = null,`,
+        `    ): () -> Unit = client.subscribe("${method.functionPath}", args, onData, onError, shardKey)`,
     ].join("\n");
 
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
@@ -130,8 +131,6 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
 
 const kotlinTarget: SdkTarget = {
     id: "kotlin",
-    // Models are not emitted, so the backend choice only has to be valid.
-    quicktype: { lang: "kotlin", rendererOptions: { "just-types": "true" } },
     render,
     runtimePackage: ["dev.lunora:lunora (Maven Central)"],
 };

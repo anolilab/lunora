@@ -88,11 +88,50 @@ const renderCall = (method: SdkMethod): string => {
         method.argsType === undefined
             ? "&WireValue::Object(Vec::new())"
             : "&from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+    const call = `self.client.call(${verbConstant(method.verb)}, "${method.functionPath}", ${payload}, shard_key)`;
+
+    // A typed result is deserialised into the model; an untyped one is handed
+    // back as the raw wire value.
+    if (method.resultType === undefined) {
+        return [
+            `    /// ${method.summary}`,
+            `    pub fn ${memberName(method.functionName)}(${parameters}) -> Result<WireValue, ClientError> {`,
+            `        ${call}`,
+            `    }`,
+        ].join("\n");
+    }
 
     return [
         `    /// ${method.summary}`,
-        `    pub fn ${memberName(method.functionName)}(${parameters}) -> Result<WireValue, ClientError> {`,
-        `        self.client.call(${verbConstant(method.verb)}, "${method.functionPath}", ${payload}, shard_key)`,
+        `    pub fn ${memberName(method.functionName)}(${parameters}) -> Result<${method.resultType}, ClientError> {`,
+        `        let raw = ${call}?;`,
+        `        let json = encode_wire(&raw).map_err(ClientError::Wire)?;`,
+        `        serde_json::from_value(json).map_err(|error| ClientError::Transport(error.to_string()))`,
+        `    }`,
+    ].join("\n");
+};
+
+/**
+ * A query's live-subscription method. Only queries get one — the WS `subscribe`
+ * frame names a query the server re-runs on every write to the tables it read.
+ */
+const renderSubscribe = (method: SdkMethod): string => {
+    const argument = method.argsType === undefined ? "" : `args: &${method.argsType}, `;
+    const payload =
+        method.argsType === undefined
+            ? "WireValue::Object(Vec::new())"
+            : "from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+
+    return [
+        `    /// live ${method.summary} — re-runs on every write to the tables it reads.`,
+        `    pub fn subscribe_${memberName(method.functionName)}(`,
+        `        &mut self,`,
+        `        ${argument}on_data: Option<Box<dyn Fn(&WireValue)>>,`,
+        `        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,`,
+        `        shard_key: Option<&str>,`,
+        `    ) -> Result<String, ClientError> {`,
+        `        let _ = shard_key;`,
+        `        Ok(self.client.subscribe("${method.functionPath}", ${payload}, on_data, on_error))`,
         `    }`,
     ].join("\n");
 };
@@ -100,14 +139,18 @@ const renderCall = (method: SdkMethod): string => {
 const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
 
+    const body = namespace.methods
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .join("\n\n");
+
     return [
         `/// Functions declared in \`${namespace.name}\`.`,
         `pub struct ${typeName}<'client> {`,
-        `    client: &'client Client,`,
+        `    client: &'client mut Client,`,
         `}`,
         ``,
         `impl<'client> ${typeName}<'client> {`,
-        namespace.methods.map((method) => renderCall(method)).join("\n\n"),
+        body,
         `}`,
     ].join("\n");
 };
@@ -117,7 +160,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         .map((namespace) =>
             [
                 `    /// Functions declared in \`${namespace.name}\`.`,
-                `    pub fn ${memberName(namespace.name)}(&self) -> ${toPascalCase(namespace.name)}Api<'_> {`,
+                `    pub fn ${memberName(namespace.name)}(&mut self) -> ${toPascalCase(namespace.name)}Api<'_> {`,
                 `        ${toPascalCase(namespace.name)}Api { client: self.client }`,
                 `    }`,
             ].join("\n"),
@@ -128,8 +171,8 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         GENERATED_HEADER,
         `#![allow(dead_code, unused_imports)]\n`,
         `\n`,
-        `use lunora::client::{Client, ClientError, Verb};\n`,
-        `use lunora::wire::{from_json, WireValue};\n`,
+        `use lunora::client::{Client, ClientError, SubscriptionError, Verb};\n`,
+        `use lunora::wire::{encode_wire, from_json, WireValue};\n`,
         `\n`,
         `use crate::models::*;\n`,
         `\n`,
@@ -137,11 +180,11 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         `\n\n`,
         `/// Typed entry point: \`Api::new(&client).<namespace>().<function>(args)\`.\n`,
         `pub struct Api<'client> {\n`,
-        `    client: &'client Client,\n`,
+        `    client: &'client mut Client,\n`,
         `}\n`,
         `\n`,
         `impl<'client> Api<'client> {\n`,
-        `    pub fn new(client: &'client Client) -> Self {\n`,
+        `    pub fn new(client: &'client mut Client) -> Self {\n`,
         `        Self { client }\n`,
         `    }\n`,
         accessors.length > 0 ? `\n${accessors}\n` : ``,

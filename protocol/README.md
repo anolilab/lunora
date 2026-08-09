@@ -8,7 +8,7 @@ language can talk to a Lunora deployment.
 This document is normative. The golden frames under [`fixtures/`](./fixtures) are
 the machine-checkable form of it: the TS client is tested against them
 (`packages/client/__tests__/protocol-conformance.test.ts`) and every non-TS SDK
-targets the same files (e.g. `sdks/python/tests/test_conformance.py`).
+targets the same files (see `sdks/README.md`).
 
 - Reference implementation anchors:
     - Worker endpoints / RPC + WS handshake: `packages/runtime/src/create-worker.ts`
@@ -269,5 +269,6 @@ An SDK is protocol-conformant when it passes, against the shared fixtures:
 4. Client WS frame builders and the server-frame consumer match `ws-frames.json`,
    including the poke sequence materialising `shape.expectedRows`.
 
-The TS reference test is `packages/client/__tests__/protocol-conformance.test.ts`;
-the Python port is `sdks/python/tests/test_conformance.py`.
+The TS reference test is `packages/client/__tests__/protocol-conformance.test.ts`.
+Every SDK under `sdks/` runs the same fixtures — see `sdks/README.md` for the
+per-language suites and the capability table.

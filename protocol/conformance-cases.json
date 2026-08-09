@@ -1,0 +1,32 @@
+{
+  "$comment": [
+    "The case list every SDK's conformance suite must exercise.",
+    "",
+    "The assertion CODE cannot be shared across seven languages, but the case",
+    "LIST is data, and its absence is what let coverage drift: the four later",
+    "ports gained six hardening cases the first three never got, so MAX_DEPTH",
+    "and MAX_BIGINT_DIGITS - both justified as defences against a hostile peer -",
+    "went unasserted in Python and Go for several commits with every gate green.",
+    "",
+    "Each suite asserts it ran every name below. Adding a case here turns every",
+    "language red until it is covered, which is the point."
+  ],
+  "required": [
+    "wire_codec_round_trip",
+    "undefined_is_distinct_from_null",
+    "over_long_bigint_rejected",
+    "depth_cap_enforced",
+    "stable_wire_key_fixtures",
+    "format_number_matches_ecmascript",
+    "key_order_matches_utf16",
+    "string_escaping_matches_json_stringify",
+    "rpc_request_bodies",
+    "rpc_responses",
+    "non_2xx_without_error_envelope_fails",
+    "client_frame_builders",
+    "server_frame_consumer",
+    "shape_subscribe_frame",
+    "poke_sequence_materialises_rows",
+    "poke_parts_do_not_apply_before_poke_end"
+  ]
+}
