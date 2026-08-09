@@ -96,14 +96,24 @@ describe("emitShard — external-source ingest", () => {
         expect(shard).toContain("import type { ExternalSourceLike, SourceClientLike, TraceRefLike }");
     });
 
-    it("never reaches into the base class's private log ring", () => {
+    it("only touches base-class members the compile-time contract covers", () => {
         expect.assertions(1);
 
-        // `logs` is private on `ShardDO`, so `this.logs.push(...)` in the emitted
-        // subclass does not type-check. Nothing caught it for the life of the
-        // feature because no fixture or example declares a `.source()` table, and
-        // the emitted string is never compiled — so assert the shape directly.
-        expect(emitShard({ schema: discover(SOURCED) })).not.toContain("this.logs");
+        // The emitted shard is a string, so nothing type-checks it — which is how
+        // `this.logs.push(...)` (private on `ShardDO`) shipped in the poll loop for
+        // the life of this feature. `emitted-shard-contract.ts` compiles a subclass
+        // using each member below, so `lint:types` fails if one changes visibility
+        // or signature; this asserts the emitter still restricts itself to that set.
+        //
+        // Adding a member here means adding it to the contract file too — that
+        // pairing is the whole guard. Members read off `this` inside the emitted
+        // poll loop, ignoring locals and the `schema`/`config` module closures.
+        const membersOf = (shard: string): Set<string> => new Set([...shard.matchAll(/\bthis\.([A-Za-z_]\w*)/gu)].map((match) => match[1] as string));
+
+        const plain = membersOf(emitShard({ schema: discover(PLAIN) }));
+        const added = [...membersOf(emitShard({ schema: discover(SOURCED) }))].filter((member) => !plain.has(member)).toSorted((a, b) => a.localeCompare(b));
+
+        expect(added).toStrictEqual(["alarmHeadroom", "currentShardKey", "recordExternalSourceError", "recordExternalSourceWarning", "scheduleSourcePoll"]);
     });
 
     it("stays byte-identical (none of the ingest surface) for a non-sourced schema", () => {
