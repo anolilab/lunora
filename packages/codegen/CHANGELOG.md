@@ -1,3 +1,10 @@
+## @lunora/codegen [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.99...%40lunora%2Fcodegen%401.0.0-alpha.100) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.78
+
 ## @lunora/codegen [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.98...%40lunora%2Fcodegen%401.0.0-alpha.99) (2026-08-09)
 
 
