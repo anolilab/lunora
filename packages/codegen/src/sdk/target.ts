@@ -61,8 +61,16 @@ interface SdkTarget {
      */
     render: (input: SdkRenderInput) => Record<string, string>;
 
-    /** The runtime package a generated SDK imports, for the CLI's next-steps hint. */
-    runtimePackage: string;
+    /**
+     * The packages a consuming project must add for the generated SDK to run,
+     * reported by the CLI.
+     *
+     * A list rather than a single name because a target's MODELS can carry a
+     * dependency the transport does not: quicktype's Ruby backend emits
+     * `Dry::Struct` types with no renderer option to avoid them, so a Ruby SDK
+     * needs the gems even though `sdks/ruby` itself is dependency-free.
+     */
+    runtimePackage: ReadonlyArray<string>;
 }
 
 export type { SdkRenderInput, SdkTarget };

@@ -118,7 +118,7 @@ const goTarget: SdkTarget = {
     id: "go",
     quicktype: { lang: "go", rendererOptions: { "just-types": "true", package: PACKAGE_NAME } },
     render,
-    runtimePackage: "github.com/anolilab/lunora-go",
+    runtimePackage: ["github.com/anolilab/lunora-go"],
 };
 
 export default goTarget;

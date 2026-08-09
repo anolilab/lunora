@@ -156,7 +156,7 @@ const pythonTarget: SdkTarget = {
     id: "python",
     quicktype: { lang: "python", rendererOptions: { "python-version": "3.7" } },
     render,
-    runtimePackage: "lunora (PyPI)",
+    runtimePackage: ["lunora (PyPI)"],
 };
 
 export default pythonTarget;

@@ -1,0 +1,293 @@
+# frozen_string_literal: true
+
+require "json"
+require "uri"
+
+require_relative "key"
+require_relative "wire"
+
+module Lunora
+  RPC_PATH = "/_lunora/rpc"
+  WS_PATH = "/_lunora/ws"
+
+  # A coded error from an RPC error envelope.
+  class ApiError < StandardError
+    attr_reader :code, :data
+
+    def initialize(code, message, data = nil)
+      super(message)
+      @code = code
+      @data = data
+    end
+  end
+
+  # A subscription-scoped error the server pushed.
+  SubscriptionError = Struct.new(:code, :message)
+
+  module_function
+
+  # Build the POST /_lunora/rpc body. +shard_key+ is omitted when nil, which
+  # routes to the default shard.
+  def build_rpc_body(function_path, args = nil, shard_key = nil)
+    body = { "args" => encode_wire(args.nil? ? {} : args), "functionPath" => function_path }
+    body["shardKey"] = shard_key unless shard_key.nil?
+    body
+  end
+
+  # Return the decoded result, or raise ApiError.
+  #
+  # +status+ is required for correctness, not diagnostics: protocol/README.md
+  # §4.2 says a non-2xx whose body carries no +error+ envelope surfaces as an
+  # INTERNAL transport error. Without it a 502 with body {"message":"..."}
+  # returns nil and raises nothing — the caller believes its mutation committed.
+  def parse_rpc_response(body, status = 200)
+    if body.key?("error")
+      envelope = body["error"]
+      data = envelope["data"].nil? ? nil : decode_wire(envelope["data"])
+      raise ApiError.new(envelope.fetch("code", "INTERNAL"), envelope.fetch("message", "request failed"), data)
+    end
+
+    raise ApiError.new("INTERNAL", "HTTP #{status} without an error envelope") unless (200..299).cover?(status)
+
+    decode_wire(body["result"])
+  end
+
+  def build_connect_frame(client_id = nil, context = nil)
+    frame = { "id" => "connect", "type" => "connect" }
+    frame["clientId"] = client_id unless client_id.nil?
+    frame["context"] = context unless context.nil?
+    frame
+  end
+
+  def build_subscribe_frame(id, function_path, args = nil, table: nil, since_seq: nil, since_epoch: nil)
+    query = {
+      "args" => encode_wire(args.nil? ? {} : args),
+      "functionPath" => function_path,
+      "table" => table || function_path
+    }
+    query["sinceSeq"] = since_seq unless since_seq.nil?
+    query["sinceEpoch"] = since_epoch unless since_epoch.nil?
+    { "id" => id, "query" => query, "type" => "subscribe" }
+  end
+
+  def build_unsubscribe_frame(id) = { "id" => id, "type" => "unsubscribe" }
+
+  def build_shape_subscribe_frame(id, name, args = nil, since_checkpoint: nil, since_epoch: nil)
+    shape = { "name" => name }
+    shape["args"] = encode_wire(args) unless args.nil?
+    frame = { "id" => id, "shape" => shape, "type" => "shape_subscribe" }
+    frame["sinceCheckpoint"] = since_checkpoint unless since_checkpoint.nil?
+    frame["sinceEpoch"] = since_epoch unless since_epoch.nil?
+    frame
+  end
+
+  def build_shape_unsubscribe_frame(id) = { "id" => id, "type" => "shape_unsubscribe" }
+
+  # A Lunora deployment client.
+  #
+  # The HTTP poster and the socket frame sender are injected rather than
+  # assumed, so the conformance suite runs with no network and a consumer keeps
+  # its own transport, timeouts and socket library instead of inheriting ours.
+  class Client
+    attr_accessor :auth_token
+
+    def initialize(url, http_post: nil, auth_token: nil, client_id: "ruby-client")
+      @url = url
+      @http_post = http_post
+      @auth_token = auth_token
+      @client_id = client_id
+      @send = nil
+      @subscriptions = {}
+      @shapes = {}
+      @pokes = {}
+      @next_id = 0
+      @next_shape_id = 0
+    end
+
+    def attach_socket(sender) = @send = sender
+
+    def query(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
+
+    def mutation(function_path, args = nil, shard_key = nil, mutation_id: nil)
+      rpc(function_path, args, shard_key, mutation_id)
+    end
+
+    # Same envelope as a mutation, but never an idempotency key: an action
+    # performs external side effects and is not replayed against the shard, so
+    # claiming mutation-style de-duplication for it would be a lie.
+    def action(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
+
+    def subscribe(function_path, args, on_data, on_error = nil, shard_key = nil)
+      @next_id += 1
+      id = "sub_#{@next_id}"
+      @subscriptions[id] = {
+        args: args, cursor: nil, epoch: nil, function_path: function_path,
+        on_data: on_data, on_error: on_error, shard_key: shard_key
+      }
+      @send&.call(Lunora.build_subscribe_frame(id, function_path, args))
+
+      lambda do
+        @subscriptions.delete(id)
+        @send&.call(Lunora.build_unsubscribe_frame(id))
+      end
+    end
+
+    # Open a partially-replicated keyed view. +on_rows+ fires once per applied
+    # poke with the view's full contents, in insertion order.
+    def subscribe_shape(name, args, on_rows, on_error = nil)
+      @next_shape_id += 1
+      id = "shape_#{@next_shape_id}"
+      @shapes[id] = { args: args, checkpoint: nil, epoch: nil, name: name, on_error: on_error, on_rows: on_rows,
+                      order: [], rows: {} }
+      @send&.call(Lunora.build_shape_subscribe_frame(id, name, args))
+
+      lambda do
+        @shapes.delete(id)
+        @send&.call(Lunora.build_shape_unsubscribe_frame(id))
+      end
+    end
+
+    # Apply one server frame and return its type. Unknown types are ignored,
+    # per the protocol's forward-compatibility rule.
+    def handle_frame(raw)
+      return nil if ["lunora-ping", "lunora-pong"].include?(raw)
+
+      frame = begin
+        JSON.parse(raw)
+      rescue JSON::ParserError
+        # Non-JSON frames are ignored by the client parser, not fatal.
+        return nil
+      end
+
+      dispatch(frame)
+    end
+
+    private
+
+    def dispatch(frame)
+      kind = frame["type"]
+      entry = @subscriptions[frame["id"]]
+
+      case kind
+      when "ack" then kind
+      when "data", "delta" then deliver(entry, frame, kind)
+      when "resume", "settled"
+        advance(entry, frame)
+        kind
+      when "error" then deliver_error(frame, kind)
+      when "complete"
+        @subscriptions.delete(frame["id"])
+        kind
+      when "pokeStart"
+        @pokes[frame["pokeId"]] = {}
+        kind
+      when "pokePart" then buffer_poke_part(frame)
+      when "pokeEnd" then apply_poke(frame)
+      else kind
+      end
+    end
+
+    def deliver(entry, frame, kind)
+      payload = frame.key?("data") && !frame["data"].nil? ? frame["data"] : frame["delta"]
+      value = Lunora.decode_wire(payload)
+
+      if entry
+        advance(entry, frame)
+        entry[:on_data]&.call(value)
+      end
+
+      kind
+    end
+
+    def deliver_error(frame, kind)
+      envelope = frame["error"] || {}
+      message = frame["message"] || envelope["message"] || "subscription error"
+      error = SubscriptionError.new(envelope["code"], message)
+      id = frame["id"]
+      @subscriptions[id]&.fetch(:on_error, nil)&.call(error)
+      @shapes[id]&.fetch(:on_error, nil)&.call(error)
+      kind
+    end
+
+    def advance(entry, frame)
+      return if entry.nil?
+
+      entry[:cursor] = frame["cursor"] if frame.key?("cursor")
+      entry[:epoch] = frame["epoch"] if frame.key?("epoch")
+    end
+
+    # Parts buffer until pokeEnd: a poke is defined as an atomic batch, so
+    # applying them as they arrive would expose a torn view, and a socket
+    # dropping mid-poke would leave it permanently half-applied.
+    def buffer_poke_part(frame)
+      buffer = @pokes[frame["pokeId"]]
+      # A part for an unknown poke is dropped — without its pokeStart there is
+      # no batch to join, and guessing would apply a fragment of one.
+      if buffer
+        shape_id = frame["shapeId"]
+        buffer[shape_id] = (buffer[shape_id] || []) + (frame["rowsPatch"] || [])
+      end
+      "pokePart"
+    end
+
+    def apply_poke(frame)
+      buffer = @pokes.delete(frame["pokeId"])
+      return "pokeEnd" if buffer.nil?
+
+      buffer.each do |shape_id, operations|
+        shape = @shapes[shape_id]
+        next if shape.nil?
+
+        operations.each { |operation| apply_row_op(shape, operation) }
+        shape[:checkpoint] = frame["checkpoint"] if frame.key?("checkpoint")
+        shape[:epoch] = frame["epoch"] if frame.key?("epoch")
+        shape[:on_rows]&.call(shape[:order].map { |key| shape[:rows][key] })
+      end
+
+      "pokeEnd"
+    end
+
+    def apply_row_op(shape, operation)
+      key = operation["key"]
+
+      if operation["op"] == "delete"
+        shape[:order].delete(key) if shape[:rows].delete(key)
+        return
+      end
+
+      # A value-less upsert is membership-only; it must not blank an existing row.
+      return if operation["value"].nil?
+
+      shape[:order] << key unless shape[:rows].key?(key)
+      shape[:rows][key] = Lunora.decode_wire(operation["value"])
+    end
+
+    def rpc(function_path, args, shard_key, mutation_id)
+      raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
+
+      headers = { "content-type" => "application/json" }
+      headers["authorization"] = "Bearer #{@auth_token}" if @auth_token
+      headers["x-lunora-mutation-id"] = mutation_id if mutation_id
+
+      status, body = @http_post.call(join_url(RPC_PATH), headers,
+                                     JSON.generate(Lunora.build_rpc_body(function_path, args, shard_key)))
+      Lunora.parse_rpc_response(body, status)
+    end
+
+    # The socket URL: the origin with its scheme swapped, plus the shard and
+    # credential query parameters when present.
+    def ws_url(shard_key = nil, token = nil)
+      endpoint = join_url(WS_PATH).sub(%r{\Ahttps://}, "wss://").sub(%r{\Ahttp://}, "ws://")
+      params = []
+      params << "shard=#{URI.encode_www_form_component(shard_key)}" unless shard_key.nil?
+      params << "token=#{URI.encode_www_form_component(token)}" unless token.nil?
+      return endpoint if params.empty?
+
+      "#{endpoint}#{endpoint.include?("?") ? "&" : "?"}#{params.join("&")}"
+    end
+
+    public :ws_url
+
+    def join_url(path) = "#{@url.sub(%r{/\z}, "")}#{path}"
+  end
+end

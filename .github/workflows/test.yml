@@ -385,6 +385,11 @@
                       "run": "go test ./... -v -race"
                       "generatedOut": "sdks/go/generatedcheck"
                       "buildGenerated": "go build ./..."
+                    - "language": "ruby"
+                      "directory": "sdks/ruby"
+                      "run": "ruby -Ilib -e 'Dir[\"test/test_*.rb\"].each { |f| require File.expand_path(f) }'"
+                      "generatedOut": "sdks/ruby/generated_check"
+                      "buildGenerated": "ruby -Ilib -c generated_check/api.rb && ruby -Ilib -c generated_check/models.rb"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -405,6 +410,20 @@
               "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
               "with":
                   "go-version": "1.22"
+
+            # The Ruby TRANSPORT is dependency-free like the others, but
+            # quicktype's Ruby backend renders Dry::Struct models with no
+            # renderer option to avoid it — so the generated-code check (and
+            # only that check) needs the gems.
+            - "name": "Setup ruby"
+              "if": "matrix.sdk.language == 'ruby'"
+              "uses": "ruby/setup-ruby@90be1154f987f4dc0fe0dd0feedac9e473aa4ba8" # v1.286.0
+              "with":
+                  "ruby-version": "3.3"
+
+            - "name": "Install the gems the generated ruby models require"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install dry-struct dry-types --no-document"
 
             - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
               "working-directory": "${{ matrix.sdk.directory }}"

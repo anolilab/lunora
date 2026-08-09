@@ -14,9 +14,10 @@ import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunction
 import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
 import pythonTarget from "./targets/python";
+import rubyTarget from "./targets/ruby";
 
 /** Every language `lunora sdk generate --lang` accepts, keyed by id. */
-const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = { go: goTarget, python: pythonTarget };
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = { go: goTarget, python: pythonTarget, ruby: rubyTarget };
 
 /** The accepted `--lang` values, sorted — for help text and error messages. */
 const SDK_LANGUAGES: ReadonlyArray<string> = Object.keys(SDK_TARGETS).toSorted((a, b) => a.localeCompare(b));

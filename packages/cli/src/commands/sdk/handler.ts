@@ -74,7 +74,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     const untypedResults = document.methods.filter((method) => !isTypedSchema(method.result?.schema)).length;
 
     logger.success(`Generated ${language} SDK for ${String(document.methods.length)} function(s) → ${outputDirectory}`);
-    logger.info(`The generated code imports the ${target.runtimePackage} runtime — add it to the consuming project.`);
+    logger.info(`Add to the consuming project: ${target.runtimePackage.join(", ")}.`);
 
     if (undeclared.length > 0) {
         // The schema declared a shape, but this language's backend did not turn
