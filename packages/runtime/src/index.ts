@@ -155,6 +155,7 @@ export { applyJurisdiction, resolveShard } from "./resolve-shard";
 export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./rest-cache";
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, readShardKey, restSurfaceFromRegistry } from "./rest-routes";
+export type { BackupRetentionPreview } from "./scheduled-backup";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 export type {

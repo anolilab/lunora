@@ -123,6 +123,9 @@ const memoryBackupStore = (): BackupStore & {
 const sha256Hex = async (text: string): Promise<string> =>
     [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
+/** The execution context `fetch` needs; nothing under test uses either hook. */
+const fakeContext = { passThroughOnException: () => undefined, waitUntil: () => undefined };
+
 const fire = async (worker: ReturnType<typeof createWorker>, controller: ScheduledControllerLike): Promise<void> => {
     await worker.scheduled(controller, {}, { passThroughOnException: () => undefined, waitUntil: () => undefined });
 };
@@ -486,6 +489,175 @@ describe("createWorker — scheduled backup", () => {
         expect(store.objects.has("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson")).toBe(false);
         expect(store.objects.has("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson")).toBe(true);
         expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+    });
+
+    /**
+     * One bucket, seeded with every case that makes eligibility subtle, read
+     * two ways: the preview route, and a real cron fire. If those can ever
+     * disagree, the preview is worse than nothing — an operator would plan
+     * around an answer the prune does not honour.
+     */
+    const seedMixedBucket = (store: ReturnType<typeof memoryBackupStore>): void => {
+        const seed = (id: string, marker: string | undefined): string => {
+            const key = `backups/lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
+
+            store.objects.set(key, "rows\n");
+            store.objects.set(`${key}.manifest.json`, JSON.stringify({ file: key, id }));
+
+            if (marker !== undefined) {
+                store.metadata.set(`${key}.manifest.json`, { lunoraBackupCron: marker });
+            }
+
+            return key;
+        };
+
+        // Ours, oldest first. The last one is keyed at SCHEDULED_TIME, which is
+        // the key the fire itself writes — so the fire overwrites it rather than
+        // adding a snapshot, and the prune sees exactly the population the
+        // preview saw. Without that the two would be answering about different
+        // buckets, and an equal/unequal result would mean nothing.
+        seed("2026-06-01T03:00:00.000Z", BACKUP_CRON);
+        seed("2026-06-02T03:00:00.000Z", BACKUP_CRON);
+        seed(new Date(SCHEDULED_TIME).toISOString(), BACKUP_CRON);
+        // A legacy sidecar: written before the marker existed, indistinguishable
+        // from an operator's, so never eligible.
+        seed("2026-05-01T03:00:00.000Z", undefined);
+        // Another deployment backing up into the same bucket.
+        seed("2026-05-02T09:30:00.000Z", "*/30 * * * *");
+        // An operator's own snapshot, taken with `lunora backup create --bucket`.
+        seed("2026-05-03T11:00:00.000Z", undefined);
+    };
+
+    const previewOf = async (store: ReturnType<typeof memoryBackupStore>): Promise<{ eligible: number; keep: number; wouldDelete: string[] }> => {
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/retention", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        return response.json();
+    };
+
+    it("previews exactly what the prune then deletes", async () => {
+        expect.assertions(6);
+
+        const previewStore = memoryBackupStore();
+        const pruneStore = memoryBackupStore();
+
+        seedMixedBucket(previewStore);
+        seedMixedBucket(pruneStore);
+
+        const preview = await previewOf(previewStore);
+
+        // The preview must not have touched anything.
+        expect([...previewStore.objects.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            [...pruneStore.objects.keys()].toSorted((a, b) => a.localeCompare(b)),
+        );
+
+        const before = new Set(pruneStore.objects.keys());
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: pruneStore,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        // What the fire actually removed, minus the snapshot it added.
+        const deleted = [...before].filter((key) => !pruneStore.objects.has(key)).filter((key) => key.endsWith(".manifest.json"));
+
+        expect(deleted.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(preview.wouldDelete.toSorted((a, b) => a.localeCompare(b)));
+
+        // And the answer is the interesting one: our two older snapshots go, the
+        // legacy sidecar, the other deployment's, and the operator's stay.
+        expect(preview.wouldDelete).toStrictEqual([
+            "backups/lunora-backup-2026-06-02T03-00-00-000Z.ndjson.manifest.json",
+            "backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json",
+        ]);
+        expect(preview.eligible).toBe(3);
+        expect(preview.keep).toBe(1);
+    });
+
+    it("reports what would go without removing a byte of it", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const before = new Map(store.objects);
+        const preview = await previewOf(store);
+
+        expect(preview.wouldDelete.length).toBeGreaterThan(0);
+        // Byte-for-byte: same keys, same contents. Nothing in this route deletes.
+        expect([...store.objects.entries()]).toStrictEqual([...before.entries()]);
+    });
+
+    it("refuses the retention preview without an admin bearer, and leaks nothing", async () => {
+        expect.assertions(2);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/backup/retention", { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+        // The gate runs before the bucket is read, so the body cannot carry an
+        // object key.
+        await expect(response.text()).resolves.not.toContain("lunora-backup-");
+    });
+
+    it("reports an empty selection when retention is not configured", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            // No `backupRetain`: retention is off, so nothing is ever deleted.
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/retention", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        const preview: { keep: number; wouldDelete: string[] } = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(preview.keep).toBe(0);
+        expect(preview.wouldDelete).toStrictEqual([]);
     });
 
     it("honors a custom backupPrefix and backupTables", async () => {

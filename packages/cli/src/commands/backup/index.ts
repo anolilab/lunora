@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 const backupCommand: Command = {
-    argument: { description: "create | list | restore <id|file> | pitr", name: "subcommand", type: String },
+    argument: { description: "create | list | restore <id|file> | retention | pitr", name: "subcommand", type: String },
     description: "Managed snapshot backups (create | list | restore) to a directory or an R2 bucket, plus native point-in-time recovery (pitr)",
     examples: [
         ["lunora backup create", "Snapshot every table to a backup file"],
@@ -9,6 +9,7 @@ const backupCommand: Command = {
         ["lunora backup restore <id>", "Restore a snapshot by id"],
         ["lunora backup create --bucket default", "Snapshot into an R2 bucket instead of a directory"],
         ["lunora backup restore <id> --bucket default --verify", "Restore from R2, checksum first"],
+        ["lunora backup retention", "Show what the platform's retention would delete next"],
         ["lunora backup pitr --at 2026-06-01T00:00:00Z", "Point-in-time recovery (≤30 days)"],
     ],
     group: "Data",

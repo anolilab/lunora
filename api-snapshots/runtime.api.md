@@ -362,6 +362,18 @@ interface BackupManifestEntry {
 }
 ```
 
+### `BackupRetentionPreview` (interface)
+
+```ts
+interface BackupRetentionPreview {
+    cron?: string;
+    eligible: number;
+    keep: number;
+    prefix: string;
+    wouldDelete: string[];
+}
+```
+
 ### `BackupStore` (interface)
 
 ```ts
