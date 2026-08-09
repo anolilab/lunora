@@ -709,7 +709,9 @@ describe("createWorker", () => {
                 idFromName: (name: string) => name,
             };
             const namespace: ShardNamespaceLike = {
-                get: () => {return { fetch: async () => new Response("unused") }},
+                get: () => {
+                    return { fetch: async () => new Response("unused") };
+                },
                 idFromName: (name: string) => name,
                 jurisdiction: () => pinned,
             };

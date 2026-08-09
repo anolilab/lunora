@@ -83,9 +83,7 @@ describe("replica read-your-writes bookmark", () => {
         // resolved. Without that, one shard's cursor splits across two client
         // entries and a write under one spelling stops constraining a read under
         // the other.
-        const fetchMock = vi.fn<typeof fetch>(
-            async () => Response.json({ commitCursor: 21, result: null }, { headers: { "x-lunora-shard-key": "__root__" } }),
-        );
+        const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ commitCursor: 21, result: null }, { headers: { "x-lunora-shard-key": "__root__" } }));
         const instance = client(fetchMock);
 
         // Write with no shard key at all; the response names the shard.
