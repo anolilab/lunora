@@ -51,7 +51,9 @@ overrides:
   # brace-expansion; these needed a cross-range nudge. (astro's XSS fix needs a
   # major bump to 7.0.10 — handled separately, it breaks the adapter.)
   adm-zip: ">=0.6.0"
-  js-yaml: ">=4.3.1"
+  # Upper bound keeps the "whole tree on js-yaml 4" rule below intact — an open
+  # `>=4.3.1` resolves @expo/xcpretty onto js-yaml 5.
+  js-yaml: ">=4.3.1 <5"
   shell-quote: ">=1.8.5"
   axios: ">=1.18.0"
   protobufjs: ">=7.6.5"
