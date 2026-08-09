@@ -20,6 +20,9 @@ import type { TraceSpan, TraceSummary } from "../../lib/admin";
  */
 const MIN_BAR_PERCENT = 0.5;
 
+/** Gridlines drawn across a waterfall, excluding the 0% edge (the track's own border reads as that). */
+const TICK_COUNT = 4;
+
 /** Clamp `value` into the inclusive `[0, 100]` percentage range. */
 const clampPercent = (value: number): number => Math.min(100, Math.max(0, value));
 
@@ -61,25 +64,39 @@ export const spanBar = (span: TraceSpan, traceDurationMs: number): SpanBar => {
 
 /**
  * Narrow the trace list by a case-insensitive substring over the trace's root
- * span name, function path, and full trace id — the identifiers the row shows,
- * plus the id so a metric exemplar can filter straight to its trace. An empty or
- * whitespace-only term matches everything, so an untouched control never hides a
- * trace.
+ * span name, function path, full trace id, and every span's name and id — so
+ * pasting a span id from an error report or a `traceparent` header finds the
+ * trace that contains it, not just the trace it happens to be named after. An
+ * empty or whitespace-only term matches everything, so an untouched control never
+ * hides a trace.
  * @param traces The loaded traces, newest first.
  * @param search The raw search-box value.
+ * @param onlyErrors Keep only traces where the root or a descendant span threw.
  */
-export const filterTraces = (traces: ReadonlyArray<TraceSummary>, search: string): TraceSummary[] => {
+export const filterTraces = (traces: ReadonlyArray<TraceSummary>, search: string, onlyErrors = false): TraceSummary[] => {
     const needle = search.trim().toLowerCase();
+    const byStatus = onlyErrors ? traces.filter((trace) => !trace.ok) : traces;
 
     if (needle === "") {
-        return [...traces];
+        return [...byStatus];
     }
 
-    return traces.filter(
+    return byStatus.filter(
         (trace) =>
-            trace.rootName.toLowerCase().includes(needle) || trace.functionPath.toLowerCase().includes(needle) || trace.traceId.toLowerCase().includes(needle),
+            trace.rootName.toLowerCase().includes(needle) ||
+            trace.functionPath.toLowerCase().includes(needle) ||
+            trace.traceId.toLowerCase().includes(needle) ||
+            trace.spans.some((span) => span.name.toLowerCase().includes(needle) || span.spanId.toLowerCase().includes(needle)),
     );
 };
+
+/** One labelled gridline of the waterfall's time ruler. */
+export interface TraceTick {
+    /** Elapsed time at this gridline, pre-formatted. */
+    readonly label: string;
+    /** Distance from the left edge of the timeline track, in percent. */
+    readonly percent: number;
+}
 
 /**
  * Render a millisecond duration for a waterfall row. Sub-millisecond spans are
@@ -93,4 +110,30 @@ export const formatSpanDuration = (durationMs: number): string => {
     }
 
     return durationMs > 0 && durationMs < 1 ? `${durationMs.toFixed(2)}ms` : `${String(Math.round(durationMs))}ms`;
+};
+
+/**
+ * Evenly-spaced elapsed-time gridlines for a trace's timeline.
+ *
+ * A waterfall without a ruler shows the *shape* of a request but not where in it
+ * a span sits — you can see one bar starts later than another and have to guess
+ * by how much. Even spacing rather than "nice" round intervals keeps this to
+ * arithmetic: the labels are derived from the duration, so they land on whatever
+ * values the trace actually has.
+ *
+ * A non-positive or non-finite duration yields no ticks, matching {@link spanBar},
+ * which lays every span out full-width in that case — there is no timeline to
+ * annotate.
+ * @param traceDurationMs The enclosing trace's total duration, in ms.
+ */
+export const traceTicks = (traceDurationMs: number): TraceTick[] => {
+    if (!Number.isFinite(traceDurationMs) || traceDurationMs <= 0) {
+        return [];
+    }
+
+    return Array.from({ length: TICK_COUNT }, (_unused, index) => {
+        const fraction = (index + 1) / TICK_COUNT;
+
+        return { label: formatSpanDuration(traceDurationMs * fraction), percent: fraction * 100 };
+    });
 };

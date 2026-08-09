@@ -496,6 +496,21 @@ interface ContextLogger {
 }
 
 /**
+ * The only part of a trace anchor an alarm-path log site needs: the id it files
+ * the line under.
+ *
+ * Declared here as a structural projection rather than re-exporting
+ * `@lunora/observability`'s `TraceAnchor`, because `@lunora/do` deliberately
+ * does not re-export observability (see this package's index) and the generated
+ * shard — which forwards this value into `recordExternalSourceError` — must be
+ * able to name the type without taking on that dependency. A real `TraceAnchor`
+ * satisfies it, so internal callers pass theirs unchanged.
+ */
+interface TraceRefLike {
+    traceId: string;
+}
+
+/**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.
  * Declared structurally so unit tests can pass in plain object doubles
  * without depending on the workers runtime.
@@ -1004,6 +1019,20 @@ abstract class ShardDO {
      * fields.
      */
     private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
+
+    /**
+     * Anchor of the in-flight trigger (`withTriggerTrace`), handed across the
+     * `runner.handleAlarm()` boundary that stops the alarm handler from just
+     * taking it as an argument.
+     *
+     * A field only because of that indirection, and read under one rule: capture
+     * it into a local SYNCHRONOUSLY at the top of the handler, before any `await`.
+     * Read later it is no safer than `currentRequestTrace` — a socket frame
+     * interleaving at an await point would pick up the alarm's trace and file its
+     * own failure under it. Everything downstream takes the captured value as a
+     * parameter for exactly that reason.
+     */
+    private currentTriggerTrace: TraceAnchor | undefined;
 
     /**
      * Per-trace head-sampling state, keyed by `traceId` so concurrent dispatches on
@@ -3170,8 +3199,8 @@ abstract class ShardDO {
      * `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor for a source whose `refresh.everyMs`
      * is, say, an hour away.
      */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll
-    protected pollExternalSources(): Promise<number | undefined> {
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll, and is the only consumer of `_trace`
+    protected pollExternalSources(_trace?: TraceRefLike): Promise<number | undefined> {
         return Promise.resolve(undefined);
     }
 
@@ -3223,7 +3252,7 @@ abstract class ShardDO {
      * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
      * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
      */
-    protected async pollTtlSweeps(): Promise<number | undefined> {
+    protected async pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined> {
         const specs = this.ttlSweeps();
 
         if (specs.length === 0) {
@@ -3243,7 +3272,7 @@ abstract class ShardDO {
 
                 for (const id of page.ids) {
                     // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkDelete`)
-                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom);
+                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
 
                     if (limitHit) {
                         return Date.now();
@@ -3273,9 +3302,39 @@ abstract class ShardDO {
         return this.runner.shardKey ?? ROOT_SHARD_NAME;
     }
 
-    /** Record a contained external-source ingest failure (one sourced table's poll) into the log ring without aborting the others. */
-    protected recordExternalSourceError(table: string, error: unknown): void {
-        this.recordShapeError(`source:${table}`, error);
+    /**
+     * Record a contained external-source ingest failure (one sourced table's
+     * poll) into the log ring without aborting the others.
+     *
+     * `trace` is the alarm's anchor, forwarded by the generated
+     * `pollExternalSources` override from the value it was handed. Optional so a
+     * subclass generated before this parameter existed still compiles and simply
+     * records an uncorrelated line.
+     */
+    protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`source:${table}`, error, trace);
+    }
+
+    /**
+     * Record a contained external-source BACK-OFF — a transaction-limit hit
+     * mid-batch, which is "batch full" rather than a failure, so it lands at
+     * `warn` and does NOT group as an Issue the way
+     * {@link ShardDO.recordExternalSourceError} does.
+     *
+     * Exists because the generated poll loop needs to write this line and the log
+     * ring is private: emitting `this.logs.push(...)` into the subclass does not
+     * compile, which went unnoticed only because no fixture or example declares a
+     * `.source()` table. A protected seam keeps the buffer encapsulated and gives
+     * the line the same trace correlation as its sibling above.
+     */
+    protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void {
+        this.logs.push({
+            functionPath: `source:${table}`,
+            level: "warn",
+            message,
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
     }
 
     /* eslint-disable no-secrets/no-secrets -- JSDoc names the `AsyncIterable<unknown>` type, not a credential */
@@ -3654,7 +3713,7 @@ abstract class ShardDO {
             userId: this.getCurrentUserId(),
         };
 
-        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts, traceId: event.traceId });
 
         try {
             emitLogEvent(event);
@@ -4464,7 +4523,7 @@ abstract class ShardDO {
             // so the request log would record an empty write set.
             const tablesWritten = [...(this.pendingChangedTables ?? [])];
 
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten, dispatchTrace);
 
             // Inspect the post-write size before responding. SQLite-in-DO
             // exposes `databaseSize` as a real getter; reading it is a
@@ -4523,12 +4582,23 @@ abstract class ShardDO {
             // Flush statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely.
             this.flushStmtSamples();
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
+            this.recordRequestLog(
+                payload.functionPath,
+                payload.args ?? {},
+                durationMs,
+                "error",
+                [...(this.pendingChangedTables ?? [])],
+                dispatchTrace,
+                message,
+            );
             this.logs.push({
                 functionPath: payload.functionPath,
                 level: "error",
                 message,
                 timestamp: Date.now(),
+                // The local, not the shared field: this runs after the handler's
+                // awaits, where an interleaved dispatch may have re-set it.
+                traceId: dispatchTrace.traceId,
             });
 
             // A fresh error row landed, but the failed dispatch's own writes (if
@@ -4610,18 +4680,24 @@ abstract class ShardDO {
      * as the host-specific handler while the engine is progressively extracted.
      */
     protected async handleAlarmCloudflare(): Promise<void> {
+        // Captured before the first `await`, then passed by value everywhere below:
+        // this handler is the alarm's own scope, so nothing has interleaved yet.
+        // `undefined` when the alarm ran outside `withTriggerTrace` (a direct call
+        // in a test), which simply leaves these log lines uncorrelated.
+        const trace = this.currentTriggerTrace;
+
         this.globalPollScheduled = false;
 
         let globalShapesRemaining: number;
 
         try {
-            globalShapesRemaining = await this.pollGlobalShapes();
+            globalShapesRemaining = await this.pollGlobalShapes(trace);
         } catch (error) {
             // `pollGlobalShapes` already contains per-socket/per-shape failures;
             // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
             // so the poll heartbeat re-arms and retries next tick instead of
             // dying permanently and silently dropping every global subscriber.
-            this.recordShapeError("shape:poll", error);
+            this.recordShapeError("shape:poll", error, trace);
             globalShapesRemaining = 1;
         }
 
@@ -4631,7 +4707,7 @@ abstract class ShardDO {
             try {
                 return await run();
             } catch (error) {
-                this.recordShapeError(tag, error);
+                this.recordShapeError(tag, error, trace);
 
                 return Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
             }
@@ -4641,13 +4717,13 @@ abstract class ShardDO {
         // base hook returns `undefined` (dormant); the codegen subclass overrides
         // it to materialize each sourced table and report the earliest NEXT-DUE
         // timestamp across every non-manual source.
-        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources());
+        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources(trace));
 
         // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
         // returns `undefined` (no TTL tables); the codegen subclass overrides
         // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
         // reports its next-due.
-        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps());
+        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps(trace));
 
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
@@ -4729,6 +4805,13 @@ abstract class ShardDO {
             this.currentRequestTrace = anchor;
         }
 
+        // Published unconditionally, unlike the shared dispatch field above: this
+        // one is written only here, and a trigger is the only thing that reads it
+        // (synchronously, at entry — see the field's docstring).
+        const previousTrigger = this.currentTriggerTrace;
+
+        this.currentTriggerTrace = anchor;
+
         let failure: { thrown: unknown } | undefined;
 
         try {
@@ -4738,6 +4821,8 @@ abstract class ShardDO {
 
             throw error;
         } finally {
+            this.currentTriggerTrace = previousTrigger;
+
             if (claimed && this.currentRequestTrace === anchor) {
                 this.currentRequestTrace = undefined;
             }
@@ -6411,6 +6496,7 @@ abstract class ShardDO {
         durationMs: number,
         outcome: "error" | "ok",
         tablesWritten: string[],
+        trace: TraceAnchor,
         errorMessage?: string,
     ): void {
         const config = this.requestLogConfig();
@@ -6439,6 +6525,13 @@ abstract class ShardDO {
             shardKey: this.runner.shardKey,
             tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
             tablesWritten,
+            // Passed BY VALUE, never read off `currentRequestTrace` here: this
+            // method runs after the handler's awaits, by which point an
+            // interleaved dispatch may have re-set (or cleared) that shared
+            // field — which would file this row, and the Logpush event carrying
+            // it, under another request's trace. Same hazard, and same fix, as
+            // the dispatch root span's `dispatchTrace` capture.
+            traceId: trace.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };
@@ -8441,7 +8534,7 @@ abstract class ShardDO {
      * on an ordinary successful delete. Any OTHER thrown error still propagates —
      * only the meter's own signal is contained here.
      */
-    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker): Promise<boolean> {
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
         try {
             await this.deleteRowThroughWriter(table, id, headroom);
 
@@ -8453,6 +8546,7 @@ abstract class ShardDO {
                     level: "warn",
                     message: `TTL sweep for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
                     timestamp: Date.now(),
+                    traceId: trace?.traceId,
                 });
 
                 return true;
@@ -8468,13 +8562,20 @@ abstract class ShardDO {
      * best-effort fan-out: one socket's read or one shape's resolve failing must
      * never take down the others — so callers swallow the throw and surface it
      * here for diagnosis. `context` is a synthetic `shape:phase:subId` path.
+     *
+     * `trace` is passed by the alarm path, which has an anchor to attribute the
+     * failure to; the socket-frame callers omit it because their path is
+     * deliberately untraced (see `webSocketMessage`). It is a parameter rather
+     * than a field read so an alarm interleaving with a socket frame cannot file
+     * one path's failure under the other's trace.
      */
-    private recordShapeError(context: string, error: unknown): void {
+    private recordShapeError(context: string, error: unknown, trace?: TraceRefLike): void {
         this.logs.push({
             functionPath: context,
             level: "error",
             message: error instanceof Error ? error.message : String(error),
             timestamp: Date.now(),
+            traceId: trace?.traceId,
         });
     }
 
@@ -8508,7 +8609,7 @@ abstract class ShardDO {
      * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
-    private async pollGlobalShapes(): Promise<number> {
+    private async pollGlobalShapes(trace?: TraceRefLike): Promise<number> {
         const sockets = [...this.runner.sockets()];
         let remaining = 0;
 
@@ -8529,7 +8630,7 @@ abstract class ShardDO {
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
             // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
-            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "");
+            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "", trace);
         }
 
         return remaining;
@@ -8547,6 +8648,7 @@ abstract class ShardDO {
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         connectionId: string,
+        trace?: TraceRefLike,
     ): Promise<number> {
         let count = 0;
 
@@ -8557,7 +8659,7 @@ abstract class ShardDO {
                 resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
             } catch (error) {
                 count += 1;
-                this.recordShapeError(`shape:poll:${subId}`, error);
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
 
                 continue;
             }
@@ -8572,7 +8674,7 @@ abstract class ShardDO {
                 // eslint-disable-next-line no-await-in-loop -- per-shape D1 reads serialized within a socket to bound concurrency
                 await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId);
             } catch (error) {
-                this.recordShapeError(`shape:poll:${subId}`, error);
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
             }
         }
 
@@ -9207,4 +9309,4 @@ export type {
 // canonical home is `./subscription-delivery`.
 export { subscriptionListDeltas } from "@lunora/shard-engine";
 
-export type { HibernatableWebSocket, LogSink, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink };
+export type { HibernatableWebSocket, LogSink, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };

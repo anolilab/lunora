@@ -650,6 +650,7 @@ interface LogEntry {
     level: LogLevel;
     message: string;
     timestamp: number;
+    traceId?: string;
 }
 ```
 

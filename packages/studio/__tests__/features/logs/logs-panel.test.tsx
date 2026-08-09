@@ -1,13 +1,15 @@
 import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { LogFilterCriteria } from "../../../src/features/logs/logs-panel";
 import { filterLogs, LogsPanel, summarizeLogs } from "../../../src/features/logs/logs-panel";
 import type { LogEntry, RequestLogEntry } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import { peekPendingTraceFilter } from "../../../src/lib/trace-handoff";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+import wrapInRouter from "../../render-with-router";
 
 const WINDOWED_ENTRY = /entry-\d+/;
 
@@ -68,15 +70,23 @@ const createClient = (entries: LogEntry[] = ENTRIES, requests: RequestLogEntry[]
         },
     });
 
-const renderPanel = (mock: MockClientHooks) => (
-    <LunoraProvider client={mock.asClient}>
-        <LogsPanel />
-    </LunoraProvider>
-);
+// Under a router: a log row's "Trace" link navigates to `/traces`, so the panel
+// now calls `useNavigate` and must mount inside a `RouterProvider`.
+const renderPanel = (mock: MockClientHooks) =>
+    wrapInRouter(
+        <LunoraProvider client={mock.asClient}>
+            <LogsPanel />
+        </LunoraProvider>,
+    );
 
-/** Switch to the in-memory Errors view (the default view is the durable request log). */
-const switchToErrors = (): void => {
-    fireEvent.click(screen.getByTestId("lg-view-errors"));
+/**
+ * Switch to the in-memory Errors view (the default view is the durable request
+ * log). Awaits the toggle: the panel mounts under a `RouterProvider`, which
+ * resolves its route before rendering children, so nothing is in the DOM on the
+ * synchronous tick after `render`.
+ */
+const switchToErrors = async (): Promise<void> => {
+    fireEvent.click(await screen.findByTestId("lg-view-errors"));
 };
 
 describe("logsPanel — requests view (default)", () => {
@@ -196,6 +206,54 @@ describe("logsPanel — requests view (default)", () => {
     });
 });
 
+describe("logsPanel — trace drill-down", () => {
+    afterEach(() => {
+        sessionStorage.clear();
+    });
+
+    it("hands a request row's trace to the Traces panel, scoped to the browsed shard", async () => {
+        expect.assertions(2);
+
+        const traced: RequestLogEntry[] = [{ ...(REQUESTS[0] as RequestLogEntry), traceId: "trace-req" }];
+
+        render(renderPanel(createClient(ENTRIES, traced)));
+
+        fireEvent.click(await screen.findByTestId("lg-trace-link"));
+
+        // The hand-off, not the navigation, is the contract: Traces reads it on
+        // mount and pre-filters. Shard "" is the root DO the panel defaults to.
+        expect(peekPendingTraceFilter()?.traceId).toBe("trace-req");
+        expect(peekPendingTraceFilter()?.shardKey).toBe("");
+    });
+
+    it("shows no Trace link on a request row written before the trace_id column existed", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        // The shared REQUESTS fixtures carry no `traceId` — the legacy-row shape.
+        await screen.findAllByTestId("lg-req-row");
+
+        expect(screen.queryByTestId("lg-trace-link")).toBeNull();
+        expect(screen.getAllByTestId("lg-req-row")).toHaveLength(2);
+    });
+
+    it("hands an errors-view log line's trace over the same way", async () => {
+        expect.assertions(1);
+
+        const traced: LogEntry[] = [{ ...(ENTRIES[0] as LogEntry), traceId: "trace-log" }];
+
+        render(renderPanel(createClient(traced)));
+
+        await screen.findByTestId("lg-table");
+        await switchToErrors();
+
+        fireEvent.click(await screen.findByTestId("lg-trace-link"));
+
+        expect(peekPendingTraceFilter()?.traceId).toBe("trace-log");
+    });
+});
+
 describe("logsPanel — errors view", () => {
     it("renders a row per captured log after switching to Errors", async () => {
         expect.assertions(3);
@@ -203,7 +261,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient()));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
 
         const rows = await screen.findAllByTestId("lg-row");
 
@@ -223,7 +281,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(withFields)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
 
         const fields = await screen.findByTestId("lg-fields");
 
@@ -243,7 +301,7 @@ describe("logsPanel — errors view", () => {
 
         render(renderPanel(createClient([], [])));
 
-        switchToErrors();
+        await switchToErrors();
 
         const empty = await screen.findByTestId("lg-empty");
 
@@ -272,7 +330,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "BOOM" } });
@@ -290,7 +348,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "no-such-message" } });
@@ -306,7 +364,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.click(screen.getByTestId("logs-level-info"));
@@ -323,7 +381,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("lg-search"), { target: { value: "boom" } });
@@ -354,7 +412,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(createClient(big)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
 
         const rows = await screen.findAllByTestId("lg-row");
 
@@ -373,7 +431,7 @@ describe("logsPanel — errors view", () => {
         render(renderPanel(mock));
 
         await screen.findByTestId("lg-empty");
-        switchToErrors();
+        await switchToErrors();
 
         // No Live toggle: switching to the Errors view subscribes to getLogs.
         await waitFor(() => {
@@ -532,7 +590,7 @@ describe("logsPanel — advanced explorer (errors view)", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.click(screen.getByTestId("logs-level-info"));
@@ -549,7 +607,7 @@ describe("logsPanel — advanced explorer (errors view)", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.change(screen.getByTestId("logs-path-filter"), { target: { value: "auth:" } });
@@ -566,7 +624,7 @@ describe("logsPanel — advanced explorer (errors view)", () => {
         render(renderPanel(createClient(MIXED_ENTRIES)));
 
         await screen.findByTestId("lg-table");
-        switchToErrors();
+        await switchToErrors();
         await screen.findAllByTestId("lg-row");
 
         fireEvent.click(screen.getByTestId("logs-summary-toggle"));

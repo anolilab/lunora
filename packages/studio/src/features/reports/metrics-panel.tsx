@@ -1,5 +1,4 @@
 import { useLunora } from "@lunora/react";
-import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -7,6 +6,7 @@ import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useOpenTrace from "../../hooks/use-open-trace";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
@@ -14,7 +14,6 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
-import { writePendingTraceFilter } from "../../lib/trace-handoff";
 import { InstrumentsTable } from "./instruments-table";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
@@ -59,7 +58,6 @@ const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insig
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
-    const navigate = useNavigate();
 
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
@@ -83,14 +81,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         };
     }, []);
 
-    // Exemplar drill-down: stash the trace id — and the shard the series was queried
-    // on, so the Traces panel searches the right ring rather than the root — for the
-    // Traces panel to pick up and pre-filter on mount, then navigate there. A
-    // one-shot handoff keeps the two panels decoupled from the router's search schema.
-    const openTrace = (traceId: string): void => {
-        writePendingTraceFilter({ shardKey: queryShardKey, traceId });
-        fireAndForget(navigate({ to: "/traces" }));
-    };
+    // Exemplar drill-down: open the trace a metric point sampled, on the shard the
+    // series was queried from.
+    const openTrace = useOpenTrace(queryShardKey);
 
     // One-shot read + always-on live subscription for the committed shard. Each
     // server push folds in like a refresh; `liveError` holds a rejection message

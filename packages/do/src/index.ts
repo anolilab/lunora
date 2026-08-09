@@ -28,6 +28,7 @@ export type {
     ShardDOState,
     SubscriptionOutcome,
     TelemetrySink,
+    TraceRefLike,
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";

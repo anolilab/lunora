@@ -12,6 +12,16 @@
  * masking PII in the message can't change which Issue a row groups into — see
  * {@link appendRequestLogEntry} and {@link readErrorIssues}.
  *
+ * Each row also carries the dispatch's `trace_id`. Note the deliberate
+ * retention asymmetry: this table is DURABLE and bounded by row count, while
+ * the `ctx.trace` span ring it correlates to is in-memory and resets on
+ * hibernation. A trace id on a row older than the current DO instance therefore
+ * resolves in an external collector but NOT against the local waterfall, and
+ * the Studio treats a local miss as ordinary rather than as an error. Recording
+ * it is still worth it: the id is what joins this row to the collector's spans
+ * and to the `Logpush`-shipped console event, which is where a deployed app's
+ * traces actually live.
+ *
  * Modelled exactly on `audit-log.ts` (the CDC-log helpers in `ctx-db.ts`
  * `migrateCdcLog`/`appendCdcChange`/`readCdcChanges`/`trimCdcChanges` and the
  * reserved-table pattern in `data-migration.ts` `ensureStateTable`). Unlike the
@@ -45,6 +55,14 @@ const REQUEST_LOG_RETENTION = 1000;
 /** Stable tag on every console-emitted event so a Logpush/SIEM consumer can filter lunora request events out of the raw Workers-trace firehose. */
 const REQUEST_LOG_EVENT_SOURCE = "lunora";
 
+/**
+ * Columns added after the table's first release, as `<name> <type>` — each one
+ * `ALTER`ed in on its own so a shard created before it gains it on the next
+ * {@link ensureRequestLogTable}. A new column is one entry here plus the matching
+ * line in the `CREATE`; nothing else needs a migration.
+ */
+const ADDED_COLUMNS = ["error_fingerprint TEXT", "trace_id TEXT"];
+
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
 
@@ -74,6 +92,9 @@ interface RequestLogEntry {
     tablesRead: string[];
     /** Tables the handler wrote (from the change tracker); empty for a read-only dispatch. */
     tablesWritten: string[];
+
+    /** W3C trace id (32-hex) of the dispatch; `undefined` on a row appended before this column existed. See the module docstring on the retention asymmetry. */
+    traceId?: string;
     /** Wall-clock millis when the dispatch completed. */
     ts: number;
     /** Acting userId forwarded by the runtime, or `undefined` when anonymous. */
@@ -93,6 +114,7 @@ interface AppendRequestLogEntry {
     subscriptionsReRun?: number;
     tablesRead?: string[];
     tablesWritten?: string[];
+    traceId?: string;
     ts: number;
     userId?: string;
 }
@@ -245,12 +267,17 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
  *
  * `error_fingerprint` is the {@link fingerprintError} grouping hash captured
  * from the RAW `error_message` at write time, before {@link appendRequestLogEntry}
- * redacts it — see that function's docstring. It is added via a guarded
- * `ALTER TABLE` rather than baked into the `CREATE`, mirroring
+ * redacts it — see that function's docstring. `trace_id` is the dispatch's W3C
+ * trace id, the correlation key to the span ring and to whatever collector
+ * `otlpSink` ships to.
+ *
+ * Both are also added via a guarded `ALTER TABLE`, mirroring
  * `function-metrics.ts`'s `ensureFunctionMetricsTables`, so a shard whose
- * `__lunora_reqlog__` predates this column gains it on the next call without a
+ * `__lunora_reqlog__` predates a column gains it on the next call without a
  * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
- * error from a re-run (or the freshly-created schema above) is swallowed.
+ * error from a re-run (or from the freshly-created schema above) is swallowed
+ * per column — the loop is what keeps one column's duplicate from skipping the
+ * next column's add.
  */
 const ensureRequestLogTable = (sql: SqlExec): void => {
     runSql(
@@ -266,6 +293,7 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
             outcome TEXT NOT NULL,
             error_message TEXT,
             error_fingerprint TEXT,
+            trace_id TEXT,
             duration_ms REAL NOT NULL,
             tables_read TEXT NOT NULL DEFAULT '[]',
             tables_written TEXT NOT NULL DEFAULT '[]',
@@ -274,10 +302,12 @@ const ensureRequestLogTable = (sql: SqlExec): void => {
         )`,
     );
 
-    try {
-        runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN error_fingerprint TEXT`);
-    } catch {
-        // Column already exists — no-op.
+    for (const column of ADDED_COLUMNS) {
+        try {
+            runSql(sql, `ALTER TABLE "${REQUEST_LOG_TABLE}" ADD COLUMN ${column}`);
+        } catch {
+            // Column already exists — no-op.
+        }
     }
 };
 
@@ -331,8 +361,8 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
     runSql(
         sql,
         `INSERT INTO "${REQUEST_LOG_TABLE}"
-            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (ts, function_path, shard_key, user_id, identity, args, outcome, error_message, error_fingerprint, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         entry.ts,
         entry.functionPath,
         // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for a request with no shard key / anonymous caller / absent field.
@@ -353,6 +383,10 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
         entry.errorMessage === undefined ? null : redactArgs(entry.errorMessage, captureRaw),
         // eslint-disable-next-line unicorn/no-null -- success path, or a legacy row appended before this column existed.
         errorFingerprint ?? null,
+        // Never redacted: a trace id is a random 32-hex identifier, not user
+        // data, and redacting it would destroy the only thing it is for.
+        // eslint-disable-next-line unicorn/no-null -- dispatch with no ambient trace, or a legacy row appended before this column existed.
+        entry.traceId ?? null,
         entry.durationMs,
         encodeTables(entry.tablesRead),
         encodeTables(entry.tablesWritten),
@@ -395,6 +429,11 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
         source: REQUEST_LOG_EVENT_SOURCE,
         tablesRead: entry.tablesRead ?? [],
         tablesWritten: entry.tablesWritten ?? [],
+        // The join key on the far side: a SIEM receiving this event and an OTLP
+        // collector receiving the same dispatch's spans can only be correlated
+        // through the trace id, so emitting it here is most of the point of
+        // recording it at all.
+        traceId: entry.traceId,
         ts: entry.ts,
         type: "request",
         userId: entry.userId,
@@ -588,6 +627,7 @@ interface RequestLogRow {
     subscriptions_rerun: number;
     tables_read: string;
     tables_written: string;
+    trace_id: null | string;
     ts: number;
     user_id: null | string;
 }
@@ -640,7 +680,7 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
     const rows = runSql<RequestLogRow>(
         sql,
-        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
+        `SELECT seq, ts, function_path, shard_key, user_id, identity, args, outcome, error_message, trace_id, duration_ms, tables_read, tables_written, cache_hit, subscriptions_rerun
          FROM "${REQUEST_LOG_TABLE}" WHERE ${conjuncts.join(" AND ")} ORDER BY seq DESC LIMIT ?`,
         ...parameters,
     ).toArray();
@@ -679,6 +719,10 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
         if (row.cache_hit !== null) {
             base.cacheHit = row.cache_hit === 1;
+        }
+
+        if (row.trace_id !== null) {
+            base.traceId = row.trace_id;
         }
 
         return base;

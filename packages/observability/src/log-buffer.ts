@@ -26,6 +26,9 @@ interface LogEntry {
     level: LogLevel;
     message: string;
     timestamp: number;
+
+    /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors). What the Studio joins a log line to its waterfall on. */
+    traceId?: string;
 }
 
 const DEFAULT_CAPACITY = 500;

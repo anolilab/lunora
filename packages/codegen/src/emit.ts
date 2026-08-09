@@ -4297,7 +4297,11 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
         `import { applyCdcChanges, buildReprojectionMigration, ${shapeGuardImport}createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, ${hasSourcedTables ? "isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick, " : ""}${hasShardedVectors ? "ROOT_SHARD_NAME, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
-        ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
+        // `TraceRefLike` rides along with the source imports: the poll override
+        // takes the alarm's trace so its contained failures are correlated, and
+        // `@lunora/do` projects it structurally rather than re-exporting the
+        // observability type.
+        ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike, TraceRefLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
@@ -4598,7 +4602,7 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
-        protected override async pollExternalSources(): Promise<number | undefined> {
+        protected override async pollExternalSources(trace?: TraceRefLike): Promise<number | undefined> {
             const env = (this.env ?? {}) as Record<string, unknown>;
             const sourced = Object.entries((schema as unknown as SchemaLike).tables)
                 .map(([table, definition]) => [table, (definition as { externalSource?: ExternalSourceLike }).externalSource] as const)
@@ -4655,7 +4659,7 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                             // \`config.sourceClient\`, or wired it wrong). Surface it in the
                             // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
                             // off to \`refresh.everyMs\` instead of retrying every alarm tick.
-                            this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
+                            this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`), trace);
                         } else {
                             // A FRESH tracker per TABLE, not one shared across the whole
                             // loop: one table's runaway pull must not spend a budget a
@@ -4703,19 +4707,18 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                             // table stays "due" and \`nextPollAlarmTarget\`'s existing
                             // due-now floor re-arms the shared alarm promptly — not a
                             // fresh \`setAlarm(now)\`.
-                            this.logs.push({
-                                functionPath: \`source:\${table}\`,
-                                level: "warn",
-                                message: \`external-source poll for "\${table}" hit the transaction limit mid-batch; resuming next tick: \${error.message}\`,
-                                timestamp: Date.now(),
-                            });
+                            this.recordExternalSourceWarning(
+                                table,
+                                \`external-source poll for "\${table}" hit the transaction limit mid-batch; resuming next tick: \${error.message}\`,
+                                trace,
+                            );
 
                             nextDueAt = nextDueAt === undefined ? now : Math.min(nextDueAt, now);
 
                             continue;
                         }
 
-                        this.recordExternalSourceError(table, error);
+                        this.recordExternalSourceError(table, error, trace);
                         // Stamp on failure too, so a persistently failing source throttles
                         // to \`refresh.everyMs\` rather than being hammered every tick.
                         polledAt.set(table, Date.now());

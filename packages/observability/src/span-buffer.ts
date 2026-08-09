@@ -9,7 +9,7 @@
  * a real collector that can retain and index them across instances.
  */
 import type { LogFields } from "../../../shared/log-fields";
-import type { SpanEvent } from "../../../shared/span-event";
+import type { SpanEvent, SpanEventPoint, SpanKind } from "../../../shared/span-event";
 
 /* eslint-disable import/exports-last -- a data + types module: the public TraceSpan/TraceSummary shapes are declared next to the ring buffer and fold that produce them; grouping all exports at the end would scatter the contract. */
 
@@ -30,6 +30,16 @@ export interface TraceSpan {
         message: string;
         type: string;
     };
+
+    /**
+     * Timestamped occurrences inside the span — `span.addEvent(...)` and
+     * `span.recordException(...)`. Carried through so a handled retry or a
+     * swallowed exception is visible on the span it happened in, which is the
+     * only place it is interpretable. Absent when the body recorded none.
+     */
+    events?: SpanEventPoint[];
+    /** OTel `SpanKind`; absent means `"internal"`. */
+    kind?: SpanKind;
     name: string;
     /** Start of this span relative to the trace's start, in ms. */
     offsetMs: number;
@@ -271,6 +281,8 @@ export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFA
                     depth: depthOf(span),
                     durationMs: span.durationMs,
                     ...(span.error === undefined ? {} : { error: span.error }),
+                    ...(span.events === undefined ? {} : { events: span.events }),
+                    ...(span.kind === undefined ? {} : { kind: span.kind }),
                     name: span.name,
                     // Clamped at 0: a child whose parent was evicted can predate the
                     // anchor, and a negative offset would render as a bar off-canvas.

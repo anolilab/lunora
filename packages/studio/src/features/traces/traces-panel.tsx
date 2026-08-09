@@ -1,29 +1,25 @@
-import type { ChangeEvent, CSSProperties, ReactElement } from "react";
+import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
-// Bundler-inlined, zero-dep `key=value` field renderer shared with the runtime
-// sinks and the dev-terminal formatter (see CLAUDE.md `shared/` rules).
-import { formatLogFields } from "../../../../../shared/log-fields";
 import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
+import { Checkbox } from "../../components/ui/checkbox";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
-import type { TraceSpan, TracesResult, TraceSummary } from "../../lib/admin";
+import type { LogEntry, LogsResult, TracesResult, TraceSummary } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { PendingTraceFilter } from "../../lib/trace-handoff";
 import { clearPendingTraceFilter, peekPendingTraceFilter } from "../../lib/trace-handoff";
-import { cn } from "../../lib/utils";
-import { filterTraces, formatSpanDuration, spanBar } from "./trace-geometry";
-
-/** Pixels of indent per nesting level of a span row. */
-const INDENT_PER_DEPTH = 14;
+import LogLine from "../logs/log-line";
+import { filterTraces, formatSpanDuration } from "./trace-geometry";
+import TraceWaterfall from "./trace-waterfall";
 
 /**
  * Coerce a (possibly partial or malformed) `getTraces` result into its `traces`
@@ -32,87 +28,43 @@ const INDENT_PER_DEPTH = 14;
  */
 const tracesOf = (result: TracesResult | undefined): TraceSummary[] => (Array.isArray(result?.traces) ? result.traces : []);
 
-interface SpanRowProps {
-    readonly span: TraceSpan;
-    /** The enclosing trace's total duration, the denominator for the bar geometry. */
-    readonly traceDurationMs: number;
+interface TraceLogsProps {
+    /** Lines emitted under this trace, oldest first. */
+    readonly entries: ReadonlyArray<LogEntry>;
 }
 
 /**
- * One waterfall row: the span's name indented by its server-computed `depth`, a
- * bar positioned by `offsetMs` and sized by `durationMs`, its duration, its
- * structured attributes, and — when the body threw — an error chip plus message.
+ * The `ctx.log` lines emitted under one trace, shown beneath its waterfall — the
+ * waterfall says WHICH span was slow or threw, these say what the code thought
+ * it was doing at the time.
+ *
+ * Read from the same live `getLogs` ring the Logs panel uses, so no extra RPC and
+ * no extra retention: a line evicted from that ring disappears here too.
  */
-const SpanRow = ({ span, traceDurationMs }: SpanRowProps): ReactElement => {
+const TraceLogs = ({ entries }: TraceLogsProps): ReactElement => {
     const t = useT();
-    const { leftPercent, widthPercent } = spanBar(span, traceDurationMs);
-
-    // Rendered once; `""` (no attributes) skips the chip entirely rather than
-    // showing a blank span — the same convention as the Logs panel's fields.
-    const attributes = formatLogFields(span.attributes);
-
-    const nameStyle: CSSProperties = { paddingLeft: span.depth * INDENT_PER_DEPTH };
-    const barStyle: CSSProperties = { left: `${String(leftPercent)}%`, width: `${String(widthPercent)}%` };
 
     return (
-        <div
-            className="flex items-center gap-2 border-b border-border px-3 py-1.5 font-mono text-xs last:border-b-0 hover:bg-muted/50"
-            data-depth={span.depth}
-            data-testid="tr-span-row"
-            role="row"
-        >
-            <span className="w-56 shrink-0 truncate" role="gridcell" style={nameStyle} title={span.name}>
-                {span.ok ? null : (
-                    <span aria-label={t("Errored span")} className="mr-1 text-destructive" data-testid="tr-span-error" role="img">
-                        ●
-                    </span>
-                )}
-                {span.name}
-            </span>
-            {/*
-             * The bar cell carries no text, so a screen reader would announce an
-             * empty gridcell. Label it with the waterfall position it encodes —
-             * where in the trace the span starts and how long it ran — which is
-             * otherwise available only visually.
-             */}
-            <span
-                aria-label={t("starts {offset} in, runs {duration}", {
-                    duration: formatSpanDuration(span.durationMs),
-                    offset: formatSpanDuration(span.offsetMs),
-                })}
-                className="relative h-3 flex-1 overflow-hidden rounded-sm bg-muted"
-                role="gridcell"
-            >
-                <span
-                    className={cn("absolute inset-y-0 rounded-sm", span.ok ? "bg-primary/70" : "bg-destructive")}
-                    data-left={leftPercent}
-                    data-testid="tr-span-bar"
-                    data-width={widthPercent}
-                    style={barStyle}
-                />
-            </span>
-            <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground" role="gridcell">
-                {formatSpanDuration(span.durationMs)}
-            </span>
-            {/*
-             * Error and attributes get their own cells rather than sharing one.
-             * Sharing meant a failed span dropped its attributes — hiding
-             * `{ orderId }` on exactly the span you opened the panel to debug.
-             */}
-            <span className="w-64 shrink-0 truncate text-muted-foreground" role="gridcell">
-                {span.error === undefined ? null : (
-                    <span className="text-destructive" data-testid="tr-span-error-message" title={span.error.message}>
-                        {`${span.error.type}: ${span.error.message}`}
-                    </span>
-                )}
-            </span>
-            <span className="w-64 shrink-0 truncate text-muted-foreground" role="gridcell">
-                {attributes === "" ? null : (
-                    <span data-testid="tr-span-attributes" title={attributes}>
-                        {attributes}
-                    </span>
-                )}
-            </span>
+        <div className="border-t border-border px-3 py-2" data-testid="tr-logs">
+            <p className="mb-1 font-mono text-xs text-muted-foreground">{t("Logs ({count})", { count: entries.length })}</p>
+            <div role="grid">
+                {/*
+                 * Keyed by position, not by content: two identical messages logged
+                 * in the same millisecond are ordinary (a retry loop) and would
+                 * collide on any content-derived key. The bucket is rebuilt whole
+                 * from an append-only ring per render, so an index is stable.
+                 */}
+                {entries.map((entry, index) => (
+                    <div
+                        className="flex items-center border-b border-border py-1 font-mono text-xs last:border-b-0"
+                        data-testid="tr-log-row"
+                        key={`${String(index)}:${String(entry.timestamp)}`}
+                        role="row"
+                    >
+                        <LogLine entry={entry} />
+                    </div>
+                ))}
+            </div>
         </div>
     );
 };
@@ -120,6 +72,8 @@ const SpanRow = ({ span, traceDurationMs }: SpanRowProps): ReactElement => {
 interface TraceRowProps {
     /** Whether this trace's waterfall is currently expanded. */
     readonly expanded: boolean;
+    /** `ctx.log` lines emitted under this trace, oldest first. Empty when none were captured. */
+    readonly logs: ReadonlyArray<LogEntry>;
     /** Lifts the per-row click out of the map so the row carries no inline closure. */
     readonly onToggle: (traceId: string) => void;
     readonly trace: TraceSummary;
@@ -127,9 +81,10 @@ interface TraceRowProps {
 
 /**
  * One trace in the list: a clickable summary header (root name, function path,
- * total duration, span count, ok/error badge) that expands into the waterfall.
+ * total duration, span count, ok/error badge) that expands into the waterfall
+ * and the log lines the same dispatch emitted.
  */
-const TraceRow = ({ expanded, onToggle, trace }: TraceRowProps): ReactElement => {
+const TraceRow = ({ expanded, logs, onToggle, trace }: TraceRowProps): ReactElement => {
     const t = useT();
 
     const onClick = (): void => {
@@ -166,16 +121,9 @@ const TraceRow = ({ expanded, onToggle, trace }: TraceRowProps): ReactElement =>
             </button>
 
             {expanded && (
-                <div
-                    aria-label={t("Trace waterfall")}
-                    className="bg-muted/20"
-                    data-testid={`tr-waterfall-${trace.traceId}`}
-                    id={`tr-waterfall-${trace.traceId}`}
-                    role="grid"
-                >
-                    {trace.spans.map((span) => (
-                        <SpanRow key={span.spanId} span={span} traceDurationMs={trace.durationMs} />
-                    ))}
+                <div className="bg-muted/20" data-testid={`tr-waterfall-${trace.traceId}`} id={`tr-waterfall-${trace.traceId}`}>
+                    <TraceWaterfall durationMs={trace.durationMs} spans={trace.spans} />
+                    {logs.length > 0 && <TraceLogs entries={logs} />}
                 </div>
             )}
         </div>
@@ -196,8 +144,10 @@ interface TracesPanelProps {
  * Traces are the drill-down from a log line: a dispatch's synthetic root span
  * plus every `ctx.trace(name, fn)` span recorded beneath it. The server folds
  * them (`@lunora/do`'s pure `foldTraces`) and stamps each span with a `depth`
- * and an `offsetMs`, so this panel does no tree math — it indents by `depth` and
- * sizes each bar from `offsetMs`/`durationMs` via the pure {@link spanBar} helper.
+ * and an `offsetMs`, so nothing here does tree math — see `trace-waterfall.tsx`.
+ *
+ * Expanding a trace also brings up the `ctx.log` lines the same dispatch emitted,
+ * joined by `traceId` from the live log ring.
  *
  * The backing span ring is bounded and in-memory, so it resets on hibernation or
  * restart and a trace can legitimately arrive partial. This is a local-development
@@ -219,6 +169,7 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
         pending?.shardKey !== undefined && pending.shardKey !== "" ? pending.shardKey : (initialShardKey ?? ""),
     );
     const [search, setSearch] = useState<string>(pending?.traceId ?? "");
+    const [onlyErrors, setOnlyErrors] = useState(false);
     const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 
     // Consume the hand-off on mount (a committed boundary): clear the store so a
@@ -234,6 +185,17 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
         {},
         { live: true, shardKey: queryShardKey },
     );
+
+    // The same live log ring the Logs panel reads, joined to the waterfalls by
+    // `traceId` — a client-side join of two reads already pushed over this socket,
+    // rather than a bespoke server-side join that would only ever serve this panel.
+    //
+    // Gated on an open trace: the log section renders only inside an expanded row,
+    // so an unconditional read would open a second live subscription and stream the
+    // whole ring on every visit to a page that starts fully collapsed. Its failure
+    // is deliberately not surfaced — losing the log ring must degrade the trace
+    // detail, never blank the waterfalls the panel exists to show.
+    const { data: logsData } = useAdminQuery<LogsResult>(ADMIN_FUNCTIONS.getLogs, {}, { enabled: expanded.size > 0, live: true, shardKey: queryShardKey });
 
     // Record the browsed shard into recent-shards history once the read resolves,
     // so a shard visited here shows up in every other panel's autocomplete —
@@ -252,7 +214,12 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
     const truncated = total > traces.length;
     // The span ring is not a queryable store, so the search runs client-side over
     // the loaded traces (the same model as the Logs panel's Errors view).
-    const filtered = filterTraces(traces, search);
+    const filtered = filterTraces(traces, search, onlyErrors);
+
+    // `getLogs` is newest-first; a trace's own lines read as a narrative, so
+    // reverse into chronological order before bucketing. Untraced lines land in an
+    // `undefined` bucket that no lookup can reach, which is the correct home.
+    const logsByTrace = Map.groupBy((logsData?.entries ?? []).toReversed(), (entry) => entry.traceId);
 
     const onSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -286,9 +253,13 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
                     className="h-8 w-56"
                     data-testid="tr-search"
                     onChange={onSearchChange}
-                    placeholder={t("search trace or function")}
+                    placeholder={t("search trace, span, or function")}
                     value={search}
                 />
+                <label className="flex items-center gap-2 text-xs text-muted-foreground" htmlFor="tr-only-errors">
+                    <Checkbox checked={onlyErrors} data-testid="tr-only-errors" id="tr-only-errors" onCheckedChange={setOnlyErrors} />
+                    {t("Errors only")}
+                </label>
                 <LiveError message={liveError} prefix="tr" />
             </div>
 
@@ -326,7 +297,13 @@ const TracesPanel = ({ initialShardKey }: TracesPanelProps): ReactElement => {
             {error === null && filtered.length > 0 && (
                 <div aria-label={t("Recent traces")} className="overflow-hidden rounded-xl border border-border shadow-xs" data-testid="tr-list">
                     {filtered.map((trace) => (
-                        <TraceRow expanded={expanded.has(trace.traceId)} key={trace.traceId} onToggle={onToggle} trace={trace} />
+                        <TraceRow
+                            expanded={expanded.has(trace.traceId)}
+                            key={trace.traceId}
+                            logs={logsByTrace.get(trace.traceId) ?? []}
+                            onToggle={onToggle}
+                            trace={trace}
+                        />
                     ))}
                 </div>
             )}

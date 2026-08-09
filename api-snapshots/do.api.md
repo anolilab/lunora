@@ -367,13 +367,14 @@ abstract class ShardDO {
     protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined;
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]>;
-    protected pollExternalSources(): Promise<number | undefined>;
+    protected pollExternalSources(_trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleSourcePoll(): Promise<void>;
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
-    protected pollTtlSweeps(): Promise<number | undefined>;
+    protected pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
     protected currentShardKey(): string;
-    protected recordExternalSourceError(table: string, error: unknown): void;
+    protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
+    protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
     protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
@@ -506,6 +507,14 @@ interface TelemetrySink {
     traceFetch?: boolean | {
         propagate?: ((url: URL) => boolean) | boolean;
     };
+}
+```
+
+### `TraceRefLike` (interface)
+
+```ts
+interface TraceRefLike {
+    traceId: string;
 }
 ```
 

@@ -2237,6 +2237,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `TraceRefLike` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `TransactionHeadroomTracker` (class)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.

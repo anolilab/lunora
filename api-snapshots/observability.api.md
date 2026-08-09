@@ -56,6 +56,7 @@ interface AppendRequestLogEntry {
     subscriptionsReRun?: number;
     tablesRead?: string[];
     tablesWritten?: string[];
+    traceId?: string;
     ts: number;
     userId?: string;
 }
@@ -425,6 +426,7 @@ interface LogEntry {
     level: LogLevel;
     message: string;
     timestamp: number;
+    traceId?: string;
 }
 ```
 
@@ -680,6 +682,7 @@ interface RequestLogEntry {
     subscriptionsReRun: number;
     tablesRead: string[];
     tablesWritten: string[];
+    traceId?: string;
     ts: number;
     userId?: string;
 }
@@ -870,6 +873,8 @@ interface TraceSpan {
         message: string;
         type: string;
     };
+    events?: SpanEventPoint[];
+    kind?: OtlpSpanKind;
     name: string;
     offsetMs: number;
     ok: boolean;
