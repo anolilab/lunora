@@ -3117,13 +3117,13 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.19
+        specifier: 1.0.0-alpha.20
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.11
+        specifier: 1.0.0-alpha.12
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3343,7 +3343,7 @@ importers:
         version: link:../flags
       '@lunora/observability':
         specifier: 1.0.0-alpha.19
-        version: link:../observability
+        version: 1.0.0-alpha.19
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
@@ -3745,7 +3745,7 @@ importers:
         version: link:../do
       '@lunora/platform-cloudflare':
         specifier: 1.0.0-alpha.11
-        version: link:../platform-cloudflare
+        version: 1.0.0-alpha.11
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -4667,8 +4667,8 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.18
-        version: 1.0.0-alpha.18
+        specifier: 1.0.0-alpha.20
+        version: link:../observability
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -7891,8 +7891,12 @@ packages:
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
 
-  '@lunora/observability@1.0.0-alpha.18':
-    resolution: {integrity: sha512-YrsoZlyW4mi252wxWnzOViaRoxAICcTEO10vnLyJVoxY2J9KIYJEpHnnBD2e2WaU8fipQV5LCch+CQmda2r0oA==}
+  '@lunora/observability@1.0.0-alpha.19':
+    resolution: {integrity: sha512-8I+tQAv2hbw+lkWYp//3Mshi5vTQsx2NuE7hUEq1NwbUH8iHieDVws4OLn8nX8J9luiPRRdQHaVdIl9fLeOgZg==}
+    engines: {node: ^22.15.0 || >=24.11.0}
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.11':
+    resolution: {integrity: sha512-qt21d9VhSR6vo77UIIIVGqlwe/OCZKP/b20wx33LQm2qVOs0Zi9sRXiwmBCSD1JIlUCPXZRdHojD0EHYnAiNvw==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
@@ -27839,12 +27843,17 @@ snapshots:
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
 
-  '@lunora/observability@1.0.0-alpha.18':
+  '@lunora/observability@1.0.0-alpha.19':
     dependencies:
       '@lunora/errors': link:packages/errors
       '@lunora/fingerprint': link:packages/fingerprint
       '@lunora/shard-engine': link:packages/shard-engine
       '@visulima/redact': 3.0.0
+
+  '@lunora/platform-cloudflare@1.0.0-alpha.11':
+    dependencies:
+      '@lunora/errors': link:packages/errors
+      '@lunora/platform': link:packages/platform
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
