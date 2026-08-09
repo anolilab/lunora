@@ -88,13 +88,4 @@ const isBackupManifestEntry = (value: unknown): value is BackupManifestEntry =>
     typeof (value as BackupManifestEntry).file === "string";
 
 export type { BackupManifestEntry };
-export {
-    BACKUP_KEY_PREFIX,
-    BACKUP_MANIFEST_SUFFIX,
-    backupManifestKey,
-    backupObjectKey,
-    backupObjectKeyOfManifest,
-    isBackupManifestEntry,
-    isBackupManifestKey,
-    normalizeBackupPrefix,
-};
+export { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, backupObjectKeyOfManifest, isBackupManifestEntry, isBackupManifestKey, normalizeBackupPrefix };

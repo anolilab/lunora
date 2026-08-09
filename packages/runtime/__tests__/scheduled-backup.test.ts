@@ -38,25 +38,18 @@ const coordinatorWithExport = (rows: ExportRows): QueryCoordinator => {
     };
 };
 
-/** Decode any body shape `BackupStore.put` accepts, so the double never silently records an empty object. */
-const bodyText = async (body: unknown): Promise<string> => {
+/**
+ * Decode the body shapes the backup actually writes — a `Uint8Array` for the
+ * snapshot, a string for the sidecar. Anything else throws rather than being
+ * tolerated, so the double cannot silently record an empty object if the write
+ * path changes shape.
+ */
+const bodyText = (body: unknown): string => {
     if (typeof body === "string") {
         return body;
     }
 
-    if (body instanceof Blob) {
-        return body.text();
-    }
-
-    if (body instanceof ReadableStream) {
-        return new Response(body).text();
-    }
-
     if (ArrayBuffer.isView(body)) {
-        return new TextDecoder().decode(body);
-    }
-
-    if (body instanceof ArrayBuffer) {
         return new TextDecoder().decode(body);
     }
 
@@ -80,7 +73,7 @@ const memoryBackupStore = (): BackupStore & {
             putOptions?: { customMetadata?: Record<string, string>; sha256?: ArrayBuffer | string },
         ) => Promise<{ etag: string; key: string; size: number }>
     >(async (key, body, putOptions) => {
-        const text = await bodyText(body);
+        const text = bodyText(body);
 
         objects.set(key, text);
 
@@ -466,7 +459,7 @@ describe("createWorker — scheduled backup", () => {
         const store = memoryBackupStore();
         // Two pre-existing snapshots already on the store (older + newer). Their
         // sidecars carry `scheduledTime`, because retention only ever removes
-        // snapshots this cron took — see the operator-snapshot test below.
+        // snapshots this cron took — see the operator-snapshot test above.
         const seed = (id: string, body: string): void => {
             const key = `backups/lunora-backup-${id.replaceAll(/[.:]/gu, "-")}.ndjson`;
 

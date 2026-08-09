@@ -259,4 +259,4 @@ const runScheduledBackup = async (
 };
 
 export type { BackupManifest };
-export { MAX_SCHEDULED_BACKUP_BYTES, pruneBackups, runScheduledBackup };
+export { runScheduledBackup };

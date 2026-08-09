@@ -305,7 +305,7 @@ describe("lunora backup", () => {
     it.each([
         ["a relative escape", "../../outside.ndjson"],
         ["an absolute path", "/etc/hosts"],
-        ["an escape wearing a plausible name", "../lunora-backups-evil/snapshot.ndjson"],
+        ["a sibling directory sharing the prefix", "../.lunora-backups-evil/snapshot.ndjson"],
     ])("restore refuses a manifest entry that points outside the backup directory (%s)", async (_label, file) => {
         expect.assertions(3);
 

@@ -2219,12 +2219,6 @@ const backupManifestKey: (objectKey: string) => string;
 const backupObjectKey: (prefix: string, id: string) => string;
 ```
 
-### `backupObjectKeyOfManifest` (const)
-
-```ts
-const backupObjectKeyOfManifest: (manifestKey: string) => string;
-```
-
 ### `buildHealthRoutes` (const)
 
 ```ts

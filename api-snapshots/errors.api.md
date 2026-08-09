@@ -302,7 +302,7 @@ const ERROR_CATALOG: {
     };
     readonly STORAGE_DOWNLOAD_NOT_CONFIGURED: {
         readonly hint: readonly [
-            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => storage.download(key)` — the storage method's own second parameter is a byte range, not a bucket, so it cannot be passed directly.",
+            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.",
             "",
             "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`."
         ];
