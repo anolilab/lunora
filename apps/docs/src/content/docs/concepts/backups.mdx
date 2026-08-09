@@ -149,11 +149,19 @@ way the answer is `--tables` / `backupTables`, or `--dir` plus
 
 ### Scheduled backups into R2
 
-<Callout>
-    Retention deletes, and an R2 delete has no undo. `lunora backup retention` reports what the next scheduled run would remove — from the same selection the
-    prune uses, so the preview cannot drift from the deletion — and removes nothing itself. Run it after changing `backupRetain`, and on any bucket that
-    predates the feature: snapshots written before retention learned to mark its own are never eligible, so it may own fewer of them than the bucket holds.
+<Callout type="warn">
+    **Scheduled backups never delete.** `backupRetain` sets the window; `lunora backup prune` is the only command that removes a backup, and it confirms before
+    it does. `lunora backup retention` shows what a prune would remove, from the same selection, so the preview cannot drift from the deletion. A bucket
+    therefore grows until you prune it — every scheduled run reports how many snapshots sit past the window, so that is not a surprise either.
 </Callout>
+
+```bash
+lunora backup retention   # what is past the window
+lunora backup prune       # remove it (asks first; --yes for scripts)
+```
+
+Run the preview after changing `backupRetain`, and on any bucket that predates this feature: snapshots written before retention learned to mark its own are
+never eligible, so it may own fewer of them than the bucket holds.
 
 For a schedule that runs on the platform itself rather than in CI, the worker
 can take its own snapshots on a Cron Trigger and write them to an R2 bucket in

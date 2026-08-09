@@ -184,21 +184,26 @@ and read off the listing, so two deployments sharing a prefix keep the retention
 each configured and pre-marker sidecars are never pruned. That is safe. It is
 still not what §4.4 promised.
 
-**The preview half has since shipped** as `lunora backup retention`
-(`GET /_lunora/admin/backup/retention`): a read-only answer to "what would
-retention delete right now", computed by the same selection the prune runs, so
-the two cannot disagree. That closes the half of §4.4 about being able to _see_
-the deletion coming — and it was the half worth doing first, because both
+**Both halves have since shipped, in that order.**
+
+`lunora backup retention` (`GET /_lunora/admin/backup/retention`) came first: a
+read-only answer to "what would retention delete right now", computed by the
+same selection the prune runs. It was the half worth doing first, because both
 data-loss defects in this branch were in retention and both were silent, and
-because eligibility depends on a metadata marker that legacy sidecars lack, so
+because eligibility depends on a metadata marker that legacy sidecars lack — so
 the behaviour on a pre-existing bucket is not deducible from the config.
 
-**Still open**, as a follow-up plan or a later WS4 phase: retention as a step an
-operator _invokes_. `backupRetain` still deletes inside every cron run, which is
-what §4.4 rules out; the preview makes it visible in advance and #387's log makes
-it visible afterwards, but neither makes it explicit. The remaining work is a
-verb that performs the deletion on demand, and a way to run the cron backup
-without the prune attached to it.
+`lunora backup prune` (`POST /_lunora/admin/backup/prune`) finished it, and the
+scheduled backup stopped deleting. `backupRetain` is now the window and nothing
+more: a cron run writes its snapshot, reports how many sit past the window and
+names the command that removes them, and leaves them alone. One selection, three
+consumers — preview, prune, and the cron's report — so a prediction, a
+confirmation and an aftermath record cannot disagree.
+
+The cost is real and was accepted deliberately: a bucket grows until somebody
+prunes it. Swapping "unexpected deletion" for "unbounded storage nobody
+mentioned" would not have been an improvement, which is why the report is not
+optional. §4.4 now reads as originally written.
 
 ### Three rounds of review, and the pattern worth carrying forward
 
