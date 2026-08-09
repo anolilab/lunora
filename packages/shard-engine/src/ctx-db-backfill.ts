@@ -29,6 +29,7 @@ import { insertRankRow, rankColumnsSql } from "./ctx-db-companions";
 import { migrateSearchState, readSearchBackfillState, writeSearchBackfillState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, DOC_COLUMN, isFtsAvailable, rowToDocument, tryRowToDocument } from "./do-sql";
+import { isLiveForCompanion } from "./query-args";
 import { matchesRankStaticWhere, rankTableName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
 
@@ -43,8 +44,12 @@ const scanRows = (sql: SqlExec, tableName: string): Record<string, unknown>[] =>
 /**
  * Backfill one aggregate counter table by scanning the source rows once and
  * tallying per canonical `by`-key. No-op when the counter already has rows.
+ *
+ * `softField` is the table's soft-delete marker column when it has one:
+ * companions tally LIVE rows only, matching the incremental maintenance in
+ * `ctx-db-companions`, so the two seeds agree.
  */
-const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike): void => {
+const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: AggregateIndexDefinitionLike, softField: string | undefined): void => {
     const aggTable = aggregateTableName(tableName, index.name);
 
     if (hasRows(sql, aggTable)) {
@@ -58,7 +63,7 @@ const backfillAggregateIndex = (sql: SqlExec, tableName: string, index: Aggregat
     for (const row of rows) {
         const record = rowToDocument(row);
 
-        if (!record || (index.where && !matchesStaticWhere(record, index.where))) {
+        if (!record || !isLiveForCompanion(record, softField) || (index.where && !matchesStaticWhere(record, index.where))) {
             continue;
         }
 
@@ -91,7 +96,7 @@ const backfillAggregateIndexes = (sql: SqlExec, schema: SchemaLike): void => {
         }
 
         for (const index of definition.aggregateIndexes) {
-            backfillAggregateIndex(sql, tableName, index);
+            backfillAggregateIndex(sql, tableName, index, definition.softDeleteMode?.field);
         }
     }
 };

@@ -224,6 +224,25 @@ const applySelect = (
 const softDeleteScope = (softDeleteMode: { field: string } | undefined, includeDeleted: boolean | undefined): undefined | WhereInput =>
     softDeleteMode && includeDeleted !== true ? { [softDeleteMode.field]: { isNull: true } } : undefined;
 
+/**
+ * The same rule as {@link softDeleteScope}, applied to a decoded row instead of
+ * compiled into a `where`: is this row LIVE?
+ *
+ * The aggregate companions tally live rows only, and a companion row carries no
+ * marker column of its own — so the tally is only as correct as this predicate's
+ * agreement with the scope it stands in for. They live adjacent for that reason;
+ * a difference between them is a maintained counter that silently disagrees with
+ * the scan it replaces.
+ *
+ * `field` `undefined` means the table has no soft-delete mode, and every row is
+ * live. Not to be confused with the exported `isSoftDeleted` in
+ * `external-source-pull.ts`, which reads an UPSTREAM tombstone column with
+ * deliberately looser semantics (`false`/`0` are live, `""` is deleted).
+ * @returns `true` when the row contributes to a companion tally
+ */
+const isLiveForCompanion = (document: Record<string, unknown>, field: string | undefined): boolean =>
+    field === undefined || document[field] === null || document[field] === undefined;
+
 export {
     applySelect,
     buildSeekBeforeWhere,
@@ -232,6 +251,7 @@ export {
     encodeCursor,
     fromBase64,
     invalidCursor,
+    isLiveForCompanion,
     normalizeOrderKeys,
     softDeleteScope,
     toBase64,
