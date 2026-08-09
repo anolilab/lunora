@@ -15,28 +15,31 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { BackupManifestEntry } from "@lunora/runtime";
 import { backupObjectKey, isBackupManifestEntry } from "@lunora/runtime";
 
-/** A snapshot made readable as a local file, plus how to let go of it. */
-interface MaterializedSnapshot {
-    /** Local path an import can read. */
-    path: string;
-    /** Drop any temporary copy made to produce {@link MaterializedSnapshot.path}. */
-    release: () => Promise<void>;
-}
+import isInsideDirectory from "../../util/path-containment";
 
 /**
- * Somewhere to write a snapshot that does not exist yet — deliberately not a
- * {@link MaterializedSnapshot}, whose `path` names a file you can read.
+ * A local path this destination has handed out, and how to let go of it.
+ *
+ * Used in both directions — a snapshot staged for writing, and one materialised
+ * for reading — because the caller's obligation is identical either way: use
+ * `path`, then call `release` however the run ends. They are one type rather
+ * than two because TypeScript is structural, so a "staged vs materialised"
+ * distinction would be documentation the compiler does not enforce.
  */
-interface StagedSnapshot {
-    /** Local path the export should stream its NDJSON to. */
+interface SnapshotFile {
+    /** Local path to write to, or to read from. */
     path: string;
-    /** Drop whatever staging allocated. A no-op where the staged file is the backup. */
+
+    /**
+     * Release whatever the destination allocated to produce {@link SnapshotFile.path}.
+     * Always call it; never assume it does nothing.
+     */
     release: () => Promise<void>;
 }
 
@@ -46,12 +49,27 @@ interface SnapshotDigest {
     sha256: string;
 }
 
+/**
+ * Where a destination keeps snapshots, as a contract rather than a description
+ * of any one implementation.
+ *
+ * What a caller may rely on. `stage` hands back a path to write to and a
+ * `release` that must be called however the run ends, including on failure;
+ * staging is never the final location, so an abandoned run leaves nothing an
+ * operator has to find. `commit` is what makes a snapshot exist at `file` —
+ * before it returns successfully, nothing may assume the snapshot is there.
+ * `record` is called only after `commit` succeeded, so the index never names a
+ * snapshot that was not written.
+ *
+ * Implementations differ in how much work each step is, not in whether it
+ * happens — an implementation whose `commit` or `release` does nothing is a bug
+ * (it was one: staging straight to the final path left partial snapshots in the
+ * operator's directory).
+ */
 interface BackupDestination {
     /**
      * Move the staged NDJSON to where this destination keeps snapshots, and
-     * throw if it cannot — a destination that returns normally is promising the
-     * bytes are at `file`. Nothing to do where staging already wrote them
-     * there.
+     * throw if it cannot. Returning normally promises the bytes are at `file`.
      */
     commit: (file: string, stagedPath: string, digest: SnapshotDigest) => Promise<void>;
     /** Human-readable destination, for logs and "nothing found" messages. */
@@ -67,17 +85,16 @@ interface BackupDestination {
      * wherever this destination put it; with no entry, `target` is a path or key
      * the operator named directly. `undefined` when there is nothing there.
      */
-    materialize: (entry: BackupManifestEntry | undefined, target: string) => Promise<MaterializedSnapshot | undefined>;
+    materialize: (entry: BackupManifestEntry | undefined, target: string) => Promise<SnapshotFile | undefined>;
     /** Add one snapshot to the index. Called only after {@link BackupDestination.commit} succeeded. */
     record: (entry: BackupManifestEntry) => Promise<void>;
 
     /**
-     * Somewhere local for the export to stream its NDJSON to. `release` drops
-     * whatever staging allocated — a temp directory for a remote destination,
-     * nothing for a local one — and `create` calls it however the run ends, so
-     * a failed export cannot leave a copy of production behind.
+     * Somewhere local for the export to stream its NDJSON to, never the final
+     * location. `release` drops it, and `create` calls that however the run
+     * ends, so a failed export cannot leave a copy of production behind.
      */
-    stage: (id: string) => Promise<StagedSnapshot>;
+    stage: (id: string) => Promise<SnapshotFile>;
 }
 
 const MANIFEST_FILE = "manifest.json";
@@ -159,16 +176,6 @@ const writeManifest = async (directory: string, entries: ReadonlyArray<BackupMan
 };
 
 /**
- * Is `path` the directory `root` itself, or something under it?
- *
- * Compared with a separator rather than by raw prefix — `/backups-evil/x`
- * starts with `/backups` and is not inside it — and without appending one when
- * `root` already ends in a separator, which is what a directory at the
- * filesystem root looks like (`resolve("/")` is `/`, and `//` matches nothing).
- */
-const isInside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : `${root}${sep}`);
-
-/**
  * Resolve a manifest entry's `file` inside the backup directory, refusing
  * anything that escapes it. `undefined` when there is simply no such file.
  *
@@ -178,14 +185,15 @@ const isInside = (root: string, path: string): boolean => path === root || path.
  * is a string — a shape check is not a safety check, and it is shared with
  * retention, which compares object keys where path semantics do not apply.
  *
- * Two checks, because they catch different things. `resolve` is pure text
- * manipulation and makes no filesystem query at all, so it closes `../` and
- * absolute paths — including for a file that does not exist, which is still an
- * attack signal worth naming — and is blind to a symlink sitting inside the
- * directory that points out of it. `realpath` is what actually asks the
- * filesystem, on BOTH sides: the backup directory can itself be reached through
- * a symlink (every macOS temp directory is), so canonicalising only the
- * candidate would reject legitimate paths.
+ * Two checks, because they catch different things. `resolve` normalises text
+ * against the working directory and never inspects the filesystem, so it closes
+ * `../` and absolute paths — including for a file that does not exist, which is
+ * still an attack signal worth naming — and is blind to a symlink sitting inside
+ * the directory that points out of it. `realpath` is what asks the filesystem,
+ * on BOTH sides: a backup directory can itself sit behind a symlink (`/home` →
+ * `/mnt/home` on plenty of installs; every macOS temp directory, which is how
+ * the test suite catches it), so canonicalising only the candidate rejects
+ * legitimate paths.
  *
  * Order matters: `realpath` throws on a missing path, and a missing snapshot is
  * ordinary — "not found" and "escaped" must not collapse into one answer.
@@ -197,7 +205,7 @@ const resolveInsideDirectory = async (directory: string, entry: BackupManifestEn
         throw new LunoraError("INTERNAL", `backup: entry ${entry.id} points outside ${lexicalRoot} (${entry.file}) — refusing to read it`);
     };
 
-    if (!isInside(lexicalRoot, lexicalPath)) {
+    if (!isInsideDirectory(lexicalRoot, lexicalPath)) {
         refuse();
     }
 
@@ -205,7 +213,7 @@ const resolveInsideDirectory = async (directory: string, entry: BackupManifestEn
         return undefined;
     }
 
-    if (!isInside(await realpath(lexicalRoot), await realpath(lexicalPath))) {
+    if (!isInsideDirectory(await realpath(lexicalRoot), await realpath(lexicalPath))) {
         refuse();
     }
 
@@ -231,16 +239,17 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
         materialize: async (entry, target) => {
             // With no entry, `target` is a path the operator typed, and naming
             // any file they can read is the point of that form — so it is
-            // checked for existence and nothing else.
-            const path = entry === undefined ? target : await resolveInsideDirectory(directory, entry);
+            // checked for existence and nothing else. The entry branch has both
+            // checks inside `resolveInsideDirectory`.
+            const found = (path: string | undefined): SnapshotFile | undefined => (path === undefined ? undefined : { path, release: () => Promise.resolve() });
 
-            if (path === undefined || !existsSync(path)) {
-                return undefined;
+            if (entry === undefined) {
+                return found(existsSync(target) ? target : undefined);
             }
 
             // The snapshot is already a local file — nothing to fetch and
             // nothing to clean up afterwards.
-            return { path, release: () => Promise.resolve() };
+            return found(await resolveInsideDirectory(directory, entry));
         },
         record: async (entry) => {
             const manifest = await readManifest(directory);
@@ -263,5 +272,5 @@ const createDirectoryDestination = (directory: string): BackupDestination => {
     };
 };
 
-export type { BackupDestination };
+export type { BackupDestination, SnapshotFile };
 export { createDirectoryDestination, digestFile };

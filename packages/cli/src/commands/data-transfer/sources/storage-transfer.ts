@@ -19,6 +19,7 @@ import { relative, resolve, sep } from "node:path";
 import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../../util/logger";
+import isInsideDirectory from "../../../util/path-containment";
 import type { StreamingFetchLike } from "../shared";
 import type { BlobUploadContext, StorageMetadataRow } from "../storage-blobs";
 import { listStorageObjects, uploadStorageBlob } from "../storage-blobs";
@@ -188,7 +189,7 @@ const listLocalObjects = async (directory: string): Promise<SourceObject[]> => {
         for (const entry of entries) {
             const full = resolve(current, entry.name);
 
-            if (full !== root && !full.startsWith(root + sep)) {
+            if (!isInsideDirectory(root, full)) {
                 throw new LunoraError("INTERNAL", `${entry.name} resolves outside ${directory} — refusing to upload it`);
             }
 

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join } from "node:path";
 
 import { DEV_VARS_FILE, discoverSchemaInfo, inferLunoraBindings, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
@@ -9,6 +9,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import type { DoctorOptions } from "./index";
 
@@ -506,7 +507,7 @@ const checkCliShadow = (cwd: string, executablePath: string | undefined, finding
         return;
     }
 
-    if (roots.some((root) => running === root || running.startsWith(`${root}${sep}`))) {
+    if (roots.some((root) => isInsideDirectory(root, running))) {
         return;
     }
 
