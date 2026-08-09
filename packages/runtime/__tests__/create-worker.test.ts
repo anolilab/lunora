@@ -511,11 +511,215 @@ describe("createWorker", () => {
             fakeContext,
         );
 
-        expect(namespace.getByName).toHaveBeenCalledWith("a");
+        // Second argument is the placement bag, absent here since no
+        // `shardRegion` policy is configured.
+        expect(namespace.getByName).toHaveBeenCalledWith("a", undefined);
         expect(namespace.idFromName).not.toHaveBeenCalled();
         // Confirms the stub returned by getByName received the forwarded RPC,
         // i.e. dispatch went through getByName rather than the idFromName + get fallback.
         expect(stub.fetch).toHaveBeenCalledWith(expect.any(Request));
+    });
+
+    describe("replica reads", () => {
+        /** A namespace that records every resolved name + placement and answers with a per-name scripted stub. */
+        const createReplicaNamespace = (
+            respond: (name: string, request: Request) => Response,
+        ): { calls: { name: string; options: unknown }[]; namespace: ShardNamespaceLike } => {
+            const calls: { name: string; options: unknown }[] = [];
+
+            return {
+                calls,
+                namespace: {
+                    get: () => {
+                        return { fetch: async () => new Response("unused") };
+                    },
+                    getByName: (name: string, options?: unknown) => {
+                        calls.push({ name, options });
+
+                        return {
+                            fetch: async (request: Request) => respond(name, request),
+                        };
+                    },
+                    idFromName: (name: string) => name,
+                },
+            };
+        };
+
+        /** An RPC request carrying edge geography, so the runtime can pick a region for it. */
+        const geoRpc = (functionPath: string, headers: Record<string, string> = {}): Request =>
+            Object.assign(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ functionPath, shardKey: "tenant-7" }),
+                    headers,
+                    method: "POST",
+                }),
+                { cf: { continent: "EU", longitude: "2.35" } },
+            );
+
+        const functions = { "posts:list": { kind: "query" as const }, "posts:add": { kind: "mutation" as const } };
+
+        it("routes a query to a replica in the caller's region, and places it there", async () => {
+            expect.assertions(5);
+
+            let marker: null | string = null;
+            let binding: null | string = null;
+            const { calls, namespace } = createReplicaNamespace((_name, request) => {
+                marker = request.headers.get("x-lunora-replica-read");
+                binding = request.headers.get("x-lunora-shard-binding");
+
+                return Response.json({ result: [] });
+            });
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            const response = await worker.fetch(geoRpc("posts:list"), { SHARD: namespace }, fakeContext);
+
+            expect(response.status).toBe(200);
+            expect(calls[0]?.name).toBe("tenant-7::replica::weur");
+            // The hint is what puts the replica near the reader; without it the
+            // copy would be created wherever this request happened to run.
+            expect(calls[0]?.options).toStrictEqual({ locationHint: "weur" });
+            // The marker is the single thing the DO gate keys on: drop it and
+            // every replica read 421s back to the owner — correct results, and a
+            // feature that is silently dead with every test still green.
+            expect(marker).toBe("1");
+            // Without the binding the replica cannot address the owner it follows.
+            expect(binding).toBe("SHARD");
+        });
+
+        it("sends writes to the owner even when replica reads are on", async () => {
+            expect.assertions(1);
+
+            const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: null }));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            await worker.fetch(geoRpc("posts:add"), {}, fakeContext);
+
+            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7"]);
+        });
+
+        it("retries against the owner once when the replica cannot serve the read", async () => {
+            expect.assertions(2);
+
+            const { calls, namespace } = createReplicaNamespace((name) =>
+                name.includes("::replica::")
+                    ? Response.json(
+                          { error: { code: "REPLICA_NOT_READY", message: "stale" } },
+                          { headers: { "x-lunora-replica-fallback": "stale" }, status: 421 },
+                      )
+                    : Response.json({ result: ["from-owner"] }),
+            );
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            const response = await worker.fetch(geoRpc("posts:list"), {}, fakeContext);
+
+            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur", "tenant-7"]);
+            await expect(response.json()).resolves.toStrictEqual({ result: ["from-owner"] });
+        });
+
+        it("forwards the caller's read-your-writes bookmark to the replica", async () => {
+            expect.assertions(2);
+
+            let seen: string | null = null;
+            const { namespace } = createReplicaNamespace((_name, request) => {
+                seen = request.headers.get("x-lunora-min-seq");
+
+                return Response.json({ result: [] });
+            });
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            await worker.fetch(geoRpc("posts:list", { "x-lunora-min-seq": "42" }), {}, fakeContext);
+
+            expect(seen).toBe("42");
+
+            // A non-numeric bookmark is dropped rather than forwarded: the header
+            // reaches the replica's integer parse, and garbage there would read as
+            // "no requirement" — the one reading that silently weakens the
+            // guarantee the caller asked for.
+            await worker.fetch(geoRpc("posts:list", { "x-lunora-min-seq": "not-a-number" }), {}, fakeContext);
+
+            expect(seen).toBeNull();
+        });
+
+        it("keeps reads on the owner when the request has no geography", async () => {
+            expect.assertions(1);
+
+            const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ functionPath: "posts:list", shardKey: "tenant-7" }), method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7"]);
+        });
+
+        it("never re-targets a shard key that already carries a reserved role infix", async () => {
+            expect.assertions(1);
+
+            const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, replicaReads: true, shardDO: namespace });
+
+            await worker.fetch(
+                Object.assign(
+                    new Request("https://app.example/_lunora/rpc", {
+                        body: JSON.stringify({ functionPath: "posts:list", shardKey: "tenant-7::replica::weur" }),
+                        method: "POST",
+                    }),
+                    { cf: { continent: "EU", longitude: "2.35" } },
+                ),
+                {},
+                fakeContext,
+            );
+
+            // A replica of a replica follows a DO nobody feeds.
+            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7::replica::weur"]);
+        });
+
+        it("stays on the owner when replica reads are off", async () => {
+            expect.assertions(1);
+
+            const { calls, namespace } = createReplicaNamespace(() => Response.json({ result: [] }));
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions, shardDO: namespace });
+
+            await worker.fetch(geoRpc("posts:list"), {}, fakeContext);
+
+            expect(calls.map((call) => call.name)).toStrictEqual(["tenant-7"]);
+        });
+    });
+
+    it("applies the `shardRegion` placement policy to the forward path", async () => {
+        expect.assertions(2);
+
+        const stub = { fetch: vi.fn<(request: Request) => Promise<Response>>(async () => new Response("ok")) };
+        const namespace: ShardNamespaceLike = {
+            get: vi.fn<NonNullable<ShardNamespaceLike["get"]>>(),
+            getByName: vi.fn<NonNullable<ShardNamespaceLike["getByName"]>>(() => stub),
+            idFromName: vi.fn<NonNullable<ShardNamespaceLike["idFromName"]>>(),
+        };
+
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            shardDO: namespace,
+            shardRegion: (shardKey) => (shardKey === "tenant-eu" ? "weur" : undefined),
+        });
+
+        const call = async (shardKey: string): Promise<void> => {
+            await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ functionPath: "x:y", shardKey }), method: "POST" }),
+                {},
+                fakeContext,
+            );
+        };
+
+        await call("tenant-eu");
+        await call("tenant-unknown");
+
+        expect(namespace.getByName).toHaveBeenNthCalledWith(1, "tenant-eu", { locationHint: "weur" });
+        // A key the policy has no opinion about keeps the platform default
+        // (create near the first request) rather than being pinned anywhere.
+        expect(namespace.getByName).toHaveBeenNthCalledWith(2, "tenant-unknown", undefined);
     });
 
     it("forwards resolveIdentity userId on the x-lunora-userid header", async () => {
@@ -2066,6 +2270,39 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards).toHaveLength(1);
         expect(forwards[0]?.name).toMatch(/^promoted-a::relay::[01]$/u); // routed to a relay
         expect(forwards[0]?.binding).toBe("SHARD"); // told the DO its namespace binding
+    });
+
+    it("spreads connections across the relay set and hints the client's region", async () => {
+        expect.assertions(3);
+
+        const placements: unknown[] = [];
+        const forwards: Forward[] = [];
+        const base = routingNamespace(4, forwards);
+        const namespace: ShardNamespaceLike = {
+            ...base,
+            get: (id, options) => {
+                placements.push(options);
+
+                return base.get(id);
+            },
+        };
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
+        const fromParis = (): Request => Object.assign(upgrade("promoted-r"), { cf: { continent: "EU", longitude: "2.35" } });
+
+        // Enough connections that a spread over four relays is overwhelmingly
+        // likely to touch more than one — the point being that a whole region
+        // must NOT collapse onto a single relay, which is the wall promotion
+        // exists to escape.
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential upgrades: each one's routing decision is what is under test
+            await worker.fetch(fromParis(), { SHARD: namespace }, fakeContext);
+        }
+
+        expect(new Set(forwards.map((forward) => forward.name)).size).toBeGreaterThan(1);
+        expect(forwards.every((forward) => /^promoted-r::relay::[0-3]$/u.test(forward.name))).toBe(true);
+        // Every relay is nonetheless CREATED in the caller's region — that is
+        // what puts the socket near the client without pinning load.
+        expect(placements).toContainEqual({ locationHint: "weur" });
     });
 
     it("keeps a new WS connection on the owner when the shard is not promoted", async () => {

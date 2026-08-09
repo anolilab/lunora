@@ -3313,6 +3313,10 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `ShardRegionHint` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ShardSqlCursor` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.

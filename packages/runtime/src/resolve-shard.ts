@@ -1,6 +1,8 @@
 import type { ShardDirectory, ShardJurisdiction } from "@lunora/platform";
 import { resolveShard as resolveShardStub } from "@lunora/platform";
 
+import type { RegionHint } from "../../../shared/region-hint";
+
 /**
  * The Cloudflare-binding members {@link toDirectory} reads.
  *
@@ -8,7 +10,7 @@ import { resolveShard as resolveShardStub } from "@lunora/platform";
  * that point is a binding, where `get` and `idFromName` are required.
  */
 type ShardNamespaceParts = {
-    getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
+    getByName?: (name: string, options?: ShardGetOptions) => { fetch: (request: Request) => Promise<Response> };
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 };
 
@@ -42,6 +44,17 @@ const directoryCache = new WeakMap<object, ShardDirectory>();
  * shard at all, and silently substituting the raw name would route every key to
  * whatever object that string happens to address.
  */
+
+/**
+ * Wrap a region in the Cloudflare options bag, or `undefined` when there is
+ * nothing to ask for.
+ *
+ * Returning `undefined` rather than `{}` for an absent hint is deliberate:
+ * `get(id, {})` and `get(id)` behave identically today, but passing a bag the
+ * caller did not ask for would make every resolution look like a placement
+ * request in traces and under any future option Cloudflare gives a default.
+ */
+const toGetOptions = (locationHint?: RegionHint): ShardGetOptions | undefined => (locationHint === undefined ? undefined : { locationHint });
 
 /**
  * `idFromName` is the one member only a Cloudflare binding has — the contract
@@ -78,19 +91,19 @@ const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
     const directory: ShardDirectory =
         typeof namespace.getByName === "function"
             ? {
-                  get: (id) => namespace.get(id),
+                  get: (id, locationHint) => namespace.get(id, toGetOptions(locationHint)),
                   // Wrapped, NOT passed by reference: `DurableObjectNamespace`'s
                   // methods are native and require their own receiver, so handing
                   // the bare function to the contract calls it with the directory
                   // as `this` and workerd rejects it with "Illegal invocation".
                   // Plain-object test doubles tolerate the detached reference,
                   // which is why only the workerd suites caught this.
-                  getByName: (name) => (namespace.getByName as NonNullable<ShardNamespaceParts["getByName"]>)(name),
+                  getByName: (name, locationHint) => (namespace.getByName as NonNullable<ShardNamespaceParts["getByName"]>)(name, toGetOptions(locationHint)),
                   idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               }
             : {
-                  get: (id) => namespace.get(id),
+                  get: (id, locationHint) => namespace.get(id, toGetOptions(locationHint)),
                   idForName: (name) => namespace.idFromName(name),
                   jurisdiction,
               };
@@ -110,20 +123,30 @@ const toDirectory = (input: ShardNamespaceInput): ShardDirectory => {
 export type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 
 /**
+ * The options bag Cloudflare's `DurableObjectNamespace.get` / `getByName`
+ * accept. Only `locationHint` is modelled: it is the one member the runtime
+ * sets, and it is honoured **only by the call that creates the object** — every
+ * later resolution of the same name reaches the object where it already lives.
+ */
+export interface ShardGetOptions {
+    locationHint?: RegionHint;
+}
+
+/**
  * Structural projection of the bits of `DurableObjectNamespace` the runtime
  * needs. Real workers-types defines a much wider surface; this lets us pass
  * unit-test doubles without coupling to `@cloudflare/workers-types`.
  */
 export interface ShardNamespaceLike {
-    /** Materialize a stub from an opaque id. */
-    get: (id: unknown) => { fetch: (request: Request) => Promise<Response> };
+    /** Materialize a stub from an opaque id, optionally hinting where to create it. */
+    get: (id: unknown, options?: ShardGetOptions) => { fetch: (request: Request) => Promise<Response> };
 
     /**
      * `getByName` is the friendlier API but isn't on every workers-types
      * release yet. We prefer it when available and fall back to
      * `idFromName` + `get` for compatibility.
      */
-    getByName?: (name: string) => { fetch: (request: Request) => Promise<Response> };
+    getByName?: (name: string, options?: ShardGetOptions) => { fetch: (request: Request) => Promise<Response> };
 
     /** Cloudflare's `DurableObjectNamespace` spelling of `idForName`. */
     idFromName: (name: string) => unknown;
@@ -190,5 +213,11 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
  * contract. Preserves the historical preference — `getByName` when present,
  * else `idFromName` + `get` — but the preference now lives in one place (the
  * contract's `resolveShard`) rather than being restated per resolution path.
+ *
+ * `locationHint` asks the platform to create the object in that region. It is
+ * advisory and only the *creating* resolution can honour it, so it is safe to
+ * pass on every call and never safe to depend on: callers must behave
+ * identically when the shard turns out to live somewhere else entirely.
  */
-export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string): ResolvedShard => resolveShardStub(toDirectory(namespace), shardKey);
+export const resolveShard = (namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint): ResolvedShard =>
+    resolveShardStub(toDirectory(namespace), shardKey, locationHint);

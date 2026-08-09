@@ -89,7 +89,7 @@ export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
 
 // Shard directory
-export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardStub, TwoStepShardDirectory } from "./shard-directory";
+export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";
 export { resolveShard } from "./shard-directory";
 // Shard host
 export type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "./shard-host";

@@ -14,6 +14,8 @@
  * unsupported per the capability matrix.
  */
 
+import type { RegionHint } from "../../../shared/region-hint";
+
 /**
  * Cloudflare Durable Object jurisdictions restrict where a DO runs and
  * persists data, for data-residency / compliance regimes (GDPR, FedRAMP, US
@@ -26,6 +28,24 @@
  * leave them unsupported.
  */
 export type ShardJurisdiction = "eu" | "fedramp" | "us" | (Record<never, never> & string);
+
+/**
+ * A geographic placement region — where a shard should be created, when the
+ * caller has an opinion.
+ *
+ * One vocabulary, defined once: `shared/region-hint.ts` owns the region list
+ * (it is also what derives a region from edge geography), and this contract
+ * re-exports it rather than restating the strings. A second list is how the two
+ * ends of a placement request drift apart.
+ *
+ * Unlike a jurisdiction — a hard constraint the caller must fail closed on — a
+ * region is **best effort and advisory**: a provider may ignore it, and on
+ * Cloudflare it is honoured only by the call that first creates the object.
+ * Everything downstream must work identically whether the hint was honoured,
+ * ignored, or never supplied, and no caller may treat a resolved stub's
+ * location as known.
+ */
+export type ShardRegionHint = RegionHint;
 
 /**
  * A resolved shard stub. The engine calls `fetch` (or an equivalent RPC
@@ -44,10 +64,10 @@ export interface ShardStub {
  */
 export interface DirectShardDirectory {
     /** Resolve an opaque id (from `idForName`) to a stub, when the provider has ids. */
-    get?: (id: unknown) => ShardStub;
+    get?: (id: unknown, locationHint?: ShardRegionHint) => ShardStub;
 
     /** Resolve a shard key to a stub. */
-    getByName: (name: string) => ShardStub;
+    getByName: (name: string, locationHint?: ShardRegionHint) => ShardStub;
 
     /** Derive a stable, opaque shard id from a shard key, when the provider has ids. */
     idForName?: (name: string) => unknown;
@@ -63,7 +83,7 @@ export interface DirectShardDirectory {
  */
 export interface TwoStepShardDirectory {
     /** Resolve an opaque id (from `idForName`) to a stub. */
-    get: (id: unknown) => ShardStub;
+    get: (id: unknown, locationHint?: ShardRegionHint) => ShardStub;
 
     /**
      * Absent — the discriminant that selects the two-step branch.
@@ -101,11 +121,16 @@ export type ShardDirectory = DirectShardDirectory | TwoStepShardDirectory;
  * Resolve a shard key to a stub against either directory shape. Uses direct
  * name lookup when the provider has it, and falls back to the two-step
  * `idForName` + `get` dance otherwise.
+ *
+ * `locationHint` is forwarded to whichever branch runs. It is advisory in
+ * both: a provider with no placement concept ignores the extra argument, which
+ * is exactly what an implementation written against the pre-placement
+ * signature does.
  */
-export const resolveShard = (directory: ShardDirectory, name: string): ShardStub => {
+export const resolveShard = (directory: ShardDirectory, name: string, locationHint?: ShardRegionHint): ShardStub => {
     if (directory.getByName !== undefined) {
-        return directory.getByName(name);
+        return directory.getByName(name, locationHint);
     }
 
-    return directory.get(directory.idForName(name));
+    return directory.get(directory.idForName(name), locationHint);
 };

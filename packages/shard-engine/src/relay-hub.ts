@@ -23,15 +23,17 @@
 
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
-import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
+import envPositiveInt from "./env-int";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableWireKey } from "./reactive-cache";
 import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
+import type { SiblingStub } from "./sibling-channel";
+import { RELAY_SIGNATURE_HEADER, siblingSecretOf, siblingStub, signSiblingBody, verifySiblingBody } from "./sibling-channel";
 import { awaitWsDrain, trySendFrame } from "./subscription-delivery";
 import type { ResolvedShape, ShapeSubscriptionQuery, ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "./types";
 
@@ -40,50 +42,6 @@ const DEFAULT_RELAY_FAN = 2;
 
 /** Hard ceiling on relays per shard (per-deployment via `LUNORA_MAX_RELAYS`) — the cost cap a viral shard can never exceed. */
 const DEFAULT_MAX_RELAYS = 8;
-
-/** Env var carrying the optional relay control-channel HMAC secret. */
-const RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
-
-/** Header carrying the hex HMAC-SHA256 of the relay control-frame body. */
-const RELAY_SIGNATURE_HEADER = "x-lunora-relay-sig";
-
-/** The relay control-channel secret, or `undefined` when message authentication is not configured. */
-const relaySecretOf = (env: unknown): string | undefined => {
-    const value = (env as Record<string, unknown> | undefined)?.[RELAY_SECRET_KEY];
-
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-};
-
-/**
- * HMAC-SHA256 of `body` under `secret`, hex-encoded. Authenticates the internal
- * `/_lunora/relay` control channel (L6): without it, safety rests solely on DO
- * network isolation, so any DO in the namespace (or a future custom route that
- * forwarded a client path+body to a shard) could inject forged relay frames —
- * e.g. deliver an arbitrary `rowsPatch` to another subscriber's socket. Opt-in:
- * only enforced when `LUNORA_RELAY_SECRET` is set, so existing deployments are
- * unaffected until they provision the secret.
- */
-const signRelayBody = async (secret: string, body: string): Promise<string> => {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
-    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-
-    return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-};
-
-/** Read a positive integer env var by `key`, falling back to `fallback` when unset/invalid. */
-const envPositiveInt = (env: unknown, key: string, fallback: number): number => {
-    const raw = (env as Record<string, unknown> | undefined)?.[key];
-    let parsed = Number.NaN;
-
-    if (typeof raw === "string") {
-        parsed = Number.parseInt(raw, 10);
-    } else if (typeof raw === "number") {
-        parsed = raw;
-    }
-
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-};
 
 /**
  * The identity the owner computes a relay-multicast shape delta under (plan 075
@@ -99,29 +57,6 @@ const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
 /** Exhaustiveness guard for the {@link OwnerRelayFrame} dispatch — an unhandled member is a compile error here, and an impossible runtime frame throws rather than silently mis-routing. */
 const assertNeverFrame = (frame: never): never => {
     throw new LunoraError("INTERNAL", `unhandled relay frame: ${JSON.stringify(frame)}`);
-};
-
-/** Minimal Durable Object stub surface the relay tier needs to POST a control frame to a sibling. */
-interface RelayStub {
-    fetch: (url: string, init?: RequestInit) => Promise<Response>;
-}
-
-/** Minimal Durable Object namespace surface for addressing sibling owners/relays by name. */
-interface RelayNamespaceLike {
-    get: (id: unknown) => RelayStub;
-    getByName?: (name: string) => RelayStub;
-    idFromName: (name: string) => unknown;
-}
-
-/** Duck-type a value as a DO namespace, or `undefined` when it isn't one (single-DO mode / unbound). */
-const asRelayNamespace = (value: unknown): RelayNamespaceLike | undefined => {
-    if (value === null || typeof value !== "object") {
-        return undefined;
-    }
-
-    const candidate = value as Partial<RelayNamespaceLike>;
-
-    return typeof candidate.idFromName === "function" && typeof candidate.get === "function" ? (candidate as RelayNamespaceLike) : undefined;
 };
 
 /**
@@ -209,15 +144,8 @@ abstract class RelayLink {
         // When a relay secret is configured, require a valid HMAC over the raw
         // body. Fail closed on a missing/mismatched signature so a forged frame
         // can't reach the dispatch below. Unconfigured ⇒ legacy network-trust.
-        const secret = relaySecretOf(this.host.env());
-
-        if (secret !== undefined) {
-            const supplied = request.headers.get(RELAY_SIGNATURE_HEADER);
-            const expected = await signRelayBody(secret, raw);
-
-            if (supplied === null || !constantTimeEqual(supplied, expected)) {
-                return new Response("forbidden", { status: 403 });
-            }
+        if (!(await verifySiblingBody(this.host.env(), request.headers.get(RELAY_SIGNATURE_HEADER), raw))) {
+            return new Response("forbidden", { status: 403 });
         }
 
         let message: OwnerRelayFrame;
@@ -277,20 +205,19 @@ abstract class RelayLink {
         return envPositiveInt(this.host.env(), "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS);
     }
 
-    /** Whether this DO can currently address its siblings (a namespace binding has been learned) — the relay tier is inert in single-DO mode. */
+    /**
+     * Whether this DO can currently address its siblings (a namespace binding
+     * has been learned) — the relay tier is inert in single-DO mode. Probed
+     * through the same resolution the sends use, so "can address" and "did
+     * address" can never disagree.
+     */
     protected canAddressSiblings(): boolean {
-        return this.relayNamespace() !== undefined;
+        return this.siblingStub(this.roleId.ownerKey) !== undefined;
     }
 
-    /** Resolve this DO's own namespace binding so it can address sibling owners/relays, or `undefined` when unknown. */
-    protected relayNamespace(): RelayNamespaceLike | undefined {
-        const binding = this.host.shardBinding();
-
-        if (binding === undefined) {
-            return undefined;
-        }
-
-        return asRelayNamespace((this.host.env() as Record<string, unknown> | undefined)?.[binding]);
+    /** Resolve a sibling owner/relay by name off this DO's namespace binding. */
+    protected siblingStub(targetName: string): SiblingStub | undefined {
+        return siblingStub(this.host.env(), this.host.shardBinding(), targetName);
     }
 
     /** POST a control frame to a sibling by name, fire-and-forget. Best-effort: a transient cross-DO failure drops the frame rather than throwing into the handler. */
@@ -305,22 +232,21 @@ abstract class RelayLink {
      * @returns the sibling's response, or `undefined` when it can't be reached
      */
     protected async requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined> {
-        const namespace = this.relayNamespace();
+        const stub = this.siblingStub(targetName);
 
-        if (namespace === undefined) {
+        if (stub === undefined) {
             return undefined;
         }
 
-        const stub = typeof namespace.getByName === "function" ? namespace.getByName(targetName) : namespace.get(namespace.idFromName(targetName));
         const body = JSON.stringify(message);
         const headers: Record<string, string> = { "content-type": "application/json", "x-lunora-shard-binding": this.host.shardBinding() ?? "" };
 
         // Sign the control-frame body when a relay secret is configured (L6), so
         // the receiver can authenticate it. Signed over the exact bytes we send.
-        const secret = relaySecretOf(this.host.env());
+        const secret = siblingSecretOf(this.host.env());
 
         if (secret !== undefined) {
-            headers[RELAY_SIGNATURE_HEADER] = await signRelayBody(secret, body);
+            headers[RELAY_SIGNATURE_HEADER] = await signSiblingBody(secret, body);
         }
 
         try {

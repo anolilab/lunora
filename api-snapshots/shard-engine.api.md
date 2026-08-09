@@ -1882,6 +1882,38 @@ interface RenderedSql {
 }
 ```
 
+### `ReplicaFollowerHost` (interface)
+
+```ts
+interface ReplicaFollowerHost extends ShardSiblingHost {
+    applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{
+        errors: ReadonlyArray<unknown>;
+    }>;
+}
+```
+
+### `ReplicaOwnerHost` (interface)
+
+```ts
+interface ReplicaOwnerHost extends ShardSiblingHost {
+    exportRows: () => Promise<ExportRow[]>;
+    ownerCursor: () => number | undefined;
+    ownerEpoch: () => string | undefined;
+    ownerFloor: () => number | undefined;
+    readChanges: (sinceSeq: number, limit: number) => {
+        changes: CdcChange[];
+        cursor: number;
+    };
+}
+```
+
+### `ReplicaReadiness` (type)
+
+```ts
+type ReplicaReadiness = "fresh" | "stale" | "unavailable";
+```
+
 ### `ResolveRelationPredicatesOptions` (interface)
 
 ```ts
@@ -2250,6 +2282,17 @@ interface ShardRunnerOptions {
         handleAlarm?: () => Promise<void>;
         handleFetch?: (request: Request) => Promise<Response>;
     };
+}
+```
+
+### `ShardSiblingHost` (interface)
+
+```ts
+interface ShardSiblingHost {
+    doName: () => string | undefined;
+    env: () => unknown;
+    shardBinding: () => string | undefined;
+    sql: () => SqlExec;
 }
 ```
 
@@ -3137,6 +3180,12 @@ const createReadFootprint: () => ReadFootprint;
 const createRelayLink: (host: RelayHost) => OwnerRelay | RelayMember | undefined;
 ```
 
+### `createReplicaLink` (const)
+
+```ts
+const createReplicaLink: (host: ReplicaFollowerHost) => ShardReplica | undefined;
+```
+
 ### `createShardCtxDb` (const)
 
 ```ts
@@ -3278,6 +3327,12 @@ const findStorageReferences: (sql: SqlExec, storageColumns: Record<string, strin
 const foldAggregateTally: (tallies: Map<string, AggregateTally>, encoded: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>) => void;
 ```
 
+### `gateReplicaDispatch` (const)
+
+```ts
+const gateReplicaDispatch: (replica: ShardReplica, request: Request, functionPath: string) => Promise<Response | undefined>;
+```
+
 ### `geoTableName` (const)
 
 ```ts
@@ -3288,6 +3343,12 @@ const geoTableName: (table: string, indexName: string) => string;
 
 ```ts
 const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds) => W;
+```
+
+### `handleReplicaControl` (const)
+
+```ts
+const handleReplicaControl: (host: ReplicaOwnerHost, request: Request) => Promise<Response>;
 ```
 
 ### `hasTrigger` (const)

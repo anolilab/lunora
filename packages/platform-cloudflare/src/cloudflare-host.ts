@@ -22,6 +22,7 @@ import type {
     ShardHost,
     ShardJurisdiction,
     ShardKvStore,
+    ShardRegionHint,
     ShardSqlExec,
     ShardStub,
     SocketHandle,
@@ -566,9 +567,19 @@ const createShardDirectory = (namespace: DurableObjectNamespace): ShardDirectory
         };
     };
 
+    // `locationHint` is honoured only by the resolution that CREATES the object,
+    // and workers-types spells the region set identically to the contract's, so
+    // it passes straight through. Dropping it here would leave the capability
+    // matrix advertising `shardPlacement: native` for a host that silently
+    // ignores every hint — the exact contract/implementation drift the
+    // platform-parity rule exists to catch.
+    type GetOptions = NonNullable<Parameters<DurableObjectNamespace["get"]>[1]>;
+
+    const toOptions = (locationHint?: ShardRegionHint): GetOptions | undefined => (locationHint === undefined ? undefined : { locationHint });
+
     const directory: ShardDirectory = {
-        get: (id) => toStub(namespace.get(id as ReturnType<DurableObjectNamespace["idFromName"]>)),
-        getByName: (name) => toStub(namespace.get(namespace.idFromName(name))),
+        get: (id, locationHint) => toStub(namespace.get(id as ReturnType<DurableObjectNamespace["idFromName"]>, toOptions(locationHint))),
+        getByName: (name, locationHint) => toStub(namespace.get(namespace.idFromName(name), toOptions(locationHint))),
         idForName: (name) => namespace.idFromName(name),
         jurisdiction: (jurisdiction: ShardJurisdiction) =>
             createShardDirectory(namespace.jurisdiction(jurisdiction as Parameters<DurableObjectNamespace["jurisdiction"]>[0])),
