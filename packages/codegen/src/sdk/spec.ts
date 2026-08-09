@@ -127,12 +127,19 @@ const verbForKind = (kind: string | undefined): RuntimeVerb => {
  * `v.date()` is deliberately NOT in this set: it schemas as an integer and is
  * genuinely epoch-milliseconds on the wire, so the plain rendering is correct.
  *
- * Walks nested properties and items, since the offending field is usually one
- * level down inside an args object.
+ * Walks nested properties and items, and the `allOf`/`anyOf`/`oneOf` branches.
+ * `.nullable()` renders as `{ anyOf: [inner, { type: "null" }] }` and `v.union()`
+ * the same way, so a branch is where a bigint or bytes leaf most often hides —
+ * skipping them missed the single most common spelling and emitted a typed
+ * model whose every call failed the server's validator, with no warning.
  */
 const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
     if (depth > 32 || schema === null || typeof schema !== "object") {
         return false;
+    }
+
+    if (Array.isArray(schema)) {
+        return schema.some((entry) => hasUnrepresentableWireType(entry, depth + 1));
     }
 
     const node = schema as Record<string, unknown>;
@@ -155,7 +162,8 @@ const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
         return true;
     }
 
-    return ["additionalProperties", "items"].some((key) => hasUnrepresentableWireType(node[key], depth + 1));
+    // `allOf`/`anyOf`/`oneOf` hold arrays; the array branch above recurses them.
+    return ["additionalProperties", "allOf", "anyOf", "items", "oneOf"].some((key) => hasUnrepresentableWireType(node[key], depth + 1));
 };
 
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
@@ -330,7 +338,12 @@ const generatedHeaderLines = (languageId: string): ReadonlyArray<string> => [
  * never a broken build.
  */
 const withDeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<SdkNamespace> => {
-    const declared = (name: string | undefined): string | undefined => (name !== undefined && models.includes(name) ? name : undefined);
+    // Word-bounded: a bare `includes` counts `FooArgs` as declared whenever
+    // `FooArgsResult` appears in the text — reachable when one function is
+    // named `list` and a sibling `listArgs` — and a false positive emits a
+    // reference to a type the backend never declared.
+    const declared = (name: string | undefined): string | undefined =>
+        name !== undefined && new RegExp(String.raw`\b${name}\b`, "u").test(models) ? name : undefined;
 
     return namespaces.map((namespace) => {
         return {
@@ -360,7 +373,7 @@ const undeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: strin
         ...new Set(
             allMethods(namespaces)
                 .flatMap((method) => [method.argsType, method.resultType])
-                .filter((name): name is string => name !== undefined && !models.includes(name)),
+                .filter((name): name is string => name !== undefined && !new RegExp(String.raw`\b${name}\b`, "u").test(models)),
         ),
     ].toSorted((a, b) => a.localeCompare(b));
 

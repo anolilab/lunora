@@ -90,6 +90,7 @@ public final class Json {
     private static final class Parser {
         private final String text;
         private int offset;
+        private int depth;
 
         Parser(String text) {
             this.text = text;
@@ -110,6 +111,15 @@ public final class Json {
 
             if (atEnd()) {
                 throw new IllegalArgumentException("json: unexpected end of input");
+            }
+
+            // Bounded here, not after parsing. Wire.MAX_DEPTH is applied to the
+            // decoded tree and so never sees the payload; without this, a deeply
+            // nested frame overflows the stack — and StackOverflowError is an
+            // Error, which Client.handleFrame's `catch (RuntimeException)`
+            // cannot catch, so it escapes onto the socket reader thread.
+            if (depth > Wire.MAX_DEPTH) {
+                throw new IllegalArgumentException("json: nesting exceeds the " + Wire.MAX_DEPTH + "-level limit");
             }
 
             char character = text.charAt(offset);
@@ -138,11 +148,13 @@ public final class Json {
         private Map<String, Object> readObject() {
             Map<String, Object> fields = new LinkedHashMap<>();
 
+            depth++;
             offset++; // '{'
             skipWhitespace();
 
             if (!atEnd() && text.charAt(offset) == '}') {
                 offset++;
+                depth--;
 
                 return fields;
             }
@@ -169,6 +181,8 @@ public final class Json {
                 char character = text.charAt(offset++);
 
                 if (character == '}') {
+                    depth--;
+
                     return fields;
                 }
 
@@ -181,11 +195,13 @@ public final class Json {
         private List<Object> readArray() {
             List<Object> items = new ArrayList<>();
 
+            depth++;
             offset++; // '['
             skipWhitespace();
 
             if (!atEnd() && text.charAt(offset) == ']') {
                 offset++;
+                depth--;
 
                 return items;
             }
@@ -201,6 +217,8 @@ public final class Json {
                 char character = text.charAt(offset++);
 
                 if (character == ']') {
+                    depth--;
+
                     return items;
                 }
 
@@ -236,6 +254,10 @@ public final class Json {
                     continue;
                 }
 
+                if (atEnd()) {
+                    throw new IllegalArgumentException("json: truncated escape");
+                }
+
                 char escape = text.charAt(offset++);
 
                 switch (escape) {
@@ -251,7 +273,16 @@ public final class Json {
                         // Surrogate pairs arrive as two consecutive \\u escapes and
                         // are appended as-is; Java strings are UTF-16, so the pair
                         // reassembles itself.
-                        out.append((char) Integer.parseInt(text.substring(offset, offset + 4), 16));
+                        if (offset + 4 > text.length()) {
+                            throw new IllegalArgumentException("json: truncated \\u escape");
+                        }
+
+                        try {
+                            out.append((char) Integer.parseInt(text.substring(offset, offset + 4), 16));
+                        } catch (NumberFormatException error) {
+                            throw new IllegalArgumentException("json: invalid \\u escape", error);
+                        }
+
                         offset += 4;
                     }
                     default -> throw new IllegalArgumentException("json: invalid escape \\" + escape);

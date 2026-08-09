@@ -81,11 +81,27 @@ type Bytes struct {
 
 // Error is a JavaScript Error: name, message, own enumerable props, and an
 // optional cause. `stack` is deliberately absent — the peer is untrusted.
+//
+// Cause distinguishes three states, which is why its absent marker is Undefined
+// rather than nil: Undefined means no cause (5-element wire form), nil means an
+// explicitly-null cause (6-element form, which the reference also encodes), and
+// any other value is a real cause. Build one with NewError so the zero value
+// does not accidentally claim a null cause.
 type Error struct {
 	Name    string
 	Message string
 	Props   map[string]any
 	Cause   any
+}
+
+// NewError builds an Error with no cause. Prefer it to a struct literal: the
+// zero value of Cause is nil, which the codec reads as an explicitly-null cause.
+func NewError(name string, message string, props map[string]any) Error {
+	if props == nil {
+		props = map[string]any{}
+	}
+
+	return Error{Cause: Undefined, Message: message, Name: name, Props: props}
 }
 
 // EncodeWire converts v into a JSON-safe tree, tagging the leaves JSON cannot
@@ -274,6 +290,18 @@ func encodeStruct(value reflect.Value, depth int) (any, error) {
 	result := make(map[string]any)
 	fields := value.Type()
 
+	// A struct with no exported fields would encode to `{}` — total, silent data
+	// loss, and exactly what the TS reference refuses ("rather than silently
+	// encode them to {} they are rejected"). time.Time is the likely arrival: it
+	// is what a Go caller reaches for on a v.date() field.
+	if exportedFieldCount(fields) == 0 {
+		if fields.String() == "time.Time" {
+			return nil, fmt.Errorf("wire-codec: cannot encode a time.Time — the wire carries a date as epoch milliseconds, so pass Date{EpochMs: float64(t.UnixMilli())}")
+		}
+
+		return nil, fmt.Errorf("wire-codec: cannot encode a %s over the Lunora wire — it has no exported fields, so it would silently become {}", fields)
+	}
+
 	for index := 0; index < fields.NumField(); index++ {
 		field := fields.Field(index)
 		if field.PkgPath != "" {
@@ -327,6 +355,22 @@ func encodeReflectedMap(value reflect.Value, depth int) (any, error) {
 	return result, nil
 }
 
+// exportedFieldCount counts the fields encoding/json would consider.
+func exportedFieldCount(fields reflect.Type) int {
+	count := 0
+
+	for index := 0; index < fields.NumField(); index++ {
+		field := fields.Field(index)
+		name, _ := jsonFieldName(field)
+
+		if field.PkgPath == "" && name != "-" {
+			count++
+		}
+	}
+
+	return count
+}
+
 // jsonFieldName reads a field's wire name and omitempty flag from its json tag,
 // falling back to the Go field name as encoding/json does.
 func jsonFieldName(field reflect.StructField) (string, bool) {
@@ -370,8 +414,11 @@ func encodeError(value Error, depth int) (any, error) {
 
 	encoded := []any{Tag, "error", value.Name, value.Message, props}
 
-	// `cause` rides a positional slot; absent when unset, keeping the 5-element form.
-	if value.Cause != nil && value.Cause != any(Undefined) {
+	// `cause` rides a positional slot. The absent marker is Undefined, NOT nil:
+	// in the reference an explicitly-null cause has `cause !== undefined` and IS
+	// encoded, so conflating the two drops the 6th slot and breaks the
+	// round-trip contract for `[…,{},null]`.
+	if value.Cause != any(Undefined) {
 		cause, err := encodeWire(value.Cause, depth+1)
 		if err != nil {
 			return nil, err

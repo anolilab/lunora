@@ -119,3 +119,41 @@ func TestConcurrentSubscribeAndHandleFrame(t *testing.T) {
 
 	<-done
 }
+
+// TestErrorCauseStates pins the three-state cause: absent, explicitly null, and
+// set. Go/Ruby/Java all dropped the middle one by conflating "no cause" with
+// "cause is nil", which breaks the round-trip contract for [...,{},null].
+func TestErrorCauseStates(t *testing.T) {
+	absent, err := EncodeWire(NewError("Error", "boom", nil))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if got := len(absent.([]any)); got != 5 {
+		t.Errorf("absent cause encoded %d elements, want 5", got)
+	}
+
+	explicitNull, err := EncodeWire(Error{Cause: nil, Message: "boom", Name: "Error", Props: map[string]any{}})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if got := len(explicitNull.([]any)); got != 6 {
+		t.Errorf("explicit-null cause encoded %d elements, want 6", got)
+	}
+
+	// And the fixture-style round trip holds for the null case.
+	decoded, err := DecodeWire([]any{Tag, "error", "Error", "boom", map[string]any{}, nil})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	reEncoded, err := EncodeWire(decoded)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	if got := len(reEncoded.([]any)); got != 6 {
+		t.Errorf("round-tripped null cause encoded %d elements, want 6", got)
+	}
+}

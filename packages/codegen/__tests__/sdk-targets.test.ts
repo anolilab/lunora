@@ -139,7 +139,12 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         // NOWHERE in the output, because the surface should have degraded it to
         // an untyped return instead of referencing a type that does not exist.
         const everything = Object.values(files).join("\n");
-        const leaked = undeclared.filter((name) => everything.includes(name));
+
+        // Word-bounded for the same reason the production check is: quicktype
+        // renders an array-of-object result as `<Name>Element`, so a loose
+        // substring test reports `<Name>` as leaked when only the longer,
+        // genuinely-declared name is present.
+        const leaked = undeclared.filter((name) => new RegExp(String.raw`\b${name}\b`, "u").test(everything));
 
         expect(leaked).toStrictEqual([]);
     });

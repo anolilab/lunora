@@ -485,12 +485,29 @@ func (c *Client) SubscribeShape(name string, args any, onRows RowsHandler, onErr
 // ResendSubscriptions re-subscribes everything after a reconnect, carrying each
 // subscription's resume cursor so the server can skip unchanged results.
 func (c *Client) ResendSubscriptions() error {
+	// Snapshot the resume state INSIDE the lock. Copying the pointers and
+	// reading entry.cursor/epoch afterwards races the frame goroutine, which
+	// writes both in advance() — `go test -race` proves it.
+	type resumePoint struct {
+		id           string
+		functionPath string
+		args         any
+		cursor       any
+		epoch        any
+	}
+
 	c.mu.Lock()
 	send := c.send
-	entries := make([]*subscription, 0, len(c.subscriptions))
+	entries := make([]resumePoint, 0, len(c.subscriptions))
 
-	for _, entry := range c.subscriptions {
-		entries = append(entries, entry)
+	for id, entry := range c.subscriptions {
+		entries = append(entries, resumePoint{
+			args:         entry.args,
+			cursor:       entry.cursor,
+			epoch:        entry.epoch,
+			functionPath: entry.functionPath,
+			id:           id,
+		})
 	}
 
 	c.mu.Unlock()

@@ -1,8 +1,7 @@
 package lunora
 
 import (
-	"bytes"
-	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -176,25 +175,45 @@ func formatNumber(value float64) string {
 
 // jsonString quotes a string the way JSON.stringify does.
 //
-// Two Go/JavaScript differences to undo. Go's encoder escapes <, > and & for
-// HTML safety, which JavaScript does not; SetEscapeHTML(false) turns that off.
-// Go also escapes U+2028 and U+2029 unconditionally (they are legal in JSON but
-// break a JavaScript source literal), while JSON.stringify emits them raw — so
-// those two are restored afterwards. Both would otherwise yield a different
-// dedup key than the reference client for the same arguments.
+// Hand-rolled rather than post-processing encoding/json's output. Two
+// JavaScript differences have to be undone — Go escapes <, > and & for HTML
+// safety, and escapes U+2028/U+2029 for JavaScript-source safety, while
+// JSON.stringify does neither — and the obvious fix, a ReplaceAll of `\u2028`
+// back to the raw rune, is itself a corruption bug: encoding/json renders a
+// literal backslash as `\\`, so the six-character input `\u2028` encodes to
+// `"\\u2028"`, whose bytes CONTAIN the escape being searched for. The replace
+// fires on it and emits invalid JSON. Writing the runes directly cannot.
 func jsonString(value string) string {
-	var buffer bytes.Buffer
+	var builder strings.Builder
 
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
+	builder.WriteByte('"')
 
-	if err := encoder.Encode(value); err != nil {
-		return `""`
+	for _, runeValue := range value {
+		switch runeValue {
+		case '"':
+			builder.WriteString(`\"`)
+		case '\\':
+			builder.WriteString(`\\`)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		case '\b':
+			builder.WriteString(`\b`)
+		case '\f':
+			builder.WriteString(`\f`)
+		default:
+			if runeValue < 0x20 {
+				builder.WriteString(fmt.Sprintf(`\u%04x`, runeValue))
+			} else {
+				builder.WriteRune(runeValue)
+			}
+		}
 	}
 
-	quoted := strings.TrimRight(buffer.String(), "\n")
-	quoted = strings.ReplaceAll(quoted, `\u2028`, "\u2028")
-	quoted = strings.ReplaceAll(quoted, `\u2029`, "\u2029")
+	builder.WriteByte('"')
 
-	return quoted
+	return builder.String()
 }

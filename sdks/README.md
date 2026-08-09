@@ -8,11 +8,11 @@ richer than anything generated, and not covered here.
 
 ## The three layers
 
-| Layer | Where | Generated? |
-| --- | --- | --- |
-| Models | `quicktype-core`, per target | yes, where the backend can express them |
-| Method surface | `packages/codegen/src/sdk/targets/<lang>.ts` | yes |
-| Transport | `sdks/<lang>/` | **no** — hand-written, imported not vendored |
+| Layer          | Where                                        | Generated?                                   |
+| -------------- | -------------------------------------------- | -------------------------------------------- |
+| Models         | `quicktype-core`, per target                 | yes, where the backend can express them      |
+| Method surface | `packages/codegen/src/sdk/targets/<lang>.ts` | yes                                          |
+| Transport      | `sdks/<lang>/`                               | **no** — hand-written, imported not vendored |
 
 The transport is imported rather than copied into a user's project, so a
 wire-protocol fix is a runtime version bump instead of a regenerate-everyone
@@ -28,18 +28,18 @@ This table exists for the same reason `PlatformCapabilities` does (see
 what lets the next consumer discover a gap at runtime. Update it in the same
 change that adds or removes a capability.
 
-| Capability | python | go | ruby | rust | swift | java | kotlin |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Wire codec (all tags) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Stable subscription key | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| RPC query / mutation / action | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Live subscriptions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Shapes + poke protocol | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Resume across reconnect | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Typed argument models | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Typed result models | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Concurrency-safe client | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| Built-in HTTP / socket | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Capability                    | python | go  | ruby | rust | swift | java | kotlin |
+| ----------------------------- | ------ | --- | ---- | ---- | ----- | ---- | ------ |
+| Wire codec (all tags)         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Stable subscription key       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| RPC query / mutation / action | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
+| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
+| Concurrency-safe client       | ✅     | ✅  | ❌   | ❌   | ❌    | ❌   | ❌     |
+| Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
 
 **Typed models, JVM.** quicktype's Java and Kotlin backends rename fields (a
 wire `channelId` becomes `channelID`) and emit no mapping metadata under
@@ -65,21 +65,27 @@ same files the TypeScript client is tested against.
 coverage drifted badly before that list existed, leaving the decode-side bounds
 unasserted in two ports for several commits with every gate green.
 
-| Language | Run the suite | Toolchain |
-| --- | --- | --- |
-| python | `python3 -m unittest discover -s tests -t .` | stdlib only |
-| go | `go test ./... -race` | stdlib only |
-| ruby | `ruby -Ilib test/test_conformance.rb` | stdlib minitest |
-| rust | `cargo test` | `serde_json` |
-| swift | `swift test` | Foundation only |
-| java | `bash build.sh` | JDK only |
-| kotlin | `bash build.sh` | kotlinc + JDK |
+Run all of them at once with `./sdks/run-all.sh`, which fans the suites out in
+parallel — they are seven independent toolchains reading the same read-only
+fixtures, so the whole set costs about as long as the slowest compiler rather
+than the sum of all seven. Pass language names to narrow it
+(`./sdks/run-all.sh go rust`). Or one at a time:
+
+| Language | Run the suite                                | Toolchain       |
+| -------- | -------------------------------------------- | --------------- |
+| python   | `python3 -m unittest discover -s tests -t .` | stdlib only     |
+| go       | `go test ./... -race`                        | stdlib only     |
+| ruby     | `ruby -Ilib test/test_conformance.rb`        | stdlib minitest |
+| rust     | `cargo test`                                 | `serde_json`    |
+| swift    | `swift test`                                 | Foundation only |
+| java     | `bash build.sh`                              | JDK only        |
+| kotlin   | `bash build.sh`                              | kotlinc + JDK   |
 
 CI runs all seven per PR (`sdk-conformance` in `.github/workflows/test.yml`),
 and each leg also generates an SDK from a committed fixture and builds the
 result — the generated surface hardcodes the runtime's call signatures, and
 nothing else pins that coupling.
 
-The Java leg additionally *runs* a generated call. That is not belt-and-braces:
+The Java leg additionally _runs_ a generated call. That is not belt-and-braces:
 an earlier revision emitted a surface that compiled perfectly and threw on the
 first invocation, with the compile-only gate green throughout.

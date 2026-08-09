@@ -71,12 +71,38 @@ const memberName = (raw: string): string => {
 /** The runtime verb entry for a method's kind. */
 const verbConstant = (verb: string): string => `Verb.${verb.toUpperCase()}`;
 
+/**
+ * Escape a value for a Kotlin `"…"` literal.
+ *
+ * Kotlin interpolates `$`, and `$` is a legal JavaScript identifier character,
+ * so an export named `$client` produced `"billing:$client"` — which compiles,
+ * runs, and posts the client object's `toString()` as the wire path. Ruby and
+ * Swift are safe by accident (`#` and `\` are not identifier characters);
+ * Kotlin is not.
+ */
+// Built from escapes rather than written literally: a bare backslash or `${`
+// in this file trips the repo's own lint rules, and `String.raw` cannot end in
+// a backslash.
+const BACKSLASH = "\u005C";
+// The Kotlin escape for a literal dollar, assembled from parts so the sequence
+// never appears as a template-looking literal in this file.
+const DOLLAR_ESCAPE = ["\u0024", "{", "'", "\u0024", "'", "}"].join("");
+
+const kotlinLiteral = (value: string): string =>
+    value
+        .split(BACKSLASH)
+        .join(BACKSLASH + BACKSLASH)
+        .split('"')
+        .join(`${BACKSLASH}"`)
+        .split("\u0024")
+        .join(DOLLAR_ESCAPE);
+
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string =>
     [
         `    /** ${method.summary} */`,
         `    fun ${memberName(method.functionName)}(args: WireValue? = null, shardKey: String? = null): WireValue =`,
-        `        client.call(${verbConstant(method.verb)}, "${method.functionPath}", args, shardKey)`,
+        `        client.call(${verbConstant(method.verb)}, "${kotlinLiteral(method.functionPath)}", args, shardKey)`,
     ].join("\n");
 
 /**
@@ -91,7 +117,7 @@ const renderSubscribe = (method: SdkMethod): string =>
         `        onData: ((WireValue) -> Unit)?,`,
         `        onError: ((SubscriptionError) -> Unit)? = null,`,
         `        shardKey: String? = null,`,
-        `    ): () -> Unit = client.subscribe("${method.functionPath}", args, onData, onError, shardKey)`,
+        `    ): () -> Unit = client.subscribe("${kotlinLiteral(method.functionPath)}", args, onData, onError, shardKey)`,
     ].join("\n");
 
 const renderNamespaceClass = (namespace: SdkNamespace): string => {

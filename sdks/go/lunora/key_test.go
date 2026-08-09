@@ -65,3 +65,22 @@ func TestStringEscapingMatchesJSONStringify(t *testing.T) {
 		}
 	}
 }
+
+// TestLiteralBackslashEscapeIsNotUnescaped pins the corruption that a post-hoc
+// ReplaceAll of `\u2028` caused: encoding/json renders a literal backslash as
+// `\\`, so the six-character input `\u2028` encoded to `"\\u2028"`, whose bytes
+// contain the escape being searched for — the replace fired and emitted invalid
+// JSON.
+func TestLiteralBackslashEscapeIsNotUnescaped(t *testing.T) {
+	got := StableStringify(map[string]any{"s": `\u2028`})
+	want := `{"s":"\\u2028"}`
+
+	if got != want {
+		t.Errorf("literal escape text = %s, want %s", got, want)
+	}
+
+	// A real U+2028 stays raw, as JSON.stringify emits it.
+	if got, want := StableStringify("\u2028"), "\"\u2028\""; got != want {
+		t.Errorf("raw separator = %q, want %q", got, want)
+	}
+}

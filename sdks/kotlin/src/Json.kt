@@ -60,6 +60,7 @@ object Json {
 
     private class Parser(private val text: String) {
         var offset: Int = 0
+        private var depth: Int = 0
 
         fun atEnd(): Boolean = offset >= text.length
 
@@ -70,6 +71,12 @@ object Json {
         fun readValue(): Any? {
             skipWhitespace()
             require(!atEnd()) { "json: unexpected end of input" }
+
+            // Bounded here, not after parsing. Wire.MAX_DEPTH applies to the
+            // decoded tree and never sees the payload; without this a deeply
+            // nested frame overflows the stack, and StackOverflowError is an
+            // Error that handleFrame's RuntimeException catch cannot catch.
+            require(depth <= Wire.MAX_DEPTH) { "json: nesting exceeds the ${Wire.MAX_DEPTH}-level limit" }
 
             return when (text[offset]) {
                 '{' -> readObject()
@@ -92,11 +99,13 @@ object Json {
         private fun readObject(): Map<String, Any?> {
             val fields = LinkedHashMap<String, Any?>()
 
+            depth++
             offset++ // '{'
             skipWhitespace()
 
             if (!atEnd() && text[offset] == '}') {
                 offset++
+                depth--
 
                 return fields
             }
@@ -114,7 +123,11 @@ object Json {
                 require(!atEnd()) { "json: unterminated object" }
 
                 when (val character = text[offset++]) {
-                    '}' -> return fields
+                    '}' -> {
+                        depth--
+
+                        return fields
+                    }
                     ',' -> Unit
                     else -> throw IllegalArgumentException("json: expected ',' or '}' but found '$character'")
                 }
@@ -124,11 +137,13 @@ object Json {
         private fun readArray(): List<Any?> {
             val items = mutableListOf<Any?>()
 
+            depth++
             offset++ // '['
             skipWhitespace()
 
             if (!atEnd() && text[offset] == ']') {
                 offset++
+                depth--
 
                 return items
             }
@@ -139,7 +154,11 @@ object Json {
                 require(!atEnd()) { "json: unterminated array" }
 
                 when (val character = text[offset++]) {
-                    ']' -> return items
+                    ']' -> {
+                        depth--
+
+                        return items
+                    }
                     ',' -> Unit
                     else -> throw IllegalArgumentException("json: expected ',' or ']' but found '$character'")
                 }
@@ -165,6 +184,8 @@ object Json {
                     continue
                 }
 
+                require(!atEnd()) { "json: truncated escape" }
+
                 when (val escape = text[offset++]) {
                     '"' -> out.append('"')
                     '\\' -> out.append('\\')
@@ -177,7 +198,12 @@ object Json {
                     'u' -> {
                         // Surrogate pairs arrive as two consecutive \u escapes;
                         // JVM strings are UTF-16, so the pair reassembles itself.
-                        out.append(text.substring(offset, offset + 4).toInt(16).toChar())
+                        require(offset + 4 <= text.length) { "json: truncated \\u escape" }
+
+                        val code = text.substring(offset, offset + 4).toIntOrNull(16)
+
+                        requireNotNull(code) { "json: invalid \\u escape" }
+                        out.append(code.toChar())
                         offset += 4
                     }
                     else -> throw IllegalArgumentException("json: invalid escape \\$escape")
