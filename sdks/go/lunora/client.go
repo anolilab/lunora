@@ -42,6 +42,9 @@ type FrameSender func(frame map[string]any) error
 // DataHandler receives each decoded subscription value.
 type DataHandler func(value any)
 
+// RowsHandler receives a shape's full row set after each poke is applied.
+type RowsHandler func(rows []any)
+
 // ErrorHandler receives each subscription-scoped error frame.
 type ErrorHandler func(err SubscriptionError)
 
@@ -90,7 +93,33 @@ type Client struct {
 	mu            sync.Mutex
 	send          FrameSender
 	subscriptions map[string]*subscription
+	shapes        map[string]*shapeSubscription
+	pokes         map[string]*pokeBuffer
 	nextID        int
+	nextShapeID   int
+}
+
+// shapeSubscription is a partially-replicated keyed view maintained by pokes.
+type shapeSubscription struct {
+	id         string
+	name       string
+	args       any
+	rows       map[string]any
+	order      []string
+	checkpoint any
+	epoch      any
+	onRows     RowsHandler
+	onError    ErrorHandler
+}
+
+// pokeBuffer accumulates one poke's parts so they apply atomically at pokeEnd.
+//
+// Buffering is required, not an optimisation: a poke is defined as an atomic
+// batch, so applying parts as they arrive would expose a torn view to the
+// callback, and a socket that drops mid-poke would leave the view permanently
+// half-applied.
+type pokeBuffer struct {
+	parts map[string][]map[string]any
 }
 
 type subscription struct {
@@ -106,7 +135,13 @@ type subscription struct {
 // NewClient builds a client for baseURL. post may be nil if only frame building
 // and decoding are used (as in the conformance suite).
 func NewClient(baseURL string, post HTTPPoster) *Client {
-	return &Client{BaseURL: baseURL, Post: post, subscriptions: map[string]*subscription{}}
+	return &Client{
+		BaseURL:       baseURL,
+		Post:          post,
+		pokes:         map[string]*pokeBuffer{},
+		shapes:        map[string]*shapeSubscription{},
+		subscriptions: map[string]*subscription{},
+	}
 }
 
 // AttachSocket registers the sender used for subscription frames. Call it once
@@ -331,6 +366,37 @@ func BuildSubscribeFrame(id string, functionPath string, args any, table string,
 	return map[string]any{"id": id, "query": query, "type": "subscribe"}, nil
 }
 
+// BuildShapeSubscribeFrame assembles a shape (partial-replication) subscription
+// frame. sinceCheckpoint/sinceEpoch ride along only on a resume.
+func BuildShapeSubscribeFrame(id string, name string, args any, sinceCheckpoint any, sinceEpoch any) (map[string]any, error) {
+	shape := map[string]any{"name": name}
+
+	if args != nil {
+		encoded, err := EncodeWire(args)
+		if err != nil {
+			return nil, err
+		}
+
+		shape["args"] = encoded
+	}
+
+	frame := map[string]any{"id": id, "shape": shape, "type": "shape_subscribe"}
+	if sinceCheckpoint != nil {
+		frame["sinceCheckpoint"] = sinceCheckpoint
+	}
+
+	if sinceEpoch != nil {
+		frame["sinceEpoch"] = sinceEpoch
+	}
+
+	return frame, nil
+}
+
+// BuildShapeUnsubscribeFrame assembles a shape teardown frame.
+func BuildShapeUnsubscribeFrame(id string) map[string]any {
+	return map[string]any{"id": id, "type": "shape_unsubscribe"}
+}
+
 // BuildUnsubscribeFrame assembles the teardown frame.
 func BuildUnsubscribeFrame(id string) map[string]any {
 	return map[string]any{"id": id, "type": "unsubscribe"}
@@ -375,6 +441,43 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 
 		if sender != nil {
 			_ = sender(BuildUnsubscribeFrame(id))
+		}
+	}
+}
+
+// SubscribeShape opens a partially-replicated keyed view. onRows fires once per
+// applied poke with the view's full contents, in insertion order.
+func (c *Client) SubscribeShape(name string, args any, onRows RowsHandler, onError ErrorHandler) Unsubscribe {
+	c.mu.Lock()
+
+	if c.shapes == nil {
+		c.shapes = map[string]*shapeSubscription{}
+	}
+
+	if c.pokes == nil {
+		c.pokes = map[string]*pokeBuffer{}
+	}
+
+	c.nextShapeID++
+	id := fmt.Sprintf("shape_%d", c.nextShapeID)
+	c.shapes[id] = &shapeSubscription{args: args, id: id, name: name, onError: onError, onRows: onRows, rows: map[string]any{}}
+	send := c.send
+	c.mu.Unlock()
+
+	if send != nil {
+		if frame, err := BuildShapeSubscribeFrame(id, name, args, nil, nil); err == nil {
+			_ = send(frame)
+		}
+	}
+
+	return func() {
+		c.mu.Lock()
+		delete(c.shapes, id)
+		sender := c.send
+		c.mu.Unlock()
+
+		if sender != nil {
+			_ = sender(BuildShapeUnsubscribeFrame(id))
 		}
 	}
 }
@@ -490,9 +593,153 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		c.mu.Unlock()
 
 		return kind, nil
+	case "pokeStart":
+		pokeID, _ := frame["pokeId"].(string)
+
+		c.mu.Lock()
+
+		if c.pokes == nil {
+			c.pokes = map[string]*pokeBuffer{}
+		}
+
+		c.pokes[pokeID] = &pokeBuffer{parts: map[string][]map[string]any{}}
+		c.mu.Unlock()
+
+		return kind, nil
+	case "pokePart":
+		c.bufferPokePart(frame)
+
+		return kind, nil
+	case "pokeEnd":
+		return kind, c.applyPoke(frame)
 	default:
 		return kind, nil
 	}
+}
+
+// bufferPokePart stashes one part until its pokeEnd arrives.
+func (c *Client) bufferPokePart(frame map[string]any) {
+	pokeID, _ := frame["pokeId"].(string)
+	shapeID, _ := frame["shapeId"].(string)
+	rows, _ := frame["rowsPatch"].([]any)
+
+	operations := make([]map[string]any, 0, len(rows))
+
+	for _, row := range rows {
+		if operation, ok := row.(map[string]any); ok {
+			operations = append(operations, operation)
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// A part for an unknown poke is dropped: without its pokeStart there is no
+	// atomic batch to join, and guessing would apply a fragment of one.
+	if buffer := c.pokes[pokeID]; buffer != nil {
+		buffer.parts[shapeID] = append(buffer.parts[shapeID], operations...)
+	}
+}
+
+// applyPoke applies a whole poke in one step and fires each touched shape's
+// callback with the resulting view.
+func (c *Client) applyPoke(frame map[string]any) error {
+	pokeID, _ := frame["pokeId"].(string)
+
+	c.mu.Lock()
+	buffer := c.pokes[pokeID]
+	delete(c.pokes, pokeID)
+
+	if buffer == nil {
+		c.mu.Unlock()
+
+		return nil
+	}
+
+	type delivery struct {
+		handler RowsHandler
+		rows    []any
+	}
+
+	deliveries := make([]delivery, 0, len(buffer.parts))
+
+	for shapeID, operations := range buffer.parts {
+		shape := c.shapes[shapeID]
+		if shape == nil {
+			continue
+		}
+
+		for _, operation := range operations {
+			key, _ := operation["key"].(string)
+			op, _ := operation["op"].(string)
+
+			if op == "delete" {
+				if _, present := shape.rows[key]; present {
+					delete(shape.rows, key)
+					shape.order = removeKey(shape.order, key)
+				}
+
+				continue
+			}
+
+			value, present := operation["value"]
+			if !present || value == nil {
+				// A value-less upsert is membership-only; it must not blank an
+				// existing row.
+				continue
+			}
+
+			decoded, err := DecodeWire(value)
+			if err != nil {
+				c.mu.Unlock()
+
+				return err
+			}
+
+			if _, existing := shape.rows[key]; !existing {
+				shape.order = append(shape.order, key)
+			}
+
+			shape.rows[key] = decoded
+		}
+
+		if checkpoint, ok := frame["checkpoint"]; ok {
+			shape.checkpoint = checkpoint
+		}
+
+		if epoch, ok := frame["epoch"]; ok {
+			shape.epoch = epoch
+		}
+
+		rows := make([]any, 0, len(shape.order))
+		for _, key := range shape.order {
+			rows = append(rows, shape.rows[key])
+		}
+
+		if shape.onRows != nil {
+			deliveries = append(deliveries, delivery{handler: shape.onRows, rows: rows})
+		}
+	}
+
+	c.mu.Unlock()
+
+	// Callbacks run outside the lock: a handler that subscribes or unsubscribes
+	// would otherwise deadlock on the mutex it is already inside.
+	for _, item := range deliveries {
+		item.handler(item.rows)
+	}
+
+	return nil
+}
+
+func removeKey(keys []string, key string) []string {
+	for index, candidate := range keys {
+		if candidate == key {
+			return append(keys[:index], keys[index+1:]...)
+		}
+	}
+
+	return keys
 }
 
 func (c *Client) advance(entry *subscription, frame map[string]any) {

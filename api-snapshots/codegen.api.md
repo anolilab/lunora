@@ -783,6 +783,7 @@ interface SdkRenderInput {
 interface SdkResult {
     files: SdkFiles;
     undeclared: ReadonlyArray<string>;
+    unrepresentable: ReadonlyArray<string>;
 }
 ```
 

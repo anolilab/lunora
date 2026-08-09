@@ -72,6 +72,60 @@ describe("assertGeneratable", () => {
     });
 });
 
+describe("wire types no model can carry", () => {
+    it("generates no args model for a v.bigint() or v.bytes() argument", async () => {
+        expect.assertions(3);
+
+        // v.bigint() schemas as {format:"int64",type:"integer"} and v.bytes() as
+        // {contentEncoding:"base64",type:"string"}. quicktype renders those as a
+        // plain integer and string, but the wire needs the TAGGED forms — a
+        // typed model would send a number where the server demands a bigint and
+        // every call would fail validation.
+        const spec: OpenRpcDocument = {
+            methods: [
+                {
+                    name: "billing:charge",
+                    params: [
+                        {
+                            name: "args",
+                            schema: {
+                                properties: { amount: { format: "int64", type: "integer" }, blob: { contentEncoding: "base64", type: "string" } },
+                                type: "object",
+                            },
+                        },
+                    ],
+                    "x-lunora-function-kind": "action",
+                },
+            ],
+        };
+
+        const { files, unrepresentable } = await generateSdk(spec, targets[0]!);
+
+        expect(unrepresentable).toStrictEqual(["billing:charge"]);
+        expect(Object.values(files).join("\n")).not.toContain("BillingChargeArgs");
+        // The call itself is still generated — just with untyped args.
+        expect(Object.values(files).join("\n")).toContain("billing:charge");
+    });
+
+    it("still types a v.date() argument, which is genuinely epoch-ms on the wire", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [
+                {
+                    name: "events:at",
+                    params: [{ name: "args", schema: { properties: { when: { description: "epoch milliseconds (date)", type: "integer" } }, type: "object" } }],
+                    "x-lunora-function-kind": "query",
+                },
+            ],
+        };
+
+        const { unrepresentable } = await generateSdk(spec, targets[0]!);
+
+        expect(unrepresentable).toStrictEqual([]);
+    });
+});
+
 describe.each(targets.map((target) => [target.id, target] as const))("target: %s", (_id, target) => {
     it.each(Object.entries(RESULT_SHAPES))("never references a model the backend did not declare (%s result)", async (_shape, resultSchema) => {
         expect.assertions(1);

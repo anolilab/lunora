@@ -59,7 +59,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         return { code: 0 };
     }
 
-    const { files, undeclared } = await generateSdk(document, target);
+    const { files, undeclared, unrepresentable } = await generateSdk(document, target);
 
     for (const [relativePath, contents] of Object.entries(files)) {
         const destination = join(outputDirectory, relativePath);
@@ -79,7 +79,15 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     if (undeclared.length > 0) {
         // The schema declared a shape, but this language's backend did not turn
         // it into a named type — the call site fell back to an untyped return.
-        logger.warn(`${String(undeclared.length)} declared result type(s) are not expressible as a named ${language} model, so those calls return untyped: ${undeclared.join(", ")}`);
+        logger.warn(
+            `${String(undeclared.length)} declared result type(s) are not expressible as a named ${language} model, so those calls return untyped: ${undeclared.join(", ")}`,
+        );
+    }
+
+    if (unrepresentable.length > 0) {
+        logger.warn(
+            `${String(unrepresentable.length)} function(s) take or return a \`v.bigint()\`/\`v.bytes()\`, which no generated model can carry — their parameters stay untyped, so pass wire values directly: ${unrepresentable.join(", ")}`,
+        );
     }
 
     if (untypedResults > 0) {

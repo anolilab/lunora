@@ -376,3 +376,96 @@ func TestUndefinedIsDistinctFromNil(t *testing.T) {
 		t.Errorf("array-position undefined = %#v, want %#v", inArray, want)
 	}
 }
+
+// TestShapeSubscribeFrame and TestPokeSequenceMaterialisesRows cover
+// protocol/README.md §8 item 4, which requires the server-frame consumer to
+// match ws-frames.json "including the poke sequence materialising
+// shape.expectedRows". The Go port previously ignored the entire `shape`
+// fixture group, so the suite went green on an unimplemented protocol.
+
+func TestShapeSubscribeFrame(t *testing.T) {
+	fixture := loadFixture(t, "ws-frames.json")
+
+	shape, ok := fixture["shape"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture has no shape group")
+	}
+
+	frame, err := BuildShapeSubscribeFrame("shape_1", "roomMessages", map[string]any{"room": "general"}, nil, nil)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if got, want := canonical(t, frame), canonical(t, shape["shape-subscribe-cold"]); got != want {
+		t.Errorf("shape-subscribe mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+func TestPokeSequenceMaterialisesRows(t *testing.T) {
+	fixture := loadFixture(t, "ws-frames.json")
+
+	shape, ok := fixture["shape"].(map[string]any)
+	if !ok {
+		t.Fatal("fixture has no shape group")
+	}
+
+	sequence, ok := shape["pokeSequence"].([]any)
+	if !ok || len(sequence) == 0 {
+		t.Fatal("fixture has no pokeSequence")
+	}
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	var delivered [][]any
+
+	client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func(rows []any) {
+		delivered = append(delivered, rows)
+	}, nil)
+
+	for _, entry := range sequence {
+		raw, marshalErr := json.Marshal(entry)
+		if marshalErr != nil {
+			t.Fatalf("marshal: %v", marshalErr)
+		}
+
+		if _, err := client.HandleFrame(raw); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	if len(delivered) != 1 {
+		t.Fatalf("onRows fired %d times, want exactly 1 — a poke applies atomically at pokeEnd", len(delivered))
+	}
+
+	if got, want := canonical(t, delivered[0]), canonical(t, shape["expectedRows"]); got != want {
+		t.Errorf("materialised rows mismatch\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// TestPokePartsDoNotApplyBeforePokeEnd pins the atomicity the protocol
+// specifies: a socket dropping mid-poke must leave no partial view.
+func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
+	fixture := loadFixture(t, "ws-frames.json")
+	shape, _ := fixture["shape"].(map[string]any)
+	sequence, _ := shape["pokeSequence"].([]any)
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	fired := 0
+
+	client.SubscribeShape("roomMessages", nil, func([]any) { fired++ }, nil)
+
+	// Everything except the terminal pokeEnd.
+	for _, entry := range sequence[:len(sequence)-1] {
+		raw, _ := json.Marshal(entry)
+		if _, err := client.HandleFrame(raw); err != nil {
+			t.Fatalf("handle: %v", err)
+		}
+	}
+
+	if fired != 0 {
+		t.Errorf("onRows fired %d times before pokeEnd, want 0 — the view would be torn", fired)
+	}
+}

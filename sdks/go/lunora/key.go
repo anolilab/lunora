@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 // StableStringify renders a pure-JSON tree canonically: object keys sorted at
@@ -82,9 +83,13 @@ func writeStableObject(builder *strings.Builder, value map[string]any) {
 		keys = append(keys, key)
 	}
 
-	// Code-point order, matching JavaScript's default string comparison. Go's
-	// string < is byte-wise over UTF-8, which is the same ordering.
-	sort.Strings(keys)
+	// JavaScript compares strings by UTF-16 CODE UNIT, and Go's `<` compares by
+	// UTF-8 byte. Those agree for everything in the BMP but disagree above it:
+	// an astral character is 0xD800-0xDBFF as UTF-16 units (sorting before
+	// U+E000-U+FFFF) yet 0xF0.. as UTF-8 bytes (sorting after). A key set mixing
+	// the two would produce a different dedup key here than in the reference
+	// client, silently splitting one subscription into two.
+	sort.Slice(keys, func(a, b int) bool { return lessUTF16(keys[a], keys[b]) })
 	builder.WriteByte('{')
 
 	for index, key := range keys {
@@ -100,7 +105,29 @@ func writeStableObject(builder *strings.Builder, value map[string]any) {
 	builder.WriteByte('}')
 }
 
-// formatNumber matches JSON.stringify: an integral float drops its decimal.
+// lessUTF16 compares two strings the way JavaScript's `<` does: by UTF-16 code
+// unit. Runes below U+10000 are one unit and compare as themselves; an astral
+// rune compares as its high surrogate, which is what puts it before U+E000.
+func lessUTF16(a string, b string) bool {
+	unitsA, unitsB := utf16.Encode([]rune(a)), utf16.Encode([]rune(b))
+
+	for index := 0; index < len(unitsA) && index < len(unitsB); index++ {
+		if unitsA[index] != unitsB[index] {
+			return unitsA[index] < unitsB[index]
+		}
+	}
+
+	return len(unitsA) < len(unitsB)
+}
+
+// formatNumber renders a number exactly as `String(v)` does in JavaScript,
+// which is what `JSON.stringify` emits for a finite number.
+//
+// Go's %g and ECMAScript disagree on when to use exponent notation and on how
+// to spell the exponent: Go switches below 1e-4 and zero-pads to two digits
+// ("1e-05"), ECMAScript switches below 1e-7 and never pads ("0.00001",
+// "1e-7"). A key is compared verbatim against one produced by the reference
+// client, so those spellings must match.
 func formatNumber(value float64) string {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
 		// Unreachable via EncodeWire (both are tagged before this runs), but
@@ -112,12 +139,49 @@ func formatNumber(value float64) string {
 		return strconv.FormatFloat(value, 'f', -1, 64)
 	}
 
-	return strconv.FormatFloat(value, 'g', -1, 64)
+	magnitude := math.Abs(value)
+
+	// ECMAScript uses positional notation down to 1e-7 and up to 1e21.
+	if magnitude >= 1e-6 && magnitude < 1e21 {
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	}
+
+	// Exponent form: strip Go's zero padding ("1e-07" -> "1e-7").
+	rendered := strconv.FormatFloat(value, 'e', -1, 64)
+	mantissa, exponent, found := strings.Cut(rendered, "e")
+
+	if !found {
+		return rendered
+	}
+
+	sign := ""
+
+	if strings.HasPrefix(exponent, "-") || strings.HasPrefix(exponent, "+") {
+		if exponent[0] == '-' {
+			sign = "-"
+		} else {
+			sign = "+"
+		}
+
+		exponent = exponent[1:]
+	}
+
+	exponent = strings.TrimLeft(exponent, "0")
+	if exponent == "" {
+		exponent = "0"
+	}
+
+	return mantissa + "e" + sign + exponent
 }
 
-// jsonString quotes a string the way JSON.stringify does. Go's encoder escapes
-// <, > and & for HTML safety by default, which JavaScript does not — that would
-// produce a different key for the same args, so it is turned off.
+// jsonString quotes a string the way JSON.stringify does.
+//
+// Two Go/JavaScript differences to undo. Go's encoder escapes <, > and & for
+// HTML safety, which JavaScript does not; SetEscapeHTML(false) turns that off.
+// Go also escapes U+2028 and U+2029 unconditionally (they are legal in JSON but
+// break a JavaScript source literal), while JSON.stringify emits them raw — so
+// those two are restored afterwards. Both would otherwise yield a different
+// dedup key than the reference client for the same arguments.
 func jsonString(value string) string {
 	var buffer bytes.Buffer
 
@@ -128,5 +192,9 @@ func jsonString(value string) string {
 		return `""`
 	}
 
-	return strings.TrimRight(buffer.String(), "\n")
+	quoted := strings.TrimRight(buffer.String(), "\n")
+	quoted = strings.ReplaceAll(quoted, `\u2028`, "\u2028")
+	quoted = strings.ReplaceAll(quoted, `\u2029`, "\u2029")
+
+	return quoted
 }

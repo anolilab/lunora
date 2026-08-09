@@ -113,17 +113,68 @@ const verbForKind = (kind: string | undefined): RuntimeVerb => {
     return kind === "action" ? "action" : "mutation";
 };
 
+/**
+ * True when a schema contains a value the generated models cannot carry.
+ *
+ * `v.bigint()` schemas as `{format:"int64",type:"integer"}` and `v.bytes()` as
+ * `{contentEncoding:"base64",type:"string"}`, because JSON Schema has no better
+ * carrier. quicktype faithfully renders those as a plain integer and a plain
+ * string — but the wire needs the TAGGED forms, `[TAG,"bigint","…"]` and
+ * `[TAG,"bytes","…"]`, which no generated field can produce. A model built from
+ * such a schema sends a number where the server's validator demands a bigint,
+ * and every call fails validation.
+ *
+ * `v.date()` is deliberately NOT in this set: it schemas as an integer and is
+ * genuinely epoch-milliseconds on the wire, so the plain rendering is correct.
+ *
+ * Walks nested properties and items, since the offending field is usually one
+ * level down inside an args object.
+ */
+const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
+    if (depth > 32 || schema === null || typeof schema !== "object") {
+        return false;
+    }
+
+    const node = schema as Record<string, unknown>;
+
+    if (node["type"] === "integer" && node["format"] === "int64") {
+        return true;
+    }
+
+    if (node["type"] === "string" && node["contentEncoding"] === "base64") {
+        return true;
+    }
+
+    const { properties } = node;
+
+    if (
+        properties !== null &&
+        typeof properties === "object" &&
+        Object.values(properties as Record<string, unknown>).some((child) => hasUnrepresentableWireType(child, depth + 1))
+    ) {
+        return true;
+    }
+
+    return ["additionalProperties", "items"].some((key) => hasUnrepresentableWireType(node[key], depth + 1));
+};
+
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
 const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     const [namespace = "", functionName = ""] = method.name.split(":");
     const base = `${toPascalCase(namespace)}${toPascalCase(functionName)}`;
 
+    const argsSchema = method.params?.[0]?.schema;
+    const resultSchema = method.result?.schema;
+
+    // A schema carrying a bigint or bytes gets NO generated model: the field
+    // would render as a plain number/string and every call would fail the
+    // server's validator. The caller passes wire values directly instead.
     return {
-        argsType: isTypedSchema(method.params?.[0]?.schema) ? `${base}Args` : undefined,
+        argsType: isTypedSchema(argsSchema) && !hasUnrepresentableWireType(argsSchema) ? `${base}Args` : undefined,
         functionName,
         functionPath: method.name,
         namespace,
-        resultType: isTypedSchema(method.result?.schema) ? `${base}Result` : undefined,
+        resultType: isTypedSchema(resultSchema) && !hasUnrepresentableWireType(resultSchema) ? `${base}Result` : undefined,
         summary: method.summary ?? method.name,
         verb: verbForKind(method["x-lunora-function-kind"]),
     };
@@ -291,6 +342,18 @@ const withDeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: str
     });
 };
 
+/**
+ * Functions whose args or result carry a bigint/bytes, so no typed model was
+ * generated for them. Reported by the CLI: the surface silently taking an
+ * untyped parameter would otherwise look like an oversight rather than a
+ * deliberate, documented limitation.
+ */
+const unrepresentableFunctions = (document: OpenRpcDocument): ReadonlyArray<string> =>
+    document.methods
+        .filter((method) => hasUnrepresentableWireType(method.params?.[0]?.schema) || hasUnrepresentableWireType(method.result?.schema))
+        .map((method) => method.name)
+        .toSorted((a, b) => a.localeCompare(b));
+
 /** Model names that were predicted but not declared — reported by the CLI. */
 const undeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: string): ReadonlyArray<string> =>
     [
@@ -315,6 +378,7 @@ export {
     allMethods,
     assertGeneratable,
     generatedHeaderLines,
+    hasUnrepresentableWireType,
     isTypedSchema,
     modelSources,
     parseMethod,
@@ -323,6 +387,7 @@ export {
     toPascalCase,
     toSnakeCase,
     undeclaredModels,
+    unrepresentableFunctions,
     verbForKind,
     withDeclaredModels,
 };

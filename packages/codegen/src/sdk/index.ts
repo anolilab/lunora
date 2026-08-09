@@ -10,7 +10,7 @@
 
 import renderModels from "./models";
 import type { OpenRpcDocument } from "./spec";
-import { assertGeneratable, parseSpec, undeclaredModels, withDeclaredModels } from "./spec";
+import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunctions, withDeclaredModels } from "./spec";
 import type { SdkTarget } from "./target";
 import goTarget from "./targets/go";
 import pythonTarget from "./targets/python";
@@ -35,6 +35,14 @@ interface SdkResult {
      * finished while returning `Any` everywhere.
      */
     undeclared: ReadonlyArray<string>;
+
+    /**
+     * Functions whose args or result carry a `v.bigint()` or `v.bytes()`. No
+     * typed model can represent those — the wire needs a tagged value that no
+     * generated field produces — so their parameters stay untyped and the
+     * caller passes wire values directly.
+     */
+    unrepresentable: ReadonlyArray<string>;
 }
 
 /**
@@ -57,7 +65,11 @@ const generateSdk = async (document: OpenRpcDocument, target: SdkTarget): Promis
     const models = await renderModels(document, target);
     const namespaces = withDeclaredModels(parsed, models);
 
-    return { files: target.render({ models, namespaces }), undeclared: undeclaredModels(parsed, models) };
+    return {
+        files: target.render({ models, namespaces }),
+        undeclared: undeclaredModels(parsed, models),
+        unrepresentable: unrepresentableFunctions(document),
+    };
 };
 
 export { generateSdk, SDK_LANGUAGES, SDK_TARGETS };
