@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "1.0.0-alpha.129",
+    "version": "1.0.0-alpha.130",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -68,10 +68,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "1.0.0-alpha.100",
-        "@lunora/container": "1.0.0-alpha.26",
-        "@lunora/errors": "1.0.0-alpha.17",
-        "@lunora/seed": "1.0.0-alpha.67",
+        "@lunora/codegen": "1.0.0-alpha.101",
+        "@lunora/container": "1.0.0-alpha.27",
+        "@lunora/errors": "1.0.0-alpha.18",
+        "@lunora/seed": "1.0.0-alpha.68",
         "@visulima/colorize": "2.0.0",
         "@visulima/find-ai-runner": "1.0.0",
         "dockerode": "catalog:tooling",
