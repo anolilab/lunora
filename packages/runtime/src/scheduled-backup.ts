@@ -23,8 +23,22 @@ const NDJSON_ENCODER = new TextEncoder();
 /** Safety bound on the retention list loop — far above any realistic backup count. */
 const MAX_PRUNE_PAGES = 1000;
 
-/** How many deleted keys the retention log names before summarising the rest. */
+/** How many keys a retention line names before summarising the rest. */
 const MAX_LOGGED_PRUNED_KEYS = 10;
+
+/**
+ * Snapshots one prune run will remove.
+ *
+ * Each costs two R2 calls, against a Worker's subrequest budget — and this
+ * number can be large exactly once: a daily cron kept for two years leaves
+ * ~700 snapshots past a 14-day window the first time anyone prunes. Hitting the
+ * budget mid-run would leave the bucket half-deleted, so the run stops at a
+ * bound it can finish and reports what is left for the next one.
+ */
+const MAX_PRUNE_DELETES = 200;
+
+/** Deletes in flight at once. Enough to hide round-trip latency, few enough to stay polite. */
+const PRUNE_DELETE_CONCURRENCY = 8;
 
 /**
  * Custom-metadata key stamped on every sidecar this backup writes, holding the
@@ -64,16 +78,29 @@ interface StaleBackups {
     stale: string[];
 }
 
-/** What a prune removed: the sidecar keys it deleted, each naming a snapshot at the same key without the suffix. */
+/** What a prune did. Keys are sidecar keys; each names a snapshot at the same key without the suffix. */
 interface PrunedBackups {
+    /** Removed, snapshot and sidecar both. */
     deleted: string[];
+    /** Attempted and not removed. The snapshot may already be gone — the sidecar survives, so the next run retries. */
+    failed: string[];
+    /** Confirmed keys retention no longer owns: already pruned, or no longer eligible. */
+    ignored: number;
+    /** Still past the window afterwards — they appeared after the preview, or the run stopped at its cap. Run again. */
+    remaining: number;
 }
 
 /** What retention would delete on the next run, and the configuration that decides it. */
 interface BackupRetentionPreview {
     /** The trigger retention belongs to. `undefined` when no scheduled backup is configured. */
     cron?: string;
-    /** Snapshots this cron owns — legacy sidecars and other writers' are not counted, because retention never touches them. */
+
+    /**
+     * Snapshots this cron owns — legacy sidecars and other writers' are not
+     * counted, because retention never touches them. `0` when there is no
+     * window (`keep === 0`): with nothing to select against, the bucket is not
+     * listed at all.
+     */
     eligible: number;
     /** `backupRetain`; `0` when unset, which is what makes the selection empty. */
     keep: number;
@@ -88,6 +115,21 @@ interface BackupManifest extends BackupManifestEntry {
     scheduledTime: number;
     sha256: string;
 }
+
+/**
+ * Name up to {@link MAX_LOGGED_PRUNED_KEYS} snapshots, summarising the rest.
+ *
+ * Snapshot keys, not sidecar keys: the sidecar is an implementation detail of
+ * the index, and the file an operator goes looking for is the `.ndjson`. The
+ * CLI prints the same form, so a prediction, a confirmation and this record
+ * name one string for one snapshot.
+ */
+const nameSnapshots = (manifestKeys: ReadonlyArray<string>): string => {
+    const shown = manifestKeys.slice(0, MAX_LOGGED_PRUNED_KEYS).map((key) => backupObjectKeyOfManifest(key));
+    const rest = manifestKeys.length - shown.length;
+
+    return `${shown.join(", ")}${rest > 0 ? ` (+${String(rest)} more)` : ""}`;
+};
 
 /** Join the encoded rows into the exact bytes that get hashed and stored. */
 const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Uint8Array<ArrayBuffer> => {
@@ -106,10 +148,11 @@ const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Ui
  * The sidecars this cron's retention would delete, newest-first ordering
  * already applied — the selection, with no deletion in it.
  *
- * Retention and `GET /_lunora/admin/backup/retention` both call this, and that
- * is the point: a preview that can disagree with the prune is worse than no
+ * Three callers, one rule: `previewBackupRetention` (what would go),
+ * `pruneBackups` (what goes), and `runScheduledBackup` (what it reports and
+ * leaves alone). A preview that can disagree with the prune is worse than no
  * preview, and this branch has already shown twice what happens when one rule
- * gets written in two places. Nothing here deletes, so the preview cannot.
+ * gets written in two places. Nothing here deletes, so neither reader can.
  *
  * The writer check is the whole point. Both backup writers share this prefix
  * and this sidecar suffix so `lunora backup list --bucket` shows one history —
@@ -131,12 +174,17 @@ const concatChunks = (chunks: ReadonlyArray<Uint8Array>, totalBytes: number): Ui
  * the safe direction. Delete those by hand once.
  *
  * Backup keys embed an ISO timestamp with `:`/`.` swapped for `-`, which sorts
- * lexicographically by recency, so a descending sort is a recency sort. Empty
- * when retention is unset or non-positive — nothing is ever deleted without
- * `backupRetain`.
+ * lexicographically by recency, so a descending sort is a recency sort.
+ *
+ * Empty unless `retain` is a positive integer. `Number.isInteger` rather than
+ * `> 0`, because `NaN` passes every comparison — `backupRetain:
+ * Number(env.BACKUP_RETAIN)` with the variable unset or misspelled would
+ * otherwise slip through and `slice(NaN)` coerces to `slice(0)`, selecting the
+ * entire eligible population for deletion. "No window" must never be
+ * confusable with "a window of zero".
  */
 const selectStaleBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<StaleBackups> => {
-    if (retain === undefined || retain <= 0) {
+    if (retain === undefined || !Number.isInteger(retain) || retain <= 0) {
         return { eligible: 0, stale: [] };
     }
 
@@ -165,45 +213,89 @@ const selectStaleBackups = async (store: BackupStore, prefix: string, retain: nu
 };
 
 /**
- * Enforce `backupRetain` by deleting every snapshot {@link selectStaleBackups}
- * picks, plus its sidecar.
+ * Delete the snapshots an operator confirmed, and only those.
+ *
+ * `confirmed` carries the sidecar keys the operator was shown and agreed to.
+ * The server still decides eligibility — it re-runs the selection, so a caller
+ * cannot name a key retention does not own — but the deletion is the
+ * **intersection**. Without that, the confirmed list and the deleted list are
+ * two computations separated by however long a human takes to read a prompt: a
+ * cron fire inside that window writes a newer snapshot, pushes one more past
+ * the window, and the prune removes a snapshot the operator was shown as kept.
+ * Irreversibly.
+ *
+ * The two sides can differ either way, and both are reported rather than
+ * silently absorbed: keys that stopped being eligible (`ignored`), and eligible
+ * snapshots this run did not touch — because they appeared after the preview,
+ * or because they were past {@link MAX_PRUNE_DELETES} (`remaining`).
  */
-const pruneBackups = async (store: BackupStore, prefix: string, retain: number | undefined, cron: string): Promise<PrunedBackups> => {
+const pruneBackups = async (
+    store: BackupStore,
+    prefix: string,
+    retain: number | undefined,
+    cron: string,
+    confirmed: ReadonlyArray<string>,
+): Promise<PrunedBackups> => {
     const { stale } = await selectStaleBackups(store, prefix, retain, cron);
+    const wanted = new Set(confirmed);
+    const agreed = stale.filter((manifestKey) => wanted.has(manifestKey));
+    const batch = agreed.slice(0, MAX_PRUNE_DELETES);
+    // Eligible but untouched: appeared since the preview, or past the cap.
+    const remaining = stale.length - batch.length;
+    const ignored = confirmed.length - agreed.length;
 
-    if (stale.length === 0) {
-        return { deleted: [] };
+    if (batch.length === 0) {
+        return { deleted: [], failed: [], ignored, remaining };
     }
 
-    await Promise.all(
-        stale.map(async (manifestKey) => {
-            // Snapshot first, sidecar second. A sidecar without its snapshot
-            // is a listable entry that fails to restore; a snapshot without
-            // its sidecar is invisible to retention forever, because the
-            // marker retention prunes on lives on the sidecar. If only one
-            // delete lands, this order is the recoverable one — the next run
-            // sees the sidecar again and retries.
-            await store.delete(backupObjectKeyOfManifest(manifestKey));
-            await store.delete(manifestKey);
-        }),
-    );
+    const deleted: string[] = [];
+    const failed: string[] = [];
+
+    for (let index = 0; index < batch.length; index += PRUNE_DELETE_CONCURRENCY) {
+        // eslint-disable-next-line no-await-in-loop -- one window at a time is what bounds the in-flight requests
+        const settled = await Promise.allSettled(
+            batch.slice(index, index + PRUNE_DELETE_CONCURRENCY).map(async (manifestKey) => {
+                // Snapshot first, sidecar second. A sidecar without its snapshot
+                // is a listable entry that fails to restore; a snapshot without
+                // its sidecar is invisible to retention forever, because the
+                // marker retention prunes on lives on the sidecar. If only one
+                // delete lands, this order is the recoverable one — the next run
+                // sees the sidecar again and retries.
+                await store.delete(backupObjectKeyOfManifest(manifestKey));
+                await store.delete(manifestKey);
+
+                return manifestKey;
+            }),
+        );
+
+        for (const [offset, outcome] of settled.entries()) {
+            if (outcome.status === "fulfilled") {
+                deleted.push(outcome.value);
+            } else {
+                // Reported, not thrown: `allSettled` rather than `all` because a
+                // failure partway through has already destroyed backups, and
+                // rejecting here would skip the record of what went and hand the
+                // operator a bare 500.
+                failed.push(batch[index + offset] as string);
+            }
+        }
+    }
 
     // Say what was destroyed. Both retention defects found in review (pruning
     // an operator's snapshots, then another deployment's) were silent
     // successes, reconstructed afterwards from a missing file — so a prune
     // leaves a record even though an operator asked for this one.
-    //
-    // Keys are capped because a first prune on an old bucket can remove many,
-    // and a log line nobody can read is its own kind of silence.
-    const shown = stale.slice(0, MAX_LOGGED_PRUNED_KEYS);
-    const rest = stale.length - shown.length;
+    if (deleted.length > 0) {
+        // eslint-disable-next-line no-console -- server-side diagnostic, same channel as the retention-report warning; a Worker has no other operator-visible sink here.
+        console.info(`[lunora] backup prune kept the newest ${String(retain)} and deleted ${String(deleted.length)}: ${nameSnapshots(deleted)}`);
+    }
 
-    // eslint-disable-next-line no-console -- server-side diagnostic, same channel as the retention-failure warning; a Worker has no other operator-visible sink here.
-    console.info(
-        `[lunora] backup prune kept the newest ${String(retain)} and deleted ${String(stale.length)}: ${shown.join(", ")}${rest > 0 ? ` (+${String(rest)} more)` : ""}`,
-    );
+    if (failed.length > 0) {
+        // eslint-disable-next-line no-console -- see above; a partial failure has already deleted snapshots and must not be silent
+        console.warn(`[lunora] backup prune failed to remove ${String(failed.length)}: ${nameSnapshots(failed)}`);
+    }
 
-    return { deleted: stale };
+    return { deleted, failed, ignored, remaining };
 };
 
 /**
@@ -369,11 +461,15 @@ const runScheduledBackup = async (
  * Delete every snapshot past the retention window — the one thing in the
  * runtime that removes a backup, and only when an operator asks.
  *
+ * `confirmed` is the set the operator was shown and agreed to; only the
+ * intersection with what is still eligible is removed.
+ *
  * Refuses without `backupRetain`: there is no window, so nothing is past it,
  * and inventing a default here would be the implicit deletion this exists to
- * end.
+ * end. `Number.isInteger` for the same reason `selectStaleBackups` uses it —
+ * `NaN` slips a `<= 0` check and then selects everything.
  */
-const runBackupPrune = async (options: WorkerOptions): Promise<PrunedBackups> => {
+const runBackupPrune = async (options: WorkerOptions, confirmed: ReadonlyArray<string>): Promise<PrunedBackups> => {
     const store = options.backupStore;
 
     if (!store) {
@@ -382,14 +478,16 @@ const runBackupPrune = async (options: WorkerOptions): Promise<PrunedBackups> =>
 
     const cron = options.backupCron;
 
-    if (cron === undefined || options.backupRetain === undefined || options.backupRetain <= 0) {
+    const retain = options.backupRetain;
+
+    if (cron === undefined || retain === undefined || !Number.isInteger(retain) || retain <= 0) {
         throw new LunoraError(
             "backup prune needs a retention window: set `backupRetain` (and `backupCron`, which decides whose snapshots retention owns) on the worker. Without one there is nothing past the window to remove.",
             { code: "BACKUP_RETENTION_NOT_CONFIGURED", status: 400 },
         );
     }
 
-    return pruneBackups(store, normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX), options.backupRetain, cron);
+    return pruneBackups(store, normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX), retain, cron, confirmed);
 };
 
 export type { BackupManifest, BackupRetentionPreview, PrunedBackups };

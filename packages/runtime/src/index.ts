@@ -1,5 +1,13 @@
 export type { BackupManifestEntry } from "./backup-layout";
-export { BACKUP_KEY_PREFIX, backupManifestKey, backupObjectKey, isBackupManifestEntry, isBackupManifestKey, normalizeBackupPrefix } from "./backup-layout";
+export {
+    BACKUP_KEY_PREFIX,
+    backupManifestKey,
+    backupObjectKey,
+    backupObjectKeyOfManifest,
+    isBackupManifestEntry,
+    isBackupManifestKey,
+    normalizeBackupPrefix,
+} from "./backup-layout";
 export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format";
 export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {

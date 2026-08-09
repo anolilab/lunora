@@ -238,8 +238,9 @@ stamped with its cron expression, and the prune matches on it. Snapshots taken
 by hand, and snapshots from a second deployment sharing the bucket, are left
 alone — so two workers on one bucket each keep the retention they configured.
 (Sidecars written before this marker existed are never eligible; delete those by
-hand once.) A failed prune is reported and does not fail the
-backup that already landed.
+hand once.) A failed retention _report_ is warned about and does not
+fail the backup that already landed — the run itself deletes nothing to fail
+at.
 
 `lunora backup list --bucket <name>` reads the same layout, so scheduled
 snapshots and ones taken by hand with `lunora backup create --bucket <name>`

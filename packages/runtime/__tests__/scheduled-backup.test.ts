@@ -234,10 +234,17 @@ describe("createWorker — scheduled backup", () => {
         expect(store.put).not.toHaveBeenCalled();
     });
 
-    /** `POST /_lunora/admin/backup/prune` — the only thing that deletes a backup. */
-    const pruneVia = async (worker: ReturnType<typeof createWorker>): Promise<{ deleted: string[] }> => {
+    /** `POST …/backup/prune` with a body — the only thing that deletes a backup. */
+    const pruneWith = async (
+        worker: ReturnType<typeof createWorker>,
+        confirm: ReadonlyArray<string>,
+    ): Promise<{ deleted: string[]; failed: string[]; ignored: number; remaining: number }> => {
         const response = await worker.fetch(
-            new Request("https://app.example/_lunora/admin/backup/prune", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/backup/prune", {
+                body: JSON.stringify({ confirm }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
             {},
             fakeContext,
         );
@@ -247,8 +254,43 @@ describe("createWorker — scheduled backup", () => {
         return response.json();
     };
 
+    const previewOf = async (store: ReturnType<typeof memoryBackupStore>): Promise<{ eligible: number; keep: number; wouldDelete: string[] }> => {
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/retention", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        return response.json();
+    };
+
+    /**
+     * The operator's path: read what would go, confirm exactly that, prune. The
+     * confirmation is what the deletion is bound to, so a test that skipped the
+     * preview would not be testing the real flow.
+     */
+    const pruneVia = async (
+        worker: ReturnType<typeof createWorker>,
+        store: ReturnType<typeof memoryBackupStore>,
+    ): Promise<{ deleted: string[]; failed: string[]; ignored: number; remaining: number }> => {
+        const preview = await previewOf(store);
+
+        return pruneWith(worker, preview.wouldDelete);
+    };
+
     it("prunes its own snapshots and leaves operator-taken ones alone", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const store = memoryBackupStore();
         // What `lunora backup create --bucket` writes: the same prefix and the
@@ -277,7 +319,7 @@ describe("createWorker — scheduled backup", () => {
         // with sharing the prefix.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
-        await pruneVia(worker);
+        await pruneVia(worker, store);
 
         expect(store.objects.has(operatorKey)).toBe(true);
         expect(store.objects.has(`${operatorKey}.manifest.json`)).toBe(true);
@@ -286,7 +328,7 @@ describe("createWorker — scheduled backup", () => {
     });
 
     it("leaves another deployment's snapshots alone, and costs no per-object reads", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const store = memoryBackupStore();
         // A second worker backing up into the same bucket and prefix, on its own
@@ -310,7 +352,7 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
-        await pruneVia(worker);
+        await pruneVia(worker, store);
 
         expect(store.objects.has(otherKey)).toBe(true);
         expect(store.objects.has(`${otherKey}.manifest.json`)).toBe(true);
@@ -472,7 +514,7 @@ describe("createWorker — scheduled backup", () => {
     });
 
     it("prunes older snapshots beyond backupRetain", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = memoryBackupStore();
         // Two pre-existing snapshots already on the store (older + newer). Their
@@ -501,7 +543,7 @@ describe("createWorker — scheduled backup", () => {
         // Firing adds a third (newest) snapshot; a prune with retain=2 must
         // then drop the oldest.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
-        await pruneVia(worker);
+        await pruneVia(worker, store);
 
         expect(store.objects.has("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson")).toBe(false);
         expect(store.objects.has("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson")).toBe(true);
@@ -545,27 +587,6 @@ describe("createWorker — scheduled backup", () => {
         seed("2026-05-03T11:00:00.000Z", undefined);
     };
 
-    const previewOf = async (store: ReturnType<typeof memoryBackupStore>): Promise<{ eligible: number; keep: number; wouldDelete: string[] }> => {
-        const worker = createWorker({
-            adminToken: ADMIN_TOKEN,
-            backupCron: BACKUP_CRON,
-            backupRetain: 1,
-            backupStore: store,
-            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
-            shardDO: noopNamespace,
-        });
-
-        const response = await worker.fetch(
-            new Request("https://app.example/_lunora/admin/backup/retention", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
-            {},
-            fakeContext,
-        );
-
-        expect(response.status).toBe(200);
-
-        return response.json();
-    };
-
     it("previews exactly what the prune then deletes", async () => {
         expect.assertions(9);
 
@@ -596,7 +617,9 @@ describe("createWorker — scheduled backup", () => {
         // retention — the same selection, reached through the verb.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        const { deleted: reported } = await pruneVia(worker);
+        // Confirming the same list the operator was shown — the prune deletes
+        // the intersection of that with what is still eligible.
+        const { deleted: reported } = await pruneWith(worker, preview.wouldDelete);
 
         // What the prune actually removed.
         const deleted = [...before].filter((key) => !pruneStore.objects.has(key)).filter((key) => key.endsWith(".manifest.json"));
@@ -686,7 +709,7 @@ describe("createWorker — scheduled backup", () => {
     });
 
     it("names what a prune deleted, and says nothing when it deletes nothing", async () => {
-        expect.assertions(5);
+        expect.assertions(7);
 
         // A prune's deletes are irreversible, so a successful one has to leave
         // a record — both retention defects found in review were silent
@@ -712,15 +735,15 @@ describe("createWorker — scheduled backup", () => {
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
         info.mockClear();
-        await pruneVia(worker);
+        await pruneVia(worker, store);
 
-        expect(info).toHaveBeenCalledWith(expect.stringContaining("deleted 1: backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json"));
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("deleted 1: backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson"));
 
         info.mockClear();
 
         // Second prune: the newest is the only one this cron kept, and retain=1
         // leaves nothing past the window.
-        await pruneVia(worker);
+        await pruneVia(worker, store);
 
         expect(store.objects.has(key)).toBe(false);
         expect(info).not.toHaveBeenCalled();
@@ -761,6 +784,159 @@ describe("createWorker — scheduled backup", () => {
         info.mockRestore();
     });
 
+    it("never deletes a snapshot the operator was shown as kept", async () => {
+        expect.assertions(5);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        const preview = await previewOf(store);
+
+        // A cron fires while the operator is reading the prompt: it writes a
+        // newer snapshot, which pushes one more past the window. Without the
+        // confirmation binding the deletion, the prune would remove a snapshot
+        // the operator was just shown as kept — irreversibly.
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+
+        const result = await pruneWith(worker, preview.wouldDelete);
+
+        expect(result.deleted).toStrictEqual(preview.wouldDelete);
+        // The newly-eligible one is reported, not deleted.
+        expect(result.remaining).toBe(1);
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+    });
+
+    it("treats a NaN retention window as no window at all", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            // `Number(env.BACKUP_RETAIN)` with the variable unset. `NaN <= 0` is
+            // false, so it slips a naive guard, and `slice(NaN)` is `slice(0)` —
+            // which would select every eligible snapshot for deletion.
+            backupRetain: Number.NaN,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/prune", {
+                body: JSON.stringify({ confirm: ["backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        expect(vi.mocked(store.delete)).not.toHaveBeenCalled();
+
+        // The preview has to agree — asked of THIS worker, not a fresh one, so
+        // it is the NaN window being reported on.
+        const previewResponse = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/retention", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+        const preview: { wouldDelete: string[] } = await previewResponse.json();
+
+        expect(preview.wouldDelete).toStrictEqual([]);
+    });
+
+    it("records what a partial failure destroyed instead of throwing it away", async () => {
+        expect.assertions(6);
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const doomed = "backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson";
+
+        vi.mocked(store.delete).mockImplementation(async (key: string) => {
+            if (key === doomed) {
+                throw new Error("R2 unavailable");
+            }
+
+            store.objects.delete(key);
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const preview = await previewOf(store);
+        const result = await pruneWith(worker, preview.wouldDelete);
+
+        // One failed, one landed. `Promise.all` would have rejected on the
+        // first failure — after deleting backups — and returned a bare 500 with
+        // no record of what went.
+        expect(result.failed).toStrictEqual([`${doomed}.manifest.json`]);
+        expect(result.deleted).toStrictEqual(["backups/lunora-backup-2026-06-02T03-00-00-000Z.ndjson.manifest.json"]);
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("deleted 1"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to remove 1"));
+
+        info.mockRestore();
+        warn.mockRestore();
+    });
+
+    it("walks every page of a listing that spans more than one", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        // The real R2 pages at 1000 objects, and `include: ["customMetadata"]`
+        // can return fewer — a selection that read only the first page would
+        // silently under-select, which on a large bucket means retention
+        // quietly stops. The in-memory double never truncates, so the loop was
+        // never exercised.
+        const pages = vi.mocked(store.list).getMockImplementation();
+
+        vi.mocked(store.list).mockImplementation(async (listOptions) => {
+            const all = await pages!(listOptions);
+
+            if (listOptions?.cursor === undefined) {
+                return { cursor: "page-2", objects: all.objects.slice(0, 2), truncated: true };
+            }
+
+            return { objects: all.objects.slice(2) };
+        });
+
+        const preview = await previewOf(store);
+
+        // Same answer as the single-page case: the two ours past the window.
+        expect(preview.wouldDelete).toStrictEqual([
+            "backups/lunora-backup-2026-06-02T03-00-00-000Z.ndjson.manifest.json",
+            "backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json",
+        ]);
+        expect(vi.mocked(store.list).mock.calls.length).toBeGreaterThan(1);
+    });
+
     it("refuses to prune without a retention window", async () => {
         expect.assertions(3);
 
@@ -780,7 +956,11 @@ describe("createWorker — scheduled backup", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_lunora/admin/backup/prune", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/backup/prune", {
+                body: JSON.stringify({ confirm: ["backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                method: "POST",
+            }),
             {},
             fakeContext,
         );

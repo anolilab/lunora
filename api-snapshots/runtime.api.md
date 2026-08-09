@@ -1491,6 +1491,9 @@ interface PipelineLogSinkOptions {
 ```ts
 interface PrunedBackups {
     deleted: string[];
+    failed: string[];
+    ignored: number;
+    remaining: number;
 }
 ```
 
@@ -2237,6 +2240,12 @@ const backupManifestKey: (objectKey: string) => string;
 
 ```ts
 const backupObjectKey: (prefix: string, id: string) => string;
+```
+
+### `backupObjectKeyOfManifest` (const)
+
+```ts
+const backupObjectKeyOfManifest: (manifestKey: string) => string;
 ```
 
 ### `buildHealthRoutes` (const)

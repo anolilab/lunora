@@ -4269,6 +4269,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `backupObjectKeyOfManifest` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `buildHealthRoutes` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.

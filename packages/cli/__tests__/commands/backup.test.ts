@@ -480,7 +480,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: previewFetch(
+                adminFetch: previewFetch(
                     {
                         cron: "0 3 * * *",
                         eligible: 5,
@@ -512,7 +512,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: previewFetch({ cron: "0 3 * * *", eligible: 4, keep: 0, prefix: "backups/", wouldDelete: [] }),
+                adminFetch: previewFetch({ cron: "0 3 * * *", eligible: 4, keep: 0, prefix: "backups/", wouldDelete: [] }),
                 subcommand: "retention",
                 token: "t",
                 url: "http://localhost:8787",
@@ -531,7 +531,7 @@ describe("lunora backup", () => {
                 cwd: workDir,
                 logger,
                 // The legacy-bucket case: snapshots exist, none carry the marker.
-                pitrFetch: previewFetch({ cron: "0 3 * * *", eligible: 0, keep: 3, prefix: "backups/", wouldDelete: [] }),
+                adminFetch: previewFetch({ cron: "0 3 * * *", eligible: 0, keep: 3, prefix: "backups/", wouldDelete: [] }),
                 subcommand: "retention",
                 token: "t",
                 url: "http://localhost:8787",
@@ -582,7 +582,7 @@ describe("lunora backup", () => {
 
                 calls.push({ method, url });
 
-                const body = method === "POST" ? { deleted: PREVIEW.wouldDelete } : preview;
+                const body = method === "POST" ? { deleted: PREVIEW.wouldDelete, failed: [], ignored: 0, remaining: 0 } : preview;
 
                 return {
                     headers: new Headers({ "content-type": "application/json" }),
@@ -605,7 +605,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: pruneFetch(calls),
+                adminFetch: pruneFetch(calls),
                 subcommand: "prune",
                 token: "t",
                 url: "http://localhost:8787",
@@ -617,7 +617,7 @@ describe("lunora backup", () => {
         });
 
         it("shows what will go before deleting, and deletes it with --yes", async () => {
-            expect.assertions(4);
+            expect.assertions(5);
 
             const { logger, logs } = capturingLogger();
             const calls: { method: string; url: string }[] = [];
@@ -625,7 +625,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: pruneFetch(calls),
+                adminFetch: pruneFetch(calls),
                 subcommand: "prune",
                 token: "t",
                 url: "http://localhost:8787",
@@ -641,6 +641,140 @@ describe("lunora backup", () => {
             ]);
             expect(logs.some((line) => line.includes("would keep the newest 2 of 4 under backups/ and delete 2"))).toBe(true);
             expect(logs.some((line) => line.includes("deleted 2 backup(s)"))).toBe(true);
+            // The snapshot key, not the sidecar — the same string the worker's
+            // own record names, so the two read as one story.
+            expect(logs.some((line) => line.includes("  backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson") && !line.includes(".manifest.json"))).toBe(
+                true,
+            );
+        });
+
+        it("asks before deleting, and sends back exactly what was confirmed", async () => {
+            expect.assertions(4);
+
+            const { logger } = capturingLogger();
+            const calls: { body?: string; method: string; url: string }[] = [];
+            const asked: string[] = [];
+
+            const recordingFetch: FetchLike = async (url, init) => {
+                const method = init?.method ?? "GET";
+
+                calls.push({ body: init?.body, method, url });
+
+                const body = method === "POST" ? { deleted: PREVIEW.wouldDelete, failed: [], ignored: 0, remaining: 0 } : PREVIEW;
+
+                return {
+                    headers: new Headers({ "content-type": "application/json" }),
+                    json: async () => body,
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify(body),
+                };
+            };
+
+            const result = await runBackupCommand({
+                confirm: async (prompt) => {
+                    asked.push(prompt);
+
+                    return true;
+                },
+                cwd: workDir,
+                logger,
+                adminFetch: recordingFetch,
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(0);
+            // The one safety control on an irreversible operation, actually executed.
+            expect(asked).toStrictEqual(["delete 2 backup(s)? This cannot be undone. [y/N] "]);
+            // The confirmed set travels with the delete, so a snapshot that
+            // became eligible while the prompt was open is not swept up.
+            expect(JSON.parse(calls[1]?.body ?? "{}")).toStrictEqual({ confirm: PREVIEW.wouldDelete });
+            expect(calls.map((call) => call.method)).toStrictEqual(["GET", "POST"]);
+        });
+
+        it("deletes nothing when the operator declines", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            const result = await runBackupCommand({
+                confirm: async () => false,
+                cwd: workDir,
+                logger,
+                adminFetch: pruneFetch(calls),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
+            expect(logs.some((line) => line.includes("nothing was deleted"))).toBe(true);
+        });
+
+        it("reports a partial failure as a failure", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+
+            const partialFetch: FetchLike = async (_url, init) => {
+                const body =
+                    (init?.method ?? "GET") === "POST"
+                        ? { deleted: [PREVIEW.wouldDelete[0]], failed: [PREVIEW.wouldDelete[1]], ignored: 0, remaining: 2 }
+                        : PREVIEW;
+
+                return {
+                    headers: new Headers({ "content-type": "application/json" }),
+                    json: async () => body,
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify(body),
+                };
+            };
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                adminFetch: partialFetch,
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+                yes: true,
+            });
+
+            // A run that destroyed some backups and failed on others is not a
+            // success, and the operator needs to know both halves.
+            expect(result.code).toBe(1);
+            expect(logs.some((line) => line.includes("could not be removed"))).toBe(true);
+            expect(logs.some((line) => line.includes("run `lunora backup prune` again"))).toBe(true);
+        });
+
+        it("refuses a destination flag rather than pruning something else", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            // `--bucket archive-2024` reads as "prune that bucket"; the worker
+            // would prune whatever it is wired to. On the one command with no
+            // undo, that is worth refusing over.
+            const result = await runBackupCommand({
+                bucket: "archive-2024",
+                cwd: workDir,
+                logger,
+                adminFetch: pruneFetch(calls),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+                yes: true,
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls).toStrictEqual([]);
+            expect(logs.some((line) => line.includes("--bucket"))).toBe(true);
         });
 
         it("deletes nothing when the window holds everything", async () => {
@@ -652,7 +786,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: pruneFetch(calls, { ...PREVIEW, wouldDelete: [] }),
+                adminFetch: pruneFetch(calls, { ...PREVIEW, wouldDelete: [] }),
                 subcommand: "prune",
                 token: "t",
                 url: "http://localhost:8787",
@@ -675,7 +809,7 @@ describe("lunora backup", () => {
                 logger,
                 // `backupRetain` unset: there is no window, so nothing is past
                 // it and a default must not be invented.
-                pitrFetch: pruneFetch(calls, { ...PREVIEW, keep: 0, wouldDelete: [] }),
+                adminFetch: pruneFetch(calls, { ...PREVIEW, keep: 0, wouldDelete: [] }),
                 subcommand: "prune",
                 token: "t",
                 url: "http://localhost:8787",
@@ -718,7 +852,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: captureFetch(calls, { current: "bm-123" }),
+                adminFetch: captureFetch(calls, { current: "bm-123" }),
                 subcommand: "pitr",
                 token: "admintok",
                 url: "http://localhost:8787",
@@ -743,7 +877,7 @@ describe("lunora backup", () => {
                 at: "2026-06-01T00:00:00.000Z",
                 cwd: workDir,
                 logger,
-                pitrFetch: captureFetch(calls, { current: "bm-now", forTime: "bm-then" }),
+                adminFetch: captureFetch(calls, { current: "bm-now", forTime: "bm-then" }),
                 shard: "tenant-7",
                 subcommand: "pitr",
                 token: "admintok",
@@ -767,7 +901,7 @@ describe("lunora backup", () => {
                 bookmark: "bm-target",
                 cwd: workDir,
                 logger,
-                pitrFetch: captureFetch(calls, { restoredTo: "bm-target", undoBookmark: "bm-undo" }),
+                adminFetch: captureFetch(calls, { restoredTo: "bm-target", undoBookmark: "bm-undo" }),
                 restart: true,
                 restore: true,
                 subcommand: "pitr",
@@ -792,7 +926,7 @@ describe("lunora backup", () => {
             const result = await runBackupCommand({
                 cwd: workDir,
                 logger,
-                pitrFetch: captureFetch(calls, {}),
+                adminFetch: captureFetch(calls, {}),
                 restore: true,
                 subcommand: "pitr",
                 token: "admintok",
@@ -813,7 +947,7 @@ describe("lunora backup", () => {
                 at: "2026-06-01T00:00:00.000Z",
                 cwd: workDir,
                 logger,
-                pitrFetch: captureFetch(calls, {}),
+                adminFetch: captureFetch(calls, {}),
                 prod: true,
                 restore: true,
                 subcommand: "pitr",
