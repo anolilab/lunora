@@ -1,6 +1,6 @@
 {
     "name": "@lunora/platform-node",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Node implementation of the Lunora platform contracts: ShardHost, SocketHost, ShardDirectory, ShardKvStore, SchedulerHost over better-sqlite3 and an in-process socket registry (dev/test target)",
     "keywords": [
         "better-sqlite3",
@@ -60,11 +60,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/d1": "1.0.0-alpha.70",
+        "@lunora/d1": "1.0.0-alpha.71",
         "@lunora/errors": "1.0.0-alpha.17",
         "@lunora/platform": "1.0.0-alpha.8",
         "@lunora/queue": "1.0.0-alpha.22",
-        "@lunora/sql-store": "1.0.0-alpha.72",
+        "@lunora/sql-store": "1.0.0-alpha.73",
         "@lunora/workflow": "1.0.0-alpha.24",
         "@visulima/workflow": "catalog:workflow",
         "better-sqlite3": "^12.11.1",
@@ -72,10 +72,10 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.76",
+        "@lunora/do": "1.0.0-alpha.77",
         "@lunora/platform-cloudflare": "1.0.0-alpha.11",
         "@lunora/runtime": "1.0.0-alpha.58",
-        "@lunora/shard-engine": "1.0.0-alpha.18",
+        "@lunora/shard-engine": "1.0.0-alpha.19",
         "@lunora/storage": "1.0.0-alpha.24",
         "@types/better-sqlite3": "^7.6.13",
         "@types/node": "catalog:types",
