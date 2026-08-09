@@ -1,3 +1,10 @@
+## @lunora/platform-cloudflare [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform-cloudflare%401.0.0-alpha.11...%40lunora%2Fplatform-cloudflare%401.0.0-alpha.12) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.18
+
 ## @lunora/platform-cloudflare [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Fplatform-cloudflare%401.0.0-alpha.10...%40lunora%2Fplatform-cloudflare%401.0.0-alpha.11) (2026-08-09)
 
 
