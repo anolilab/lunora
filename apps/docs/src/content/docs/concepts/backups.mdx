@@ -169,8 +169,8 @@ your account. Wire `backupStore`, `backupCron`, and `backupRetain` on
 `createWorker` — see
 [scheduled backups in @lunora/runtime](/docs/packages/runtime#scheduled-backups)
 for the full configuration. Each run writes the snapshot plus a manifest object,
-prunes older snapshots past the retention count, and produces exactly the format
-`lunora backup restore <file>` consumes — including the key layout
+reports how many older snapshots sit past the retention count without removing
+them, and produces exactly the format `lunora backup restore <file>` consumes — including the key layout
 `lunora backup list --bucket` reads, so cron-written and hand-taken snapshots
 share one history.
 
