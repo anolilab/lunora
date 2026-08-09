@@ -562,6 +562,132 @@ describe("lunora backup", () => {
         });
     });
 
+    describe("prune", () => {
+        const PREVIEW = {
+            cron: "0 3 * * *",
+            eligible: 4,
+            keep: 2,
+            prefix: "backups/",
+            wouldDelete: [
+                "backups/lunora-backup-2026-06-01T03-00-00-000Z.ndjson.manifest.json",
+                "backups/lunora-backup-2026-06-02T03-00-00-000Z.ndjson.manifest.json",
+            ],
+        };
+
+        /** Serves the preview on GET and records every request; POST answers with what it deleted. */
+        const pruneFetch =
+            (calls: { method: string; url: string }[], preview: unknown = PREVIEW): FetchLike =>
+            async (url, init) => {
+                const method = init?.method ?? "GET";
+
+                calls.push({ method, url });
+
+                const body = method === "POST" ? { deleted: PREVIEW.wouldDelete } : preview;
+
+                return {
+                    headers: new Headers({ "content-type": "application/json" }),
+                    json: async () => body,
+                    ok: true,
+                    status: 200,
+                    text: async () => JSON.stringify(body),
+                };
+            };
+
+        it("refuses to delete without confirmation when there is no TTY", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            // vitest runs without a TTY, which is the CI/pipeline case: a prune
+            // that deleted here because nobody could answer is the failure this
+            // whole workstream exists to prevent.
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                pitrFetch: pruneFetch(calls),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
+            expect(logs.some((line) => line.includes("--yes"))).toBe(true);
+        });
+
+        it("shows what will go before deleting, and deletes it with --yes", async () => {
+            expect.assertions(4);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                pitrFetch: pruneFetch(calls),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            // Read first, delete second — the confirmation is over the same
+            // prediction `lunora backup retention` prints.
+            expect(calls).toStrictEqual([
+                { method: "GET", url: "http://localhost:8787/_lunora/admin/backup/retention" },
+                { method: "POST", url: "http://localhost:8787/_lunora/admin/backup/prune" },
+            ]);
+            expect(logs.some((line) => line.includes("would keep the newest 2 of 4 under backups/ and delete 2"))).toBe(true);
+            expect(logs.some((line) => line.includes("deleted 2 backup(s)"))).toBe(true);
+        });
+
+        it("deletes nothing when the window holds everything", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                pitrFetch: pruneFetch(calls, { ...PREVIEW, wouldDelete: [] }),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
+            expect(logs.some((line) => line.includes("nothing to prune"))).toBe(true);
+        });
+
+        it("refuses when no retention window is configured", async () => {
+            expect.assertions(3);
+
+            const { logger, logs } = capturingLogger();
+            const calls: { method: string; url: string }[] = [];
+
+            const result = await runBackupCommand({
+                cwd: workDir,
+                logger,
+                // `backupRetain` unset: there is no window, so nothing is past
+                // it and a default must not be invented.
+                pitrFetch: pruneFetch(calls, { ...PREVIEW, keep: 0, wouldDelete: [] }),
+                subcommand: "prune",
+                token: "t",
+                url: "http://localhost:8787",
+                yes: true,
+            });
+
+            expect(result.code).toBe(1);
+            expect(calls.map((call) => call.method)).toStrictEqual(["GET"]);
+            expect(logs.some((line) => line.includes("backupRetain"))).toBe(true);
+        });
+    });
+
     describe("pitr", () => {
         interface PitrCall {
             body: string;

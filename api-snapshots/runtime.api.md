@@ -1486,6 +1486,14 @@ interface PipelineLogSinkOptions {
 }
 ```
 
+### `PrunedBackups` (interface)
+
+```ts
+interface PrunedBackups {
+    deleted: string[];
+}
+```
+
 ### `QueryCoordinator` (interface)
 
 ```ts

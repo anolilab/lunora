@@ -234,8 +234,21 @@ describe("createWorker — scheduled backup", () => {
         expect(store.put).not.toHaveBeenCalled();
     });
 
+    /** `POST /_lunora/admin/backup/prune` — the only thing that deletes a backup. */
+    const pruneVia = async (worker: ReturnType<typeof createWorker>): Promise<{ deleted: string[] }> => {
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/prune", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        return response.json();
+    };
+
     it("prunes its own snapshots and leaves operator-taken ones alone", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = memoryBackupStore();
         // What `lunora backup create --bucket` writes: the same prefix and the
@@ -258,12 +271,13 @@ describe("createWorker — scheduled backup", () => {
             shardDO: noopNamespace,
         });
 
-        // Two cron fires with `backupRetain: 1`: the older cron snapshot goes,
-        // the operator's stays. Deleting a snapshot somebody took by hand —
-        // silently, from the bucket the docs recommend — is the failure mode
-        // that comes with sharing the prefix.
+        // Two fires build the history, then a prune applies retention. The
+        // operator's snapshot stays: deleting one somebody took by hand —
+        // from the bucket the docs recommend — is the failure mode that comes
+        // with sharing the prefix.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+        await pruneVia(worker);
 
         expect(store.objects.has(operatorKey)).toBe(true);
         expect(store.objects.has(`${operatorKey}.manifest.json`)).toBe(true);
@@ -272,7 +286,7 @@ describe("createWorker — scheduled backup", () => {
     });
 
     it("leaves another deployment's snapshots alone, and costs no per-object reads", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const store = memoryBackupStore();
         // A second worker backing up into the same bucket and prefix, on its own
@@ -296,6 +310,7 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME + 86_400_000 });
+        await pruneVia(worker);
 
         expect(store.objects.has(otherKey)).toBe(true);
         expect(store.objects.has(`${otherKey}.manifest.json`)).toBe(true);
@@ -307,13 +322,13 @@ describe("createWorker — scheduled backup", () => {
         expect(vi.mocked(store.list).mock.calls.every(([listOptions]) => listOptions?.include?.includes("customMetadata") === true)).toBe(true);
     });
 
-    it("reports a successful backup even when retention fails", async () => {
+    it("reports a successful backup even when the retention report fails", async () => {
         expect.assertions(3);
 
         const store = memoryBackupStore();
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-        vi.mocked(store.delete).mockRejectedValue(new Error("R2 unavailable"));
+        vi.mocked(store.list).mockRejectedValue(new Error("R2 unavailable"));
         store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
         store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
         store.metadata.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", { lunoraBackupCron: BACKUP_CRON });
@@ -327,13 +342,13 @@ describe("createWorker — scheduled backup", () => {
             shardDO: noopNamespace,
         });
 
-        // The snapshot and its manifest have both landed before retention runs.
-        // Failing the invocation here would show an operator a broken backup
-        // cron over a backup that is fine, and bury the real symptom.
+        // The snapshot and its manifest have both landed before the retention
+        // report runs. Failing the invocation here would show an operator a
+        // broken backup cron over a backup that is fine.
         await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).resolves.toBeUndefined();
 
         expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("retention failed"), expect.anything());
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("retention report failed"), expect.anything());
 
         warn.mockRestore();
     });
@@ -457,7 +472,7 @@ describe("createWorker — scheduled backup", () => {
     });
 
     it("prunes older snapshots beyond backupRetain", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const store = memoryBackupStore();
         // Two pre-existing snapshots already on the store (older + newer). Their
@@ -483,8 +498,10 @@ describe("createWorker — scheduled backup", () => {
             shardDO: noopNamespace,
         });
 
-        // Firing adds a third (newest) snapshot; retain=2 must drop the oldest.
+        // Firing adds a third (newest) snapshot; a prune with retain=2 must
+        // then drop the oldest.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        await pruneVia(worker);
 
         expect(store.objects.has("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson")).toBe(false);
         expect(store.objects.has("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson")).toBe(true);
@@ -550,7 +567,7 @@ describe("createWorker — scheduled backup", () => {
     };
 
     it("previews exactly what the prune then deletes", async () => {
-        expect.assertions(6);
+        expect.assertions(9);
 
         const previewStore = memoryBackupStore();
         const pruneStore = memoryBackupStore();
@@ -575,12 +592,20 @@ describe("createWorker — scheduled backup", () => {
             shardDO: noopNamespace,
         });
 
+        // A cron fire writes and removes nothing, so the prune is what applies
+        // retention — the same selection, reached through the verb.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        // What the fire actually removed, minus the snapshot it added.
+        const { deleted: reported } = await pruneVia(worker);
+
+        // What the prune actually removed.
         const deleted = [...before].filter((key) => !pruneStore.objects.has(key)).filter((key) => key.endsWith(".manifest.json"));
 
         expect(deleted.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(preview.wouldDelete.toSorted((a, b) => a.localeCompare(b)));
+        // And the worker reports back exactly what it removed.
+        expect(reported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(preview.wouldDelete.toSorted((a, b) => a.localeCompare(b)));
+        // The legacy sidecar, the other deployment's, and the operator's stay.
+        expect(pruneStore.objects.has("backups/lunora-backup-2026-05-01T03-00-00-000Z.ndjson")).toBe(true);
 
         // And the answer is the interesting one: our two older snapshots go, the
         // legacy sidecar, the other deployment's, and the operator's stay.
@@ -660,13 +685,13 @@ describe("createWorker — scheduled backup", () => {
         expect(preview.wouldDelete).toStrictEqual([]);
     });
 
-    it("names what retention deleted, and says nothing when it deletes nothing", async () => {
-        expect.assertions(3);
+    it("names what a prune deleted, and says nothing when it deletes nothing", async () => {
+        expect.assertions(5);
 
-        // Retention is opt-in and its deletes are irreversible, so a successful
-        // prune has to leave a record — both retention defects found in review
-        // were silent successes. A run that removes nothing must stay quiet,
-        // or every cron fire logs noise nobody reads.
+        // A prune's deletes are irreversible, so a successful one has to leave
+        // a record — both retention defects found in review were silent
+        // successes. A prune that removes nothing must stay quiet, or the
+        // record is noise nobody reads.
         const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
         const store = memoryBackupStore();
         const key = "backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson";
@@ -686,16 +711,108 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
+        info.mockClear();
+        await pruneVia(worker);
+
         expect(info).toHaveBeenCalledWith(expect.stringContaining("deleted 1: backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json"));
 
         info.mockClear();
 
-        // Second fire: the newest is now the only one this cron kept, and
-        // retain=1 leaves nothing past the window.
-        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+        // Second prune: the newest is the only one this cron kept, and retain=1
+        // leaves nothing past the window.
+        await pruneVia(worker);
 
         expect(store.objects.has(key)).toBe(false);
         expect(info).not.toHaveBeenCalled();
+    });
+
+    it("deletes nothing on a cron fire, and names the command that would", async () => {
+        expect.assertions(4);
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const before = new Map(store.objects);
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        // The whole point of WS4: a scheduled backup writes, and removes
+        // nothing. Every seeded object is still here (the fire overwrites the
+        // snapshot at its own key rather than adding one).
+        expect([...store.objects.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([...before.keys()].toSorted((a, b) => a.localeCompare(b)));
+        expect(vi.mocked(store.delete)).not.toHaveBeenCalled();
+
+        // But it must not go quiet either — without automatic pruning a bucket
+        // grows until somebody acts, so the run says what is past the window
+        // and what removes it.
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("past the newest 1"));
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("lunora backup prune"));
+
+        info.mockRestore();
+    });
+
+    it("refuses to prune without a retention window", async () => {
+        expect.assertions(3);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            // No `backupRetain`: there is no window, so nothing is past it and
+            // inventing a default here would be the implicit deletion the verb
+            // exists to replace.
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/backup/prune", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("BACKUP_RETENTION_NOT_CONFIGURED");
+        expect(vi.mocked(store.delete)).not.toHaveBeenCalled();
+    });
+
+    it("refuses to prune without an admin bearer", async () => {
+        expect.assertions(2);
+
+        const store = memoryBackupStore();
+
+        seedMixedBucket(store);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([]),
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/backup/prune", { method: "POST" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+        expect(vi.mocked(store.delete)).not.toHaveBeenCalled();
     });
 
     it("honors a custom backupPrefix and backupTables", async () => {

@@ -240,6 +240,15 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Scheduled backup not configured";
     };
+    readonly BACKUP_RETENTION_NOT_CONFIGURED: {
+        readonly hint: readonly [
+            "`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.",
+            "",
+            "Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace."
+        ];
+        readonly status: 400;
+        readonly title: "Backup retention window not configured";
+    };
     readonly BACKUP_TOO_LARGE: {
         readonly hint: readonly [
             "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",

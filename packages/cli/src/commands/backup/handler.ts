@@ -20,6 +20,7 @@
  */
 import { join } from "node:path";
 
+import { isInteractive, promptYesNo } from "@lunora/config";
 import type { BackupManifestEntry, BackupRetentionPreview } from "@lunora/runtime";
 
 import { resolveAdminBearer } from "../../util/admin-token";
@@ -46,12 +47,15 @@ const MANIFEST_SUFFIX_LENGTH = ".manifest.json".length;
 /** Read-only worker endpoint reporting what the platform's retention would delete next (see `@lunora/runtime`). */
 const RETENTION_ENDPOINT_PATH = "/_lunora/admin/backup/retention";
 
+/** The only endpoint that deletes a backup (see `@lunora/runtime`). */
+const PRUNE_ENDPOINT_PATH = "/_lunora/admin/backup/prune";
+
 /** Worker endpoint that forwards a per-shard native-PITR admin op (see `@lunora/runtime`). */
 const PITR_ENDPOINT_PATH = "/_lunora/admin/pitr";
 const GET_PITR_BOOKMARK_OP = "__lunora_admin__:getPitrBookmark";
 const PITR_RESTORE_OP = "__lunora_admin__:pitrRestore";
 
-type BackupSubcommand = "create" | "list" | "pitr" | "restore" | "retention";
+type BackupSubcommand = "create" | "list" | "pitr" | "prune" | "restore" | "retention";
 
 interface BackupCommandOptions {
     /** `pitr`: restore to the bookmark nearest this time (ISO or epoch-ms), within 30 days. */
@@ -98,6 +102,8 @@ interface BackupCommandOptions {
 
 interface BackupCommandResult {
     code: number;
+    /** Set on `prune` — the sidecar keys the worker reported it deleted. */
+    deleted?: string[];
     /** Set on `create` — the written backup's manifest entry. */
     entry?: BackupManifestEntry;
     /** Set on `retention` — what the worker reported it would delete next. */
@@ -421,6 +427,51 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
 };
 
 /**
+ * Resolve the admin bearer + base URL for the two worker-answered backup verbs
+ * (`retention`, `prune`). Logs and returns `undefined` on any failure.
+ */
+const resolveBackupAdminRequest = (options: BackupCommandOptions): { baseUrl: string; fetchImpl: FetchLike; token: string } | undefined => {
+    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
+
+        return undefined;
+    }
+
+    if (options.prod === true && options.url === undefined) {
+        options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
+
+        return undefined;
+    }
+
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        return undefined;
+    }
+
+    const fetchImpl: FetchLike = options.pitrFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+
+    if (typeof fetchImpl !== "function") {
+        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
+    }
+
+    return { baseUrl, fetchImpl, token };
+};
+
+/** Print a retention selection the way the cron reports it and the prune records it. */
+const reportSelection = (options: BackupCommandOptions, preview: BackupRetentionPreview, verb: string): void => {
+    options.logger.info(
+        `backup retention would keep the newest ${preview.keep.toString()} of ${preview.eligible.toString()} under ${preview.prefix} and ${verb} ${preview.wouldDelete.length.toString()}`,
+    );
+
+    for (const key of preview.wouldDelete) {
+        options.logger.info(`  ${key.slice(0, -MANIFEST_SUFFIX_LENGTH)}`);
+    }
+};
+
+/**
  * `lunora backup retention` — what the platform's own retention would delete on
  * its next run, and nothing else.
  *
@@ -430,34 +481,14 @@ const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupD
  * because eligibility turns on a marker the CLI cannot see from a listing.
  */
 const runBackupRetention = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
+    const request = resolveBackupAdminRequest(options);
 
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
+    if (request === undefined) {
         return { code: 1 };
     }
 
-    if (options.prod === true && options.url === undefined) {
-        options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
-
-        return { code: 1 };
-    }
-
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
-
-    if (baseUrl === undefined) {
-        return { code: 1 };
-    }
-
-    const fetchImpl: FetchLike = options.pitrFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
-
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
-    }
-
-    const response = await fetchImpl(`${baseUrl}${RETENTION_ENDPOINT_PATH}`, {
-        headers: { authorization: `Bearer ${token}` },
+    const response = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
         method: "GET",
     });
 
@@ -481,15 +512,9 @@ const runBackupRetention = async (options: BackupCommandOptions): Promise<Backup
         return { code: 0, preview };
     }
 
-    // Phrased like the line the cron writes after it prunes, so a preview and
-    // the record of a real run read as one story.
-    options.logger.info(
-        `backup retention would keep the newest ${preview.keep.toString()} of ${preview.eligible.toString()} under ${preview.prefix} and delete ${preview.wouldDelete.length.toString()}`,
-    );
-
-    for (const key of preview.wouldDelete) {
-        options.logger.info(`  ${key.slice(0, -MANIFEST_SUFFIX_LENGTH)}`);
-    }
+    // Phrased like the line the cron writes and the prune records, so a
+    // prediction, a confirmation and an aftermath read as one story.
+    reportSelection(options, preview, "delete");
 
     if (preview.eligible === 0) {
         // The likeliest surprise on a real bucket: snapshots exist, but none
@@ -498,6 +523,99 @@ const runBackupRetention = async (options: BackupCommandOptions): Promise<Backup
     }
 
     return { code: 0, preview };
+};
+
+/**
+ * `lunora backup prune` — delete every snapshot past the retention window.
+ *
+ * The only command that deletes a backup. Nothing else does: the scheduled
+ * backup reports what is past the window and leaves it, so the destructive step
+ * is one an operator takes deliberately.
+ *
+ * It prints what will go before asking, and asks by default. Without a TTY it
+ * refuses rather than proceeding — a prune that deletes silently because it
+ * happened to run in a pipeline is the failure this whole workstream exists to
+ * prevent — so a script says `--yes` and means it.
+ */
+const runBackupPrune = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const request = resolveBackupAdminRequest(options);
+
+    if (request === undefined) {
+        return { code: 1 };
+    }
+
+    // Show it first, from the same endpoint `lunora backup retention` reads, so
+    // the prediction an operator confirms is the one they were shown.
+    const previewResponse = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "GET",
+    });
+
+    if (!previewResponse.ok) {
+        await readAndLogBody(previewResponse, options.logger);
+
+        return { code: 1 };
+    }
+
+    const preview = (await previewResponse.json()) as BackupRetentionPreview;
+
+    if (preview.keep <= 0 || preview.cron === undefined) {
+        options.logger.error(
+            "backup prune needs a retention window: set `backupRetain` (and `backupCron`) on the worker. Without one there is nothing past the window to remove.",
+        );
+
+        return { code: 1, preview };
+    }
+
+    if (preview.wouldDelete.length === 0) {
+        options.logger.info(
+            `nothing to prune — ${preview.eligible.toString()} snapshot(s) under ${preview.prefix} and retention keeps the newest ${preview.keep.toString()}`,
+        );
+
+        return { code: 0, preview };
+    }
+
+    reportSelection(options, preview, "delete");
+
+    if (options.yes !== true) {
+        if (!isInteractive()) {
+            options.logger.error("refusing to delete backups without confirmation — re-run with --yes (there is no undo for an object-store delete)");
+
+            return { code: 1, preview };
+        }
+
+        const confirmed = await promptYesNo(`delete ${preview.wouldDelete.length.toString()} backup(s)? This cannot be undone. [y/N] `);
+
+        if (!confirmed) {
+            options.logger.info("nothing was deleted");
+
+            return { code: 0, preview };
+        }
+    }
+
+    const response = await request.fetchImpl(`${request.baseUrl}${PRUNE_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        await readAndLogBody(response, options.logger);
+
+        return { code: 1, preview };
+    }
+
+    // Report what actually went, not what was predicted: the worker re-runs the
+    // selection when it deletes, and a snapshot written between the two calls
+    // would push one more past the window.
+    const { deleted } = (await response.json()) as { deleted: string[] };
+
+    options.logger.success(`deleted ${deleted.length.toString()} backup(s)`);
+
+    for (const key of deleted) {
+        options.logger.info(`  ${key.slice(0, -MANIFEST_SUFFIX_LENGTH)}`);
+    }
+
+    return { code: 0, deleted, preview };
 };
 
 const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
@@ -513,6 +631,10 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
 
         if (options.subcommand === "retention") {
             return await runBackupRetention(options);
+        }
+
+        if (options.subcommand === "prune") {
+            return await runBackupPrune(options);
         }
 
         const destination = resolveDestination(options, cwd);
@@ -541,7 +663,7 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
 
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
 const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
-    value === "create" || value === "list" || value === "pitr" || value === "restore" || value === "retention";
+    value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
 
 /** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {

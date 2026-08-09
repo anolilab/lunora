@@ -336,17 +336,61 @@ const runScheduledBackup = async (
         httpMetadata: { contentType: "application/json" },
     });
 
-    // Both objects have landed by here, so the backup succeeded whatever
-    // retention does next. Failing the cron invocation for a failed prune would
-    // report a broken backup to an operator whose backup is fine, and bury the
-    // real symptom — that retention stopped.
+    // The backup has landed. Retention is reported, never applied: a scheduled
+    // job that deletes backups as a side effect of writing one is the thing
+    // plan 313 §4.4 rules out, and this subsystem's two worst defects were both
+    // that deletion going wrong quietly. `lunora backup prune` is the only
+    // thing that removes a backup now.
+    //
+    // Reporting is not optional decoration. Without automatic pruning a bucket
+    // grows until somebody acts, and swapping "unexpected deletion" for
+    // "unbounded storage nobody mentioned" would not be an improvement — so
+    // every run that has snapshots past the window says so, and names the
+    // command. A failed count is a warning, never a failed backup.
     try {
-        await pruneBackups(store, prefix, options.backupRetain, controller.cron);
+        const { stale } = await selectStaleBackups(store, prefix, options.backupRetain, controller.cron);
+
+        if (stale.length > 0) {
+            const shown = stale.slice(0, MAX_LOGGED_PRUNED_KEYS);
+            const rest = stale.length - shown.length;
+
+            // eslint-disable-next-line no-console -- server-side diagnostic, the same channel the prune itself uses; a Worker has no other operator-visible sink here.
+            console.info(
+                `[lunora] backup retention: ${String(stale.length)} snapshot(s) past the newest ${String(options.backupRetain)} — run \`lunora backup prune\` to remove them: ${shown.join(", ")}${rest > 0 ? ` (+${String(rest)} more)` : ""}`,
+            );
+        }
     } catch (error: unknown) {
-        // eslint-disable-next-line no-console -- server-side diagnostic; the alternative is a silently broken retention
-        console.warn(`[lunora] backup ${fileKey} was written, but retention failed:`, error);
+        // eslint-disable-next-line no-console -- server-side diagnostic; the alternative is a silently missing retention report
+        console.warn(`[lunora] backup ${fileKey} was written, but the retention report failed:`, error);
     }
 };
 
-export type { BackupManifest, BackupRetentionPreview };
-export { previewBackupRetention, runScheduledBackup };
+/**
+ * Delete every snapshot past the retention window — the one thing in the
+ * runtime that removes a backup, and only when an operator asks.
+ *
+ * Refuses without `backupRetain`: there is no window, so nothing is past it,
+ * and inventing a default here would be the implicit deletion this exists to
+ * end.
+ */
+const runBackupPrune = async (options: WorkerOptions): Promise<PrunedBackups> => {
+    const store = options.backupStore;
+
+    if (!store) {
+        throw new LunoraError("backup prune requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+    }
+
+    const cron = options.backupCron;
+
+    if (cron === undefined || options.backupRetain === undefined || options.backupRetain <= 0) {
+        throw new LunoraError(
+            "backup prune needs a retention window: set `backupRetain` (and `backupCron`, which decides whose snapshots retention owns) on the worker. Without one there is nothing past the window to remove.",
+            { code: "BACKUP_RETENTION_NOT_CONFIGURED", status: 400 },
+        );
+    }
+
+    return pruneBackups(store, normalizeBackupPrefix(options.backupPrefix ?? BACKUP_KEY_PREFIX), options.backupRetain, cron);
+};
+
+export type { BackupManifest, BackupRetentionPreview, PrunedBackups };
+export { previewBackupRetention, runBackupPrune, runScheduledBackup };

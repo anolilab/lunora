@@ -49,7 +49,7 @@ import { createResourceAttributeResolver } from "./resource-detect";
 import type { RestInvoke, RestRateLimit } from "./rest-routes";
 import { buildRestRoutes } from "./rest-routes";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
-import { previewBackupRetention, runScheduledBackup } from "./scheduled-backup";
+import { previewBackupRetention, runBackupPrune, runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
@@ -1368,6 +1368,9 @@ interface RpcContext {
 
 /** Read-only: what backup retention would delete on its next run. Never deletes anything. */
 const BACKUP_RETENTION_PATH = "/_lunora/admin/backup/retention";
+
+/** The one route that deletes a backup, and only when an operator invokes it. */
+const BACKUP_PRUNE_PATH = "/_lunora/admin/backup/prune";
 
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
@@ -4314,6 +4317,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
 
             return Response.json(await previewBackupRetention(options), { headers: { "cache-control": "no-store" } });
+        },
+
+        /**
+         * Delete every snapshot past the retention window.
+         *
+         * The only thing in the runtime that removes a backup. It runs when an
+         * operator asks and never on a schedule — the scheduled backup reports
+         * what is past the window and leaves it there, which is what makes the
+         * deletion explicit rather than a side effect of a backup succeeding.
+         *
+         * `POST`, because it destroys; admin-gated before it reads or removes
+         * anything; and it deletes exactly what `GET …/backup/retention`
+         * predicted, from the same selection.
+         */
+        [BACKUP_PRUNE_PATH]: async (request) => {
+            assertMethod(request, "POST", "Backup-prune");
+
+            requireAdminOption(request, options.backupStore, {
+                code: "BACKUP_NOT_CONFIGURED",
+                message: "backup prune requires a `backupStore` on the worker",
+            });
+
+            return Response.json(await runBackupPrune(options), { headers: { "cache-control": "no-store" } });
         },
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /

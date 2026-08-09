@@ -190,6 +190,15 @@ export const ERROR_CATALOG = {
     AUTH_NOT_CONFIGURED: { status: 400, title: "Auth admin not configured" },
     AUTH_OP_NOT_SUPPORTED: { status: 400, title: "Auth admin operation not supported" },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
+    BACKUP_RETENTION_NOT_CONFIGURED: {
+        hint: [
+            "`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.",
+            "",
+            "Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace.",
+        ],
+        status: 400,
+        title: "Backup retention window not configured",
+    },
     BACKUP_TOO_LARGE: {
         hint: [
             "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
