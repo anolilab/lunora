@@ -42,6 +42,7 @@ import { param } from "./drizzle";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
+import { mayHoldProjectedValue } from "./sql-projection";
 import type { MutationDelta } from "./types";
 
 /**
@@ -255,10 +256,32 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * over the group answers it. Runs AFTER the physical row write, so it sees
      * the post-write source. Returns the extreme (`null` when no numeric row
      * survives); the caller pins `__count__` from its own tracked tally.
+     *
+     * A `bigint` / bytes value is stored as an order-preserving KEY, and
+     * `MIN`/`MAX(json_extract(...))` coerces that padded text to a REAL —
+     * `1e+39` for a group whose real extreme is `9`. The reader refuses that
+     * coercion on its own scan (`assertReducibleBySql`), but this is the write
+     * path: refusing here would break `delete`. So a column that may hold one is
+     * reduced in JS off the decoded documents instead — through
+     * {@link foldAggregateTally}, the same fold both backfills seed a group with,
+     * so the recompute cannot disagree with a rebuild.
+     *
+     * Not `ORDER BY json_extract(...) LIMIT 1`, which would read one row rather
+     * than the group: the key is order-preserving only against other keys, and
+     * SQLite orders every TEXT after every numeric — so on a mixed `v.any()`
+     * column the extreme would be decided by storage class, not magnitude.
+     *
+     * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
+     * runs on the RUNTIME value type (`sqlComparableProjection` branches on
+     * `typeof value === "bigint"`), so a `v.any()` / `v.union()` / `v.from()`
+     * column holding a bigint is stored as a padded key exactly like a declared
+     * one. Gating on the declared kind sent those columns down the SQL branch and
+     * wrote ~1e39 into the companion — the same silent wrong number, one
+     * declaration away. Over-including is safe here because this branch only
+     * reads documents; the reader's guard must stay narrow because it REFUSES.
      */
     const recomputeExtreme = (tableName: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>): { value: null | number } => {
         const by = index.by ?? [];
-        const sqlFunction = aggregateSqlFunction(index.op);
         const field = index.field ?? "";
         const conditions: SQL[] = [];
 
@@ -282,6 +305,33 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         }
 
         const whereSql = conditions.length > 0 ? dsql` WHERE ${dsql.join(conditions, dsql` AND `)}` : dsql``;
+        const validator = schema.tables[tableName]?.shape[field];
+
+        if (validator && mayHoldProjectedValue(validator)) {
+            const rows = runDrizzle(
+                sql,
+                dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${whereSql}`,
+            ).toArray();
+            // The canonical reducer, not a second copy of it: this is the same
+            // fold the two backfills seed a group with, so a recomputed extreme
+            // cannot disagree with a rebuilt one. Single-group, so the key is
+            // the empty string and only `value` is read — the caller pins
+            // `__count__` from its own tracked tally.
+            const tallies = new Map<string, AggregateTally>();
+
+            for (const row of rows) {
+                const document = rowToDocument(row);
+
+                if (document) {
+                    foldAggregateTally(tallies, "", index, document);
+                }
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
+            return { value: tallies.get("")?.value ?? null };
+        }
+
+        const sqlFunction = aggregateSqlFunction(index.op);
         const ref = jsonPathSql(field);
         const row = runDrizzle<{ value: null | number }>(
             sql,

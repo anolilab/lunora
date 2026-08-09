@@ -44,7 +44,10 @@ const schema: SchemaLike = {
         // indexed and never summed. It carries no aggregate index precisely
         // because summing ids is not a question anyone asks.
         paymentSessions: {
-            aggregateIndexes: [{ by: ["currency"], field: "amountMinor", name: "sumByCurrency", on: "paymentSessions", op: "sum" }],
+            aggregateIndexes: [
+                { by: ["currency"], field: "amountMinor", name: "sumByCurrency", on: "paymentSessions", op: "sum" },
+                { by: ["currency"], field: "amountMinor", name: "maxByCurrency", on: "paymentSessions", op: "max" },
+            ],
             indexes: [
                 { fields: ["amountMinor"], name: "by_amount" },
                 { fields: ["currency", "amountMinor"], name: "by_currency_amount" },
@@ -62,9 +65,11 @@ const schema: SchemaLike = {
                 refundedMinor: { kind: "bigint" },
             },
         },
-        // Soft delete lives on its own table: it forces the aggregate reader off
-        // the maintained companion and onto the SQL scan, which would silently
-        // change what every aggregate test above is exercising.
+        // Soft delete lives on its own table so the aggregate cases above are
+        // read through one path only. It no longer forces them onto the scan —
+        // a soft-delete table reaches the companion for a projected field — but
+        // mixing the two concerns in one fixture would still make a failure
+        // ambiguous about which path served it.
         receipts: {
             indexes: [],
             shape: { archivedAt: { kind: "number" }, payload: { kind: "bytes" } },
@@ -365,6 +370,27 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             await seed(writer);
 
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "sum", where: { currency: "usd" } })).resolves.toBe(19);
+        });
+
+        it("recomputes a max group's extreme from the values, not the padded keys", async () => {
+            expect.assertions(2);
+
+            // Deleting the row that holds the stored extreme is the one branch
+            // that recomputes the group from the source table — on the WRITE
+            // path, where the reader's `assertReducibleBySql` refusal cannot
+            // apply because refusing would break `delete`. `MAX(json_extract(…))`
+            // reads the order-preserving KEY and SQLite coerces that padded text
+            // to a REAL, so this stored 1e+39 as the new maximum and every later
+            // read returned it.
+            const writer = setup();
+
+            await seed(writer);
+
+            await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(10);
+
+            await writer.delete("s10", "paymentSessions");
+
+            await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(9);
         });
 
         it("refuses to reduce an OPTIONAL bigint column too", async () => {
