@@ -2111,6 +2111,37 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", level: "error", message: "boom" });
     });
 
+    it("correlates an alarm-path failure to the trigger's own trace", async () => {
+        expect.assertions(3);
+
+        // The alarm's ingest tier throws, so `pollTier` contains it and records a
+        // `source:poll` line — an alarm-path log site, which used to be recorded
+        // with no trace at all.
+        class FailingSourceShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override pollExternalSources(): Promise<number | undefined> {
+                return Promise.reject(new Error("source ingest exploded"));
+            }
+        }
+
+        const shard = new FailingSourceShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.alarm();
+        await shard.alarm();
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
+        const body = await response.json<{ result: { entries: { functionPath?: string; message: string; traceId?: string }[] } }>();
+        const lines = body.result.entries.filter((entry) => entry.functionPath === "source:poll");
+
+        expect(lines[0]?.message).toBe("source ingest exploded");
+        // The alarm publishes an anchor through `withTriggerTrace`, so the line is
+        // attributable rather than orphaned — a 32-hex W3C trace id.
+        expect(lines[0]?.traceId).toMatch(/^[\da-f]{32}$/u);
+        // Each alarm tick mints its own anchor: a shared id would mean the second
+        // tick's failure was filed under the first tick's trace.
+        expect(lines[0]?.traceId).not.toBe(lines[1]?.traceId);
+    });
+
     it("getFunctionStats reports per-function call and error counts", async () => {
         expect.assertions(6);
 

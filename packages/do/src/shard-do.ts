@@ -1006,6 +1006,20 @@ abstract class ShardDO {
     private currentRequestTrace: { rootSpanId: string; traceId: string } | undefined;
 
     /**
+     * Anchor of the in-flight trigger (`withTriggerTrace`), handed across the
+     * `runner.handleAlarm()` boundary that stops the alarm handler from just
+     * taking it as an argument.
+     *
+     * A field only because of that indirection, and read under one rule: capture
+     * it into a local SYNCHRONOUSLY at the top of the handler, before any `await`.
+     * Read later it is no safer than `currentRequestTrace` — a socket frame
+     * interleaving at an await point would pick up the alarm's trace and file its
+     * own failure under it. Everything downstream takes the captured value as a
+     * parameter for exactly that reason.
+     */
+    private currentTriggerTrace: TraceAnchor | undefined;
+
+    /**
      * Per-trace head-sampling state, keyed by `traceId` so concurrent dispatches on
      * the same DO instance can't clobber each other's decision. A DO interleaves
      * dispatches across `await` points, and the span-recording and error-flush
@@ -3223,7 +3237,7 @@ abstract class ShardDO {
      * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
      * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
      */
-    protected async pollTtlSweeps(): Promise<number | undefined> {
+    protected async pollTtlSweeps(trace?: TraceAnchor): Promise<number | undefined> {
         const specs = this.ttlSweeps();
 
         if (specs.length === 0) {
@@ -3243,7 +3257,7 @@ abstract class ShardDO {
 
                 for (const id of page.ids) {
                     // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkDelete`)
-                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom);
+                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
 
                     if (limitHit) {
                         return Date.now();
@@ -4621,18 +4635,24 @@ abstract class ShardDO {
      * as the host-specific handler while the engine is progressively extracted.
      */
     protected async handleAlarmCloudflare(): Promise<void> {
+        // Captured before the first `await`, then passed by value everywhere below:
+        // this handler is the alarm's own scope, so nothing has interleaved yet.
+        // `undefined` when the alarm ran outside `withTriggerTrace` (a direct call
+        // in a test), which simply leaves these log lines uncorrelated.
+        const trace = this.currentTriggerTrace;
+
         this.globalPollScheduled = false;
 
         let globalShapesRemaining: number;
 
         try {
-            globalShapesRemaining = await this.pollGlobalShapes();
+            globalShapesRemaining = await this.pollGlobalShapes(trace);
         } catch (error) {
             // `pollGlobalShapes` already contains per-socket/per-shape failures;
             // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
             // so the poll heartbeat re-arms and retries next tick instead of
             // dying permanently and silently dropping every global subscriber.
-            this.recordShapeError("shape:poll", error);
+            this.recordShapeError("shape:poll", error, trace);
             globalShapesRemaining = 1;
         }
 
@@ -4642,7 +4662,7 @@ abstract class ShardDO {
             try {
                 return await run();
             } catch (error) {
-                this.recordShapeError(tag, error);
+                this.recordShapeError(tag, error, trace);
 
                 return Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
             }
@@ -4658,7 +4678,7 @@ abstract class ShardDO {
         // returns `undefined` (no TTL tables); the codegen subclass overrides
         // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
         // reports its next-due.
-        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps());
+        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps(trace));
 
         // Drain the tables the ingest poll just wrote: a sourced table is local, so
         // its `defineShape` subscribers are poked through the standard
@@ -4740,6 +4760,13 @@ abstract class ShardDO {
             this.currentRequestTrace = anchor;
         }
 
+        // Published unconditionally, unlike the shared dispatch field above: this
+        // one is written only here, and a trigger is the only thing that reads it
+        // (synchronously, at entry — see the field's docstring).
+        const previousTrigger = this.currentTriggerTrace;
+
+        this.currentTriggerTrace = anchor;
+
         let failure: { thrown: unknown } | undefined;
 
         try {
@@ -4749,6 +4776,8 @@ abstract class ShardDO {
 
             throw error;
         } finally {
+            this.currentTriggerTrace = previousTrigger;
+
             if (claimed && this.currentRequestTrace === anchor) {
                 this.currentRequestTrace = undefined;
             }
@@ -8460,7 +8489,7 @@ abstract class ShardDO {
      * on an ordinary successful delete. Any OTHER thrown error still propagates —
      * only the meter's own signal is contained here.
      */
-    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker): Promise<boolean> {
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceAnchor): Promise<boolean> {
         try {
             await this.deleteRowThroughWriter(table, id, headroom);
 
@@ -8472,6 +8501,7 @@ abstract class ShardDO {
                     level: "warn",
                     message: `TTL sweep for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
                     timestamp: Date.now(),
+                    traceId: trace?.traceId,
                 });
 
                 return true;
@@ -8487,13 +8517,20 @@ abstract class ShardDO {
      * best-effort fan-out: one socket's read or one shape's resolve failing must
      * never take down the others — so callers swallow the throw and surface it
      * here for diagnosis. `context` is a synthetic `shape:phase:subId` path.
+     *
+     * `trace` is passed by the alarm path, which has an anchor to attribute the
+     * failure to; the socket-frame callers omit it because their path is
+     * deliberately untraced (see `webSocketMessage`). It is a parameter rather
+     * than a field read so an alarm interleaving with a socket frame cannot file
+     * one path's failure under the other's trace.
      */
-    private recordShapeError(context: string, error: unknown): void {
+    private recordShapeError(context: string, error: unknown, trace?: TraceAnchor): void {
         this.logs.push({
             functionPath: context,
             level: "error",
             message: error instanceof Error ? error.message : String(error),
             timestamp: Date.now(),
+            traceId: trace?.traceId,
         });
     }
 
@@ -8527,7 +8564,7 @@ abstract class ShardDO {
      * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
-    private async pollGlobalShapes(): Promise<number> {
+    private async pollGlobalShapes(trace?: TraceAnchor): Promise<number> {
         const sockets = [...this.runner.sockets()];
         let remaining = 0;
 
@@ -8548,7 +8585,7 @@ abstract class ShardDO {
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
             // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
-            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "");
+            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "", trace);
         }
 
         return remaining;
@@ -8566,6 +8603,7 @@ abstract class ShardDO {
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         connectionId: string,
+        trace?: TraceAnchor,
     ): Promise<number> {
         let count = 0;
 
@@ -8576,7 +8614,7 @@ abstract class ShardDO {
                 resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
             } catch (error) {
                 count += 1;
-                this.recordShapeError(`shape:poll:${subId}`, error);
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
 
                 continue;
             }
@@ -8591,7 +8629,7 @@ abstract class ShardDO {
                 // eslint-disable-next-line no-await-in-loop -- per-shape D1 reads serialized within a socket to bound concurrency
                 await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId);
             } catch (error) {
-                this.recordShapeError(`shape:poll:${subId}`, error);
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
             }
         }
 

@@ -370,7 +370,7 @@ abstract class ShardDO {
     protected pollExternalSources(): Promise<number | undefined>;
     protected scheduleSourcePoll(): Promise<void>;
     protected ttlSweeps(): ReadonlyArray<TtlSweepSpec>;
-    protected pollTtlSweeps(): Promise<number | undefined>;
+    protected pollTtlSweeps(trace?: TraceAnchor): Promise<number | undefined>;
     protected scheduleTtlSweep(): Promise<void>;
     protected currentShardKey(): string;
     protected recordExternalSourceError(table: string, error: unknown): void;
