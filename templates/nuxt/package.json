@@ -18,7 +18,7 @@
         "@lunora/vue": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
-        "nuxt": "^4.4.8",
+        "nuxt": "^4.5.2",
         "vue": "^3.5.38"
     },
     "devDependencies": {
