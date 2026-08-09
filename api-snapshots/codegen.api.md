@@ -541,21 +541,6 @@ interface ProjectIR {
 }
 ```
 
-### `PythonSdkEmitInput` (interface)
-
-```ts
-interface PythonSdkEmitInput {
-    document: OpenRpcDocument;
-    models: string;
-}
-```
-
-### `PythonSdkFiles` (type)
-
-```ts
-type PythonSdkFiles = Record<string, string>;
-```
-
 ### `QUEUES_FILENAME` (const)
 
 ```ts
@@ -660,6 +645,12 @@ interface RlsRoleIR {
 }
 ```
 
+### `RuntimeVerb` (type)
+
+```ts
+type RuntimeVerb = "action" | "mutation" | "query";
+```
+
 ### `SCHEMA_SNAPSHOT_FILENAME` (const)
 
 ```ts
@@ -670,6 +661,18 @@ const SCHEMA_SNAPSHOT_FILENAME = ".lunora-schema.json";
 
 ```ts
 const SCHEMA_SNAPSHOT_VERSION: 1;
+```
+
+### `SDK_LANGUAGES` (const)
+
+```ts
+const SDK_LANGUAGES: ReadonlyArray<string>;
+```
+
+### `SDK_TARGETS` (const)
+
+```ts
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
 ```
 
 ### `SHAPES_FILENAME` (const)
@@ -733,6 +736,59 @@ interface SchemaSnapshot {
 ```ts
 class SchemaSnapshotParseError extends LunoraError {
     constructor(message: string);
+}
+```
+
+### `SdkFiles` (type)
+
+```ts
+type SdkFiles = Record<string, string>;
+```
+
+### `SdkMethod` (interface)
+
+```ts
+interface SdkMethod {
+    argsType: string | undefined;
+    functionName: string;
+    functionPath: string;
+    namespace: string;
+    resultType: string | undefined;
+    summary: string;
+    verb: RuntimeVerb;
+}
+```
+
+### `SdkNamespace` (interface)
+
+```ts
+interface SdkNamespace {
+    methods: ReadonlyArray<SdkMethod>;
+    name: string;
+}
+```
+
+### `SdkRenderInput` (interface)
+
+```ts
+interface SdkRenderInput {
+    models: string;
+    namespaces: ReadonlyArray<SdkNamespace>;
+}
+```
+
+### `SdkTarget` (interface)
+
+```ts
+interface SdkTarget {
+    id: string;
+    memberName: (raw: string) => string;
+    quicktype: {
+        lang: LanguageName;
+        rendererOptions?: Record<string, string>;
+    };
+    render: (input: SdkRenderInput) => Record<string, string>;
+    runtimePackage: string;
 }
 ```
 
@@ -1144,12 +1200,6 @@ const emitOpenRpc: (input: OpenRpcEmitInput) => string;
 const emitOpenRpcModule: (document_: Record<string, unknown>) => string;
 ```
 
-### `emitPythonSdk` (const)
-
-```ts
-const emitPythonSdk: (input: PythonSdkEmitInput) => PythonSdkFiles;
-```
-
 ### `emitServer` (const)
 
 ```ts
@@ -1213,6 +1263,18 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 ```
 
+### `generateSdk` (const)
+
+```ts
+const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkFiles>;
+```
+
+### `isTypedSchema` (const)
+
+```ts
+const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
+```
+
 ### `lintSchema` (const)
 
 ```ts
@@ -1253,12 +1315,6 @@ const redact: (value: string) => string;
 
 ```ts
 const refreshCodegenProject: (project: Project, lunoraDirectory: string) => void;
-```
-
-### `renderPythonModels` (const)
-
-```ts
-const renderPythonModels: (document: OpenRpcDocument) => Promise<string>;
 ```
 
 ### `resolveCodegenTarget` (const)

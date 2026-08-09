@@ -3,20 +3,21 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { OpenRpcDocument } from "../src/emit-python-sdk";
-import { emitPythonSdk, isTypedSchema, renderPythonModels, toSnakeCase } from "../src/emit-python-sdk";
+import type { OpenRpcDocument } from "../src/sdk";
+import { generateSdk, isTypedSchema } from "../src/sdk";
+import pythonTarget from "../src/sdk/targets/python";
 
 const fixture = (): OpenRpcDocument =>
     JSON.parse(readFileSync(join(__dirname, "fixtures", "simple", "expected", "_generated", "openrpc.json"), "utf8")) as OpenRpcDocument;
 
-describe("toSnakeCase", () => {
+describe("python memberName", () => {
     it("splits camelCase and escapes Python keywords", () => {
         expect.assertions(3);
 
-        expect(toSnakeCase("listMessages")).toBe("list_messages");
-        expect(toSnakeCase("sendMessage")).toBe("send_message");
+        expect(pythonTarget.memberName("listMessages")).toBe("list_messages");
+        expect(pythonTarget.memberName("sendMessage")).toBe("send_message");
         // `import` is a Python keyword — an un-escaped `def import(...)` is a SyntaxError.
-        expect(toSnakeCase("import")).toBe("import_");
+        expect(pythonTarget.memberName("import")).toBe("import_");
     });
 });
 
@@ -31,13 +32,12 @@ describe("isTypedSchema", () => {
     });
 });
 
-describe("emitPythonSdk", () => {
+describe("generateSdk (python)", () => {
     it("emits a namespaced surface that dispatches on functionPath", async () => {
         expect.assertions(9);
 
         const document = fixture();
-        const models = await renderPythonModels(document);
-        const files = emitPythonSdk({ document, models });
+        const files = await generateSdk(document, pythonTarget);
 
         expect(Object.keys(files).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["__init__.py", "api.py", "models.py"]);
 
@@ -64,7 +64,8 @@ describe("emitPythonSdk", () => {
     it("renders the model layer from the args schemas", async () => {
         expect.assertions(5);
 
-        const models = await renderPythonModels(fixture());
+        const generated = await generateSdk(fixture(), pythonTarget);
+        const models = generated["models.py"] ?? "";
 
         // quicktype maps the wire's camelCase onto snake_case fields and back.
         expect(models).toContain("channel_id: str");
@@ -79,8 +80,8 @@ describe("emitPythonSdk", () => {
         expect.assertions(1);
 
         const document = fixture();
-        const first = emitPythonSdk({ document, models: await renderPythonModels(document) });
-        const second = emitPythonSdk({ document, models: await renderPythonModels(document) });
+        const first = await generateSdk(document, pythonTarget);
+        const second = await generateSdk(document, pythonTarget);
 
         expect(second).toStrictEqual(first);
     });
@@ -89,7 +90,8 @@ describe("emitPythonSdk", () => {
         expect.assertions(4);
 
         const document = fixture();
-        const api = emitPythonSdk({ document, models: await renderPythonModels(document) })["api.py"] ?? "";
+        const files = await generateSdk(document, pythonTarget);
+        const api = files["api.py"] ?? "";
 
         // `messages:list` is a query — it gets a live subscription.
         expect(api).toContain("def subscribe_list(");
@@ -110,7 +112,8 @@ describe("emitPythonSdk", () => {
                 { name: "billing:total", "x-lunora-function-kind": "query" },
             ],
         };
-        const api = emitPythonSdk({ document, models: "" })["api.py"] ?? "";
+        const files = await generateSdk(document, pythonTarget);
+        const api = files["api.py"] ?? "";
 
         // `action` must NOT fold into `mutation`: only `mutation` carries an
         // idempotency key, which the server does not honour for actions.
@@ -131,7 +134,7 @@ describe("emitPythonSdk", () => {
                 },
             ],
         };
-        const files = emitPythonSdk({ document, models: await renderPythonModels(document) });
+        const files = await generateSdk(document, pythonTarget);
         const api = files["api.py"] ?? "";
 
         expect(api).toContain("-> MessagesCountResult:");
@@ -143,7 +146,8 @@ describe("emitPythonSdk", () => {
         expect.assertions(2);
 
         const document = fixture();
-        const api = emitPythonSdk({ document, models: await renderPythonModels(document) })["api.py"] ?? "";
+        const files = await generateSdk(document, pythonTarget);
+        const api = files["api.py"] ?? "";
 
         // Both fixture functions lack `.output()`, so nothing is typed on return.
         expect(api).not.toContain("Result.from_dict");

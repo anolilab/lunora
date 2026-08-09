@@ -2,13 +2,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { OpenRpcDocument } from "@lunora/codegen";
-import { emitPythonSdk, renderPythonModels } from "@lunora/codegen";
+import { generateSdk, isTypedSchema, SDK_LANGUAGES, SDK_TARGETS } from "@lunora/codegen";
 import { LunoraError } from "@lunora/errors";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { SdkOptions } from "./index";
-import { SDK_LANGUAGE_HELP, SDK_LANGUAGES } from "./index";
 
 /** Where `lunora codegen --api-spec openrpc` writes the document by default. */
 const DEFAULT_SPEC_PATH = join("lunora", "_generated", "openrpc.json");
@@ -43,9 +42,10 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     }
 
     const language = options.lang ?? "python";
+    const target = SDK_TARGETS[language];
 
-    if (!(SDK_LANGUAGES as ReadonlyArray<string>).includes(language)) {
-        throw new LunoraError("BAD_REQUEST", `unsupported --lang "${language}" — expected one of: ${SDK_LANGUAGE_HELP}`);
+    if (target === undefined) {
+        throw new LunoraError("BAD_REQUEST", `unsupported --lang "${language}" — expected one of: ${SDK_LANGUAGES.join(" | ")}`);
     }
 
     const specPath = resolve(cwd, options.spec ?? DEFAULT_SPEC_PATH);
@@ -59,26 +59,26 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         return { code: 0 };
     }
 
-    const models = await renderPythonModels(document);
-    const files = emitPythonSdk({ document, models });
+    const files = await generateSdk(document, target);
 
     for (const [relativePath, contents] of Object.entries(files)) {
-        const target = join(outputDirectory, relativePath);
+        const destination = join(outputDirectory, relativePath);
 
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, contents, "utf8");
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, contents, "utf8");
     }
 
-    // The count of methods whose `result` is still the untyped placeholder —
-    // every function without a declared `.output()`. Those generate `-> Any`,
-    // so surface it rather than letting an untyped SDK look complete.
-    const untypedResults = document.methods.filter((method) => method.result?.schema?.type === undefined).length;
+    // How many functions still return the untyped placeholder — i.e. declare no
+    // `.output()`. Uses the same predicate the emitter does, so the warning can
+    // never disagree with what was generated.
+    const untypedResults = document.methods.filter((method) => !isTypedSchema(method.result?.schema)).length;
 
     logger.success(`Generated ${language} SDK for ${String(document.methods.length)} function(s) → ${outputDirectory}`);
+    logger.info(`The generated code imports the ${target.runtimePackage} runtime — add it to the consuming project.`);
 
     if (untypedResults > 0) {
         logger.warn(
-            `${String(untypedResults)} of ${String(document.methods.length)} function(s) return \`Any\` — declare \`.output()\` on them for typed results.`,
+            `${String(untypedResults)} of ${String(document.methods.length)} function(s) return an untyped result — declare \`.output()\` on them for typed returns.`,
         );
     }
 

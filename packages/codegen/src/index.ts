@@ -62,8 +62,6 @@ export {
 } from "./emit";
 export type { EmitAppOptions } from "./emit-app";
 export { emitApp } from "./emit-app";
-export type { OpenRpcDocument, OpenRpcMethod, PythonSdkEmitInput, PythonSdkFiles } from "./emit-python-sdk";
-export { emitPythonSdk, renderPythonModels } from "./emit-python-sdk";
 export type {
     AgentIR,
     AuthApiCallIR,
@@ -107,6 +105,8 @@ export type { SchemaDriftDecision } from "./schema-drift";
 export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
+export type { OpenRpcDocument, OpenRpcMethod, RuntimeVerb, SdkFiles, SdkMethod, SdkNamespace, SdkRenderInput, SdkTarget } from "./sdk";
+export { generateSdk, isTypedSchema, SDK_LANGUAGES, SDK_TARGETS } from "./sdk";
 export { redact, secretKindOf } from "./secret-rules";
 export type { LunoraSolution, LunoraSolutionRule } from "./solutions";
 export { findLunoraSolution, LUNORA_SOLUTION_RULES } from "./solutions";

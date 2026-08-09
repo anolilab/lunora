@@ -1,16 +1,12 @@
+import { SDK_LANGUAGES } from "@lunora/codegen";
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
-
-/** Target languages `lunora sdk generate` can emit. */
-const SDK_LANGUAGES = ["python"] as const;
-
-const SDK_LANGUAGE_HELP = SDK_LANGUAGES.join(" | ");
 
 const sdkCommand: Command = {
     argument: { description: "<generate>", name: "args", type: String },
     description: "Generate a typed client SDK for another language from the project's OpenRPC surface",
     examples: [
         ["lunora sdk generate --lang python", "Emit a Python SDK into ./sdk/python"],
-        ["lunora sdk generate --lang python --out ./clients/py", "Choose the output directory"],
+        ["lunora sdk generate --lang go --out ./clients/go", "Choose the language and output directory"],
     ],
     group: "Project",
     loader: () =>
@@ -19,7 +15,9 @@ const sdkCommand: Command = {
         }),
     name: "sdk",
     options: [
-        { description: `Target language: ${SDK_LANGUAGE_HELP}`, name: "lang", type: String },
+        // The accepted values come from the target registry rather than a
+        // second list here — a new target must not need this file edited too.
+        { description: `Target language: ${SDK_LANGUAGES.join(" | ")}`, name: "lang", type: String },
         { description: "Output directory (default ./sdk/<lang>)", name: "out", type: String },
         {
             description: "Path to the OpenRPC document (default ./lunora/_generated/openrpc.json)",
@@ -29,6 +27,6 @@ const sdkCommand: Command = {
     ],
 };
 
-export { SDK_LANGUAGE_HELP, SDK_LANGUAGES, sdkCommand };
+export { sdkCommand };
 
 export type SdkOptions = CreateOptions<{ lang: string | undefined; out: string | undefined; spec: string | undefined }>;
