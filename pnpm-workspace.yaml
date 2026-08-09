@@ -114,7 +114,7 @@ overrides:
   "lunorash": "workspace:*"
   '@opentelemetry/core@<2.8.0': ^2.8.0
   astro@<6.4.6: ^6.4.6
-  dompurify@<=3.4.10: ^3.4.11
+  dompurify@<=3.4.10: ^3.4.13
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
   # Force the whole tree onto js-yaml 4 (3.x is unmaintained / flagged by audits).
   # The only 3.x consumer is gray-matter@4.0.3, which calls the removed
@@ -707,7 +707,8 @@ minimumReleaseAgeExclude:
   - js-yaml@4.1.2
   - '@opentelemetry/core@2.8.0'
   - astro@6.4.6
-  - dompurify@3.4.11
+  # Renovate security update: dompurify@3.4.13
+  - dompurify@3.4.11 || 3.4.13
   - undici@6.27.0
   # Renovate security update: hono@4.12.34
   - hono@4.12.34
