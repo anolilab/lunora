@@ -70,6 +70,7 @@ export const usageEvents = sqliteTable("usageEvents", {
     createdAt: real("createdAt").notNull(),
     featureId: text("featureId").notNull(),
     idempotencyKey: text("idempotencyKey").notNull(),
+    mode: text("mode"),
     provider: text("provider").notNull(),
     quantity: real("quantity").notNull(),
     referenceId: text("referenceId").notNull(),
