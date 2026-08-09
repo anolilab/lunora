@@ -488,6 +488,44 @@ describe("createWorker — scheduled backup", () => {
         expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
     });
 
+    it("names what retention deleted, and says nothing when it deletes nothing", async () => {
+        expect.assertions(3);
+
+        // Retention is opt-in and its deletes are irreversible, so a successful
+        // prune has to leave a record — both retention defects found in review
+        // were silent successes. A run that removes nothing must stay quiet,
+        // or every cron fire logs noise nobody reads.
+        const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+        const store = memoryBackupStore();
+        const key = "backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson";
+
+        store.objects.set(key, "old\n");
+        store.objects.set(`${key}.manifest.json`, JSON.stringify({ cron: BACKUP_CRON, file: key, id: "2026-06-01T00:00:00.000Z", scheduledTime: 0 }));
+        store.metadata.set(`${key}.manifest.json`, { lunoraBackupCron: BACKUP_CRON });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            backupCron: BACKUP_CRON,
+            backupRetain: 1,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        expect(info).toHaveBeenCalledWith(expect.stringContaining("deleted 1: backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json"));
+
+        info.mockClear();
+
+        // Second fire: the newest is now the only one this cron kept, and
+        // retain=1 leaves nothing past the window.
+        await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
+
+        expect(store.objects.has(key)).toBe(false);
+        expect(info).not.toHaveBeenCalled();
+    });
+
     it("honors a custom backupPrefix and backupTables", async () => {
         expect.assertions(2);
 

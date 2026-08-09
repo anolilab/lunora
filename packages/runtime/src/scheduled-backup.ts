@@ -23,6 +23,9 @@ const NDJSON_ENCODER = new TextEncoder();
 /** Safety bound on the retention list loop — far above any realistic backup count. */
 const MAX_PRUNE_PAGES = 1000;
 
+/** How many deleted keys the retention log names before summarising the rest. */
+const MAX_LOGGED_PRUNED_KEYS = 10;
+
 /**
  * Custom-metadata key stamped on every sidecar this backup writes, holding the
  * cron expression that produced it.
@@ -126,20 +129,42 @@ const pruneBackups = async (store: BackupStore, prefix: string, retain: number |
     }
 
     // Newest first; everything past the retention window goes.
+    const stale = mine.toSorted((a, b) => b.localeCompare(a)).slice(retain);
+
+    if (stale.length === 0) {
+        return;
+    }
+
     await Promise.all(
-        mine
-            .toSorted((a, b) => b.localeCompare(a))
-            .slice(retain)
-            .map(async (manifestKey) => {
-                // Snapshot first, sidecar second. A sidecar without its snapshot
-                // is a listable entry that fails to restore; a snapshot without
-                // its sidecar is invisible to retention forever, because the
-                // marker retention prunes on lives on the sidecar. If only one
-                // delete lands, this order is the recoverable one — the next run
-                // sees the sidecar again and retries.
-                await store.delete(backupObjectKeyOfManifest(manifestKey));
-                await store.delete(manifestKey);
-            }),
+        stale.map(async (manifestKey) => {
+            // Snapshot first, sidecar second. A sidecar without its snapshot
+            // is a listable entry that fails to restore; a snapshot without
+            // its sidecar is invisible to retention forever, because the
+            // marker retention prunes on lives on the sidecar. If only one
+            // delete lands, this order is the recoverable one — the next run
+            // sees the sidecar again and retries.
+            await store.delete(backupObjectKeyOfManifest(manifestKey));
+            await store.delete(manifestKey);
+        }),
+    );
+
+    // Say what was destroyed. Retention is opt-in — nothing is deleted without
+    // `backupRetain` — so the deletion is expected, but it had been leaving no
+    // trace at all: only the failure path logged. Both retention defects found
+    // in review (pruning an operator's snapshots, then another deployment's)
+    // were silent successes, reconstructed afterwards from a missing file. This
+    // is a forensic record, not an approval gate; an operator who wants to see
+    // a prune before it happens wants the `prune` verb (plan 313, WS4).
+    //
+    // Keys are capped because a first run after enabling retention on an old
+    // bucket can delete many, and a log line nobody can read is its own kind of
+    // silence.
+    const shown = stale.slice(0, MAX_LOGGED_PRUNED_KEYS);
+    const rest = stale.length - shown.length;
+
+    // eslint-disable-next-line no-console -- server-side diagnostic, same channel as the retention-failure warning below; a Worker has no other operator-visible sink here.
+    console.info(
+        `[lunora] backup retention kept the newest ${String(retain)} and deleted ${String(stale.length)}: ${shown.join(", ")}${rest > 0 ? ` (+${String(rest)} more)` : ""}`,
     );
 };
 
