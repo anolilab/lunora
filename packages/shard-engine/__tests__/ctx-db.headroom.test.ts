@@ -212,3 +212,62 @@ describe("ctx-db transaction headroom", () => {
         await expect(writer.insert("notes", { body: "c", bucket: "a" })).resolves.toBeDefined();
     });
 });
+
+describe("the .global() branches", () => {
+    // These return before `onWrite`, so each charges the meter itself. They also
+    // write into D1, which the DO's transaction cannot roll back — so the charge
+    // has to land BEFORE the boundary or a breach commits the row it refused.
+    const globalSchema: SchemaLike = {
+        tables: {
+            profiles: {
+                indexes: [],
+                shape: { name: { kind: "string" } },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    /** A D1 double that records which writes actually crossed the boundary. */
+    const globalDouble = (crossed: string[]): DatabaseWriterLike =>
+        ({
+            delete: async () => {
+                crossed.push("delete");
+            },
+            patch: async () => {
+                crossed.push("patch");
+            },
+            replace: async () => {
+                crossed.push("replace");
+            },
+        }) as unknown as DatabaseWriterLike;
+
+    const writerWithCeiling = (crossed: string[], maxWrittenRows: number): DatabaseWriterLike => {
+        const sql = makeSql();
+
+        runShardMigrations(sql, globalSchema);
+
+        return createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            globalDb: globalDouble(crossed),
+            headroom: new TransactionHeadroomTracker({ maxWrittenRows }),
+            schema: globalSchema,
+            sql,
+        });
+    };
+
+    it.each(["patch", "replace", "delete"] as const)("charges %s and refuses past the ceiling before D1 sees it", async (operation) => {
+        expect.assertions(3);
+
+        const crossed: string[] = [];
+        // A one-row ceiling: the first write spends it, the second must be refused.
+        const writer = writerWithCeiling(crossed, 1);
+        const call = async (): Promise<unknown> => (operation === "delete" ? writer.delete("p_absent") : writer[operation]("p_absent", { name: "n" }));
+
+        await call();
+
+        expect(crossed).toStrictEqual([operation]);
+        await expect(codeOf(call)).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        // Refused before the boundary: D1 never saw the second write.
+        expect(crossed).toStrictEqual([operation]);
+    });
+});

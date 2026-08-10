@@ -24,7 +24,6 @@
  * affected, whether a given row is one of them, and a transform that re-encodes.
  */
 
-import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { reprojectionMigrationTable } from "../../../shared/reprojection-id";
 import { encodeWire } from "../../../shared/wire-codec";
@@ -94,19 +93,33 @@ const reprojectionTables = (schema: SchemaLike): string[] =>
  * forever, so `countLegacyRows` would never reach zero and every deploy would
  * rewrite every shard. Testing only the sentinel would do exactly that.
  *
- * `json_extract` returns `NULL` for a current projection (a JSON string, so
- * `$.field[0]` does not resolve), which is why a NULL-safe `=` is enough.
+ * Walks the document's own top-level members rather than extracting at a path
+ * per field, which is what keeps the statement a fixed width: four bound
+ * parameters and one `EXISTS`, whatever the column count. Extracting per field
+ * cost five placeholders each and OR'd a clause each, so a table with 21
+ * `v.bigint()`/`v.bytes()` columns exceeded Workerd's 100-parameter cap — and
+ * its 100-term `OR` would have hit the expression-depth ceiling on the way.
  *
- * Paths are **bound**, which defeats SQL injection but NOT SQLite's JSON-path
- * grammar — an unquoted `.` in a field name would still parse as a nested key.
- * Hence {@link jsonPathSegment}. Binding costs nothing here: this is a one-off
- * scan, not an indexed lookup whose expression has to match an index.
+ * Walking also removes the JSON-path grammar from the question entirely. A
+ * field name is compared as `json_each`'s `key`, a plain string, so a field
+ * literally called `a.b` (or one carrying a quote, a bracket, or an emoji)
+ * needs no escaping and cannot re-parse as a nested key.
+ *
+ * `type = 'array'` is load-bearing rather than an optimisation: `json_each`
+ * hands back a scalar member's raw SQL text, and `json_extract('abc', '$[0]')`
+ * is a malformed-JSON error, not `NULL`. It also preserves the exclusion above —
+ * a current projection is a JSON string, so it never reaches the element tests.
  */
 const legacyRowPredicate = (fields: ReadonlyArray<string>): { params: unknown[]; sql: string } => {
-    const clauses = fields.map(() => `(json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) = ? AND json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) IN (?, ?))`);
-    const params = fields.flatMap((field) => [`$.${jsonPathSegment(field)}[0]`, WIRE_TAG, `$.${jsonPathSegment(field)}[1]`, "bigint", "bytes"]);
+    // `__f__.value` is the member itself, so both slots are fixed paths into the
+    // two-element wire tuple.
+    const member = `json_each(${quoteIdentifier(DOC_COLUMN)}) AS __f__`;
+    const reprojectable = `__f__.type = 'array' AND __f__.key IN (SELECT value FROM json_each(?))`;
 
-    return { params, sql: clauses.join(" OR ") };
+    return {
+        params: [JSON.stringify(fields), WIRE_TAG, "bigint", "bytes"],
+        sql: `EXISTS (SELECT 1 FROM ${member} WHERE ${reprojectable} AND json_extract(__f__.value, '$[0]') = ? AND json_extract(__f__.value, '$[1]') IN (?, ?))`,
+    };
 };
 
 /**

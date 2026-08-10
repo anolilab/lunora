@@ -1990,10 +1990,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * mutation can bypass the meter. A delete carries no document: it still
      * costs a row, just no bytes.
      */
-    const onWrite: WriteHook = async (event) => {
+
+    /**
+     * Charge one written document against the transaction meter, unless this
+     * writer is running unmetered (see `meterExempt`).
+     *
+     * Named rather than inlined because the `.global()` branches cannot reach
+     * `onWrite` — they return before it — so each one has to charge itself, and
+     * "did this branch remember?" is invisible when the answer is a three-line
+     * ritual repeated six times across 700 lines. One call is an obvious
+     * absence.
+     */
+    const meterWrite = (row: unknown): void => {
         if (!meterExempt) {
-            headroom?.recordWrite(event.doc);
+            headroom?.recordWrite(row);
         }
+    };
+
+    const onWrite: WriteHook = async (event) => {
+        meterWrite(event.doc);
 
         await reportWrite(event);
     };
@@ -2700,6 +2715,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // A delete carries no document, so it costs a row and no
+                    // bytes — exactly what `onWrite` charges for the local paths
+                    // (see its docblock). Charged here because this branch
+                    // returns before that hook, and before the boundary because
+                    // D1 does not roll back with the DO's transaction. Without
+                    // it, `deleteWhere` over a `.global()` table — which routes
+                    // through `deleteMany` to here — was free of the meter
+                    // entirely, however many rows it removed.
+                    meterWrite(undefined);
+
                     await global.delete(id, undefined, deleteOptions);
                 }
 
@@ -3361,9 +3386,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // consumes ceiling for the skips. Failing closed is the right side
                 // of that: over-counting costs a retry, under-counting costs an
                 // isolate.
-                if (!meterExempt) {
-                    headroom?.recordWrite(document);
-                }
+                meterWrite(document);
 
                 const id = await global.insert(tableName, document, insertOptions);
 
@@ -3477,10 +3500,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // mid-loop would leave every earlier row committed with no way to
                 // undo them. Metering up front means the batch is refused while
                 // that is still true of none of them.
-                if (!meterExempt) {
-                    for (const document of documents) {
-                        headroom?.recordWrite(document);
-                    }
+                for (const document of documents) {
+                    meterWrite(document);
                 }
 
                 for (const document of documents) {
@@ -3533,10 +3554,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only after the multi-row INSERT has already landed, so metering
             // there would let one oversized batch materialize in full — which
             // is exactly the isolate exhaustion the meter exists to prevent.
-            if (!meterExempt) {
-                for (const row of rows) {
-                    headroom?.recordWrite(row.document);
-                }
+            for (const row of rows) {
+                meterWrite(row.document);
             }
 
             // Multi-row INSERTs — the throughput win over `insertMany`'s N
@@ -3623,6 +3642,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Same reason as the global `insert` branch. The DELTA is
+                    // charged, not the merged row: the row lives in D1, and
+                    // reading it back to size it would double the round-trips on
+                    // every global patch. That meters a global patch lighter than
+                    // the shard-local path, which charges the whole merged
+                    // document — under-counting by the untouched fields is the
+                    // right side of that trade, since the delta is what this call
+                    // actually sends.
+                    meterWrite(patch);
+
                     await global.patch(id, patch);
                     return;
                 }
@@ -4037,6 +4066,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Same reason as the global `patch` branch — and here the
+                    // whole replacement document is in hand, so the charge is
+                    // exact rather than a delta.
+                    meterWrite(document);
+
                     await global.replace(id, document, undefined, replaceOptions);
                     return;
                 }
