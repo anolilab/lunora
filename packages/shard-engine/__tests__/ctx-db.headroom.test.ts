@@ -266,7 +266,7 @@ describe("the .global() branches", () => {
         await call();
 
         expect(crossed).toStrictEqual([operation]);
-        expect(await codeOf(call)).toBe("TRANSACTION_LIMIT_EXCEEDED");
+        await expect(codeOf(call)).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
         // Refused before the boundary: D1 never saw the second write.
         expect(crossed).toStrictEqual([operation]);
     });

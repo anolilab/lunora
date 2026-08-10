@@ -21,8 +21,9 @@
  * else would notice if that changed. The two shapes are pinned separately
  * because authorization is per function, not per query: `sqliteInList`'s scalar
  * `SELECT value FROM json_each(?)`, and the re-projection scan's correlated
- * `EXISTS` whose json path is built with `||` at runtime. The second is the
- * stricter test — a computed path argument is the part an allowlist could
+ * `EXISTS` walking a document's members by `type` and `key`. The second is the
+ * stricter test — those two columns, and a table-valued function applied to a
+ * column rather than a bound literal, are the parts an allowlist could
  * plausibly treat differently.
  */
 import { env, runInDurableObject } from "cloudflare:test";
@@ -96,21 +97,26 @@ describe("workerd SQLite limits", () => {
         });
     });
 
-    it("authorizes `json_each` inside a correlated EXISTS with a computed path", async () => {
+    it("exposes `json_each`'s type and key columns over a document", async () => {
         expect.assertions(1);
 
-        // The re-projection scan's shape: walk a bound list of json paths, and
-        // build each extraction path with `||` rather than binding it whole.
-        // Four parameters however many fields the table has.
-        await withSql("limits-json-each-exists", (sql) => {
+        // The re-projection scan's shape: walk the row's OWN members and filter
+        // by `key`, rather than extracting at a path per field. Four parameters
+        // however many columns the table has. `type` is load-bearing — without
+        // it, `json_extract` over a scalar member's raw text is a
+        // malformed-JSON error rather than NULL — and both columns are
+        // `json_each` surface an allowlist could plausibly treat differently
+        // from the scalar form pinned below.
+        await withSql("limits-json-each-members", (sql) => {
             sql.exec(`CREATE TABLE t (id TEXT PRIMARY KEY, "__doc__" TEXT)`);
-            sql.exec(`INSERT INTO t VALUES (?, ?)`, "legacy", JSON.stringify({ amount: ["$lunora.wire$", "bigint", "10"] }));
-            sql.exec(`INSERT INTO t VALUES (?, ?)`, "current", JSON.stringify({ amount: "0000010" }));
+            sql.exec(`INSERT INTO t VALUES (?, ?)`, "legacy", JSON.stringify({ "a.b": ["$lunora.wire$", "bigint", "10"] }));
+            sql.exec(`INSERT INTO t VALUES (?, ?)`, "scalar", JSON.stringify({ "a.b": "0000010" }));
+            sql.exec(`INSERT INTO t VALUES (?, ?)`, "dated", JSON.stringify({ "a.b": ["$lunora.wire$", "date", "2020"] }));
 
             const rows = sql
                 .exec(
-                    `SELECT id FROM t WHERE EXISTS (SELECT 1 FROM json_each(?) AS __f__ WHERE json_extract("__doc__", __f__.value || '[0]') = ? AND json_extract("__doc__", __f__.value || '[1]') IN (?, ?))`,
-                    JSON.stringify(['$."amount"']),
+                    `SELECT id FROM t WHERE EXISTS (SELECT 1 FROM json_each("__doc__") AS __f__ WHERE __f__.type = 'array' AND __f__.key IN (SELECT value FROM json_each(?)) AND json_extract(__f__.value, '$[0]') = ? AND json_extract(__f__.value, '$[1]') IN (?, ?))`,
+                    JSON.stringify(["a.b"]),
                     "$lunora.wire$",
                     "bigint",
                     "bytes",

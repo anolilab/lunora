@@ -1990,6 +1990,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * mutation can bypass the meter. A delete carries no document: it still
      * costs a row, just no bytes.
      */
+
     /**
      * Charge one written document against the transaction meter, unless this
      * writer is running unmetered (see `meterExempt`).
