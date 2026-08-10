@@ -168,6 +168,11 @@ is_skipped() {
 #   TYPECHECK_CMD   — the checker itself
 #   AUTHUI_RE       — ERE matching ONE diagnostic for a file under lunora/auth-ui/
 #   ERROR_RE        — ERE matching ONE diagnostic for ANY file
+#   FILE_RE         — ERE matching ONE diagnostic that NAMES A FILE, i.e. that
+#                     proves the checker got as far as reading source. Defaults to
+#                     TypeScript's `path(line,col): error TSxxxx`; overridden for the
+#                     checkers with a different format. See the vacuous-pass guard
+#                     below for why this is not the same question as ERROR_RE.
 #
 # The checker is injected into the scaffold at smoke time (see
 # inject_typecheck_dep, same idea as inject_peer_deps) rather than added to
@@ -177,6 +182,8 @@ is_skipped() {
 set_typecheck() {
     TYPECHECK_DEP=""
     TYPECHECK_PREP=()
+    # TypeScript's own format, shared by `tsc` and `vue-tsc`.
+    FILE_RE='\([0-9]+,[0-9]+\): error TS'
 
     case "$1" in
         astro)
@@ -189,6 +196,7 @@ set_typecheck() {
             TYPECHECK_CMD=(pnpm exec astro check)
             AUTHUI_RE='^lunora/auth-ui/.*error ts\('
             ERROR_RE='error ts\('
+            FILE_RE='[0-9]+:[0-9]+ - error ts\('
             ;;
         nuxt)
             # `nuxt prepare` writes `.nuxt/tsconfig.json` — the config the
@@ -210,6 +218,20 @@ set_typecheck() {
             TYPECHECK_CMD=(pnpm exec svelte-check --tsconfig ./tsconfig.json --output machine --threshold error)
             AUTHUI_RE='^[0-9]+ ERROR "lunora/auth-ui/'
             ERROR_RE='^[0-9]+ ERROR "'
+            # svelte-check's machine format carries the path in every diagnostic,
+            # so "is a diagnostic" and "names a file" are the same question here.
+            FILE_RE='^[0-9]+ ERROR "'
+            ;;
+        react-router)
+            # `react-router typegen` writes `.react-router/types/**` — the route
+            # module types every route imports as `./+types/<route>`, resolved through
+            # the tsconfig's `rootDirs`. This is what the template's own `typecheck`
+            # script runs and what React Router documents for CI; without it every
+            # route fails on `Cannot find module './+types/root'`.
+            TYPECHECK_PREP=(pnpm exec react-router typegen)
+            TYPECHECK_CMD=(pnpm exec tsc --noEmit)
+            AUTHUI_RE='^lunora/auth-ui/'
+            ERROR_RE='error TS'
             ;;
         *)
             TYPECHECK_CMD=(pnpm exec tsc --noEmit)
@@ -745,6 +767,27 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
+
+        # Vacuous-pass guard. A checker that reported diagnostics but named no FILE
+        # in any of them never got as far as reading source: `tsc` aborts during
+        # CONFIG resolution on e.g. `TS2688: Cannot find type definition file for
+        # 'x'` — printed with no path, exit 1, ZERO files compiled.
+        #
+        # The count above cannot tell that apart from real type errors, and the
+        # difference matters: a config abort means this run proves NOTHING about
+        # the payload, whereas N real diagnostics mean it was read and found
+        # wanting. Not hypothetical — `templates/react-router` listed
+        # `@react-router/dev`, a package with no root type entry point, in its
+        # tsconfig `types`, and its gate printed "typecheck OK" on every run from
+        # the day it was added without ever having compiled one file.
+        if [[ "$ts_errors" -gt 0 ]] && ! grep -qE "$FILE_RE" "$typecheck_log"; then
+            echo "  FAIL: typecheck in $tname aborted before reading any file — $ts_errors diagnostic(s), none naming a file (see $typecheck_log)"
+            echo "        A file-less diagnostic means the CHECKER is broken (bad tsconfig 'types'/'include',"
+            echo "        missing prep step), so this run proves nothing about what it was meant to compile."
+            grep -E "$ERROR_RE" "$typecheck_log" | head -10 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:vacuous)")
+            continue
+        fi
 
         if [[ "$ts_errors" -gt 0 ]]; then
             echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"

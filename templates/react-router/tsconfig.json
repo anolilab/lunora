@@ -11,6 +11,14 @@
         "isolatedModules": true,
         "verbatimModuleSyntax": true,
         "noEmit": true,
+        // `vite/client` for `import.meta.env` (app/root.tsx reads VITE_LUNORA_URL).
+        // NOT `@react-router/dev`: that package publishes only subpath exports
+        // (`/vite`, `/config`, `/routes`) and no root type entry, so naming it here
+        // aborts `tsc` during config resolution with
+        // `TS2688: Cannot find type definition file for '@react-router/dev'` — before
+        // a single file is read. Route module types do not come from a `types` entry
+        // at all: `react-router typegen` writes them into `.react-router/types`, which
+        // `rootDirs` + `include` below bring in (so `./+types/root` resolves).
         "types": ["@cloudflare/workers-types", "vite/client"],
         "rootDirs": [".", "./.react-router/types"],
         "paths": {
