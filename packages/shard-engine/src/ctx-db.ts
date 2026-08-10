@@ -3345,15 +3345,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "insert");
 
             if (global) {
-                const id = await global.insert(tableName, document, insertOptions);
-
-                // The global branch returns before `onWrite`, which is where the
-                // meter normally charges — so charge here, or a transaction could
-                // write unbounded rows to a `.global()` table without ever
-                // consuming its ceiling.
+                // Charge BEFORE the write, not after. The global branch returns
+                // before `onWrite`, which is where the meter normally charges, so
+                // it has to charge itself or a transaction could write unbounded
+                // rows to a `.global()` table without consuming its ceiling. The
+                // order matters because this write lands in ANOTHER backend: a
+                // mutation runs inside the DO's `storage.transaction`, which
+                // rolls back the DO's SQLite and nothing else. Charging after
+                // meant a ceiling breach threw with the D1 row already committed
+                // and no way to undo it — a rollback that silently kept half the
+                // write.
                 if (!meterExempt) {
                     headroom?.recordWrite(document);
                 }
+
+                const id = await global.insert(tableName, document, insertOptions);
 
                 // A `.global()` (D1) write lands in another backend, but live
                 // subscriptions on this DO that read the table still need to be
@@ -3464,14 +3470,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // supplied `_id` across the D1 boundary too — mirrors the single
                     // `insert` global branch; without it the D1 writer would silently
                     // re-key every row (thermos HIGH).
-                    // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
-                    const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
-
-                    // Same reason as the single-insert global branch: this loop
-                    // never reaches `onWrite`, so it must charge the meter itself.
+                    // Charged before the write for the same reason as the single
+                    // `insert` global branch: the row lands in D1, which the DO's
+                    // transaction cannot roll back. Charging after would leave
+                    // every row up to the breach committed in another backend.
                     if (!meterExempt) {
                         headroom?.recordWrite(document);
                     }
+
+                    // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
+                    const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
 
                     broadcast({
                         key: globalId,
