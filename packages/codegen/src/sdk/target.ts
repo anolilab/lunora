@@ -3,13 +3,27 @@
  *
  * Everything language-neutral (parsing, model naming, kind→verb, grouping) is
  * already done by {@link file://./spec.ts} before a target is called. A target
- * supplies exactly three things: which quicktype backend renders its models,
- * how it spells a member name, and the file text itself.
+ * supplies which quicktype backend renders its models, how it spells a member
+ * name, the file text itself, and — since the transport is COPIED into the
+ * output rather than installed from a registry — where that transport lands.
  *
- * Deliberately NOT in this interface: anything about the transport. The
- * hand-written runtime under `sdks/<lang>/` is a separate artifact with its own
- * conformance suite — generated code imports it, so the two version
- * independently and a wire fix does not force a regeneration.
+ * ## Why the transport is vendored
+ *
+ * It used to be imported: generated code named a runtime package and the CLI
+ * printed "add `lunora` (PyPI)". None of those packages exist. `lunora` 404s on
+ * PyPI, RubyGems and crates.io, `dev.lunora:lunora` 404s on Maven Central, and
+ * `github.com/anolilab/lunora-go` 404s too — so the Go surface could not resolve
+ * its own import in a user's project at all, and only compiled in CI because the
+ * generated package happened to sit inside our own module. Publishing seven
+ * registries (Maven Central alone needs a build tool these transports do not
+ * have, plus groupId ownership and signing) is a larger project than the SDKs.
+ *
+ * So `lunora sdk generate` copies `sdks/<id>/` into the output beside the
+ * generated surface, the way `lunora add` copies a registry item — the output is
+ * self-contained and runs with no Lunora package installed anywhere. The cost is
+ * that a wire fix no longer arrives as a version bump; it arrives on the next
+ * regeneration, which is why the fetch is pinned to the CLI's own release tag
+ * and the copy is stamped with the ref it came from.
  *
  * ## Conventions every target must follow
  *
@@ -43,6 +57,28 @@ interface SdkRenderInput {
     namespaces: ReadonlyArray<SdkNamespace>;
 }
 
+/**
+ * One directory or file of the hand-written transport, and where it lands in the
+ * output.
+ *
+ * `from` is relative to `sdks/<target id>/` and `to` is relative to `--out`. The
+ * two differ because a repo layout and a consumable layout are not the same
+ * shape: the Ruby transport lives under `lib/` so `ruby -Ilib` works in the
+ * repo, while a vendored copy has no `lib` to point at, and the Rust transport
+ * is the repo's root crate but a nested one in the output.
+ *
+ * Only the runtime is listed. A transport's own conformance suite and its
+ * `generated_check/` sample are deliberately absent — they assert against
+ * `protocol/fixtures/`, which is not copied, so vendoring them would ship a user
+ * a test suite that cannot run.
+ */
+interface SdkVendorEntry {
+    /** Path under `sdks/<id>/`. A directory is copied recursively. */
+    from: string;
+    /** Destination path under `--out`. */
+    to: string;
+}
+
 /** A language target. One per `--lang` value. */
 interface SdkTarget {
     /** The `--lang` value (`"python"`, `"go"`, …). */
@@ -65,19 +101,32 @@ interface SdkTarget {
     /**
      * Render the SDK. Returns file contents keyed by path relative to the
      * output directory (nested paths are created as needed).
+     *
+     * This includes the BUILD MANIFEST the layout needs — `go.mod`, `Cargo.toml`,
+     * `Package.swift`, a crate root — because those name the vendored transport
+     * and are therefore part of "how this language resolves the copy", not
+     * something a consumer should have to write. Languages that resolve by
+     * directory (Python, Ruby, Java, Kotlin) emit no manifest.
      */
     render: (input: SdkRenderInput) => Record<string, string>;
 
     /**
-     * The packages a consuming project must add for the generated SDK to run,
-     * reported by the CLI.
+     * THIRD-PARTY packages a consuming project must still install, reported by
+     * the CLI. Empty for five of the seven — the transport is vendored and those
+     * five reach the wire with only their standard library.
      *
-     * A list rather than a single name because a target's MODELS can carry a
-     * dependency the transport does not: quicktype's Ruby backend emits
+     * A list, and not derivable from the transport, because a target's MODELS can
+     * carry a dependency the transport does not: quicktype's Ruby backend emits
      * `Dry::Struct` types with no renderer option to avoid them, so a Ruby SDK
      * needs the gems even though `sdks/ruby` itself is dependency-free.
      */
-    runtimePackage: ReadonlyArray<string>;
+    requires: ReadonlyArray<string>;
+
+    /**
+     * Which parts of `sdks/<id>/` are the transport, and where they land under
+     * `--out`. See {@link SdkVendorEntry}.
+     */
+    vendor: ReadonlyArray<SdkVendorEntry>;
 }
 
-export type { SdkRenderInput, SdkTarget };
+export type { SdkRenderInput, SdkTarget, SdkVendorEntry };

@@ -38,12 +38,11 @@ line-length = 160
 # `from __future__ import annotations`, which this package deliberately avoids so
 # the modules stay readable as plain 3.9.
 target-version = "py39"
-# `generated_check/` is `lunora sdk generate` output committed as a sample. Its
-# models come from quicktype, whose style this repo does not own, and any rewrite
-# here is undone by the next regeneration — so it is excluded outright rather than
-# checked and then diverging. The emitter is what enforces correctness in that
-# output (see `narrowBareExcept` in `packages/codegen/src/sdk/targets/python.ts`).
-exclude = ["generated_check"]
+# No exclude for generated output, because none is committed any more: since the
+# generator vendors the transport, its output is a self-contained tree built and
+# run from a scratch directory by `sdks/generated-check.sh`. Correctness in that
+# output is enforced in the emitter (see `narrowBareExcept` in
+# `packages/codegen/src/sdk/targets/python.ts`), never by formatting it here.
 
 [tool.ruff.lint]
 select = ["ARG", "B", "C4", "E", "F", "FURB", "I", "N", "PERF", "PIE", "RET", "RUF", "SIM", "UP", "W"]

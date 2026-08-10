@@ -5,11 +5,15 @@
 // and Ruby one whose every method raised NoMethodError, both with the
 // compile-or-parse gate green.
 //
-// Behind a build tag because it imports a package that `lunora sdk generate`
-// produces rather than one that is committed — the main conformance suite runs
-// before generation and must not fail to build on its absence. Run it with
-// `go test -tags generatedcheck ./smoke/...` after generating.
-//go:build generatedcheck
+// `sdks/generated-check.sh go` copies this into a throwaway consumer module whose
+// go.mod carries the two lines a real consumer writes:
+//
+//	require lunorasdk v0.0.0
+//	replace lunorasdk => ../sdk
+//
+// That is why the imports below name `lunorasdk` and not this repo's module: the
+// point of the check is that the generated SDK resolves from OUTSIDE the
+// monorepo, where `github.com/anolilab/lunora-go` does not exist.
 
 package smoke
 
@@ -17,8 +21,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	lunoraapi "github.com/anolilab/lunora-go/generatedcheck"
-	"github.com/anolilab/lunora-go/lunora"
+	"lunorasdk/lunora"
+	"lunorasdk/lunoraapi"
 )
 
 func TestGeneratedCallReachesTheWire(t *testing.T) {

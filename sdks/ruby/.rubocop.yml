@@ -1,14 +1,14 @@
-# RuboCop for the hand-written Ruby transport.
+# RuboCop for the hand-written Ruby transport, and — via an explicit path in
+# `lint-all.sh` — for `sdks/smoke/ruby`, which has no config of its own.
 #
-# `generated_check/` is excluded: it is `lunora sdk generate` output committed as
-# a sample, its models come from quicktype (whose style this repo does not own),
-# and any correction here is undone by the next regeneration. Correctness in that
-# output is enforced in the emitter instead — see `targets/ruby.ts`.
+# There is no exclude for generated output because none is committed: since the
+# generator vendors the transport, its output is a self-contained tree built and
+# run from a scratch directory by `sdks/generated-check.sh`. Its models come from
+# quicktype, whose style this repo does not own, and correctness there is enforced
+# in the emitter instead — see `targets/ruby.ts`.
 AllCops:
     NewCops: "enable"
     TargetRubyVersion: 3.1
-    Exclude:
-        - "generated_check/**/*"
 
 # 160 to match the repo's Prettier `printWidth`, so two ports read the same width
 # side by side.

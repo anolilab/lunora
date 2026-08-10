@@ -7,7 +7,9 @@ import { LunoraError } from "@lunora/errors";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { sourceGateError } from "../registry/resolve";
 import type { SdkOptions } from "./index";
+import { STAMP_FILE, vendorTransport, writeStamp } from "./vendor";
 
 /** Where `lunora codegen --api-spec openrpc` writes the document by default. */
 const DEFAULT_SPEC_PATH = join("lunora", "_generated", "openrpc.json");
@@ -58,6 +60,19 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         throw new LunoraError("BAD_REQUEST", `unsupported --lang "${language}" — expected one of: ${SDK_LANGUAGES.join(" | ")}`);
     }
 
+    // Checked before anything is generated: a blocked `--source` must not leave
+    // half an SDK on disk with no transport under it.
+    const blocked = sourceGateError("sdk generate", {
+        allowUnsafeSource: options.allowUnsafeSource,
+        logger,
+        names: [],
+        source: options.source,
+    });
+
+    if (blocked !== undefined) {
+        throw new LunoraError("BAD_REQUEST", blocked);
+    }
+
     const specPath = resolve(cwd, options.spec ?? DEFAULT_SPEC_PATH);
     const outputDirectory = resolve(cwd, options.out ?? join("sdk", language));
 
@@ -73,6 +88,25 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     const { files, undeclared, unrepresentable } = await generateSdk(document, target);
 
+    // The transport FIRST, and before any generated file is written. It is the
+    // step that can fail on a ref, a network or a missing language, and failing
+    // after the surface is on disk would leave a directory that looks generated
+    // and imports a package that is not there.
+    mkdirSync(outputDirectory, { recursive: true });
+
+    const vendored = await vendorTransport({
+        allowUnsafeSource: options.allowUnsafeSource,
+        from: options.from,
+        language,
+        logger,
+        outputDirectory,
+        ref: options.ref,
+        source: options.source,
+        target,
+    });
+
+    writeStamp(outputDirectory, language, vendored);
+
     for (const [relativePath, contents] of Object.entries(files)) {
         const destination = join(outputDirectory, relativePath);
 
@@ -86,7 +120,21 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     const untypedResults = document.methods.filter((method) => !isTypedSchema(method.result?.schema)).length;
 
     logger.success(`Generated ${language} SDK for ${String(document.methods.length)} function(s) → ${outputDirectory}`);
-    logger.info(`Add to the consuming project: ${target.runtimePackage.join(", ")}.`);
+
+    // What was copied and from where, every run. The output is self-contained, so
+    // this line is the only place the protocol vintage is stated out loud — and
+    // `versionMatched` is the part a reader needs, since the fallback path can
+    // pair a new surface with an older transport.
+    logger.info(
+        `Vendored the ${language} transport (${String(vendored.files.length)} file(s)) from ${vendored.source} @ ${vendored.ref}` +
+            `${vendored.versionMatched ? " — version-matched to this CLI" : ""}; see ${STAMP_FILE}.`,
+    );
+
+    logger.info(
+        target.requires.length > 0
+            ? `Install in the consuming project: ${target.requires.join(", ")}.`
+            : `Nothing to install — the transport is vendored and needs only the standard library.`,
+    );
 
     if (undeclared.length > 0) {
         // The schema declared a shape, but this language's backend did not turn

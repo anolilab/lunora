@@ -361,7 +361,10 @@
     #
     # Every SDK is dependency-free by design (its HTTP/socket transport is
     # injected), so each leg is just "install the toolchain, run the suite" —
-    # no lockfile, no registry, nothing to pin beyond the language version.
+    # no lockfile, no registry, nothing to pin beyond the language version. That
+    # is also why `lunora sdk generate` can vendor a transport into a consumer's
+    # project and leave them with nothing to install; the second half of each leg
+    # is the check that it really does.
     #
     # One matrix leg per language so a single failure names the language that
     # broke rather than collapsing them into one red job.
@@ -387,8 +390,6 @@
                       "timeoutMinutes": 15
                       "directory": "sdks/python"
                       "run": "python -m unittest discover -s tests -t . -v"
-                      "generatedOut": "sdks/python/generated_check/lunora_api"
-                      "buildGenerated": "python generated_smoke.py"
                     - "language": "go"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
@@ -397,36 +398,26 @@
                       # conformance manifest live outside the Go module, so the
                       # cache cannot see them change and would replay a stale PASS.
                       "run": "go test ./... -v -race -count=1"
-                      "generatedOut": "sdks/go/generatedcheck"
-                      "buildGenerated": "go build ./... && go test -tags generatedcheck ./smoke/..."
                     - "language": "ruby"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/ruby"
                       "run": "ruby -Ilib -e 'Dir.glob(%q{test/test_*.rb}).each { |f| require File.expand_path(f) }'"
-                      "generatedOut": "sdks/ruby/generated_check"
-                      "buildGenerated": "ruby -Ilib generated_smoke.rb"
                     - "language": "rust"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/rust"
                       "run": "cargo test"
-                      "generatedOut": "sdks/rust/generated_check/src"
-                      "buildGenerated": "cargo test --manifest-path generated_check/Cargo.toml"
                     - "language": "java"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/java"
                       "run": "bash build.sh"
-                      "generatedOut": "sdks/java/generated_check/lunoraapi"
-                      "buildGenerated": "javac -Xlint:all -d /tmp/javacheck src/dev/lunora/*.java generated_check/lunoraapi/*.java generated_check/GeneratedSmoke.java && java -cp /tmp/javacheck GeneratedSmoke"
                     - "language": "kotlin"
                       "runner": "ubuntu-latest"
                       "timeoutMinutes": 15
                       "directory": "sdks/kotlin"
                       "run": "bash build.sh"
-                      "generatedOut": "sdks/kotlin/generated_check"
-                      "buildGenerated": "kotlinc src generated_check GeneratedSmoke.kt -include-runtime -d /tmp/kcheck.jar -nowarn && java -cp /tmp/kcheck.jar dev.lunora.GeneratedSmokeKt"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
@@ -440,8 +431,6 @@
                       # asserts a COUNT and a lock could be dropped from a path it
                       # does not drive; TSan reports the unsynchronised access itself.
                       "run": "swift test --sanitize=thread"
-                      "generatedOut": "sdks/swift/Sources/GeneratedCheck"
-                      "buildGenerated": "swift test --filter GeneratedCheckTests"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -564,12 +553,11 @@
               "working-directory": "${{ matrix.sdk.directory }}"
               "run": "${{ matrix.sdk.run }}"
 
-            # The generated surface hardcodes the runtime's call signatures, and
-            # `target.ts` deliberately keeps that coupling out of the contract so
-            # the two can version independently. Nothing else pins it: change a
-            # runtime signature and every language suite above still passes while
-            # every generated SDK is broken. So generate against the committed
-            # fixture and make the result build — and then CALL it.
+            # The generated surface hardcodes the runtime's call signatures.
+            # Nothing else pins that coupling: change a runtime signature and every
+            # language suite above still passes while every generated SDK is broken.
+            # So generate against the committed fixture and make the result build —
+            # and then CALL it.
             #
             # Every leg runs a generated call, not just a build. Building is not
             # sufficient and that is measured, not assumed: Java emitted a surface
@@ -596,16 +584,23 @@
               "run": |
                   pnpm exec vis run build --query "project=cli"
 
-            - "name": "Generate an SDK from the committed fixture"
-              "run": |
-                  node packages/cli/dist/bin.mjs sdk generate \
-                    --lang "${{ matrix.sdk.language }}" \
-                    --spec packages/codegen/__tests__/fixtures/simple/expected/_generated/openrpc.json \
-                    --out "${{ matrix.sdk.generatedOut }}"
-
-            - "name": "Build and call the generated ${{ matrix.sdk.language }} SDK against the runtime"
-              "working-directory": "${{ matrix.sdk.directory }}"
-              "run": "${{ matrix.sdk.buildGenerated }}"
+            # One script, and the same one a developer runs, for the same reason
+            # the lint step calls `lint-all.sh`: a command list kept in this matrix
+            # drifts from the local check, which is how conformance coverage
+            # drifted before `protocol/conformance-cases.json` existed.
+            #
+            # It generates into `mktemp -d` — outside the checkout — because the
+            # generator now COPIES the transport into its output, and that promise
+            # cannot be tested anywhere the repo's own `sdks/<lang>` is resolvable.
+            # It then assembles the consumer project a real user writes (a go.mod
+            # `replace`, a cargo path dependency, `.package(path:)`) and runs a call
+            # through it.
+            #
+            # `--from sdks` is passed inside the script: the default fetch is pinned
+            # to the CLI's own release tag, and six of the seven transports do not
+            # exist at any released tag yet — CI must not depend on one.
+            - "name": "Generate a self-contained ${{ matrix.sdk.language }} SDK and call it"
+              "run": "bash sdks/generated-check.sh ${{ matrix.sdk.language }}"
 
     # Single required check: green when every dependent job passed or was
     # skipped (so a no-package-change PR with all jobs skipped still passes).

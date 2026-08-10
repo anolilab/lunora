@@ -6,24 +6,30 @@ not prove a call reaches the wire: Java shipped a surface that compiled and thre
 raised NoMethodError, both with the compile-or-parse gate green. This closes that
 gap for Python.
 
-Run after `lunora sdk generate --lang python --out generated_check/lunora_api`.
+Run by `sdks/generated-check.sh python`, against an SDK generated into a scratch
+directory OUTSIDE this repo — which is the point. `sdks/python/lunora` is
+importable from anywhere in this checkout, so a smoke run from inside it would
+pass on the repo's transport and prove nothing about the vendored copy.
+LUNORA_SDK_OUT is therefore the ONLY path put on `sys.path`.
 """
 
 import asyncio
 import json
+import os
 import sys
 
-sys.path.insert(0, ".")
+sys.path.insert(0, os.environ["LUNORA_SDK_OUT"])
 
-from generated_check.lunora_api.api import Api
-from generated_check.lunora_api.models import MessagesListArgs
+from lunora_api.api import Api
+from lunora_api.models import MessagesListArgs
+
 from lunora.client import LunoraClient
 from lunora.wire import stable_stringify
 
 captured: dict = {}
 
 
-def fake_post(_url: str, _headers: dict, body: bytes) -> tuple[int, dict]:
+def fake_post(_url: str, _headers: dict, body: bytes) -> tuple:
     captured["body"] = json.loads(body)
 
     return 200, {"result": {"ok": True}}

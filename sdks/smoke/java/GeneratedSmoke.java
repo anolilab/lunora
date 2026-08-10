@@ -11,6 +11,11 @@ import java.util.Map;
  * target emitted a surface that type checked perfectly and threw {@code cannot encode a
  * lunoraapi.MessagesListArgs} on the first call. Building proves the shapes line up; only invoking
  * proves a request reaches the wire.
+ *
+ * <p>Compiled by {@code sdks/generated-check.sh java} with the generated SDK as the ONLY source
+ * path — {@code javac -sourcepath $LUNORA_SDK_OUT} — against an SDK generated into a scratch
+ * directory outside this repo. Both {@code dev.lunora} and {@code lunoraapi} therefore resolve out
+ * of the vendored copy and nothing else, which is what the check is for.
  */
 public final class GeneratedSmoke {
     public static void main(String[] args) {

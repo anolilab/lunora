@@ -6,6 +6,12 @@
  * delegates the data classes to quicktype; a target under `targets/` contributes
  * only naming and templates. Adding a language is a new file in `targets/` plus
  * a hand-written transport under `sdks/<lang>/` — never a fork of the parsing.
+ *
+ * This module emits SOURCE ONLY. The transport that source imports is copied into
+ * the same output directory by the CLI (`commands/sdk/vendor.ts`), which is where
+ * the filesystem and the network live; a target declares only what to copy and
+ * where. See {@link file://./target.ts} for why it is copied rather than
+ * installed from a registry.
  */
 
 import renderModels from "./models";
@@ -89,4 +95,4 @@ export { generateSdk, SDK_LANGUAGES, SDK_TARGETS };
 export type { SdkFiles, SdkResult };
 export type { OpenRpcDocument, OpenRpcMethod, RuntimeVerb, SdkMethod, SdkNamespace } from "./spec";
 export { isTypedSchema } from "./spec";
-export type { SdkRenderInput, SdkTarget } from "./target";
+export type { SdkRenderInput, SdkTarget, SdkVendorEntry } from "./target";

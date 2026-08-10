@@ -1,6 +1,27 @@
 /**
- * Kotlin SDK target. Emits `Api.kt` against the hand-written runtime in
- * `sdks/kotlin` (package `dev.lunora`).
+ * Kotlin SDK target. Emits `lunoraapi/Api.kt` beside a vendored copy of the
+ * `sdks/kotlin` transport.
+ *
+ * ## Layout
+ *
+ * ```
+ * <out>/dev/lunora/*.kt   the vendored transport, package dev.lunora
+ * <out>/lunoraapi/Api.kt  the generated surface, package lunoraapi
+ * ```
+ *
+ * Kotlin resolves by package declaration, not by directory, so `kotlinc <out>`
+ * compiles both regardless of the layout. The directories mirror the packages
+ * anyway — matching the Java target, and satisfying ktlint's filename rule — and
+ * the transport gains the `dev/lunora/` prefix it does not have in the repo,
+ * where its sources sit flat under `src/`.
+ *
+ * ```
+ * kotlinc <out> YourCode.kt -include-runtime -d app.jar
+ * ```
+ *
+ * No build file is emitted, for the same reason as Java: there is no single one,
+ * and none is needed — the transport hand-rolls `Json.kt` precisely so the JVM's
+ * missing JSON costs no dependency.
  *
  * ## Why this target emits no typed models
  *
@@ -149,13 +170,16 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
         `}\n`,
     ].join("");
 
-    return { "Api.kt": api };
+    return { [`${PACKAGE_NAME}/Api.kt`]: api };
 };
 
 const kotlinTarget: SdkTarget = {
     id: "kotlin",
     render,
-    runtimePackage: ["dev.lunora:lunora (Maven Central)"],
+    // Nothing: the transport is JDK-only and the generated surface passes the
+    // transport's own `WireValue` rather than a model.
+    requires: [],
+    vendor: [{ from: "src", to: "dev/lunora" }],
 };
 
 export { kotlinTarget, memberName };

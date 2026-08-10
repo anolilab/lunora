@@ -797,7 +797,8 @@ interface SdkTarget {
         rendererOptions?: Record<string, string>;
     };
     render: (input: SdkRenderInput) => Record<string, string>;
-    runtimePackage: ReadonlyArray<string>;
+    requires: ReadonlyArray<string>;
+    vendor: ReadonlyArray<SdkVendorEntry>;
 }
 ```
 

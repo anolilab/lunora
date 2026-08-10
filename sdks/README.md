@@ -8,18 +8,90 @@ richer than anything generated, and not covered here.
 
 ## The three layers
 
-| Layer          | Where                                        | Generated?                                   |
-| -------------- | -------------------------------------------- | -------------------------------------------- |
-| Models         | `quicktype-core`, per target                 | yes, where the backend can express them      |
-| Method surface | `packages/codegen/src/sdk/targets/<lang>.ts` | yes                                          |
-| Transport      | `sdks/<lang>/`                               | **no** — hand-written, imported not vendored |
+| Layer          | Where                                        | Generated?                                     |
+| -------------- | -------------------------------------------- | ---------------------------------------------- |
+| Models         | `quicktype-core`, per target                 | yes, where the backend can express them        |
+| Method surface | `packages/codegen/src/sdk/targets/<lang>.ts` | yes                                            |
+| Transport      | `sdks/<lang>/`                               | **no** — hand-written, and COPIED into `--out` |
 
-The transport is imported rather than copied into a user's project, so a
-wire-protocol fix is a runtime version bump instead of a regenerate-everyone
-event. `packages/codegen/src/sdk/target.ts` documents the conventions every
-target must follow, and `packages/codegen/__tests__/sdk-targets.test.ts`
-enforces them — a convention that only exists in prose gets violated silently,
-which is exactly how three of them were.
+`packages/codegen/src/sdk/target.ts` documents the conventions every target must
+follow, and `packages/codegen/__tests__/sdk-targets.test.ts` enforces them — a
+convention that only exists in prose gets violated silently, which is exactly how
+three of them were.
+
+## The transport is copied, not installed
+
+`lunora sdk generate` writes the transport into its output directory beside the
+generated surface, so the result runs with **no Lunora package installed
+anywhere**. This is the same copy-in model as `lunora registry add`, and it is not
+a preference: the runtime packages the generated code used to import do not exist.
+`lunora` 404s on PyPI, RubyGems and crates.io, `dev.lunora:lunora` 404s on Maven
+Central, and `github.com/anolilab/lunora-go` 404s too — so the Go surface could
+not resolve its own import in a user's project at all, and only compiled in CI
+because the generated package happened to sit inside this repo's module.
+Publishing seven registries (Maven Central alone needs a build tool these
+transports do not have, plus groupId ownership and signing) is a larger project
+than the SDKs.
+
+### Layout per language
+
+Each language gets the arrangement its own toolchain resolves, which is not the
+same shape as this repo's. `targets/<lang>.ts` carries the reasoning; the summary:
+
+| Language | Output layout                                              | How a consumer wires it up                                |
+| -------- | ---------------------------------------------------------- | --------------------------------------------------------- |
+| python   | `lunora/` + `lunora_api/`                                  | put `<out>` on `sys.path`, `import lunora_api`            |
+| go       | `go.mod` (module `lunorasdk`) + `lunora/` + `lunoraapi/`   | `require lunorasdk v0.0.0` + `replace lunorasdk => <out>` |
+| ruby     | `lunora.rb` + `lunora/` + `api.rb` + `models.rb`           | `$LOAD_PATH.unshift(<out>)`, `require "lunora"` / `"api"` |
+| rust     | `Cargo.toml` (`lunora-api`) + `src/` + `lunora/`           | `lunora-api = { path = "<out>" }`                         |
+| swift    | `Package.swift` + `Sources/Lunora/` + `Sources/LunoraApi/` | `.package(path: "<out>")` + `.product(name:package:)`     |
+| java     | `dev/lunora/*.java` + `lunoraapi/Api.java`                 | `javac -sourcepath <out>`                                 |
+| kotlin   | `dev/lunora/*.kt` + `lunoraapi/Api.kt`                     | `kotlinc <out> …`                                         |
+
+Two of those cost the consumer a line they would not otherwise write. Go needs the
+`replace`, because two packages in one module beat one flat package: the transport
+exports `Error`, `Map`, `Set`, `Date`, `URL`, `Bytes` and `Client`, so a table
+named `error` or a result model named `Map` would be a redeclaration — a schema in
+a user's project breaking the SDK's own compile. Swift needs `package:` spelled as
+the output DIRECTORY's name, because SwiftPM takes a path dependency's identity
+from the last path component and ignores the manifest's `name:`; a bare product
+name does not resolve either. Both measured, both recorded in their target file.
+
+### What a consumer must install
+
+Five of seven: nothing.
+
+| Language     | Install                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| python       | nothing — stdlib only                                              |
+| go           | nothing — stdlib only                                              |
+| java, kotlin | nothing — JDK only                                                 |
+| swift        | nothing — Foundation only                                          |
+| rust         | `serde` (derive) + `serde_json`, declared in the emitted manifests |
+| ruby         | `dry-struct` + `dry-types`, and only when models are emitted       |
+
+The two that are not empty are quicktype's, not the transports': the Ruby backend
+renders `Dry::Struct` types with no renderer option to avoid them, and Rust models
+are `serde` types. Cargo resolves Rust's from the emitted `Cargo.toml`, so only
+Ruby's is a manual step.
+
+### Which vintage did I get
+
+A copy cannot be upgraded by bumping a version, so the fetch is pinned to the
+CLI's own release tag (`@lunora/cli@<version>`) and every output carries a
+`lunora-transport.json` recording the ref that was actually used:
+
+```json
+{ "cliVersion": "1.0.0-alpha.159", "ref": "@lunora/cli@1.0.0-alpha.159", "versionMatched": true, … }
+```
+
+`versionMatched` is the field that matters — it says whether the transport and the
+surface above it came from one release. Regenerating with a newer CLI is the
+upgrade path. When the tag carries no transport for that language (a language
+added since the last release), the CLI falls back to the release branch, warns
+loudly naming both refs, and records `versionMatched: false`. `--ref <tag>` pins
+explicitly and never falls back; `--from <dir>` copies from a local checkout of
+this directory and is what CI uses.
 
 ## Capability matrix
 
@@ -135,12 +207,17 @@ Where a rule is switched off, the config says which behaviour of this code the
 rule was wrong about — the wire codec's `case`/`when` tables and its
 shortest-round-trip float comparison are the recurring two.
 
-**`generated_check/` is excluded from all of it.** Those trees are
-`lunora sdk generate` output committed as samples; the models come from
-quicktype, whose style this repo does not own, and any correction there is undone
-by the next regeneration. Correctness in generated output is enforced in the
-emitter instead — `narrowBareExcept` in `targets/python.ts` is one such fix, for a
-bare `except:` that swallowed `KeyboardInterrupt` in every generated Python SDK.
+**Generated output is excluded from all of it**, and there is no longer any
+committed: the models come from quicktype, whose style this repo does not own, and
+any correction there is undone by the next regeneration. Correctness in generated
+output is enforced in the emitter instead — `narrowBareExcept` in
+`targets/python.ts` is one such fix, for a bare `except:` that swallowed
+`KeyboardInterrupt` in every generated Python SDK.
+
+What IS linted here, and lives outside every transport's own tree, is
+`sdks/smoke/<lang>/`. Those are the consumer programs `generated-check.sh` builds,
+and the only code in this repo written against the vendored layout a user gets —
+the closest thing to a worked example, and an example nobody formats rots.
 
 ## Conformance
 
@@ -208,19 +285,39 @@ a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
 
 CI runs all seven per PR (`sdk-conformance` in `.github/workflows/test.yml`),
-and each leg also generates an SDK from a committed fixture, builds the result,
-and then _calls_ it — the generated surface hardcodes the runtime's call
-signatures, and nothing else pins that coupling.
+and each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
+hardcodes the runtime's call signatures, and nothing else pins that coupling.
 
-Calling is not belt-and-braces. Two languages shipped a revision whose surface
+## The generated-SDK check
+
+```bash
+./sdks/generated-check.sh            # all seven, sequentially
+./sdks/generated-check.sh go rust    # a subset
+```
+
+It needs a built CLI (`pnpm exec vis run build --query "project=cli"`) and then,
+per language: generates an SDK into `mktemp -d`, assembles the consumer project a
+real user writes, compiles it, and runs a call.
+
+**The scratch directory is the point, not tidiness.** Since the transport is
+copied, the promise is "this output runs with nothing installed" — and that cannot
+be tested anywhere `sdks/<lang>` is resolvable. Inside the checkout Python finds
+`sdks/python/lunora` on `sys.path`, Go finds a sibling package in the same module,
+Swift finds a target in the same package; a pass there would prove nothing. So the
+output goes outside the repo and each consumer project wires it up the documented
+way and no other.
+
+**Calling is not belt-and-braces.** Two languages shipped a revision whose surface
 passed its compile-or-parse check and threw on the first invocation: Java could
 not encode its own argument model, and Ruby called a `to_dynamic` the models were
 not rendered with. A third — Rust — sent `"limit": null` for an unset optional,
 which `v.optional()` rejects; the smoke that calls it is what surfaced that, one
 build after the same bug was fixed in Ruby.
 
-The smoke programs live beside each transport (`generated_smoke.*`,
-`smoke/generated_smoke_test.go`, `generated_check/tests/`,
-`Tests/GeneratedCheckTests/`) and each asserts the same thing: that a generated
-call reaches the wire as `{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}`.
-Run one after generating into that language's `generatedOut` path.
+The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
+a generated call reaches the wire as
+`{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}`. They sit outside
+every transport's tree because that is what they are — consumer code, importing
+`lunorasdk/lunoraapi` and `import LunoraApi`, which resolve only against generated
+output. `--from sdks` is passed for them, because the default fetch is the CLI's
+release tag and six of the seven transports do not exist at any released tag yet.

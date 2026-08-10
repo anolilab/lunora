@@ -1,10 +1,41 @@
 /**
- * Go SDK target. Emits a single `api.go` plus `models.go` against the
- * hand-written runtime in `sdks/go` (module `github.com/anolilab/lunora-go`).
+ * Go SDK target. Emits `lunoraapi/{api,models}.go` plus a `go.mod`, beside a
+ * vendored copy of the `sdks/go` transport.
  *
  * Typed results go through `lunora.Call[T]`, a free function, because Go methods
  * cannot take type parameters — that is what lets a generated method declare a
  * concrete return type while the decode stays generic.
+ *
+ * ## Layout
+ *
+ * ```
+ * <out>/go.mod        module lunorasdk
+ * <out>/lunora/       the vendored transport, package lunora
+ * <out>/lunoraapi/    the generated surface, package lunoraapi
+ * ```
+ *
+ * The generated import used to be `github.com/anolilab/lunora-go/lunora`, which
+ * does not exist; it now names the emitted module, so the copy resolves with no
+ * network. A consumer wires it in with two lines:
+ *
+ * ```
+ * require lunorasdk v0.0.0
+ * replace lunorasdk => ./sdk/go
+ * ```
+ *
+ * ## Why a module and not one flat package
+ *
+ * Folding the transport and the surface into a single package would need no
+ * import path at all, which is tempting. It also puts quicktype's model names in
+ * the same scope as the transport's exports — and the transport exports `Error`,
+ * `Map`, `Set`, `Date`, `URL`, `Bytes` and `Client`. A table called `error` or a
+ * result model called `Map` would then be a redeclaration, i.e. a schema in a
+ * user's project breaking the SDK's own compile. Two packages cost the `replace`
+ * line and cannot collide.
+ *
+ * The module path is `lunorasdk` — no dot, so Go can never mistake it for a
+ * fetchable path and go looking for a proxy that would 404. With `replace` it
+ * never resolves remotely at all.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
@@ -15,11 +46,21 @@ const GENERATED_HEADER = `${generatedHeaderLines("go")
     .map((line) => `// ${line}`)
     .join("\n")}\n\n`;
 
-/** The package generated code lives in. */
+/** The package generated code lives in, and the directory it is written to. */
 const PACKAGE_NAME = "lunoraapi";
 
-/** The runtime module the generated code imports. */
-const RUNTIME_IMPORT = "github.com/anolilab/lunora-go/lunora";
+/** The module the emitted `go.mod` declares, and that a consumer `replace`s. */
+const MODULE_PATH = "lunorasdk";
+
+/** The runtime package the generated code imports, inside the emitted module. */
+const RUNTIME_IMPORT = `${MODULE_PATH}/lunora`;
+
+/**
+ * The `go` directive of the emitted module. Matches `sdks/go/go.mod`, since the
+ * vendored transport is that module's source and a lower value here would fail
+ * on whatever language version it uses.
+ */
+const GO_DIRECTIVE = "1.22";
 
 /**
  * Go has no reserved-word collision problem for our names: every generated
@@ -114,14 +155,34 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
             ? `${GENERATED_HEADER}package ${PACKAGE_NAME}\n\n${models}\n`
             : `${GENERATED_HEADER}package ${PACKAGE_NAME}\n\n// No typed argument or result schemas in this deployment.\n`;
 
-    return { "api.go": api, "models.go": modelsFile };
+    return {
+        [`${PACKAGE_NAME}/api.go`]: api,
+        [`${PACKAGE_NAME}/models.go`]: modelsFile,
+        "go.mod": [
+            `// The generated Lunora Go SDK, with the transport vendored under ./lunora.\n`,
+            `//\n`,
+            `// A consuming module wires it in without a network fetch:\n`,
+            `//\n`,
+            `//\trequire ${MODULE_PATH} v0.0.0\n`,
+            `//\treplace ${MODULE_PATH} => ./path/to/this/directory\n`,
+            `module ${MODULE_PATH}\n`,
+            `\n`,
+            `go ${GO_DIRECTIVE}\n`,
+        ].join(""),
+    };
 };
 
 const goTarget: SdkTarget = {
     id: "go",
     quicktype: { lang: "go", rendererOptions: { "just-types": "true", package: PACKAGE_NAME } },
     render,
-    runtimePackage: ["github.com/anolilab/lunora-go"],
+    // Nothing: the transport is `encoding/json`, `math/big`, `net/url` and
+    // `sync`, all standard library.
+    requires: [],
+    // The transport's `go.mod` is NOT copied — it declares the unpublished
+    // `github.com/anolilab/lunora-go`, and a second module file inside the output
+    // would cut `lunora/` out of the emitted module entirely.
+    vendor: [{ from: "lunora", to: "lunora" }],
 };
 
 export default goTarget;

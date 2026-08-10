@@ -1,6 +1,35 @@
 /**
- * Rust SDK target. Emits `api.rs` plus `models.rs` against the hand-written
- * runtime in `sdks/rust` (crate `lunora`).
+ * Rust SDK target. Emits a `lunora-api` crate beside a vendored copy of the
+ * `sdks/rust` transport crate.
+ *
+ * ## Layout
+ *
+ * ```
+ * <out>/Cargo.toml          crate lunora-api, depends on lunora by path
+ * <out>/src/lib.rs          pub mod api; pub mod models;
+ * <out>/src/{api,models}.rs the generated surface
+ * <out>/lunora/             the vendored transport crate, verbatim
+ * ```
+ *
+ * A path dependency, so `use lunora::client::Client` in the generated code is an
+ * ordinary extern-crate import and needs no rewriting. A consumer adds one line:
+ *
+ * ```
+ * lunora-api = { path = "sdk/rust" }
+ * ```
+ *
+ * `[workspace]` is emitted (empty) on the outer crate on purpose. Without it, a
+ * consumer whose project is a Cargo workspace pulls this directory in as a member
+ * and then fails with "current package believes it's in a workspace when it's
+ * not" the moment anything builds it directly. Declaring it its OWN workspace
+ * root insulates it, and the nested `lunora` path dependency becomes a member of
+ * that inner workspace rather than of the consumer's.
+ *
+ * The transport's `serde_json` is not a manual install: it is declared in the
+ * vendored `lunora/Cargo.toml` and cargo resolves it like any other dependency.
+ * What a consumer must be told is that the generated MODELS need `serde` with
+ * `derive` — the outer crate declares that too, but a consumer moving these files
+ * elsewhere has to keep it.
  *
  * A generated model is a `serde` type, so it reaches the wire via
  * `serde_json::to_value` and `lunora::from_model_json` — a structural mapping rather
@@ -16,6 +45,36 @@ import type { SdkRenderInput, SdkTarget } from "../target";
 const GENERATED_HEADER = `${generatedHeaderLines("rust")
     .map((line) => `// ${line}`)
     .join("\n")}\n\n`;
+
+/** The crate root, declaring the two generated modules. */
+const CRATE_ROOT = `${GENERATED_HEADER}pub mod api;\npub mod models;\n`;
+
+/**
+ * The generated crate's manifest. `edition` and the `serde_json` major match the
+ * vendored transport's own manifest, so the two crates cannot disagree about the
+ * JSON types they pass across the boundary.
+ */
+const CARGO_MANIFEST = `# The generated Lunora Rust SDK, with the transport vendored under ./lunora.
+#
+# Add to a consuming crate:
+#
+#     lunora-api = { path = "sdk/rust" }
+
+[package]
+name = "lunora-api"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Its own workspace root, so a consumer whose project IS a workspace does not
+# adopt this directory as a member (which then fails to build on its own).
+[workspace]
+
+[dependencies]
+lunora = { path = "lunora" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+`;
 
 /** Rust keywords (including reserved ones) a function name could collide with. */
 const RUST_KEYWORDS = new Set([
@@ -195,8 +254,10 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
     ].join("");
 
     return {
-        "api.rs": api,
-        "models.rs":
+        "Cargo.toml": CARGO_MANIFEST,
+        "src/api.rs": api,
+        "src/lib.rs": CRATE_ROOT,
+        "src/models.rs":
             models.length > 0
                 ? `${GENERATED_HEADER}#![allow(dead_code)]\n\n${models}\n`
                 : `${GENERATED_HEADER}#![allow(dead_code)]\n\n// No typed argument or result schemas in this deployment.\n`,
@@ -207,7 +268,14 @@ const rustTarget: SdkTarget = {
     id: "rust",
     quicktype: { lang: "rust", rendererOptions: { "just-types": "true" } },
     render,
-    runtimePackage: ["lunora (crates.io)", "serde + serde_json (required by the generated models)"],
+    // Resolved by cargo from the manifests emitted and vendored here, so there is
+    // no manual step — but named, because they are genuinely third-party and a
+    // consumer relocating these files carries them along.
+    requires: ["serde (derive) + serde_json — declared in the emitted Cargo.toml, fetched by cargo"],
+    vendor: [
+        { from: "Cargo.toml", to: "lunora/Cargo.toml" },
+        { from: "src", to: "lunora/src" },
+    ],
 };
 
 export { memberName, rustTarget };

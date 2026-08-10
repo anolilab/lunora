@@ -39,9 +39,13 @@ describe("generateSdk (python)", () => {
         const document = fixture();
         const { files } = await generateSdk(document, pythonTarget);
 
-        expect(Object.keys(files).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["__init__.py", "api.py", "models.py"]);
+        expect(Object.keys(files).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "lunora_api/__init__.py",
+            "lunora_api/api.py",
+            "lunora_api/models.py",
+        ]);
 
-        const api = files["api.py"] ?? "";
+        const api = files["lunora_api/api.py"] ?? "";
 
         // One class per namespace, one method per function, snake_cased.
         expect(api).toContain("class MessagesApi:");
@@ -57,15 +61,15 @@ describe("generateSdk (python)", () => {
 
         // Models the surface references must exist in models.py, or the import
         // points at a class that was never rendered.
-        expect(files["models.py"]).toContain("class MessagesListArgs:");
-        expect(files["models.py"]).toContain("class MessagesSendArgs:");
+        expect(files["lunora_api/models.py"]).toContain("class MessagesListArgs:");
+        expect(files["lunora_api/models.py"]).toContain("class MessagesSendArgs:");
     });
 
     it("renders the model layer from the args schemas", async () => {
         expect.assertions(5);
 
         const { files: generated } = await generateSdk(fixture(), pythonTarget);
-        const models = generated["models.py"] ?? "";
+        const models = generated["lunora_api/models.py"] ?? "";
 
         // quicktype maps the wire's camelCase onto snake_case fields and back.
         expect(models).toContain("channel_id: str");
@@ -91,7 +95,7 @@ describe("generateSdk (python)", () => {
 
         const document = fixture();
         const { files } = await generateSdk(document, pythonTarget);
-        const api = files["api.py"] ?? "";
+        const api = files["lunora_api/api.py"] ?? "";
 
         // `messages:list` is a query — it gets a live subscription.
         expect(api).toContain("def subscribe_list(");
@@ -113,7 +117,7 @@ describe("generateSdk (python)", () => {
             ],
         };
         const { files } = await generateSdk(document, pythonTarget);
-        const api = files["api.py"] ?? "";
+        const api = files["lunora_api/api.py"] ?? "";
 
         // `action` must NOT fold into `mutation`: only `mutation` carries an
         // idempotency key, which the server does not honour for actions.
@@ -135,11 +139,11 @@ describe("generateSdk (python)", () => {
             ],
         };
         const { files } = await generateSdk(document, pythonTarget);
-        const api = files["api.py"] ?? "";
+        const api = files["lunora_api/api.py"] ?? "";
 
         expect(api).toContain("-> MessagesCountResult:");
         expect(api).toContain('return MessagesCountResult.from_dict(await self._client.query("messages:count", {}, shard_key))');
-        expect(files["models.py"]).toContain("class MessagesCountResult:");
+        expect(files["lunora_api/models.py"]).toContain("class MessagesCountResult:");
     });
 
     it("falls back to `Any` while results carry no schema", async () => {
@@ -147,7 +151,7 @@ describe("generateSdk (python)", () => {
 
         const document = fixture();
         const { files } = await generateSdk(document, pythonTarget);
-        const api = files["api.py"] ?? "";
+        const api = files["lunora_api/api.py"] ?? "";
 
         // Both fixture functions lack `.output()`, so nothing is typed on return.
         expect(api).not.toContain("Result.from_dict");
@@ -162,7 +166,7 @@ describe("generateSdk (python)", () => {
         // tries the next member. Every union-typed field routes through that
         // helper, so the fix belongs in the emitter rather than in each consumer.
         const { files } = await generateSdk(fixture(), pythonTarget);
-        const models = files["models.py"] ?? "";
+        const models = files["lunora_api/models.py"] ?? "";
 
         expect(models).toContain("except Exception:");
         expect(models).not.toMatch(/^[ \t]*except:[ \t]*$/mu);

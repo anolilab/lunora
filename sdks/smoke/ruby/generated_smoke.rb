@@ -7,11 +7,18 @@
 # — so every generated call raised NoMethodError while the syntax check stayed
 # green. Parsing proves the file is well formed; only invoking proves a request
 # reaches the wire.
+#
+# Run by `sdks/generated-check.sh ruby` against an SDK generated into a scratch
+# directory outside this repo. LUNORA_SDK_OUT is the only entry added to the load
+# path, so `require "lunora"` can only resolve to the VENDORED transport — not to
+# `sdks/ruby/lib`, which a run inside the checkout would find instead.
 
 require "json"
-require_relative "lib/lunora/client"
-require_relative "lib/lunora/key"
-require_relative "generated_check/api"
+
+$LOAD_PATH.unshift(ENV.fetch("LUNORA_SDK_OUT"))
+
+require "lunora"
+require "api"
 
 captured = nil
 

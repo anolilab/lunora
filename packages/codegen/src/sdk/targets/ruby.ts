@@ -1,12 +1,29 @@
 /**
- * Ruby SDK target. Emits `api.rb` plus `models.rb` against the hand-written
- * runtime in `sdks/ruby`.
+ * Ruby SDK target. Emits `api.rb` plus `models.rb` beside a vendored copy of the
+ * `sdks/ruby` transport.
  *
- * Unlike every other target so far, the MODELS carry a third-party dependency:
- * quicktype's Ruby backend renders `Dry::Struct` types and there is no renderer
- * option that avoids it (`strictness: none` and `just-types` both still emit
- * `require 'dry-types'`). The transport stays dependency-free — only the
- * generated models need the gems — which is why `runtimePackage` is a list.
+ * ## Layout
+ *
+ * ```
+ * <out>/lunora.rb   the transport entry point, `require`s the three below
+ * <out>/lunora/     client.rb, key.rb, wire.rb
+ * <out>/api.rb      the generated surface
+ * <out>/models.rb
+ * ```
+ *
+ * Flat, with the transport's `lib/` prefix dropped. In the repo that prefix is
+ * what makes `ruby -Ilib` work; in an output directory there is no `lib` for a
+ * consumer to point `-I` at, and `require_relative "lunora"` from a file beside
+ * it is the form that needs no load-path flag at all. `lunora.rb` still finds
+ * `lunora/client.rb` because its own `require_relative`s are unchanged by the
+ * move — both hop together.
+ *
+ * Unlike most targets, the MODELS carry a third-party dependency: quicktype's
+ * Ruby backend renders `Dry::Struct` types and there is no renderer option that
+ * avoids it (`strictness: none` and `just-types` both still emit
+ * `require 'dry-types'`). The transport itself is dependency-free, so the gems
+ * are needed only when a deployment declares typed schemas — which is why
+ * `requires` is a list and why it says so.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
@@ -183,7 +200,13 @@ const rubyTarget: SdkTarget = {
     // NoMethodError. The default mode emits both.
     quicktype: { lang: "ruby", rendererOptions: {} },
     render,
-    runtimePackage: ["lunora (RubyGems)", "dry-struct + dry-types (required by the generated models)"],
+    // The one target with a genuine install step, and it is quicktype's, not the
+    // transport's.
+    requires: ["dry-struct + dry-types (gems, required by the generated models)"],
+    vendor: [
+        { from: "lib/lunora.rb", to: "lunora.rb" },
+        { from: "lib/lunora", to: "lunora" },
+    ],
 };
 
 export { memberName, rubyTarget };

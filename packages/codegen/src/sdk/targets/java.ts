@@ -1,8 +1,29 @@
 /**
- * Java SDK target. Emits `Api.java` — and no model files — against the
- * hand-written runtime in `sdks/java` (package `dev.lunora`). The next section
- * is why there are no models, and holds the shared JVM reasoning that
+ * Java SDK target. Emits `lunoraapi/Api.java` — and no model files — beside a
+ * vendored copy of the `sdks/java` transport. The section after the layout is why
+ * there are no models, and holds the shared JVM reasoning that
  * `targets/kotlin.ts` points at.
+ *
+ * ## Layout
+ *
+ * ```
+ * <out>/dev/lunora/*.java   the vendored transport, package dev.lunora
+ * <out>/lunoraapi/Api.java  the generated surface, package lunoraapi
+ * ```
+ *
+ * Package-per-directory under one root, because that is what `javac` searches:
+ * point it at `<out>` as a source root and `import dev.lunora.Client;` in the
+ * generated file resolves with nothing on the classpath.
+ *
+ * ```
+ * javac -sourcepath <out> -d classes YourCode.java
+ * ```
+ *
+ * No build file is emitted. Java has no single one to emit — Maven and Gradle
+ * would each need their own, and neither is required: the transport has no
+ * dependencies (Java SE ships no JSON, so `Json.java` is hand-rolled) and the
+ * generated surface takes wire-shaped maps, so a plain source root is complete.
+ * Consumers on a build tool add `<out>` as an extra source directory.
  *
  * ## Why the JVM targets emit no typed models
  *
@@ -242,13 +263,18 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
         `\n}\n`,
     ].join("");
 
-    return { "Api.java": api };
+    return { [`${PACKAGE_NAME}/Api.java`]: api };
 };
 
 const javaTarget: SdkTarget = {
     id: "java",
     render,
-    runtimePackage: ["dev.lunora:lunora (Maven Central)"],
+    // Nothing: the transport is `java.util`, `java.net` and `java.math`, and the
+    // generated surface takes `Map<String, Object>` rather than a model.
+    requires: [],
+    // `test/` is not copied: it asserts against `protocol/fixtures/`, which is not
+    // part of the output, so it could not run in a consumer's tree.
+    vendor: [{ from: "src/dev/lunora", to: "dev/lunora" }],
 };
 
 export { javaTarget, memberName };

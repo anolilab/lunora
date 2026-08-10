@@ -7,12 +7,16 @@
 #   ./sdks/lint-all.sh            # all seven
 #   ./sdks/lint-all.sh go rust    # a subset
 #
-# WHAT IS CHECKED: the hand-written transports, their suites, and the
-# `generated_smoke.*` programs. NOT the `generated_check/` trees — those are
-# `lunora sdk generate` output committed as samples, their models come from
-# quicktype (whose style this repo does not own), and any correction there is
-# undone by the next regeneration. The emitter is what enforces that output's
-# shape; `packages/codegen/__tests__/sdk-targets.test.ts` is where it is asserted.
+# WHAT IS CHECKED: the hand-written transports, their suites, and the consumer
+# smoke programs under `sdks/smoke/<lang>/`. NOT generated output — the style of
+# quicktype's models is not this repo's to own, and any correction there is undone
+# by the next regeneration. The emitter is what enforces that output's shape;
+# `packages/codegen/__tests__/sdk-targets.test.ts` is where it is asserted.
+#
+# The smoke programs are linted here even though they live outside every
+# transport's own tree: they are the only code in this repo written against the
+# VENDORED layout a consumer gets, so they are the closest thing to a worked
+# example, and an example nobody formats rots.
 #
 # A missing tool is reported as SKIP, not PASS — a local run should say which
 # check it did not actually perform.
@@ -73,7 +77,12 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/python" || return 1
-            ruff check . && ruff format --check .
+            # --config, because ruff resolves settings by walking up from each
+            # FILE: the smoke lives outside this directory and would otherwise be
+            # linted against defaults rather than the transport's own rules.
+            ruff check . && ruff format --check . \
+                && ruff check --config pyproject.toml "$ROOT/sdks/smoke/python" \
+                && ruff format --check --config pyproject.toml "$ROOT/sdks/smoke/python"
             ;;
         go)
             command -v gofmt >/dev/null || {
@@ -83,13 +92,16 @@ lint_suite() {
             cd "$ROOT/sdks/go" || return 1
             # gofmt has no check mode: a non-empty file list IS the failure.
             local unformatted
-            unformatted="$(gofmt -l lunora smoke)"
+            unformatted="$(gofmt -l lunora "$ROOT/sdks/smoke/go")"
             if [ -n "$unformatted" ]; then
                 echo "gofmt would rewrite:"
                 echo "$unformatted"
                 return 1
             fi
-            go vet ./lunora/... && go vet -tags generatedcheck ./smoke/...
+            # No vet over the smoke: it imports `lunorasdk`, which only exists once
+            # an SDK has been generated. `generated-check.sh` compiles it there,
+            # and `go test` runs vet by default — so it is vetted, just not here.
+            go vet ./lunora/...
             ;;
         ruby)
             command -v rubocop >/dev/null || {
@@ -97,7 +109,7 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/ruby" || return 1
-            rubocop
+            rubocop && rubocop --config .rubocop.yml "$ROOT/sdks/smoke/ruby"
             ;;
         rust)
             command -v cargo >/dev/null || {
@@ -105,7 +117,13 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/rust" || return 1
-            cargo fmt --check && cargo clippy --all-targets -- -D warnings
+            # rustfmt directly for the smoke: it belongs to no crate in this repo
+            # (its crate is assembled at check time), so `cargo fmt` cannot see it.
+            # --config-path, because rustfmt discovers `rustfmt.toml` by walking up
+            # from the FILE — outside this directory it would silently fall back to
+            # defaults and hold the smoke to a narrower width than everything else.
+            cargo fmt --check && cargo clippy --all-targets -- -D warnings \
+                && rustfmt --check --edition 2021 --config-path rustfmt.toml "$ROOT/sdks/smoke/rust/generated_smoke.rs"
             ;;
         swift)
             # The one linter here with no install step, because there is nothing
@@ -165,7 +183,11 @@ lint_suite() {
             fi
 
             cd "$ROOT/sdks/swift" || return 1
-            "${swift_format[@]}" lint --recursive --strict Sources/Lunora Tests
+            # --configuration for the same reason rustfmt needs --config-path: the
+            # smoke sits outside this directory, and swift-format finds
+            # `.swift-format` by walking up from the file.
+            "${swift_format[@]}" lint --recursive --strict Sources/Lunora Tests \
+                && "${swift_format[@]}" lint --recursive --strict --configuration .swift-format "$ROOT/sdks/smoke/swift"
             ;;
         java)
             command -v google-java-format >/dev/null || {
@@ -175,7 +197,7 @@ lint_suite() {
             cd "$ROOT/sdks/java" || return 1
             # --aosp for 4-space indentation, matching every sibling port.
             google-java-format --aosp --dry-run --set-exit-if-changed \
-                src/dev/lunora/*.java test/dev/lunora/*.java generated_check/GeneratedSmoke.java \
+                src/dev/lunora/*.java test/dev/lunora/*.java "$ROOT"/sdks/smoke/java/*.java \
                 && javac -Xlint:all -Werror -d "$WORK/javalint" src/dev/lunora/*.java test/dev/lunora/*.java
             ;;
         kotlin)
@@ -192,7 +214,7 @@ lint_suite() {
             local kotlin_files=()
             local kotlin_input
 
-            for kotlin_input in src test GeneratedSmoke.kt; do
+            for kotlin_input in src test "$ROOT/sdks/smoke/kotlin"; do
                 local kotlin_found=()
 
                 while IFS= read -r kotlin_file; do

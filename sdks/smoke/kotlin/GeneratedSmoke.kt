@@ -4,6 +4,10 @@
 // Java shipped a surface that compiled and threw on the first invocation, and
 // Ruby one whose every method raised NoMethodError, both with the
 // compile-or-parse gate green.
+//
+// Compiled by `sdks/generated-check.sh kotlin` as `kotlinc $LUNORA_SDK_OUT
+// GeneratedSmoke.kt`, against an SDK generated into a scratch directory outside
+// this repo — so `dev.lunora` here is the vendored transport, not `sdks/kotlin`.
 
 package dev.lunora
 

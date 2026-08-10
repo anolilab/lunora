@@ -17,9 +17,3 @@ ktlint_standard_blank-line-between-when-conditions = disabled
 indent_size = 4
 indent_style = space
 insert_final_newline = true
-
-# `generated_check/` is `lunora sdk generate` output committed as a sample; the
-# next regeneration overwrites anything corrected here, so the emitter is what
-# enforces its shape.
-[generated_check/**.kt]
-ktlint = disabled

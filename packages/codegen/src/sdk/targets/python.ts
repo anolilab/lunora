@@ -1,6 +1,23 @@
 /**
- * Python SDK target. Emits a package of `__init__.py` / `api.py` / `models.py`
- * against the hand-written runtime in `sdks/python`.
+ * Python SDK target. Emits a `lunora_api/` package beside a vendored copy of the
+ * `sdks/python` transport.
+ *
+ * ## Layout
+ *
+ * ```
+ * <out>/lunora/       the vendored transport package (stdlib only)
+ * <out>/lunora_api/   the generated surface
+ * ```
+ *
+ * Two sibling packages under one directory, because that is the only arrangement
+ * `from lunora.client import LunoraClient` resolves from: an import is looked up
+ * on `sys.path`, so both packages have to be immediate children of one entry.
+ * Nesting the transport INSIDE the generated package (`lunora_api/lunora/`)
+ * would need `lunora_api` itself on the path, which no consumer would guess.
+ *
+ * The consumer therefore puts `<out>` on the path — `sys.path`, `PYTHONPATH`, or
+ * just generating into a directory that is already importable — and imports
+ * `lunora_api`. Nothing to install.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
@@ -47,6 +64,13 @@ const PYTHON_KEYWORDS = new Set([
 ]);
 
 const GENERATED_HEADER = `"""${generatedHeaderLines("python").join("\n\n")}\n"""\n\n`;
+
+/**
+ * The package the generated surface lives in, beside the vendored `lunora`.
+ * Not `lunora` itself: a consumer regenerating the surface must never be able to
+ * overwrite the transport with it.
+ */
+const SURFACE_PACKAGE = "lunora_api";
 
 /** `listMessages` → `list_messages`; a trailing `_` escapes a keyword. */
 const memberName = (raw: string): string => {
@@ -160,14 +184,14 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
     const exported = ["Api", ...namespaces.map((namespace) => `${toPascalCase(namespace.name)}Api`)];
 
     return {
-        "__init__.py": [
+        [`${SURFACE_PACKAGE}/__init__.py`]: [
             GENERATED_HEADER,
             `from .api import ${exported.join(", ")}\n`,
             `\n`,
             `__all__ = [${exported.map((name) => `"${name}"`).join(", ")}]\n`,
         ].join(""),
-        "api.py": api,
-        "models.py":
+        [`${SURFACE_PACKAGE}/api.py`]: api,
+        [`${SURFACE_PACKAGE}/models.py`]:
             models.length > 0
                 ? `${GENERATED_HEADER}${narrowBareExcept(models)}\n`
                 : `${GENERATED_HEADER}# No typed argument or result schemas in this deployment.\n`,
@@ -178,7 +202,13 @@ const pythonTarget: SdkTarget = {
     id: "python",
     quicktype: { lang: "python", rendererOptions: { "python-version": "3.7" } },
     render,
-    runtimePackage: ["lunora (PyPI)"],
+    // Nothing: the transport is vendored and imports only `json`, `base64`,
+    // `threading` and friends. `pyproject.toml` is deliberately NOT copied —
+    // `<out>/lunora` is already an importable package, and a second project file
+    // in a consumer's tree invites `pip install -e` against a directory that is
+    // not meant to be a distribution.
+    requires: [],
+    vendor: [{ from: "lunora", to: "lunora" }],
 };
 
 // `memberName` is exported for its own unit test: the keyword escaping is a
