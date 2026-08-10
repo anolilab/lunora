@@ -31,12 +31,19 @@ so your Next.js app and the Lunora worker share one origin locally. Codegen
 
 ```bash
 pnpm build      # lunora codegen && vinext build
+pnpm preview    # vite preview — the built Worker in workerd, with bindings
 pnpm deploy     # lunora codegen && vinext build && lunora deploy
 ```
 
 `vinext build` runs the Vite build, resolving `virtual:lunora/worker` into one
 Cloudflare Worker bundle carrying both vinext's Pages pipeline and Lunora's
 `/_lunora/*` RPC layer. `lunora deploy` ships it.
+
+> [!NOTE]
+> Preview with `pnpm preview`, not `vinext start`. `vinext start` is vinext's
+> **Node** production server: it has no Cloudflare bindings, so `env.SHARD` is
+> undefined there and every `/_lunora/*` call fails. `vite preview` runs the
+> built Worker in workerd through `@cloudflare/vite-plugin`, bindings and all.
 
 ## Stack
 

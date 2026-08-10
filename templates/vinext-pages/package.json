@@ -9,7 +9,7 @@
     "scripts": {
         "dev": "vinext dev",
         "build": "lunora codegen && vinext build",
-        "preview": "vinext start",
+        "preview": "vite preview",
         "codegen": "lunora codegen",
         "deploy": "lunora codegen && vinext build && lunora deploy"
     },
