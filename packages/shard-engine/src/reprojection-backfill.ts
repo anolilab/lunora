@@ -109,19 +109,18 @@ const reprojectionTables = (schema: SchemaLike): string[] =>
  * columns could not be counted at all — and its 100-term `OR` would have hit the
  * expression-depth ceiling on the way. This form is four parameters and one
  * `EXISTS`, whatever the column count.
- *
- * `json_each` yields each path already quoted by {@link jsonPathSegment}, so the
- * `|| '[0]'` concatenation appends an array index to a well-formed path — a
- * field literally named `a.b` still resolves to itself rather than to a nested
- * `b`.
  */
 const legacyRowPredicate = (fields: ReadonlyArray<string>): { params: unknown[]; sql: string } => {
     const paths = fields.map((field) => `$.${jsonPathSegment(field)}`);
     const document = quoteIdentifier(DOC_COLUMN);
+    // `__f__.value` is one already-quoted path; the suffix picks the wire
+    // tuple's sentinel and kind slots.
+    const sentinel = `json_extract(${document}, __f__.value || '[0]')`;
+    const kind = `json_extract(${document}, __f__.value || '[1]')`;
 
     return {
         params: [JSON.stringify(paths), WIRE_TAG, "bigint", "bytes"],
-        sql: `EXISTS (SELECT 1 FROM json_each(?) AS __f__ WHERE json_extract(${document}, __f__.value || '[0]') = ? AND json_extract(${document}, __f__.value || '[1]') IN (?, ?))`,
+        sql: `EXISTS (SELECT 1 FROM json_each(?) AS __f__ WHERE ${sentinel} = ? AND ${kind} IN (?, ?))`,
     };
 };
 

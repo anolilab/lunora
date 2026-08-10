@@ -15,11 +15,15 @@
  * size in `@lunora/shard-engine` would be wrong at once; the boundary cases
  * below fail loudly either way.
  *
- * Second, `json_each` is authorized. It is the mechanism the whole bounded-`IN`
- * form rests on and the only use of it in the repo. Workerd runs a function
- * allowlist — `sqlite_version()`, for instance, is rejected — so "SQLite has it"
- * is not the same as "a Durable Object may call it". Nothing else would notice
- * if that changed.
+ * Second, `json_each` is authorized, in both shapes the engine emits. Workerd
+ * runs a function allowlist — `sqlite_version()`, for instance, is rejected — so
+ * "SQLite has it" is not the same as "a Durable Object may call it", and nothing
+ * else would notice if that changed. The two shapes are pinned separately
+ * because authorization is per function, not per query: `sqliteInList`'s scalar
+ * `SELECT value FROM json_each(?)`, and the re-projection scan's correlated
+ * `EXISTS` whose json path is built with `||` at runtime. The second is the
+ * stricter test — a computed path argument is the part an allowlist could
+ * plausibly treat differently.
  */
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -89,6 +93,31 @@ describe("workerd SQLite limits", () => {
         await withSql("limits-like", (sql) => {
             expect(() => sql.exec(`SELECT 1 WHERE 'x' LIKE '%' || ? || '%'`, term).toArray()).toThrow(/LIKE or GLOB pattern too complex/u);
             expect(sql.exec(`SELECT instr(lower(?), lower(?)) > 0 AS hit`, `prefix ${term} suffix`, term).toArray()).toStrictEqual([{ hit: 1 }]);
+        });
+    });
+
+    it("authorizes `json_each` inside a correlated EXISTS with a computed path", async () => {
+        expect.assertions(1);
+
+        // The re-projection scan's shape: walk a bound list of json paths, and
+        // build each extraction path with `||` rather than binding it whole.
+        // Four parameters however many fields the table has.
+        await withSql("limits-json-each-exists", (sql) => {
+            sql.exec(`CREATE TABLE t (id TEXT PRIMARY KEY, "__doc__" TEXT)`);
+            sql.exec(`INSERT INTO t VALUES (?, ?)`, "legacy", JSON.stringify({ amount: ["$lunora.wire$", "bigint", "10"] }));
+            sql.exec(`INSERT INTO t VALUES (?, ?)`, "current", JSON.stringify({ amount: "0000010" }));
+
+            const rows = sql
+                .exec(
+                    `SELECT id FROM t WHERE EXISTS (SELECT 1 FROM json_each(?) AS __f__ WHERE json_extract("__doc__", __f__.value || '[0]') = ? AND json_extract("__doc__", __f__.value || '[1]') IN (?, ?))`,
+                    JSON.stringify(['$."amount"']),
+                    "$lunora.wire$",
+                    "bigint",
+                    "bytes",
+                )
+                .toArray();
+
+            expect(rows).toStrictEqual([{ id: "legacy" }]);
         });
     });
 

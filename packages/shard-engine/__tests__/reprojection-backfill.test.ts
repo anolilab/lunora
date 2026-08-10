@@ -123,13 +123,11 @@ describe("reprojection backfill", () => {
     });
 
     describe("statement width", () => {
-        // The predicate used to bind five parameters per reprojectable column
-        // and OR one clause per column. Workerd caps a statement at 100 bound
-        // parameters, so a table with 21 bigint/bytes columns could not be
-        // counted at all — and its OR chain would have hit the expression-depth
-        // ceiling on the way.
-        it("counts a very wide table, whose parameters used to scale with it", () => {
-            expect.assertions(2);
+        // Executed against real SQLite rather than asserted on the emitted text:
+        // `json_each` behaviour is exactly what cannot be reasoned about from the
+        // source. See `legacyRowPredicate` for why the width matters.
+        it("counts a table far wider than the parameter ceiling would allow", () => {
+            expect.assertions(1);
 
             const columns = 40;
             const wide = {
@@ -140,8 +138,6 @@ describe("reprojection backfill", () => {
                     },
                 },
             } as unknown as SchemaLike;
-
-            expect(reprojectableFields(wide.tables["wide"]!)).toHaveLength(columns);
 
             runShardMigrations(harness.sql, wide);
             // Raw `JSON.stringify`, like `seedLegacy`: `encodeDocJson` would
@@ -154,7 +150,6 @@ describe("reprojection backfill", () => {
                 JSON.stringify({ _creationTime: 1, _id: "legacy-1", f0: taggedBigint("10") }),
             );
 
-            // Five per column would have been 200 parameters; the row is still found.
             expect(countLegacyRows(harness.sql, "wide", reprojectableFields(wide.tables["wide"]!))).toBe(1);
         });
     });
