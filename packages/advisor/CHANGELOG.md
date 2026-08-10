@@ -1,3 +1,5 @@
+## @lunora/advisor [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/%40lunora%2Fadvisor%401.0.0-alpha.74...%40lunora%2Fadvisor%401.0.0-alpha.75) (2026-08-10)
+
 ## @lunora/advisor [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/%40lunora%2Fadvisor%401.0.0-alpha.73...%40lunora%2Fadvisor%401.0.0-alpha.74) (2026-08-10)
 
 
