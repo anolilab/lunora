@@ -5,11 +5,14 @@ import { useState } from "react";
 
 import "./welcome.css";
 
-// Lunora endpoint. `VITE_LUNORA_URL` (statically replaced by Vite at dev/build)
-// wins so you can point at a deployed Worker; otherwise the browser uses the page
-// origin and SSR loops back to the local worker.
+// Lunora endpoint. `VITE_LUNORA_URL` wins so you can point at a deployed Worker;
+// `vite.config.ts` otherwise defines it as the dev server's resolved origin,
+// because `virtual:lunora/worker` serves Lunora from this same worker. In a
+// build with neither set, the browser uses its own page origin — also this
+// worker.
+const isServer = typeof globalThis.window === "undefined";
 const resolveLunoraUrl = (): string =>
-    (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (typeof window === "undefined" ? "http://localhost:8787" : window.location.origin);
+    (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (isServer ? "http://localhost:3000" : globalThis.location.origin);
 
 /**
  * Custom App (Pages Router). Wraps every page in the LunoraProvider so any

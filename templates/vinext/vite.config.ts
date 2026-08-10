@@ -1,7 +1,49 @@
 import { lunora } from "@lunora/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import vinext from "vinext";
+import type { Plugin } from "vite";
 import { defineConfig } from "vite";
+
+/**
+ * Tells the SSR render which origin to call Lunora on, during `vinext dev`.
+ *
+ * The browser can use `location.origin`; a server render has no page to be
+ * relative to, so it needs an absolute URL. There is no second worker here —
+ * `virtual:lunora/worker` composes Lunora and vinext's SSR handler into one
+ * worker, so that origin is this very dev server. Hardcoding a port breaks the
+ * moment it runs on another one (`vinext dev --port 3001`, a second app on the
+ * same machine); reading the *resolved* port covers all of those.
+ *
+ * Two vinext-specific details, both load-bearing:
+ *  - The port is read in `configResolved`, not `config`. vinext's CLI passes
+ *    `--port` as inline config to `createServer`, so `config`'s `userConfig`
+ *    reports `server.port` as undefined and a `config`-hook version of this
+ *    plugin would silently inject the wrong port.
+ *  - It runs on `serve` ONLY. A build must never bake a localhost origin into
+ *    the deployed bundle — set `VITE_LUNORA_URL` to point a build at a
+ *    standalone Worker; otherwise the browser falls back to its page origin,
+ *    which is correct for this single-worker topology.
+ */
+const ssrOrigin = (): Plugin => {
+    return {
+        apply: "serve",
+        configResolved(config) {
+            if (process.env.VITE_LUNORA_URL) {
+                return;
+            }
+
+            const origin = `http://localhost:${config.server.port ?? 3000}`;
+
+            // Assign INTO `define` rather than replacing it: `ResolvedConfig.define`
+            // is a readonly property. Vite has always populated it by this point,
+            // so the guard is only here to satisfy its optional type.
+            if (config.define) {
+                config.define["import.meta.env.VITE_LUNORA_URL"] = JSON.stringify(origin);
+            }
+        },
+        name: "lunora-ssr-origin",
+    };
+};
 
 /**
  * Plugin ordering for Next.js-on-Vite (vinext) composed with Lunora:
@@ -21,5 +63,5 @@ import { defineConfig } from "vite";
  * worker). One worker, one deploy, one `ShardDO` namespace.
  */
 export default defineConfig({
-    plugins: [vinext(), cloudflare({ viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] } }), lunora({ cloudflare: false })],
+    plugins: [vinext(), cloudflare({ viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] } }), lunora({ cloudflare: false }), ssrOrigin()],
 });
