@@ -19,6 +19,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { sqliteInList, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import type { FieldOperators, WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
@@ -51,13 +52,23 @@ interface WhereSqlStrategy {
 
     /**
      * Dialect `IN` / `NOT IN` rendering over an already-serialized value list.
-     * Absent ⇒ a literal `IN (?, ?, …)`, one bound parameter per item.
+     * Absent ⇒ SQLite's {@link sqliteInList}, which switches a wide list to a
+     * single `json_each` parameter.
      *
-     * SQLite suppliers override it because Workerd and D1 both cap a statement
-     * at 100 bound parameters, which a wide `in` (or the relation semijoin, good
-     * for 5,000 join keys) blows straight through.
+     * Defaulted to the bounded form rather than to a literal `IN (?, ?, …)` for
+     * the same reason the substring hook above is: Workerd and D1 cap a statement at
+     * 100 bound parameters, and a wide `in` (or the relation semijoin, good for
+     * 5,000 join keys) blows straight through it. A strategy that forgets to
+     * opt in would fail with a runtime `SQLITE_ERROR` that no test catches,
+     * whereas a non-SQLite dialect that forgets to override fails loudly and
+     * immediately — Postgres and MySQL have no `json_each`.
+     *
+     * `budget` is how many placeholders THIS list may spend — the compiler
+     * divides {@link WHERE_LIST_PARAM_BUDGET} by the number of lists in the
+     * tree, so several `in` filters in one `where` cannot add up past the cap
+     * the way a fixed per-list threshold lets them.
      */
-    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
+    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
 
     /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
@@ -121,12 +132,13 @@ const compileInList = (reference: SQL, keyword: "IN" | "NOT IN", value: unknown,
     const serialized = items.map((item) => strategy.serialize(item));
     const negated = keyword === "NOT IN";
 
-    if (strategy.inList) {
-        return strategy.inList(reference, serialized, negated);
-    }
+    return (strategy.inList ?? sqliteInList)(reference, serialized, negated);
+};
 
+/** The `IN` / `NOT IN` rendering a dialect with no bounded list form uses: one bound placeholder per item. */
+const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
     const list = sql.join(
-        serialized.map((item) => sql`${item}`),
+        items.map((item) => sql`${item}`),
         sql`, `,
     );
 
@@ -252,6 +264,48 @@ const compileNode = (where: WhereInput, strategy: WhereSqlStrategy): SQL | undef
 };
 
 /**
+ * Placeholders every `in` / `notIn` list in one `where` may spend between them.
+ *
+ * Half of Workerd's per-statement parameter cap, leaving the other half for the
+ * rest of the statement — the comparators, the cursor, the limit. It is a
+ * whole-statement budget rather than a per-list one because three 40-item `in`
+ * filters are ordinary app code and would otherwise bind 120 placeholders while
+ * each list sat "within budget" on its own.
+ *
+ * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
+ * overrides the hook is free to ignore the budget it is handed.
+ */
+const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
+
+/** Count the `in` / `notIn` operators anywhere in the tree, so the budget above can be split evenly between them. */
+const countLists = (node: unknown): number => {
+    if (Array.isArray(node)) {
+        return node.reduce<number>((total, branch) => total + countLists(branch), 0);
+    }
+
+    if (node === null || typeof node !== "object") {
+        return 0;
+    }
+
+    let total = 0;
+
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "in" || key === "notIn") {
+            total += 1;
+        } else if (key === "AND" || key === "NOT" || key === "OR") {
+            total += countLists(value);
+        }
+        // Anything else is a field whose value is either an equality literal or
+        // an operator object; only the latter can hold a list.
+        else if (isOperatorObject(value)) {
+            total += countLists(value);
+        }
+    }
+
+    return total;
+};
+
+/**
  * Compile a structural {@link WhereInput} into a drizzle `SQL` predicate, or
  * `undefined` when the input imposes no constraint (empty `where`).
  */
@@ -260,7 +314,23 @@ export const compileWhereSql = (where: WhereInput | undefined, strategy: WhereSq
         return undefined;
     }
 
-    return compileNode(where, strategy);
+    const inList = strategy.inList ?? sqliteInList;
+    const listCount = countLists(where);
+
+    if (listCount === 0) {
+        return compileNode(where, strategy);
+    }
+
+    // Split the statement's list budget across however many lists the tree
+    // holds, so each one switches to its dialect's bounded form early enough
+    // that the total still fits. `Math.max(1, …)` keeps a pathologically wide
+    // `where` from computing a 0-placeholder budget; past 50 lists the
+    // one-placeholder floor per list is itself the ceiling, and `maxInValues` /
+    // the procedure's own arg validation is what bounds that.
+    const perList = Math.max(1, Math.floor(WHERE_LIST_PARAM_BUDGET / listCount));
+
+    return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) });
 };
 
+export { literalInList };
 export type { WhereSqlStrategy };

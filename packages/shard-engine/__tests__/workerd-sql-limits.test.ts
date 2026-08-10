@@ -82,7 +82,7 @@ describe("compound SELECT term cap", () => {
         expect(() => unionAll([])).toThrow("at least one branch");
     });
 
-    it("resolves a bare-id patch and delete on a schema wider than the cap", async () => {
+    it("returns the same rows from a nested probe as a flat one would, on a schema wider than the cap", async () => {
         expect.assertions(3);
 
         const harness = createSqliteExec();
@@ -112,7 +112,7 @@ describe("compound SELECT term cap", () => {
         }
     });
 
-    it("resolves many ids through the guarded batch probe on a schema wider than the cap", async () => {
+    it("resolves every id through the reshaped guarded batch probe, on a schema wider than the cap", async () => {
         expect.assertions(1);
 
         const harness = createSqliteExec();
@@ -180,21 +180,36 @@ describe("bound-parameter cap", () => {
         expect(renderSql("sqlite", compiled!)).toStrictEqual({ params: ["a", "b", "c"], sql: `"id" IN (?, ?, ?)` });
     });
 
-    it("keeps a non-finite number literal, because `JSON.stringify` writes it as null", () => {
+    it.each([
+        ["a non-finite number", Number.NaN],
+        ["a lone surrogate", "\uD800x"],
+        ["bytes", new Uint8Array([1, 2, 3])],
+    ])("keeps a list holding %s literal, because JSON would not carry it back unchanged", (_label, odd) => {
         expect.assertions(2);
 
-        // Long enough for the JSON form, but `[NaN]` stringifies to `[null]` —
-        // so the JSON list would stop matching NaN and start matching null.
-        const items = [...Array.from({ length: 400 }, (_, index) => index), Number.NaN, Number.POSITIVE_INFINITY];
-        const compiled = compileWhereSql({ score: { in: items } }, strategy);
-        const { params, sql: text } = renderSql("sqlite", compiled!);
+        // `JSON.stringify` turns each of these into something else — NaN into
+        // `null`, a lone surrogate into U+FFFD — so the JSON form would match
+        // different rows than the literal one. Under budget they stay literal.
+        const items = [1, 2, odd];
+        const { params, sql: text } = renderSql("sqlite", compileWhereSql({ score: { in: items } }, strategy)!);
 
         expect(params).toStrictEqual(items);
         expect(text).not.toContain("json_each");
     });
 
+    it("refuses an over-budget list it can neither bind as one parameter nor fit as placeholders", () => {
+        expect.assertions(1);
+
+        // Over budget AND not JSON-safe: there is no form of this statement that
+        // prepares on Workerd, so it fails with a message that says so rather
+        // than with `SQLITE_ERROR: too many SQL variables` from the engine.
+        const items = [...Array.from({ length: 400 }, (_, index) => index), Number.NaN];
+
+        expect(() => compileWhereSql({ score: { in: items } }, strategy)).toThrow(/cannot be bound as one parameter/u);
+    });
+
     it("chunks the by-id probes so a schema wider than the parameter cap stays under it", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const harness = createSqliteExec();
 
@@ -231,7 +246,63 @@ describe("bound-parameter cap", () => {
             await guarded.deleteMany!([id]);
 
             await expect(admin.get(id)).resolves.toBeNull();
+            expect(bound.length).toBeGreaterThan(0);
             expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+        } finally {
+            harness.close();
+        }
+    });
+
+    it("splits the list budget across every `in` in one `where`, not per list", () => {
+        expect.assertions(2);
+
+        // Three 40-item lists each sit under a 50-per-list threshold, so a
+        // per-list budget renders all three literally — 120 placeholders in one
+        // statement, over the cap. The budget is per statement, so each one
+        // switches to its single JSON parameter instead.
+        const items = Array.from({ length: 40 }, (_, index) => `id-${String(index)}`);
+        const compiled = compileWhereSql({ AND: [{ a: { in: items } }, { b: { in: items } }, { c: { notIn: items } }] }, strategy);
+        const { params, sql: text } = renderSql("sqlite", compiled!);
+
+        expect(params).toHaveLength(3);
+        expect(text.match(/json_each/gu)).toHaveLength(3);
+    });
+
+    it("chunks a bulk insert so no one statement passes the cap", async () => {
+        expect.assertions(2);
+
+        const harness = createSqliteExec();
+
+        try {
+            const schema = schemaWith(1);
+
+            runShardMigrations(harness.sql, schema);
+
+            const bound: number[] = [];
+            const counting: SqlExec = {
+                exec: (query, ...params) => {
+                    if (query.startsWith("INSERT INTO")) {
+                        bound.push(params.length);
+                    }
+
+                    return harness.sql.exec(query, ...params);
+                },
+            };
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: counting });
+            // 200 rows at 3 bound parameters each — 600 placeholders if the
+            // batch went out as one statement.
+            const rows = Array.from({ length: 200 }, (_, index) => {
+                return { title: `row ${String(index)}` };
+            });
+
+            await writer.insertMany!("t0", rows);
+
+            expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+
+            const stored = await writer.findMany("t0", { limit: 500 });
+
+            expect(stored.page).toHaveLength(200);
         } finally {
             harness.close();
         }
@@ -269,8 +340,8 @@ describe("bound-parameter cap", () => {
     });
 });
 
-describe("lIKE pattern-length cap", () => {
-    it("compiles `contains` to a position test, so a long term is not a pattern", async () => {
+describe("`LIKE` pattern-length cap", () => {
+    it("matches the same rows through a position test as `LIKE` did, and takes a wildcard literally", async () => {
         expect.assertions(2);
 
         const harness = createSqliteExec();

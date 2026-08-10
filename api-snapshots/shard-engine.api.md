@@ -2845,7 +2845,7 @@ interface WhereInput {
 interface WhereSqlStrategy {
     containsExpr?: (reference: SQL, term: SQL) => SQL;
     fieldRef: FieldRefSql;
-    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
+    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
     relationExists?: (request: unknown) => SQL;
     serialize: SerializeValue;
 }
@@ -3459,6 +3459,12 @@ const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
 
 ```ts
 const listTables: (sql: SqlExec) => TableInfo[];
+```
+
+### `literalInList` (const)
+
+```ts
+const literalInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
 ```
 
 ### `matchesRankStaticWhere` (const)

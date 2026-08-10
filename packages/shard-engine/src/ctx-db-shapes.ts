@@ -34,7 +34,7 @@ import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
 
 /** Flat JSON-blob `where` strategy: fields via `json_extract`, values via `serializeSqlValue`. Mirrors the query path's `doWhereSqlStrategy`. */
-const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, inList: sqliteInList, serialize: serializeSqlValue };
+const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /** Build the `id IN (...)` restriction for a non-empty id list, or `undefined` to leave the query unrestricted. */
 const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {

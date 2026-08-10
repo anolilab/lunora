@@ -592,14 +592,35 @@ const emitLogEvent = (input: LogEventInput, options: RequestLogWriteOptions = {}
     }
 };
 
-/** Escape LIKE wildcards so a literal `%`/`_`/`\` in a filter matches itself (paired with `ESCAPE '\'`). */
-const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
+/**
+ * A prefix / substring test that is not a `LIKE` pattern.
+ *
+ * Workerd caps `SQLITE_LIMIT_LIKE_PATTERN_LENGTH` at 50 bytes and this table
+ * lives in a Durable Object, so `function_path LIKE 'prefix%'` failed the whole
+ * read with "LIKE or GLOB pattern too complex" once the prefix passed ~49
+ * characters — which a Lunora function path reaches easily
+ * (`api/admin/billing/subscriptions/reconcileStripeWebhook` is 54). `substr` and
+ * `instr` carry no pattern, so they have no length ceiling, and they take the
+ * term literally — which also retires the wildcard escaping this used to need.
+ *
+ * Both sides go through SQLite's `lower()` because that is the case folding
+ * `LIKE` applied and therefore the behaviour callers already have — folding in
+ * JS instead would diverge on non-ASCII, where `lower()` is a no-op and
+ * `toLowerCase()` is not.
+ *
+ * `substr`'s length is the term's code-point count (what SQLite counts), not its
+ * UTF-16 length, and it is interpolated as an integer literal rather than bound
+ * so the comparison stays a plain equality.
+ */
+const prefixTest = (column: string, term: string): string =>
+    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- code points is exactly the unit wanted: SQLite's `substr` counts them, so `term.length` (UTF-16 units) would over-count any astral character and slice a longer prefix than the term.
+    `lower(substr(${column}, 1, ${String([...term].length)})) = lower(?)`;
 
 /** Append the scope filters {@link readRequestLog} and {@link readErrorIssues} share (function-path prefix, exact userId/shardKey), each as a bound parameter. */
 const pushScopeFilters = (conjuncts: string[], parameters: unknown[], options: { functionPathPrefix?: string; shardKey?: string; userId?: string }): void => {
     if (options.functionPathPrefix !== undefined && options.functionPathPrefix !== "") {
-        conjuncts.push(String.raw`function_path LIKE ? ESCAPE '\'`);
-        parameters.push(`${escapeLike(options.functionPathPrefix)}%`);
+        conjuncts.push(prefixTest("function_path", options.functionPathPrefix));
+        parameters.push(options.functionPathPrefix);
     }
 
     if (options.userId !== undefined && options.userId !== "") {
@@ -668,11 +689,11 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
 
     if (options.tableTouched !== undefined && options.tableTouched !== "") {
         // Tables are stored as a JSON string array (e.g. `["a","b"]`), so a
-        // quoted-substring LIKE matches an exact table name without colliding on
+        // quoted-substring test matches an exact table name without colliding on
         // a prefix (`"posts"` never matches inside `"posts_archive"`).
-        const needle = `%${escapeLike(JSON.stringify(options.tableTouched))}%`;
+        const needle = JSON.stringify(options.tableTouched);
 
-        conjuncts.push(String.raw`(tables_read LIKE ? ESCAPE '\' OR tables_written LIKE ? ESCAPE '\')`);
+        conjuncts.push("(instr(lower(tables_read), lower(?)) > 0 OR instr(lower(tables_written), lower(?)) > 0)");
         parameters.push(needle, needle);
     }
 

@@ -115,32 +115,37 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
 };
 
 /**
- * Rows per companion `INSERT`. At 3 bound parameters per row this is 96 per
- * statement — under the tightest engine's cap, which is D1's 100 (it runs
- * Workerd's SQLite build, where `SQLITE_LIMIT_VARIABLE_NUMBER` is 100, not stock
- * SQLite's 500,000). Still turns a many-token document into a handful of round
- * trips rather than one per token.
+ * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
+ * far under every engine's cap (3 params per row) while still turning a
+ * many-token document into a handful of round trips rather than one per token.
+ *
+ * Deliberately NOT sized to Workerd's cap of 100, unlike its namesake in
+ * `@lunora/shard-engine`: `chooseLayout` picks this layout only when the dialect
+ * has no FTS5, and the only such dialects are Hyperdrive's Postgres and MySQL,
+ * which bind thousands. D1's SQLite dialect sets `supportsFts5: true` and never
+ * reaches here.
  */
-const INSERT_CHUNK_ROWS = 32;
+const INSERT_CHUNK_ROWS = 50;
 
 /**
  * The predicate one query term matches a companion token with: an exact
  * equality, except for the query's final term, which matches as a prefix so a
- * search behaves as-you-type.
+ * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
+ * the `LIKE` pattern carries no wildcard or escape character.
  *
- * The prefix half is a half-open range rather than `LIKE 'token%'` — the same
- * form the vocabulary scorer below uses. Both plan against the btree, but D1
- * runs Workerd's SQLite build, which caps a LIKE pattern at 50 bytes: a 50-plus
- * character search term would otherwise fail the query outright with "LIKE or
- * GLOB pattern too complex".
+ * `LIKE`, not the half-open range the vocabulary scorer uses, for the same
+ * reason the chunk above is not 32: this layout runs only on Postgres and
+ * MySQL, so Workerd's 50-byte LIKE cap cannot apply — and on Postgres a range
+ * would be strictly worse. The companion's token btree declares
+ * `text_pattern_ops` precisely so a prefix `LIKE` stays indexed under a
+ * linguistic collation, and a `xxx_pattern_ops` class cannot answer `>=` / `<`
+ * at all. A collation-ordered range is also a different set from a
+ * character-wise `LIKE` (under `en_US.UTF-8`, `straße` falls inside the range
+ * for `stras` but does not match `stras%`), which would put this backend's
+ * results at odds with the FTS5 ones the shared scorer exists to keep aligned.
  */
-const searchTermPredicate = (token: string, isLast: boolean): SQL => {
-    const range = searchTermRange(token, isLast);
-
-    return range.exact
-        ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${range.lower}`
-        : sql`${sql.identifier(FTS_TOKEN_COLUMN)} >= ${range.lower} AND ${sql.identifier(FTS_TOKEN_COLUMN)} < ${range.upper}`;
-};
+const searchTermPredicate = (token: string, isLast: boolean): SQL =>
+    isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
 
 /** The main-table (`m`) conditions every layout applies: the staged equality filters plus the soft-delete scope. */
 const mainTableFilters = (definition: TableDefinitionLike, search: SearchStage): SQL[] => {
@@ -380,9 +385,9 @@ const invertedLayout: SearchLayout = {
         }
 
         // One round trip per document write when the exec exposes `batch`
-        // (still chunked at INSERT_CHUNK_ROWS, so no one statement exceeds the
-        // tightest engine's bound-parameter cap); a per-chunk sequential `run()`
-        // loop otherwise.
+        // (still chunked at INSERT_CHUNK_ROWS, so the bound-parameter count of
+        // any one statement stays far under every engine's cap); a per-chunk
+        // sequential `run()` loop otherwise.
         await queryBatch(exec, dialect, chunks);
     },
     name: "inverted",

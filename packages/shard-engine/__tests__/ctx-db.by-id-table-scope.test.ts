@@ -262,7 +262,7 @@ describe("the RLS guard batch id→table probe (deleteMany/patchMany)", () => {
     });
 
     it("issues far fewer guard-probe statements than one per bare id (pre-fix: one per id)", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // All-public so the batch resolves cleanly with no denial — isolates the
         // STATEMENT COUNT, not the guard's allow/deny decision (covered above).
@@ -305,15 +305,14 @@ describe("the RLS guard batch id→table probe (deleteMany/patchMany)", () => {
 
         // Any table-resolution probe (guard batch OR the writer's own per-row
         // CAS resolution) shares this `AS __t__, id` shape. Pre-fix, the guard
-        // alone issued one such statement PER id (50); post-fix it issues at
-        // most `ceil(ids / chunkSize)` — here 2, since a chunk holds 33 ids
-        // (`floor(100 / 3)`, Workerd's bound-variable cap over 3 branches). The
-        // writer's own 50 (one per row, unavoidable — the OCC/CAS snapshot) are
-        // untouched and included below.
+        // alone issued one such statement PER id (50); post-fix it batches every
+        // id into ONE statement per chunk of tables, and 3 tables is a single
+        // chunk (the probe chunks tables at 100, not ids — the id list becomes a
+        // single `json_each` parameter once it would not fit). The writer's own
+        // 50 (one per row, unavoidable — the OCC/CAS snapshot) are untouched.
         const probeLikeCount = queries.filter((query) => /AS __t__, id\b/u.test(query)).length;
-        const chunkSize = Math.max(1, Math.floor(100 / nonGlobalTableCount));
-        const expectedMax = Math.ceil(50 / chunkSize) + 50;
 
-        expect(probeLikeCount).toBeLessThanOrEqual(expectedMax);
+        expect(nonGlobalTableCount).toBeLessThanOrEqual(100);
+        expect(probeLikeCount).toBe(51);
     });
 });

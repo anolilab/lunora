@@ -79,7 +79,7 @@ import {
     tableColumns,
     tryRowToDocument,
 } from "./do-sql";
-import { sqliteInList, unionAll } from "./drizzle";
+import { sqliteInList, unionAll, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { boundingBoxGeohashes, coveringGeohashes, haversineMeters, pointInBoundingBox } from "./geo";
 import { NotFoundError } from "./not-found-error";
 import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
@@ -348,23 +348,24 @@ type CountArgs = RestrictableQueryOptions;
 const DEFAULT_BATCH_LIMIT = 500;
 
 /**
- * Rows per multi-row `INSERT`. Three bound parameters per row puts one statement
- * at 96 — under Workerd's `SQLITE_LIMIT_VARIABLE_NUMBER` of 100, which is where
- * a Durable Object's SQLite refuses to prepare rather than merely running
- * slower. Mirrors the aggregate companion's own chunk in `ctx-db-companions`.
+ * Rows per multi-row `INSERT`. Three bound parameters per row, so one statement
+ * lands just under Workerd's per-statement parameter cap — which is where a
+ * Durable Object's SQLite refuses to prepare rather than merely running slower.
+ * Mirrors the aggregate companion's own chunk in `ctx-db-companions`.
  */
-const INSERT_CHUNK_ROWS = 32;
+const INSERT_CHUNK_ROWS = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / 3);
 
 /**
  * Most tables one by-id probe may union into a single statement.
  *
- * `unionAll` nests branches so the 5-term compound-SELECT cap never binds, but
- * every branch still spends at least one bound parameter — the id in
- * `locateRowById`, the `json_each` list in `locateTablesByIds` — against
- * Workerd's cap of 100 per statement. A schema wider than that cannot probe in
- * one round-trip however the branches nest, so it probes a chunk at a time.
+ * `unionAll` nests branches so the compound-SELECT cap never binds, but every
+ * branch still spends at least one bound parameter — the id in
+ * `locateRowById`, the `json_each` list in `locateTablesByIds` — so the
+ * parameter cap is what bounds the branch count. A schema wider than that
+ * cannot probe in one round-trip however the branches nest, so it probes a
+ * chunk at a time.
  */
-const MAX_PROBE_BRANCHES = 100;
+const MAX_PROBE_BRANCHES = WORKERD_SQLITE_LIMITS.boundParams;
 
 /**
  * Rows pulled per page when a reader is iterated with `for await`.
@@ -964,7 +965,7 @@ const runPlainFetch = (
 };
 
 /** DO drizzle `where` strategy (flat): fields via `json_extract`, values via {@link serializeSqlValue}. */
-const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, inList: sqliteInList, serialize: serializeSqlValue };
+const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
  * Whether `field` is stored as an order-preserving sort key rather than as its
@@ -1047,7 +1048,6 @@ const makeRelationExistsSqlStrategy = (onRead: ReadHook): WhereSqlStrategy => {
 
     const strategy: WhereSqlStrategy = {
         fieldRef: jsonPathSql,
-        inList: sqliteInList,
         relationExists: (request) => {
             const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
             const alias = `__rel_${String(aliasCounter)}`;

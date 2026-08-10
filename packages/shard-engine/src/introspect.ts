@@ -711,7 +711,7 @@ interface TablePage {
     total?: number;
 }
 
-/** Comparison a {@link FilterClause} applies. `contains` is a case-sensitive substring (LIKE); the rest are direct SQL comparisons. */
+/** Comparison a {@link FilterClause} applies. `contains` is a case-insensitive substring test (see {@link containsSql}); the rest are direct SQL comparisons. */
 type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
 
 /**

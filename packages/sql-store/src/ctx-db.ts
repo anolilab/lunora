@@ -90,9 +90,9 @@ import {
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
+    literalInList,
     softDeleteScope,
     sortColumnName,
-    sqliteInList,
     throwingScheduler,
 } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
@@ -960,9 +960,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // case-sensitive (`strpos`).
         ...(dialect.name === "mysql" ? { containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0` } : {}),
         ...(dialect.name === "postgres" ? { containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0` } : {}),
-        // D1 is the same Workerd SQLite build as a Durable Object, so it caps a
-        // statement at 100 bound parameters; the other two engines bind thousands.
-        ...(dialect.name === "sqlite" ? { inList: sqliteInList } : {}),
+        // The compiler defaults `inList` to SQLite's bounded `json_each` form,
+        // because D1 is the same Workerd build as a Durable Object and caps a
+        // statement at 100 bound parameters. The other two engines bind
+        // thousands and have no `json_each`, so they take the literal list.
+        ...(dialect.name === "sqlite" ? {} : { inList: literalInList }),
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */
