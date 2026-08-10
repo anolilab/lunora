@@ -51,18 +51,31 @@ a library on the classpath, which is the one thing these transports do not have.
 `targets/java.ts` records every renderer option that was measured, and what a
 real fix would cost.
 
-**Concurrency.** Go, Ruby, Java, Kotlin and Swift hold a lock over the
+**Concurrency.** Go, Ruby, Java, Kotlin, Swift and Python hold a lock over the
 subscription registry, the shape views and the id counters, and dispatch frames
 and user callbacks after releasing it. Resume frames are BUILT under that lock,
 because each one reads a `cursor` the frame handler writes. Every one of those
-five has a test that starts a socket reader and four subscriber threads and
+six has a test that starts a socket reader and four subscriber threads and
 asserts on the resulting subscription count — a lost `nextId++` silently forgets
 a live subscription, and that is deterministic where waiting for a hash map to
 corrupt is not. The Swift leg additionally runs under `--sanitize=thread`; the
 Ruby one gives its injected sender a `Thread.pass`, because MRI's 100ms time
 slice otherwise lets four CPU-bound threads each run to completion without ever
-interleaving, and the case then passes with the lock removed. Python's client is
-safe by virtue of the GIL for the operations it performs.
+interleaving, and the case then passes with the lock removed.
+
+Python's lock is `threading.Lock`, not `asyncio.Lock`: `subscribe`,
+`subscribe_shape`, `handle_frame` and `resend_subscriptions` are plain
+synchronous methods, so the contention is between real OS threads — the WS read
+loop against whatever thread the application subscribes from — and not between
+tasks on one event loop. This row previously read "safe by virtue of the GIL",
+which was wrong twice over. The GIL makes each bytecode atomic, not each
+statement: `self._next_sub_id += 1` followed by a separate read of it lost 830 of
+16,000 subscriptions in one unsynchronised run at the stock 5ms switch interval,
+and building the reconnect resend by walking `_subs` while another thread
+inserted raised `RuntimeError: dictionary changed size during iteration` on 10 of
+10 runs. Its test lowers `sys.setswitchinterval` to sample that window often
+enough to fail inside one run, which is the CPython counterpart of the Swift
+leg's TSan pass — the failures above were measured at the stock interval.
 
 Rust carries no lock and needs none: every method that touches that state takes
 `&mut self`, so two threads reaching it at once is a compile error rather than a
