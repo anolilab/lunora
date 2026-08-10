@@ -9,6 +9,17 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createNodeQueueHost } from "../src/node-queue-host";
 
+// Every case that polls at an offset injects `now`, so the producer's
+// `visible_at` and `poll`'s comparison share one clock.
+//
+// Not a style preference. `send` stamps `visible_at` from the host clock, so a
+// case that captures `Date.now()`, sends, then polls at `captured + delay` is
+// asking whether zero milliseconds elapsed in between. "holds a delayed message
+// back" asserted at exactly `captured + 60_000` and failed that way on one CI leg
+// while passing on the other; "retries an explicitly retried message" and
+// "retries every undecided message" assert `poll(now) === 1` with no margin at
+// all. Two more were safe only by accident — one polls 5s out, one captures after
+// its sends. Injecting everywhere removes the need to work out which is which.
 describe("createNodeQueueHost", () => {
     let directory: string;
 
@@ -99,14 +110,14 @@ describe("createNodeQueueHost", () => {
 
         const batched = defineQueue({ handler: () => undefined, maxBatchSize: 3, maxBatchTimeout: 5 });
         const sizes: number[] = [];
+        const now = Date.now();
         const host = createNodeQueueHost(freshDatabase(), {
+            now: () => now,
             onBatch: (batch) => {
                 sizes.push(batch.messages.length);
             },
             queues: { batched },
         });
-
-        const now = Date.now();
 
         await host.bindings.batched.send("one");
 
@@ -128,7 +139,9 @@ describe("createNodeQueueHost", () => {
 
         const flaky = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, maxRetries: 5 });
         const attempts: number[] = [];
+        const now = Date.now();
         const host = createNodeQueueHost(freshDatabase(), {
+            now: () => now,
             onBatch: (batch) => {
                 attempts.push(batch.messages[0]?.attempts ?? -1);
 
@@ -138,8 +151,6 @@ describe("createNodeQueueHost", () => {
             },
             queues: { flaky },
         });
-
-        const now = Date.now();
 
         await host.bindings.flaky.send("payload");
 
@@ -158,7 +169,9 @@ describe("createNodeQueueHost", () => {
 
         const crashing = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, maxRetries: 10 });
         let calls = 0;
+        const now = Date.now();
         const host = createNodeQueueHost(freshDatabase(), {
+            now: () => now,
             onBatch: () => {
                 calls += 1;
 
@@ -168,8 +181,6 @@ describe("createNodeQueueHost", () => {
             },
             queues: { crashing },
         });
-
-        const now = Date.now();
 
         await host.bindings.crashing.send("keep me");
 
@@ -188,7 +199,9 @@ describe("createNodeQueueHost", () => {
         const failures = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, name: "failures" });
 
         const deliveredTo: Record<string, unknown[]> = {};
+        const now = Date.now();
         const host = createNodeQueueHost(freshDatabase(), {
+            now: () => now,
             onBatch: (batch) => {
                 deliveredTo[batch.queue] ??= [];
 
@@ -207,8 +220,6 @@ describe("createNodeQueueHost", () => {
 
         await host.bindings.parked.send("doomed");
         await host.bindings.routed.send("also-doomed");
-
-        const now = Date.now();
 
         // `maxRetries` counts retries AFTER the initial delivery, matching
         // Cloudflare and `dispatchQueueBatch`'s `attempts > maxRetries` — so
