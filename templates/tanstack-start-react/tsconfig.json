@@ -10,6 +10,10 @@
         "skipLibCheck": true,
         "isolatedModules": true,
         "noEmit": true,
+        // `vite/client` for the Vite ambients: `import.meta.env` (src/routes/__root.tsx
+        // reads VITE_LUNORA_URL) and the `*.css` side-effect import in
+        // src/routes/index.tsx. Without it both are errors — the same pair the
+        // tanstack-start-solid template already ships this for.
         "types": ["@cloudflare/workers-types", "vite/client"],
         "paths": {
             "~/*": ["./src/*"]
