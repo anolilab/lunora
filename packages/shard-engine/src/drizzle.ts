@@ -42,8 +42,14 @@ const COMPOUND_SELECT_LIMIT = 5;
  */
 const IN_LIST_PARAM_BUDGET = 50;
 
-/** Values that survive `JSON.stringify` round-trip intact, so the `json_each` form is safe for them. */
-const isJsonSafe = (value: unknown): boolean => value === null || ["boolean", "number", "string"].includes(typeof value);
+/**
+ * Values that survive a `JSON.stringify` round-trip intact, so the `json_each`
+ * form is safe for them. Non-finite numbers do not: `JSON.stringify` writes
+ * `NaN` and `±Infinity` as `null`, which would silently change what the list
+ * matches — those keep the literal form.
+ */
+const isJsonSafe = (value: unknown): boolean =>
+    value === null || typeof value === "boolean" || typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 
 /** The SQL engine a render targets. */
 export type SqlEngine = "mysql" | "postgres" | "sqlite";

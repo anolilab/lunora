@@ -356,6 +356,17 @@ const DEFAULT_BATCH_LIMIT = 500;
 const INSERT_CHUNK_ROWS = 32;
 
 /**
+ * Most tables one by-id probe may union into a single statement.
+ *
+ * `unionAll` nests branches so the 5-term compound-SELECT cap never binds, but
+ * every branch still spends at least one bound parameter — the id in
+ * `locateRowById`, the `json_each` list in `locateTablesByIds` — against
+ * Workerd's cap of 100 per statement. A schema wider than that cannot probe in
+ * one round-trip however the branches nest, so it probes a chunk at a time.
+ */
+const MAX_PROBE_BRANCHES = 100;
+
+/**
  * Rows pulled per page when a reader is iterated with `for await`.
  *
  * A batch, not one row at a time: the cost is dominated by the per-page keyset
@@ -2366,41 +2377,42 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // regardless of table count. `LIMIT 1` short-circuits once a branch
         // hits; ids are unique across tables so at most one branch matches.
         // `unionAll` nests the branches five at a time so a schema wider than
-        // Workerd's 5-term compound-SELECT cap still probes in one statement.
+        // Workerd's 5-term compound-SELECT cap still probes in one statement;
+        // past MAX_PROBE_BRANCHES the id placeholders alone exceed the bound-
+        // parameter cap, so those schemas probe one chunk of tables at a time.
         const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
-        if (nonGlobalTables.length === 0) {
-            return undefined;
+        for (let start = 0; start < nonGlobalTables.length; start += MAX_PROBE_BRANCHES) {
+            const branches = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES).map(
+                (tableName) =>
+                    // The table-name discriminator stays an inline literal (escaped) rather than a bound param so it reads as `'<table>' AS __t__`.
+                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id = ${id}`,
+            );
+
+            const [firstRow] = runDrizzle(sql, dsql`${unionAll(branches)} LIMIT 1`).toArray();
+
+            if (!firstRow) {
+                continue;
+            }
+
+            const tableName = firstRow["__t__"];
+            const row = rowToDocument(firstRow);
+
+            if (typeof tableName !== "string" || !row) {
+                return undefined;
+            }
+
+            // Capture the exact stored blob at read time so a read-modify-write
+            // that spans an `await` (before-update trigger / onDelete cascade)
+            // can compare-and-swap on it — a concurrent write that changed the
+            // row flips the blob and the guarded UPDATE/DELETE matches zero rows.
+            const rawDocument = firstRow[DOC_COLUMN];
+            const documentJson = typeof rawDocument === "string" ? rawDocument : encodeDocJson((rawDocument ?? {}) as Record<string, unknown>);
+
+            return { docJson: documentJson, row, tableName };
         }
 
-        const branches = nonGlobalTables.map(
-            (tableName) =>
-                // The table-name discriminator stays an inline literal (escaped) rather than a bound param so it reads as `'<table>' AS __t__`.
-                dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id = ${id}`,
-        );
-        const probeQuery = dsql`${unionAll(branches)} LIMIT 1`;
-
-        const [firstRow] = runDrizzle(sql, probeQuery).toArray();
-
-        if (!firstRow) {
-            return undefined;
-        }
-
-        const tableName = firstRow["__t__"];
-        const row = rowToDocument(firstRow);
-
-        if (typeof tableName !== "string" || !row) {
-            return undefined;
-        }
-
-        // Capture the exact stored blob at read time so a read-modify-write
-        // that spans an `await` (before-update trigger / onDelete cascade)
-        // can compare-and-swap on it — a concurrent write that changed the
-        // row flips the blob and the guarded UPDATE/DELETE matches zero rows.
-        const rawDocument = firstRow[DOC_COLUMN];
-        const documentJson = typeof rawDocument === "string" ? rawDocument : encodeDocJson((rawDocument ?? {}) as Record<string, unknown>);
-
-        return { docJson: documentJson, row, tableName };
+        return undefined;
     };
 
     /**
@@ -2414,12 +2426,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * `LIMIT 1`: unlike a single lookup, every id may hit a different table
      * and all hits are wanted.
      *
-     * One statement, however many ids: each of the `nonGlobalTables.length`
-     * branches repeats the full `id IN (...)` list, so a literal list would cost
-     * `ids * tables` bound placeholders against Workerd's cap of 100 — hence the
-     * per-branch budget handed to `sqliteInList`, which switches the list to a
-     * single JSON parameter once it would not fit. The branch count itself is
-     * capped by `unionAll`'s nesting.
+     * One statement, however many ids: each branch repeats the full
+     * `id IN (...)` list, so a literal list would cost `ids * tables` bound
+     * placeholders against Workerd's cap of 100 — hence the per-branch budget
+     * handed to `sqliteInList`, which switches the list to a single JSON
+     * parameter once it would not fit. The branch count itself is capped by
+     * `unionAll`'s nesting for the compound-SELECT limit and by
+     * {@link MAX_PROBE_BRANCHES} for the parameter one.
      * @returns a map from id to its owning table; an id absent from the map resolved to no table this writer can see
      */
     const locateTablesByIds = (ids: ReadonlyArray<string>, expectedTable?: string): Map<string, string> => {
@@ -2433,27 +2446,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         const nonGlobalTables = nonGlobalTableNames(expectedTable);
 
-        if (nonGlobalTables.length === 0) {
-            return resolved;
-        }
+        for (let start = 0; start < nonGlobalTables.length; start += MAX_PROBE_BRANCHES) {
+            const group = nonGlobalTables.slice(start, start + MAX_PROBE_BRANCHES);
+            // Chunking keeps the divisor at or below MAX_PROBE_BRANCHES, so the
+            // budget is always at least the one placeholder a branch needs.
+            const perBranchBudget = Math.floor(MAX_PROBE_BRANCHES / group.length);
+            // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
+            const idFilter = sqliteInList(dsql`${dsql.identifier("id")}`, uniqueIds, false, perBranchBudget);
+            const branches = group.map(
+                (tableName) =>
+                    // Mirrors `locateRowById`'s inline-literal table discriminator.
+                    dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id FROM ${dsql.identifier(tableName)} WHERE ${idFilter}`,
+            );
 
-        // `Math.max(1, …)` keeps a very-wide schema (100+ tables) from computing
-        // a 0-placeholder budget; past that width the branch parameters alone
-        // exceed the cap and the budget is best-effort anyway.
-        const perBranchBudget = Math.max(1, Math.floor(100 / nonGlobalTables.length));
-        // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
-        const idFilter = sqliteInList(dsql`${dsql.identifier("id")}`, uniqueIds, false, perBranchBudget);
-        const branches = nonGlobalTables.map(
-            (tableName) =>
-                // Mirrors `locateRowById`'s inline-literal table discriminator.
-                dsql`SELECT ${dsql.raw(`'${tableName.replaceAll("'", "''")}'`)} AS __t__, id FROM ${dsql.identifier(tableName)} WHERE ${idFilter}`,
-        );
+            for (const row of runDrizzle(sql, unionAll(branches))) {
+                const { id, __t__: tableName } = row;
 
-        for (const row of runDrizzle(sql, unionAll(branches))) {
-            const { id, __t__: tableName } = row;
-
-            if (typeof tableName === "string" && typeof id === "string") {
-                resolved.set(id, tableName);
+                if (typeof tableName === "string" && typeof id === "string") {
+                    resolved.set(id, tableName);
+                }
             }
         }
 

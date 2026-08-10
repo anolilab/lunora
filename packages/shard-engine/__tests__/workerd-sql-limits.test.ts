@@ -2,7 +2,7 @@ import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import type { SchemaLike } from "../src/ctx-db";
+import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { renderSql, sqliteInList, unionAll } from "../src/drizzle";
 import { compileWhereSql } from "../src/where-sql";
@@ -61,22 +61,30 @@ const schemaWith = (tableCount: number, rls = false): SchemaLike => {
 
 describe("compound SELECT term cap", () => {
     it("counts compound terms per nesting depth", () => {
+        expect.assertions(3);
+
         expect(widestCompound("SELECT 1")).toBe(1);
         expect(widestCompound("SELECT 1 UNION ALL SELECT 2")).toBe(2);
         expect(widestCompound("SELECT * FROM (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) x UNION ALL SELECT 4")).toBe(3);
     });
 
     it.each([1, 2, 5, 6, 13, 26, 126])("nests %i branches so no compound exceeds five terms", (branchCount) => {
+        expect.assertions(1);
+
         const branches = Array.from({ length: branchCount }, (_, index) => dsql`SELECT ${index} AS ${dsql.identifier("x")}`);
 
         expect(widestCompound(renderSql("sqlite", unionAll(branches)).sql)).toBeLessThanOrEqual(5);
     });
 
     it("rejects an empty branch list", () => {
+        expect.assertions(1);
+
         expect(() => unionAll([])).toThrow("at least one branch");
     });
 
     it("resolves a bare-id patch and delete on a schema wider than the cap", async () => {
+        expect.assertions(3);
+
         const harness = createSqliteExec();
 
         try {
@@ -105,6 +113,8 @@ describe("compound SELECT term cap", () => {
     });
 
     it("resolves many ids through the guarded batch probe on a schema wider than the cap", async () => {
+        expect.assertions(1);
+
         const harness = createSqliteExec();
 
         try {
@@ -152,6 +162,8 @@ describe("bound-parameter cap", () => {
         ["in", false],
         ["notIn", true],
     ])("spends one parameter, not one per item, on a wide `%s`", (operator, negated) => {
+        expect.assertions(2);
+
         const items = Array.from({ length: 400 }, (_, index) => `id-${String(index)}`);
         const compiled = compileWhereSql({ id: { [operator]: items } }, strategy);
         const { params, sql: text } = renderSql("sqlite", compiled!);
@@ -161,12 +173,73 @@ describe("bound-parameter cap", () => {
     });
 
     it("keeps a short list literal, so an index still plans against it", () => {
+        expect.assertions(1);
+
         const compiled = compileWhereSql({ id: { in: ["a", "b", "c"] } }, strategy);
 
         expect(renderSql("sqlite", compiled!)).toStrictEqual({ params: ["a", "b", "c"], sql: `"id" IN (?, ?, ?)` });
     });
 
+    it("keeps a non-finite number literal, because `JSON.stringify` writes it as null", () => {
+        expect.assertions(2);
+
+        // Long enough for the JSON form, but `[NaN]` stringifies to `[null]` —
+        // so the JSON list would stop matching NaN and start matching null.
+        const items = [...Array.from({ length: 400 }, (_, index) => index), Number.NaN, Number.POSITIVE_INFINITY];
+        const compiled = compileWhereSql({ score: { in: items } }, strategy);
+        const { params, sql: text } = renderSql("sqlite", compiled!);
+
+        expect(params).toStrictEqual(items);
+        expect(text).not.toContain("json_each");
+    });
+
+    it("chunks the by-id probes so a schema wider than the parameter cap stays under it", async () => {
+        expect.assertions(3);
+
+        const harness = createSqliteExec();
+
+        try {
+            // 120 tables: `unionAll` nests them past the compound-SELECT cap
+            // fine, but one placeholder per branch — the id, or the `json_each`
+            // list — still binds 120 parameters against Workerd's cap of 100.
+            const schema = schemaWith(120, true);
+
+            runShardMigrations(harness.sql, schema);
+
+            const bound: number[] = [];
+            const counting: SqlExec = {
+                exec: (query, ...params) => {
+                    bound.push(params.length);
+
+                    return harness.sql.exec(query, ...params);
+                },
+            };
+
+            const admin = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: counting });
+            // The last table, so the owning branch lands in the second chunk.
+            const id = await admin.insert("t119", { title: "before" });
+            const guarded = createShardContextDatabase({ clock: () => 1_700_000_000_000, enforceRls: true, schema, sql: counting });
+
+            bound.length = 0;
+
+            // Bare-id (no `expectedTable`) — `locateRowById`'s unscoped probe.
+            await admin.patch(id, { title: "after" });
+
+            await expect(admin.get(id)).resolves.toMatchObject({ title: "after" });
+
+            // And the RLS guard's batched `locateTablesByIds` pre-check.
+            await guarded.deleteMany!([id]);
+
+            await expect(admin.get(id)).resolves.toBeNull();
+            expect(Math.max(...bound)).toBeLessThanOrEqual(100);
+        } finally {
+            harness.close();
+        }
+    });
+
     it("matches exactly the same rows either side of the threshold", async () => {
+        expect.assertions(2);
+
         const harness = createSqliteExec();
 
         try {
@@ -198,6 +271,8 @@ describe("bound-parameter cap", () => {
 
 describe("lIKE pattern-length cap", () => {
     it("compiles `contains` to a position test, so a long term is not a pattern", async () => {
+        expect.assertions(2);
+
         const harness = createSqliteExec();
 
         try {
@@ -227,6 +302,8 @@ describe("lIKE pattern-length cap", () => {
     });
 
     it("folds case the way SQLite's LIKE did, so existing matches still match", async () => {
+        expect.assertions(1);
+
         const harness = createSqliteExec();
 
         try {
