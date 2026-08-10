@@ -193,11 +193,28 @@ run_typecheck() {
         } catch { process.stdout.write('no'); }
     " 2>/dev/null)"
 
+    # Returns the checker's exit status — callers need it. A `|| true` here would
+    # make "the checker refused to run" (missing binary, a failed `lunora codegen`
+    # inside a template's own `typecheck` script) indistinguishable from a clean
+    # pass, because neither produces an `error TS` line to grep for.
     if [[ "$has_script" == "yes" ]]; then
-        (cd "$scaffold_dir" && pnpm run typecheck 2>&1) > "$log" || true
+        (cd "$scaffold_dir" && pnpm run typecheck 2>&1) > "$log"
     else
-        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$log" || true
+        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$log"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# A nonzero typecheck exit is only interesting when NOTHING was reported: `tsc`
+# exits 1 whenever it finds type errors, and those are gated (and printed) by the
+# caller. An exit with no diagnostic at all means the checker never got as far as
+# reading source, so a green result would prove nothing.
+# ---------------------------------------------------------------------------
+typecheck_never_ran() {
+    local status="$1"
+    local log="$2"
+
+    [[ "$status" -ne 0 ]] && ! grep -q 'error TS' "$log"
 }
 
 is_typecheck_unsupported() {
@@ -485,7 +502,15 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-        run_typecheck "$scaffold_dir" "$typecheck_log"
+        typecheck_status=0
+        run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
+
+        if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
+            echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+            tail -20 "$typecheck_log" | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:never-ran)")
+            continue
+        fi
 
         ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
         if [[ "$ts_errors" -gt 0 ]]; then
@@ -531,7 +556,15 @@ for tname in "${TEMPLATES[@]}"; do
         else
             echo "  ==> typecheck (compiling the copied screens)"
             typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-            run_typecheck "$scaffold_dir" "$typecheck_log"
+            typecheck_status=0
+            run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
+
+            if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
+                echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+                tail -20 "$typecheck_log" | sed 's/^/    /'
+                FAIL+=("$tname(typecheck:never-ran)")
+                continue
+            fi
 
             ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
             if [[ "$ts_errors" -gt 0 ]]; then
