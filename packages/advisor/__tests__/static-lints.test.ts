@@ -8,6 +8,7 @@ import {
     emptyIndex,
     filterWithoutIndex,
     fromServerSchema,
+    globalTableNearColumnLimit,
     indexReferencesUnknownField,
     relationReferencesUnknownField,
     relationReferencesUnknownTable,
@@ -210,6 +211,41 @@ describe("relation_references_unknown_field", () => {
         });
 
         expect(relationReferencesUnknownField.run({ schema: fromServerSchema(schema) })).toHaveLength(0);
+    });
+});
+
+describe("global_table_near_column_limit", () => {
+    /** A `.global()` table with `count` declared string fields. */
+    const globalTableWith = (count: number) =>
+        defineSchema({
+            wide: defineTable(Object.fromEntries(Array.from({ length: count }, (_unused, index) => [`f${String(index)}`, v.string()]))).global(),
+        });
+
+    it("flags a global table within ten columns of the ceiling", () => {
+        expect.assertions(2);
+
+        // 88 fields + id + _creationTime = 90, the warning threshold.
+        const findings = globalTableNearColumnLimit.run({ schema: fromServerSchema(globalTableWith(88)) });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ columns: 90, limit: 100, table: "wide" });
+    });
+
+    it("stays silent one column below the threshold", () => {
+        expect.assertions(1);
+
+        expect(globalTableNearColumnLimit.run({ schema: fromServerSchema(globalTableWith(87)) })).toHaveLength(0);
+    });
+
+    it("ignores a shard-local table, whose fields never become columns", () => {
+        expect.assertions(1);
+
+        // Same width, stored as one JSON document — the ceiling does not apply.
+        const schema = defineSchema({
+            wide: defineTable(Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, v.string()]))),
+        });
+
+        expect(globalTableNearColumnLimit.run({ schema: fromServerSchema(schema) })).toHaveLength(0);
     });
 });
 

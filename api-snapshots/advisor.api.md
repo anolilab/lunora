@@ -1359,6 +1359,12 @@ const geoIndexFieldNotGeopoint: Lint;
 const geoIndexUnused: Lint;
 ```
 
+### `globalTableNearColumnLimit` (const)
+
+```ts
+const globalTableNearColumnLimit: Lint;
+```
+
 ### `gradeFromScore` (const)
 
 ```ts
