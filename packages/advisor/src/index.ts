@@ -47,6 +47,7 @@ import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import geoIndexFieldNotGeopoint from "./lints/static/geo-index-field-not-geopoint";
 import geoIndexUnused from "./lints/static/geo-index-unused";
+import globalTableNearColumnLimit from "./lints/static/global-table-near-column-limit";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import httpActionResponseHeaderInjection from "./lints/static/http-action-response-header-injection";
@@ -184,6 +185,7 @@ export { default as filterWithoutIndex } from "./lints/static/filter-without-ind
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
 export { default as geoIndexFieldNotGeopoint } from "./lints/static/geo-index-field-not-geopoint";
 export { default as geoIndexUnused } from "./lints/static/geo-index-unused";
+export { default as globalTableNearColumnLimit } from "./lints/static/global-table-near-column-limit";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as httpActionResponseHeaderInjection } from "./lints/static/http-action-response-header-injection";
@@ -306,6 +308,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     externalSourceOnGlobal,
     externalSourceUnscoped,
     emptyIndex,
+    globalTableNearColumnLimit,
     errorWithoutCatalog,
     geoIndexFieldNotGeopoint,
     geoIndexUnused,
