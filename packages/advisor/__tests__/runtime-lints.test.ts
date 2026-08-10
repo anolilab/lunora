@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorFunctionMetrics, AdvisorShardTraffic, LintContext } from "../src";
-import { ALL_LINTS, errorRateOutlier, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
+import { ALL_LINTS, errorRateOutlier, fanOutBreadth, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
 /** A minimal context with an empty schema — runtime lints read only the observed-signal fields. */
 const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
@@ -11,6 +11,45 @@ const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
 const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ shardTraffic: entries });
 
 const functionMetrics = (entries: AdvisorFunctionMetrics[]): LintContext => baseContext({ functionMetrics: entries });
+
+/** `count` shards in one group, each with negligible traffic — breadth is what this lint reads. */
+const shardsInGroup = (group: string, count: number): AdvisorShardTraffic[] =>
+    Array.from({ length: count }, (_unused, index) => {
+        return { group, requests: 1, shardKey: `${group}-${String(index)}` };
+    });
+
+describe("fan_out_breadth", () => {
+    it("flags a fan-out approaching the per-invocation subrequest ceiling", () => {
+        expect.assertions(2);
+
+        const findings = fanOutBreadth.run(traffic(shardsInGroup("listRooms", 500)));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ level: "WARN", metadata: { group: "listRooms", shards: 500 }, name: "fan_out_breadth" });
+    });
+
+    it("stays silent one shard below the threshold", () => {
+        expect.assertions(1);
+
+        expect(fanOutBreadth.run(traffic(shardsInGroup("listRooms", 499)))).toHaveLength(0);
+    });
+
+    it("counts per function group, since the ceiling is per invocation", () => {
+        expect.assertions(1);
+
+        // Two functions, 400 shards each: 800 shards in the deployment, but no
+        // single invocation fans out over more than 400.
+        const findings = fanOutBreadth.run(traffic([...shardsInGroup("listRooms", 400), ...shardsInGroup("listUsers", 400)]));
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it("finds nothing for a static caller with no traffic feeder", () => {
+        expect.assertions(1);
+
+        expect(fanOutBreadth.run(baseContext())).toHaveLength(0);
+    });
+});
 
 describe("hot_shard", () => {
     it("flags a shard taking a dominant share of traffic", () => {
@@ -265,7 +304,13 @@ describe("runtime lint registration", () => {
     it("includes all runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator", "error_rate_outlier"]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual([
+            "hot_shard",
+            "index_utilization",
+            "constraint_validator",
+            "error_rate_outlier",
+            "fan_out_breadth",
+        ]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

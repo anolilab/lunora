@@ -1323,6 +1323,12 @@ const externalSourceOnGlobal: Lint;
 const externalSourceUnscoped: Lint;
 ```
 
+### `fanOutBreadth` (const)
+
+```ts
+const fanOutBreadth: Lint;
+```
+
 ### `filterOnPrimaryKey` (const)
 
 ```ts
