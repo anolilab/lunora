@@ -390,7 +390,7 @@
                     - "language": "ruby"
                       "runner": "ubuntu-latest"
                       "directory": "sdks/ruby"
-                      "run": 'ruby -Ilib -e ''Dir["test/test_*.rb"].each { |f| require File.expand_path(f) }'''
+                      "run": "ruby -Ilib -e 'Dir.glob(%q{test/test_*.rb}).each { |f| require File.expand_path(f) }'"
                       "generatedOut": "sdks/ruby/generated_check"
                       "buildGenerated": "ruby -Ilib generated_smoke.rb"
                     - "language": "rust"
