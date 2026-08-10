@@ -285,14 +285,22 @@ const lines = rows.map((row) => {
 process.stdout.write(lines.join('\n'));
 ")"
 
-# Every `@lunora/*` name that a workspace package declares as a PEER, so the
-# scaffold can satisfy it from a tarball as well.
+# Every `@lunora/*` name that a workspace package declares as a REQUIRED peer, so
+# the scaffold can satisfy it from a tarball as well.
 #
 # `overrides` alone is not enough: pnpm auto-installs a MISSING peer as a root
 # dependency of the project and resolves it FROM THE REGISTRY, ignoring overrides
 # entirely. `@lunora/vite` → `@lunora/config` → `@lunora/seed`, whose peers are
 # `@lunora/server` and `@lunora/values`, so every vite-based template quietly
 # fetched two base packages from npm at whatever version the graph asked for.
+#
+# Peers marked optional in the declaring package's `peerDependenciesMeta` are
+# EXCLUDED: pnpm does not auto-install a missing optional peer, so it is not a
+# leak vector, and injecting it would hand every scaffold a package a real user's
+# install would leave unsatisfied — the opposite of what this matrix is for. The
+# check is per-declaration, not per-name: `@lunora/server` is optional for
+# `@lunora/replica` and `@lunora/cloudflare-access` yet required by `@lunora/seed`,
+# and one required declaration is enough to make it auto-installable.
 #
 # That works right up until a release commit bumps a version whose publish has not
 # landed — which is exactly how this matrix broke on `@lunora/values@1.0.0-alpha.24`,
@@ -315,6 +323,7 @@ for (const dir of fs.readdirSync('$REPO_ROOT/packages')) {
     const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
 
     for (const name of Object.keys(pkg.peerDependencies ?? {})) {
+        if (pkg.peerDependenciesMeta?.[name]?.optional) continue;
         if (packed.has(name)) peers.add(name);
     }
 }
