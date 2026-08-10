@@ -118,15 +118,21 @@ than by Lunora. Split large batches across calls.
 | `topK` with full metadata | **50**     | Cloudflare's ceiling; `defineRag` caps at 20, a legacy-V1 holdover |
 | `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata         |
 
-`defineRag` rejects a `chunkSize` that could not fit the metadata ceiling when
-the RAG is defined, rather than on every failed upsert. That check applies only
-where Lunora stores chunk text in the vector's metadata: a `textStore` keeps the
-text out entirely, and a custom `chunk` splitter makes `chunkSize` inert, so
-neither is checked.
-
 The ceiling covers the **whole** metadata object — chunk text, Lunora's
-bookkeeping keys, and any `metadata` you attach — so the check reserves room for
-the rest rather than spending all 10 KiB on text.
+bookkeeping keys, and any `metadata` you attach — so `defineRag` checks it in
+two places.
+
+At index time it measures the serialized metadata of each chunk and refuses one
+that would not fit, naming what pushed it over. This is the check that holds:
+`chunkSize` counts characters while the ceiling counts bytes, so multibyte text
+costs up to three bytes each, and your own `metadata` is not known until a
+document is indexed.
+
+When the RAG is defined it also rejects a `chunkSize` that could not fit
+whatever the ceiling allows, so an unworkable config fails at startup rather
+than on every upsert. That earlier check applies only where Lunora stores chunk
+text in the vector's metadata: a `textStore` keeps the text out entirely, and a
+custom `chunk` splitter makes `chunkSize` inert, so neither is checked.
 
 ## Workers KV
 

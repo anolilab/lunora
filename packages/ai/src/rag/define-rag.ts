@@ -67,6 +67,40 @@ const MODEL_KEY = "__ragModel";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
 
+/**
+ * Refuse a metadata object over Vectorize's ceiling, naming what breached it.
+ *
+ * The config-time `chunkSize` check is a fast fail on the one input known when
+ * the RAG is defined; this is the one that actually holds. Two things get past
+ * the former by construction: `chunkSize` counts CHARACTERS while the ceiling
+ * counts BYTES, so ~3.4k characters of CJK already exceed 10 KiB at a
+ * `chunkSize` the config check waves through — and the caller's `metadata` is
+ * not known until index time, so {@link METADATA_OVERHEAD_RESERVE} can only
+ * guess at it.
+ *
+ * Measured on the serialized form because that is what Vectorize stores and
+ * counts. Without this the upsert fails at the far side with nothing naming the
+ * cause, which is the failure this whole check exists to replace.
+ */
+const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string): void => {
+    const bytes = new TextEncoder().encode(JSON.stringify(metadata)).length;
+
+    if (bytes <= VECTORIZE_METADATA_BYTES) {
+        return;
+    }
+
+    const textBytes = typeof metadata[TEXT_KEY] === "string" ? new TextEncoder().encode(metadata[TEXT_KEY]).length : 0;
+    const remedy =
+        textBytes * 2 > bytes
+            ? "lower `chunkSize` (it counts characters, not bytes — multibyte text costs up to 3 bytes each), or supply `textStore` to move chunk text out of metadata entirely"
+            : "attach less per-source `metadata`";
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte per-vector ceiling — ${remedy}`,
+    );
+};
+
 /** Allowed shape of {@link RagConfig.embeddingModelVersion} — safe in a Vectorize namespace + chunk-id prefix. */
 const MODEL_VERSION_PATTERN = /^[\w.-]{1,40}$/;
 
@@ -489,6 +523,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         metadata[MODEL_KEY] = modelTag;
                     }
                 }
+
+                assertMetadataFits(metadata, chunkIndex, input.id);
 
                 // Vector upsert
                 await context.vectors.upsert(config.index, {

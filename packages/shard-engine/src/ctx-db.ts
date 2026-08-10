@@ -2107,6 +2107,77 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         return globalDb;
     };
 
+    /**
+     * The `.global()` half of `insert`: put the row on the meter, forward it to
+     * the global (D1) writer, then refresh this DO's subscribers.
+     *
+     * Charge BEFORE the write, not after. The global branch returns before
+     * `onWrite`, which is where the meter normally charges, so it has to charge
+     * itself or a transaction could write unbounded rows to a `.global()` table
+     * without consuming its ceiling. The order matters because this write lands
+     * in ANOTHER backend: a mutation runs inside the DO's `storage.transaction`,
+     * which rolls back the DO's SQLite and nothing else. Charging after meant a
+     * ceiling breach threw with the D1 row already committed and no way to undo
+     * it.
+     *
+     * The trade is a charge for a row that was never written when the throw is
+     * caught — `insertMany`'s `skipDuplicates` swallows the D1 unique violation,
+     * so a re-run over mostly-duplicate rows now consumes ceiling for the skips.
+     * Failing closed is the right side of that: over-counting costs a retry,
+     * under-counting costs an isolate.
+     *
+     * What is charged is the caller's document, not the row D1 ends up storing —
+     * the global writer applies its own defaults, `_creationTime` and id on the
+     * far side, and reproducing that here would duplicate the far-side default
+     * pipeline for an estimate. So `writtenBytes` runs light by whatever those
+     * add, a bounded per-row amount; `writtenRows`, which is the ceiling that
+     * actually protects the isolate, is charged exactly.
+     * `charge` is `false` when the caller already charged this row — today
+     * `insertMany`, which pre-charges the whole batch so a mid-loop breach
+     * cannot leave earlier rows committed in a backend the DO transaction
+     * cannot roll back. A parameter rather than `runUnmetered`, deliberately:
+     * `meterExempt` is writer-wide for the duration of its await, so a routine
+     * `Promise.all([ctx.db.insertMany("<global>", rows), ctx.db.insert(…)])`
+     * would silently exempt the sibling write too. `deleteAll` accepts that
+     * trade for an unusual pattern; a global `insertMany` is ordinary.
+     */
+    const insertGlobal = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        document: Record<string, unknown>,
+        insertOptions: Parameters<DatabaseWriterLike["insert"]>[2],
+        charge: boolean,
+    ): Promise<string> => {
+        if (charge) {
+            meterWrite(document);
+        }
+
+        const id = await global.insert(tableName, document, insertOptions);
+
+        // A `.global()` (D1) write lands in another backend, but live
+        // subscriptions on this DO that read the table still need to be
+        // refreshed — so notify them via the same `broadcast` channel the
+        // local path uses (the DO maps it to `recordChangedTable`). Without
+        // this, `ctx.db.insert("<global>", …)` would never push a delta to
+        // subscribers of that global table's query.
+        //
+        // Deliberately NO `indexKeys`: the global writer applied its own
+        // defaults and `_creationTime` on the far side, so the image here
+        // is not the row that was stored. An index covering a defaulted
+        // field would encode a position the row does not occupy, which
+        // could prove a write outside a slice that actually contains it —
+        // suppressing an invalidation. Omitting them falls back to
+        // whole-table, which is always sound.
+        broadcast({
+            key: id,
+            op: "insert",
+            row: { ...document, _id: id },
+            table: tableName,
+        });
+
+        return id;
+    };
+
     // For *id-addressed* ops (`get`/`patch`/`replace`/`delete`): a bare id
     // carries no table, so they probe this DO's local tables first; a global
     // row's id never lives here, so on a local miss they fall back to
@@ -3370,48 +3441,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "insert");
 
             if (global) {
-                // Charge BEFORE the write, not after. The global branch returns
-                // before `onWrite`, which is where the meter normally charges, so
-                // it has to charge itself or a transaction could write unbounded
-                // rows to a `.global()` table without consuming its ceiling. The
-                // order matters because this write lands in ANOTHER backend: a
-                // mutation runs inside the DO's `storage.transaction`, which
-                // rolls back the DO's SQLite and nothing else. Charging after
-                // meant a ceiling breach threw with the D1 row already committed
-                // and no way to undo it.
-                //
-                // The trade is a charge for a row that was never written when the
-                // throw is caught — `insertMany`'s `skipDuplicates` swallows the
-                // D1 unique violation, so a re-run over mostly-duplicate rows now
-                // consumes ceiling for the skips. Failing closed is the right side
-                // of that: over-counting costs a retry, under-counting costs an
-                // isolate.
-                meterWrite(document);
-
-                const id = await global.insert(tableName, document, insertOptions);
-
-                // A `.global()` (D1) write lands in another backend, but live
-                // subscriptions on this DO that read the table still need to be
-                // refreshed — so notify them via the same `broadcast` channel the
-                // local path uses (the DO maps it to `recordChangedTable`). Without
-                // this, `ctx.db.insert("<global>", …)` would never push a delta to
-                // subscribers of that global table's query.
-                //
-                // Deliberately NO `indexKeys`: the global writer applied its own
-                // defaults and `_creationTime` on the far side, so the image here
-                // is not the row that was stored. An index covering a defaulted
-                // field would encode a position the row does not occupy, which
-                // could prove a write outside a slice that actually contains it —
-                // suppressing an invalidation. Omitting them falls back to
-                // whole-table, which is always sound.
-                broadcast({
-                    key: id,
-                    op: "insert",
-                    row: { ...document, _id: id },
-                    table: tableName,
-                });
-
-                return id;
+                return insertGlobal(global, tableName, document, insertOptions, true);
             }
 
             const definition = schema.tables[tableName];
@@ -3612,20 +3642,23 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // as `insertManyUnsafe`'s global branch does — refuses it while none
             // of it has crossed.
             //
-            // The loop then runs unmetered, or every row would be charged twice:
-            // once here and once by its own `insert`. Shard-local batches keep
-            // the per-row charge untouched, since the DO transaction rewinds them
-            // and there is nothing to pre-empt.
-            const precharged = globalWriterFor(tableName, "insert") !== undefined;
+            // The loop then forwards each row through `insertGlobal` with the
+            // charge suppressed, or every row would be charged twice: once here
+            // and once on its way out. Suppressing it per call rather than with
+            // the writer-wide `runUnmetered` keeps a concurrent write on this
+            // same writer metered (see `insertGlobal`'s `charge` parameter).
+            // Shard-local batches keep the per-row charge untouched, since the DO
+            // transaction rewinds them and there is nothing to pre-empt.
+            const global = globalWriterFor(tableName, "insert");
 
-            if (precharged) {
+            if (global) {
                 for (const document of documents) {
                     meterWrite(document);
                 }
             }
 
             const insertOne = async (document: Record<string, unknown>): Promise<string> =>
-                precharged ? runUnmetered(async () => writer.insert(tableName, document)) : writer.insert(tableName, document);
+                global ? insertGlobal(global, tableName, document, undefined, false) : writer.insert(tableName, document);
 
             for (const document of documents) {
                 try {

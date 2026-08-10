@@ -297,6 +297,37 @@ describe(defineRag, () => {
         expect(() => defineRag({ chunk: (text: string) => [text], chunkSize: 20_000, index: "docs" })).not.toThrow();
     });
 
+    it("refuses a metadata payload over the ceiling at index time, whatever got it there", async () => {
+        expect.assertions(4);
+
+        const { store, vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        // The config check compares `chunkSize` (CHARACTERS) against a byte
+        // budget, so multibyte text walks straight past it: 8 KiB of CJK is
+        // ~24 KB in UTF-8 against a 10 KiB ceiling.
+        const cjk = defineRag({ allowSharedNamespace: true, chunkSize: 8 * 1024, index: "docs" });
+
+        await expect(cjk(ctx).index({ id: "doc-1", text: "字".repeat(5000) })).rejects.toThrow(/per-vector ceiling/u);
+        // Nothing was upserted, so the far side never saw the oversized vector.
+        expect(store.size).toBe(0);
+
+        // And the caller's own `metadata` is not known at config time, so the
+        // reserve can only guess at it — this is the check that actually holds.
+        const small = defineRag({ allowSharedNamespace: true, chunk: (text: string) => [text], index: "docs" });
+
+        await expect(small(ctx).index({ id: "doc-2", metadata: { blob: "x".repeat(11 * 1024) }, text: "tiny" })).rejects.toThrow(/attach less per-source/u);
+
+        // A textStore keeps the text out of metadata, so the same chunk fits.
+        const stored = defineRag({
+            allowSharedNamespace: true,
+            chunkSize: 8 * 1024,
+            index: "docs",
+            textStore: { getMany: async () => [], put: async () => undefined },
+        });
+
+        await expect(stored(fakeCtx(memoryVectors().vectors)).index({ id: "doc-3", text: "字".repeat(5000) })).resolves.toMatchObject({ unchanged: false });
+    });
+
     it("chunks, embeds and upserts with deterministic ids and linking metadata", async () => {
         expect.assertions(7);
 
