@@ -27,7 +27,8 @@
  * uses, so a generated migration is byte-identical to what the runtime would
  * auto-provision.
  */
-import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
+import { columnRef, frameworkColumnDdl, MAX_D1_TABLE_COLUMNS, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
+import { LunoraError } from "@lunora/errors";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
@@ -93,10 +94,28 @@ const renderColumnDefinition = (name: string, column: ColumnSnapshot): string =>
     return parts.join(" ");
 };
 
-/** Emit `CREATE TABLE` SQL for a new global table. */
+/**
+ * Emit `CREATE TABLE` SQL for a new global table.
+ *
+ * Refuses a table past D1's column ceiling rather than writing SQL that
+ * `lunora migrate up` will reject: the runtime auto-provisioner checks the same
+ * number, and a migration file is the worse place to find out — the failure
+ * lands later, against a database, with none of the schema context that names
+ * which table and field to split.
+ */
 const renderCreateTable = (table: TableSnapshot): string => {
     const columns = Object.entries(table.columns).map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`);
-    const lines = [...frameworkColumnDdl().map((column) => `    ${column}`), ...columns].join(",\n");
+    const frameworkColumns = frameworkColumnDdl();
+    const total = frameworkColumns.length + columns.length;
+
+    if (total > MAX_D1_TABLE_COLUMNS) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `table "${table.name}" needs ${String(total)} columns, over D1's ${String(MAX_D1_TABLE_COLUMNS)}-column limit — split the table, or move the extra fields into one object field`,
+        );
+    }
+
+    const lines = [...frameworkColumns.map((column) => `    ${column}`), ...columns].join(",\n");
 
     return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };

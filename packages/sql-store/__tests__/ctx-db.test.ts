@@ -79,6 +79,7 @@ const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDialect => {
         },
         decode: (value, kind) => sqliteDecode(value, kind),
         encode: (value) => sqliteEncode(value),
+        maxTableColumns: 100,
         frameworkColumns: () => [
             { name: "id", type: "TEXT PRIMARY KEY" },
             { name: "_creationTime", type: "REAL NOT NULL" },
@@ -250,6 +251,59 @@ describe("createSqlCtxDb — auto-provision + crud over node:sqlite", () => {
 });
 
 /** A `notes` schema carrying a two-column rank index so the seek/before predicates emit prefix equalities. */
+describe("createSqlCtxDb — the column ceiling", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    // D1 runs Workerd's SQLite build, which sets SQLITE_LIMIT_COLUMN to 100.
+    // Provisioning a wider table used to fail with a bare "too many columns"
+    // that named neither the table nor the ceiling.
+    it("refuses to provision a global table wider than 100 columns", async () => {
+        expect.assertions(1);
+
+        const wide: SchemaLike = {
+            tables: {
+                wide: {
+                    indexes: [],
+                    shape: Object.fromEntries(Array.from({ length: 99 }, (_unused, index) => [`f${String(index)}`, col("string")])),
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: wide });
+
+        await expect(writer.insert("wide", { f0: "x" })).rejects.toThrow(/over this engine's 100-column limit/u);
+    });
+
+    it("provisions a table that exactly fills the budget", async () => {
+        expect.assertions(1);
+
+        // 98 declared fields + the id/_creationTime framework columns = 100.
+        const atLimit: SchemaLike = {
+            tables: {
+                atLimit: {
+                    indexes: [],
+                    shape: Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, col("string")])),
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: atLimit });
+        const row = Object.fromEntries(Array.from({ length: 98 }, (_unused, index) => [`f${String(index)}`, "x"]));
+
+        expect(typeof (await writer.insert("atLimit", row))).toBe("string");
+    });
+});
+
 const rankSchema: SchemaLike = {
     tables: {
         notes: {

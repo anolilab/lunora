@@ -624,22 +624,8 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
  */
 const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string => dialect.columnType(effectiveColumnKind(validator));
 
-/**
- * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
- * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
- * declared field, then its secondary and `.unique()` indexes. This is the D1
- * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
- * tables) — it makes the schema the single source of truth for global tables
- * too, so a fresh database serves them without a hand-applied migration. The
- * column set and dialect match exactly what this module reads and writes
- * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
- *
- * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
- * drops or retypes an existing column, so destructive schema changes still need
- * an explicit migration.
- */
 /** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
-const globalTableColumnsDdl = (definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
+const globalTableColumnsDdl = (tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
     const fieldColumns: SQL[] = [];
 
     for (const [field, validator] of Object.entries(definition.shape)) {
@@ -655,6 +641,20 @@ const globalTableColumnsDdl = (definition: SchemaLike["tables"][string], dialect
     }
 
     const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
+    const total = frameworkColumns.length + fieldColumns.length;
+
+    // `VALIDATION_ERROR`, not `INTERNAL`: a table too wide is the schema
+    // author's input, and an internal-coded error has its message replaced with
+    // "Internal error" on the way out — redacting the one sentence that says
+    // what to do. `ensureMigrated` does not cache the rejection, so every
+    // request re-runs this; an opaque 500 forever is a bad way to learn a table
+    // has too many columns.
+    if (dialect.maxTableColumns !== undefined && total > dialect.maxTableColumns) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/sql-store: global table "${tableName}" needs ${String(total)} columns, over this engine's ${String(dialect.maxTableColumns)}-column limit — split the table, or move the extra fields into one object field`,
+        );
+    }
 
     return sql.join([...frameworkColumns, ...fieldColumns], sql`, `);
 };
@@ -701,13 +701,27 @@ const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, def
     }
 };
 
+/**
+ * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
+ * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
+ * declared field, then its secondary and `.unique()` indexes. This is the D1
+ * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
+ * tables) — it makes the schema the single source of truth for global tables
+ * too, so a fresh database serves them without a hand-applied migration. The
+ * column set and dialect match exactly what this module reads and writes
+ * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
+ *
+ * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
+ * drops or retypes an existing column, so destructive schema changes still need
+ * an explicit migration.
+ */
 const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
     for (const [tableName, definition] of Object.entries(schema.tables)) {
         if (definition.shardMode?.kind !== "global") {
             continue;
         }
 
-        const columns = globalTableColumnsDdl(definition, dialect);
+        const columns = globalTableColumnsDdl(tableName, definition, dialect);
 
         // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
         await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);

@@ -15,7 +15,7 @@ import type { SqlDialect } from "@lunora/sql-store";
 import { sqliteDecode, sqliteEncode } from "@lunora/sql-store";
 import { sql } from "drizzle-orm";
 
-import { sqlAffinityForKind } from "./dialect";
+import { MAX_D1_TABLE_COLUMNS, sqlAffinityForKind } from "./dialect";
 
 /** Both workerd and `node:sqlite` phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
 const UNIQUE_VIOLATION_RE = /unique constraint failed/iu;
@@ -41,6 +41,7 @@ const sqliteDialect: SqlDialect = {
         { name: "_creationTime", type: "REAL NOT NULL" },
     ],
     isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
+    maxTableColumns: MAX_D1_TABLE_COLUMNS,
     name: "sqlite",
     supportsFts5: true,
     supportsReturning: true,
