@@ -285,6 +285,102 @@ const lines = rows.map((row) => {
 process.stdout.write(lines.join('\n'));
 ")"
 
+# Every `@lunora/*` name that a workspace package declares as a PEER, so the
+# scaffold can satisfy it from a tarball as well.
+#
+# `overrides` alone is not enough: pnpm auto-installs a MISSING peer as a root
+# dependency of the project and resolves it FROM THE REGISTRY, ignoring overrides
+# entirely. `@lunora/vite` → `@lunora/config` → `@lunora/seed`, whose peers are
+# `@lunora/server` and `@lunora/values`, so every vite-based template quietly
+# fetched two base packages from npm at whatever version the graph asked for.
+#
+# That works right up until a release commit bumps a version whose publish has not
+# landed — which is exactly how this matrix broke on `@lunora/values@1.0.0-alpha.24`,
+# a version that was version-bumped in the repo and never published (npm holds
+# alpha.23 and alpha.25, with nothing in between). The two templates without
+# `@lunora/vite` passed the same run, because they have no `seed` edge and so no
+# peer to auto-install.
+PEER_NAMES="$(node -e "
+const fs = require('fs');
+const path = require('path');
+const rows = fs.readFileSync('$PACK_MANIFEST', 'utf8').trim().split('\n').filter(Boolean);
+const packed = new Set(rows.map((row) => row.split('\t')[0]));
+const peers = new Set();
+
+for (const dir of fs.readdirSync('$REPO_ROOT/packages')) {
+    const manifest = path.join('$REPO_ROOT/packages', dir, 'package.json');
+
+    if (!fs.existsSync(manifest)) continue;
+
+    const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+
+    for (const name of Object.keys(pkg.peerDependencies ?? {})) {
+        if (packed.has(name)) peers.add(name);
+    }
+}
+
+process.stdout.write([...peers].sort().join(' '));
+")"
+
+echo "==> Peer base packages to satisfy locally: ${PEER_NAMES:-<none>}"
+
+# ---------------------------------------------------------------------------
+# Helper: add the peer base packages to a scaffold as local-tarball devDeps.
+# ---------------------------------------------------------------------------
+inject_peer_deps() {
+    local scaffold_dir="$1"
+
+    node -e "
+const fs = require('fs');
+const rows = fs.readFileSync('$PACK_MANIFEST', 'utf8').trim().split('\n').filter(Boolean);
+const tarball = new Map(rows.map((row) => row.split('\t')));
+const names = '$PEER_NAMES'.split(' ').filter(Boolean);
+const file = '$scaffold_dir/package.json';
+const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
+
+pkg.devDependencies ??= {};
+
+for (const name of names) {
+    // Never shadow a dependency the template declares itself — that spec is part
+    // of what this matrix is testing.
+    if (pkg.dependencies?.[name] || pkg.devDependencies[name]) continue;
+
+    pkg.devDependencies[name] = 'file:' + tarball.get(name);
+}
+
+fs.writeFileSync(file, JSON.stringify(pkg, null, 4) + '\n');
+"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: assert no @lunora/* package came from the npm registry.
+# ---------------------------------------------------------------------------
+# The whole point of the tarball overrides is that this matrix tests the code in
+# THIS checkout. A registry resolution silently tests a published version instead,
+# and only fails on the day that version does not exist — so it is checked rather
+# than assumed.
+assert_no_registry_lunora() {
+    local scaffold_dir="$1"
+    local lockfile="$scaffold_dir/pnpm-lock.yaml"
+
+    [[ -f "$lockfile" ]] || return 0
+
+    local leaked
+    # `tr -d` rather than a `?` quantifier in sed: BSD's basic regex has none, so
+    # the quote survived and the report named `'@lunora/x` instead of `@lunora/x`.
+    # The `(...)` suffix pnpm appends to a peer-resolved variant is excluded too, so
+    # one package is reported once rather than twice.
+    leaked="$(grep -oE "^  '?(@lunora/[a-z0-9-]+|lunorash)@[0-9][^'(:]*" "$lockfile" | tr -d " '" | sort -u)"
+
+    if [[ -n "$leaked" ]]; then
+        echo "  FAIL: these base packages resolved from the npm REGISTRY, not this checkout:"
+        echo "$leaked" | sed 's/^/    /'
+        return 1
+    fi
+
+    return 0
+}
+
 # ---------------------------------------------------------------------------
 # Helper: inject @lunora/* overrides into a scaffold directory.
 # ---------------------------------------------------------------------------
@@ -383,6 +479,7 @@ for tname in "${TEMPLATES[@]}"; do
 
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
+    inject_peer_deps "$scaffold_dir"
 
     # -- pnpm install -------------------------------------------------------
     echo "  ==> pnpm install"
@@ -393,7 +490,15 @@ for tname in "${TEMPLATES[@]}"; do
         FAIL+=("$tname(install)")
         continue
     fi
-    echo "  ==> install OK"
+
+    # A registry resolution means this template was silently tested against a
+    # PUBLISHED base package rather than the one in this checkout.
+    if ! assert_no_registry_lunora "$scaffold_dir"; then
+        FAIL+=("$tname(registry-leak)")
+        continue
+    fi
+
+    echo "  ==> install OK (no base package came from the registry)"
 
     AUTHUI_ADDED="no"
 
