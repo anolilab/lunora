@@ -22,6 +22,9 @@
 const CF_5XX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/";
 const CF_1XXX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/";
 
+/** SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; D1 surfaces the same text through its own error envelope. */
+const ROW_TOO_BIG_RE = /string or blob too big/iu;
+
 /** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
 export type ErrorHint = string | ReadonlyArray<string>;
 
@@ -451,6 +454,27 @@ export interface SolutionRule extends Solution {
  * `LUNORA_SOLUTION_RULES` for backward compatibility.
  */
 export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
+    {
+        body: [
+            "A single row exceeded the storage engine's per-row ceiling — 2 MB on a Durable Object's SQLite, and 2,000,000 bytes on D1.",
+            "",
+            "The limit is on the STORED bytes, which are UTF-8: a document of multi-byte text (CJK, emoji) costs up to 3x its character count. `v.bytes()` and `v.bigint()` columns cost more again on a shard-local table, where the row stores both a SQL-comparable projection and the original.",
+            "",
+            "Keep the large payload out of the row and store a reference to it:",
+            "",
+            "```ts",
+            // eslint-disable-next-line no-template-curly-in-string -- markdown code sample shown to the developer, not a template literal
+            "const key = `uploads/${crypto.randomUUID()}`;",
+            "await ctx.storage.uploads.put(key, bytes);",
+            'await ctx.db.insert("documents", { storageKey: key, title });',
+            "```",
+            "",
+            "R2 has no practical object-size ceiling, and the row stays small enough to read, index, and replicate.",
+        ].join("\n"),
+        header: "Row too large for the storage engine",
+        id: "lunora-row-too-big",
+        test: (message) => ROW_TOO_BIG_RE.test(message),
+    },
     {
         body: [
             "Lunora codegen couldn't find a schema to generate from.",

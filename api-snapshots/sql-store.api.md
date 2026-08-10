@@ -67,6 +67,7 @@ interface SqlDialect {
     }>;
     indexKeyPrefix?: (kind: string | undefined) => number | undefined;
     isUniqueViolation: (error: unknown) => boolean;
+    maxTableColumns?: number;
     readonly name: "mysql" | "postgres" | "sqlite";
     nativeTextSearch?: {
         createCompanion: (companion: string, keyType: string) => SQL;
@@ -228,6 +229,7 @@ interface SqlDialect {
     }>;
     indexKeyPrefix?: (kind: string | undefined) => number | undefined;
     isUniqueViolation: (error: unknown) => boolean;
+    maxTableColumns?: number;
     readonly name: "mysql" | "postgres" | "sqlite";
     nativeTextSearch?: {
         createCompanion: (companion: string, keyType: string) => SQL;

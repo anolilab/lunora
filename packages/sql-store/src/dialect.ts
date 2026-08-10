@@ -122,8 +122,21 @@ export interface SqlDialect {
      * the column's effective validator kind.
      */
     indexKeyPrefix?: (kind: string | undefined) => number | undefined;
+
     /** True when an `error` thrown by a write is a UNIQUE-constraint breach (mapped to a 409 ConflictError). */
     isUniqueViolation: (error: unknown) => boolean;
+
+    /**
+     * Most columns one table may carry on this engine, framework columns
+     * included. Omit it and the DDL builder does not check — the right answer
+     * for an engine whose ceiling is high enough that no real schema reaches it.
+     *
+     * Declared because the ceilings differ by more than an order of magnitude:
+     * D1 runs Workerd's SQLite build, which caps a table at 100 columns, where
+     * Postgres allows 1,600 and MySQL 4,096. A fixed number here would either
+     * miss the D1 failure or reject schemas the other two engines run happily.
+     */
+    maxTableColumns?: number;
 
     /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). The store core selects drizzle's matching dialect for rendering off this. */
     readonly name: "mysql" | "postgres" | "sqlite";

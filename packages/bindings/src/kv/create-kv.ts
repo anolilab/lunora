@@ -19,6 +19,13 @@ const MAX_KEY_LENGTH = 512;
 /** Workers KV's documented per-page list ceiling. */
 const MAX_LIST_LIMIT = 1000;
 
+/**
+ * Workers KV's documented ceiling on a key's attached metadata: 1,024 bytes of
+ * serialized JSON. Checked before the round-trip so an oversized metadata object
+ * fails here, naming the limit, rather than as a rejected `put` from the remote.
+ */
+const MAX_METADATA_LENGTH = 1024;
+
 /** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
 const TEXT_ENCODER = new TextEncoder();
 
@@ -123,6 +130,25 @@ const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined 
     }
 
     if (options.metadata !== undefined) {
+        // `JSON.stringify` throws on a bigint or a cycle. Catching it keeps this
+        // guard from replacing one cryptic failure with another: a raw
+        // `TypeError` out of an options builder is exactly what the byte check
+        // below exists to avoid.
+        let encoded: string;
+
+        try {
+            encoded = JSON.stringify(options.metadata);
+        } catch {
+            throw new LunoraError("INTERNAL", "@lunora/bindings/kv: metadata is not JSON-serializable (cyclic value, bigint, or similar)");
+        }
+
+        // A value JSON drops entirely (a function, a symbol) stringifies to
+        // `undefined` despite the type saying otherwise; it measures small,
+        // passes, and reaches the binding unchanged — as it did before this guard.
+        if (byteLength(encoded) > MAX_METADATA_LENGTH) {
+            throw new LunoraError("INTERNAL", `@lunora/bindings/kv: metadata exceeds ${String(MAX_METADATA_LENGTH)}-byte limit`);
+        }
+
         out.metadata = options.metadata;
     }
 

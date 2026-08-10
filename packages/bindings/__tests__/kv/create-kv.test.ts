@@ -131,6 +131,29 @@ describe("createKv", () => {
         expect(namespace.puts[0]?.options).toStrictEqual({ expirationTtl: 60, metadata: { owner: "x" } });
     });
 
+    it("rejects metadata over KV's 1,024-byte ceiling before the value is uploaded", async () => {
+        expect.assertions(2);
+
+        const namespace = fakeNamespace();
+        const kv = createKv({ namespace });
+
+        // Serialized JSON is what KV measures, so the overflow is in bytes of
+        // `{"owner":"xxx…"}` — not in the object's key count.
+        await expect(kv.put("k", "v", { metadata: { owner: "x".repeat(1024) } })).rejects.toThrow(/1024-byte limit/u);
+
+        // Caught before the round-trip, so the remote never sees the write.
+        expect(namespace.puts).toHaveLength(0);
+    });
+
+    it("names non-serializable metadata instead of leaking a TypeError", async () => {
+        expect.assertions(1);
+
+        const namespace = fakeNamespace();
+        const kv = createKv({ namespace });
+
+        await expect(kv.put("k", "v", { metadata: { big: 1n } })).rejects.toThrow(/not JSON-serializable/u);
+    });
+
     it("forwards expiration to the binding put", async () => {
         expect.assertions(1);
 

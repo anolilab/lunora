@@ -125,6 +125,26 @@ describe("transactionHeadroomTracker", () => {
 
         expect(tracker.headroom().writtenBytes).toBe(JSON.stringify(row).length);
     });
+
+    // The two ceilings charge first and complain after, because the work they
+    // bound already happened. An unserializable document is the opposite: it is
+    // never written, so charging it left a caller that catches and continues
+    // carrying a phantom row against `maxWrittenRows`.
+    it("charges nothing for a document it refuses to size", () => {
+        expect.assertions(2);
+
+        const tracker = new TransactionHeadroomTracker();
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic["self"] = cyclic;
+
+        expect(
+            codeOf(() => {
+                tracker.recordWrite(cyclic);
+            }),
+        ).toBe("BAD_REQUEST");
+        expect(tracker.headroom()).toMatchObject({ writtenBytes: 0, writtenRows: 0 });
+    });
 });
 
 describe("estimateBytes", () => {

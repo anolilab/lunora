@@ -34,12 +34,11 @@ import type {
 } from "./types";
 
 /**
- * Cloudflare Queues hard ceiling on a single `sendBatch` call: 100 messages
- * (also capped at 1 MB total / 256 KB per message — see the Cloudflare Queues
- * limits documentation). Mirrors `@lunora/queue`'s `create-queues.ts` guard of
- * the same name and value; duplicated rather than shared because the two
- * packages have no dependency edge and a `shared/` file for one integer is
- * overkill.
+ * Cloudflare Queues ceiling on one `sendBatch`: 100 messages. The byte caps
+ * alongside it (256 KB per batch, 128 KB per message) are left to the platform,
+ * which rejects them clearly — measuring them here means serializing every body
+ * a second time on the send path. Mirrored in `@lunora/queue` and
+ * `@lunora/scheduler`; no dependency edge between them.
  */
 const MAX_QUEUE_BATCH = 100;
 
@@ -78,7 +77,7 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     ): Promise<void> => {
         if (jobs.length > MAX_QUEUE_BATCH) {
             throw new LunoraError(
-                "INTERNAL",
+                "VALIDATION_ERROR",
                 `@lunora/scheduler: enqueueBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(jobs.length)}) — split across calls`,
             );
         }

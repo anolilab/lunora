@@ -3,15 +3,16 @@
  * bindings. Node-safe (structural binding types), so it's exercised by unit
  * tests with plain-object doubles.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { LunoraQueuesOptions, MessageSendRequestLike, QueueBindingLike, QueueProducer, Queues, QueueSendBatchOptions, QueueSendOptions } from "./types";
 
 /**
- * Cloudflare Queues hard ceiling on a single `sendBatch` call: 100 messages
- * (also capped at 1 MB total / 256 KB per message — see the Cloudflare Queues
- * limits documentation). Mirrors `@lunora/scheduler`'s `queue-workpool.ts`
- * guard of the same name and value; duplicated rather than shared because the
- * two packages have no dependency edge and a `shared/` file for one integer is
- * overkill.
+ * Cloudflare Queues ceiling on one `sendBatch`: 100 messages. The byte caps
+ * alongside it (256 KB per batch, 128 KB per message) are left to the platform,
+ * which rejects them clearly — measuring them here means serializing every body
+ * a second time on the send path. Mirrored in `@lunora/queue` and
+ * `@lunora/scheduler`; no dependency edge between them.
  */
 const MAX_QUEUE_BATCH = 100;
 
@@ -31,8 +32,14 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
                 // A `throw` inside this `async` function still surfaces to the
                 // caller as an async rejection (never a synchronous throw) —
                 // matching the `missing` producer's convention below and a real
-                // producer's async surface.
-                throw new Error(`@lunora/queue: sendBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`);
+                // producer's async surface. `VALIDATION_ERROR` rather than a
+                // bare `Error` so it carries a code and a 400: the caller passed
+                // too many messages, which is not a server fault. The mirrored
+                // guard in `@lunora/scheduler` throws the same way.
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/queue: sendBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(batch.length)}) — split across calls`,
+                );
             }
 
             await binding.sendBatch(batch, options);

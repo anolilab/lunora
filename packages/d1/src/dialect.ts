@@ -50,6 +50,17 @@ export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
     }
 };
 
+/**
+ * Most columns one D1 table may carry, framework columns included.
+ *
+ * D1 runs Workerd's SQLite build, which sets `SQLITE_LIMIT_COLUMN` to 100 where
+ * stock SQLite allows 2,000. Exported so the two producers of global-table DDL
+ * — the runtime auto-provisioner in `@lunora/sql-store` and the
+ * `lunora migrate generate` emitter — check the same number rather than each
+ * carrying its own copy.
+ */
+export const MAX_D1_TABLE_COLUMNS = 100;
+
 /** Framework columns every global table carries: the physical `id` (exposed as `_id`) and `_creationTime`. */
 export const frameworkColumnDdl = (): ReadonlyArray<string> => [
     `${quoteIdentifier("id")} TEXT PRIMARY KEY`,

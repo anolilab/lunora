@@ -130,6 +130,8 @@ export const postgresDialect: SqlDialect = {
 
         return code === "23505" || (error instanceof Error && PG_UNIQUE_VIOLATION_RE.test(error.message));
     },
+    /** Postgres allows 1,600 columns per table (fewer once wide types are involved, which the engine reports on its own). */
+    maxTableColumns: 1600,
     name: "postgres",
     supportsFts5: false,
 
@@ -212,6 +214,8 @@ export const mysqlDialect: SqlDialect = {
 
         return candidate.errno === 1062 || candidate.code === "ER_DUP_ENTRY";
     },
+    /** MySQL's hard ceiling is 4,096 columns per table; InnoDB's practical limit is lower and row-size-bound, which the engine reports on its own. */
+    maxTableColumns: 4096,
     name: "mysql",
     supportsFts5: false,
     supportsReturning: false,
