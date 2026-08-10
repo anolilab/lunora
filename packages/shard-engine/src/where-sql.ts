@@ -29,17 +29,35 @@ type FieldRefSql = (field: string) => SQL;
 type SerializeValue = (value: unknown) => unknown;
 
 interface WhereSqlStrategy {
+    /**
+     * Dialect substring test, given the field reference and the bound search
+     * term. Absent ⇒ SQLite's `instr(lower(ref), lower(term)) > 0`.
+     *
+     * A position function rather than `LIKE '%…%'` on purpose: Workerd caps
+     * `SQLITE_LIMIT_LIKE_PATTERN_LENGTH` at 50 bytes, so a `contains` on a term
+     * longer than ~48 characters is a runtime error ("LIKE or GLOB pattern too
+     * complex") on Durable Objects and D1 alike. It also needs no wildcard
+     * escaping, which removes the pathological-pattern scan a raw term invited.
+     *
+     * Each dialect's expression must fold case the way that dialect's `LIKE`
+     * does, since that is the behaviour callers already have: SQLite's `LIKE` is
+     * ASCII-case-insensitive (so `lower()` on both sides), MySQL's follows the
+     * column collation (`LOCATE`, case-insensitive by default), Postgres' is
+     * case-sensitive (`strpos`).
+     */
+    containsExpr?: (reference: SQL, term: SQL) => SQL;
+
     fieldRef: FieldRefSql;
 
     /**
-     * Dialect `contains` rendering given the field reference and the (already
-     * bound, already wildcard-escaped) search term. Absent ⇒ the portable
-     * `… LIKE '%' || term || '%' ESCAPE '\'` concat form (SQLite/Postgres); MySQL
-     * supplies a `CONCAT(...)` variant. The term is escaped by
-     * {@link compileContains}, so an implementation MUST pair it with
-     * `ESCAPE '\'` for the literal-match to hold.
+     * Dialect `IN` / `NOT IN` rendering over an already-serialized value list.
+     * Absent ⇒ a literal `IN (?, ?, …)`, one bound parameter per item.
+     *
+     * SQLite suppliers override it because Workerd and D1 both cap a statement
+     * at 100 bound parameters, which a wide `in` (or the relation semijoin, good
+     * for 5,000 join keys) blows straight through.
      */
-    likeContains?: (reference: SQL, term: SQL) => SQL;
+    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
 
     /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
@@ -72,20 +90,15 @@ const isOperatorObject = (value: unknown): value is FieldOperators => {
 };
 
 /**
- * Escape LIKE wildcards (`%`, `_`) and the escape char (`\`) in a `contains`
- * term so they match literally. Without this a client-supplied term like `%` or
- * `a%b%c%…` becomes a live pattern — matching every row, or forcing a pathological
- * pattern scan (a mild DoS). The escaped term pairs with `ESCAPE '\'` on the LIKE.
- * Non-string values pass through unchanged (a `contains` on a non-string is odd,
- * but not our concern here).
+ * Render a `contains` substring match, binding the term (never interpolating
+ * raw). The term needs no wildcard escaping: a position function takes it
+ * literally, so a client-supplied `%` or `a%b%c%…` is just text rather than a
+ * live pattern.
  */
-const escapeLikeTerm = (value: unknown): unknown => (typeof value === "string" ? value.replaceAll(/[\\%_]/g, (character) => `\\${character}`) : value);
-
-/** Render a `contains` substring match, binding the (wildcard-escaped) term (never interpolating raw). */
 const compileContains = (reference: SQL, value: unknown, strategy: WhereSqlStrategy): SQL => {
-    const term = sql`${strategy.serialize(escapeLikeTerm(value))}`;
+    const term = sql`${strategy.serialize(value)}`;
 
-    return strategy.likeContains ? strategy.likeContains(reference, term) : sql`${reference} LIKE '%' || ${term} || '%' ESCAPE '\\'`;
+    return strategy.containsExpr ? strategy.containsExpr(reference, term) : sql`instr(lower(${reference}), lower(${term})) > 0`;
 };
 
 const compileComparator = (reference: SQL, operator: string, comparator: string, value: unknown, strategy: WhereSqlStrategy): SQL => {
@@ -105,12 +118,19 @@ const compileInList = (reference: SQL, keyword: "IN" | "NOT IN", value: unknown,
         return keyword === "IN" ? sql`0 = 1` : sql`1 = 1`;
     }
 
+    const serialized = items.map((item) => strategy.serialize(item));
+    const negated = keyword === "NOT IN";
+
+    if (strategy.inList) {
+        return strategy.inList(reference, serialized, negated);
+    }
+
     const list = sql.join(
-        items.map((item) => sql`${strategy.serialize(item)}`),
+        serialized.map((item) => sql`${item}`),
         sql`, `,
     );
 
-    return keyword === "IN" ? sql`${reference} IN (${list})` : sql`${reference} NOT IN (${list})`;
+    return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
 };
 
 const compileFieldOperators = (reference: SQL, operators: FieldOperators, strategy: WhereSqlStrategy): SQL[] => {

@@ -33,6 +33,7 @@ import {
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
+import { unionAll } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -114,20 +115,32 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
 };
 
 /**
- * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
- * far under every engine's cap (3 params per row) while still turning a
- * many-token document into a handful of round trips rather than one per token.
+ * Rows per companion `INSERT`. At 3 bound parameters per row this is 96 per
+ * statement — under the tightest engine's cap, which is D1's 100 (it runs
+ * Workerd's SQLite build, where `SQLITE_LIMIT_VARIABLE_NUMBER` is 100, not stock
+ * SQLite's 500,000). Still turns a many-token document into a handful of round
+ * trips rather than one per token.
  */
-const INSERT_CHUNK_ROWS = 50;
+const INSERT_CHUNK_ROWS = 32;
 
 /**
  * The predicate one query term matches a companion token with: an exact
  * equality, except for the query's final term, which matches as a prefix so a
- * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
- * the `LIKE` pattern carries no wildcard or escape character.
+ * search behaves as-you-type.
+ *
+ * The prefix half is a half-open range rather than `LIKE 'token%'` — the same
+ * form the vocabulary scorer below uses. Both plan against the btree, but D1
+ * runs Workerd's SQLite build, which caps a LIKE pattern at 50 bytes: a 50-plus
+ * character search term would otherwise fail the query outright with "LIKE or
+ * GLOB pattern too complex".
  */
-const searchTermPredicate = (token: string, isLast: boolean): SQL =>
-    isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
+const searchTermPredicate = (token: string, isLast: boolean): SQL => {
+    const range = searchTermRange(token, isLast);
+
+    return range.exact
+        ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${range.lower}`
+        : sql`${sql.identifier(FTS_TOKEN_COLUMN)} >= ${range.lower} AND ${sql.identifier(FTS_TOKEN_COLUMN)} < ${range.upper}`;
+};
 
 /** The main-table (`m`) conditions every layout applies: the staged equality filters plus the soft-delete scope. */
 const mainTableFilters = (definition: TableDefinitionLike, search: SearchStage): SQL[] => {
@@ -275,7 +288,7 @@ const runFtsSearch = async (
     const perTerm = tokens.map(
         (_, index) => sql`SUM(CASE WHEN u.${sql.identifier("__term__")} = ${sql.raw(String(index))} THEN u.${sql.identifier("__n__")} ELSE 0 END)`,
     );
-    const scored = sql`SELECT f.${sql.identifier(FTS_ID_COLUMN)} AS ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM (${sql.join(branches, sql` UNION ALL `)}) u JOIN ${sql.identifier(companion)} f ON f.rowid = u.${sql.identifier("doc")} GROUP BY f.${sql.identifier(FTS_ID_COLUMN)} HAVING ${sql.join(
+    const scored = sql`SELECT f.${sql.identifier(FTS_ID_COLUMN)} AS ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM (${unionAll(branches)}) u JOIN ${sql.identifier(companion)} f ON f.rowid = u.${sql.identifier("doc")} GROUP BY f.${sql.identifier(FTS_ID_COLUMN)} HAVING ${sql.join(
         perTerm.map((term) => sql`${term} > 0`),
         sql` AND `,
     )}`;
@@ -367,9 +380,9 @@ const invertedLayout: SearchLayout = {
         }
 
         // One round trip per document write when the exec exposes `batch`
-        // (still chunked at INSERT_CHUNK_ROWS, so the bound-parameter count of
-        // any one statement stays far under every engine's cap); a per-chunk
-        // sequential `run()` loop otherwise.
+        // (still chunked at INSERT_CHUNK_ROWS, so no one statement exceeds the
+        // tightest engine's bound-parameter cap); a per-chunk sequential `run()`
+        // loop otherwise.
         await queryBatch(exec, dialect, chunks);
     },
     name: "inverted",

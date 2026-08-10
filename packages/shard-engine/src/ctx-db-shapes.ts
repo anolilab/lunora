@@ -28,12 +28,13 @@ import { sql as dsql } from "drizzle-orm";
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { DOC_COLUMN, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import { sqliteInList } from "./drizzle";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
 
 /** Flat JSON-blob `where` strategy: fields via `json_extract`, values via `serializeSqlValue`. Mirrors the query path's `doWhereSqlStrategy`. */
-const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
+const shapeWhereStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, inList: sqliteInList, serialize: serializeSqlValue };
 
 /** Build the `id IN (...)` restriction for a non-empty id list, or `undefined` to leave the query unrestricted. */
 const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {
@@ -41,10 +42,7 @@ const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {
         return undefined;
     }
 
-    return dsql`id IN (${dsql.join(
-        ids.map((id) => dsql`${id}`),
-        dsql`, `,
-    )})`;
+    return sqliteInList(dsql`${dsql.identifier("id")}`, ids, false);
 };
 
 /** AND-compose an optional id restriction with the compiled `effectiveWhere`, returning the trailing `WHERE …` fragment (empty when unconstrained). */

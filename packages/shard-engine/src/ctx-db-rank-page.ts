@@ -30,7 +30,7 @@ import { mergeWhere } from "./aggregates";
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { SCAN_DEP } from "./dependency-tracker";
 import { runDrizzle } from "./do-exec";
-import { param } from "./drizzle";
+import { sqliteInList } from "./drizzle";
 import { decodeCursor, toBase64 } from "./query-args";
 import { encodePartitionKey, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { RankDirection, RankIndexDefinitionLike, RankPageOptions, RankPageRowKey } from "./schema-types";
@@ -195,6 +195,10 @@ interface RankPageComputation {
     rows: { doc: Record<string, unknown>; key: RankPageRowKey }[];
 }
 
+/** The `id` column as a drizzle chunk — the hydration membership test's left-hand side, built once. */
+// eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
+const hydrateIdColumn: SQL = dsql`${dsql.identifier("id")}`;
+
 /**
  * Hydrate a page's docs by id in one `IN (...)` query (avoids an N+1 over
  * the rank companion), returning an id->doc map the caller re-projects in
@@ -208,13 +212,9 @@ const hydrateDocsById = (deps: RankPageDeps, tableName: string, ids: ReadonlyArr
         return byId;
     }
 
-    const idList = dsql.join(
-        ids.map((id) => param(id)),
-        dsql`, `,
-    );
     const documentRows = runDrizzle(
         deps.sql,
-        dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE id IN (${idList})`,
+        dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)} WHERE ${sqliteInList(hydrateIdColumn, ids, false)}`,
     ).toArray();
 
     for (const documentRow of documentRows) {
