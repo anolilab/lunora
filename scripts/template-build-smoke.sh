@@ -10,9 +10,10 @@
 #   3. Runs `pnpm install`.
 #   4. For React templates, runs `lunora add auth-ui` and asserts the copy-in
 #      screens landed and their deps were injected (then re-installs).
-#   5. Runs `pnpm run build` (skipped with a notice if no build script) — which
-#      is what proves the copied auth screens actually compile in a real app.
-#   5. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
+#   5. Runs `pnpm run build` — which is what proves the copied auth screens
+#      actually compile in a real app. A template with no build script instead
+#      runs `pnpm run codegen` + `tsc --noEmit` over everything it ships.
+#   6. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
 #
 # Exit codes:
 #   0  — all results were PASS or XFAIL
@@ -43,7 +44,10 @@
 # What this does NOT cover:
 #   - The remote giget fetch path (needs network + a published template ref).
 #   - Starting the Vite+workerd dev server (long-running, needs a real CF account).
-#   - Running codegen on the scaffolded project (covered by clean-machine-smoke.sh).
+#   - Running codegen on the *buildable* templates' scaffolds — their bundler
+#     runs it via the Vite plugin / astro integration. Only the no-build path
+#     invokes `lunora codegen` directly here; clean-machine-smoke.sh covers it
+#     against a tarball-installed CLI.
 
 set -euo pipefail
 
@@ -431,8 +435,39 @@ for tname in "${TEMPLATES[@]}"; do
     " 2>/dev/null)"
 
     if [[ "$build_script" != "yes" ]]; then
-        echo "  ==> NOTICE: no build script in $tname — skipping build"
+        # A template with no bundler had nothing compiled at all: scaffold +
+        # install was the whole gate, so any type error it ships — including one
+        # introduced by a breaking change in `@lunora/*` — passed silently.
+        # Run its own `codegen` script (every source file imports
+        # `#lunora/_generated/*`, which only exists afterwards), then typecheck.
+        #
+        # Unlike the auth-ui gate below this fails on ANY diagnostic rather than
+        # only ones under `lunora/auth-ui/`. That is affordable exactly because
+        # there is no build: no framework-generated route types to trip over, and
+        # the tsconfig `include` covers precisely the files the template ships.
+        echo "  ==> NOTICE: no build script in $tname — codegen + tsc --noEmit instead"
         SKIP_BUILD+=("$tname")
+
+        codegen_log="$RESULTS_DIR/${tname}-codegen.log"
+        if ! (cd "$scaffold_dir" && pnpm run codegen 2>&1) > "$codegen_log"; then
+            echo "  FAIL: codegen failed for $tname (see $codegen_log)"
+            tail -20 "$codegen_log" | sed 's/^/    /'
+            FAIL+=("$tname(codegen)")
+            continue
+        fi
+
+        typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$typecheck_log" || true
+
+        ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+        if [[ "$ts_errors" -gt 0 ]]; then
+            echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+            grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck)")
+            continue
+        fi
+
+        echo "  ==> codegen + typecheck OK"
         PASS+=("$tname")
         continue
     fi
@@ -523,9 +558,15 @@ for t in "${TEMPLATES[@]}"; do
     fi
     result="unknown"
     for p in "${PASS[@]+"${PASS[@]}"}"; do [[ "$p" == "$t" ]] && result="PASS" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(install)" ]] && result="FAIL(install)" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(auth-ui:typecheck)" ]] && result="FAIL(typecheck)" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "$t" ]] && result="FAIL(build)" && break; done
+    # A bare template name means the build step failed; anything else is recorded
+    # as `<template>(<stage>)` and renders as `FAIL(<stage>)` — so a new stage
+    # cannot show up in the table as "unknown".
+    for f in "${FAIL[@]+"${FAIL[@]}"}"; do
+        case "$f" in
+            "$t") result="FAIL(build)" && break ;;
+            "$t("*) result="FAIL${f#"$t"}" && break ;;
+        esac
+    done
     for x in "${XFAIL[@]+"${XFAIL[@]}"}"; do [[ "$x" == "$t" ]] && result="XFAIL(expected)" && break; done
     for x in "${XPASS[@]+"${XPASS[@]}"}"; do [[ "$x" == "$t" ]] && result="XPASS(unexpected)" && break; done
     printf "%-20s  %s\n" "$t" "$result"
