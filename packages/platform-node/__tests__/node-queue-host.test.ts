@@ -68,14 +68,22 @@ describe("createNodeQueueHost", () => {
 
         const delayed = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
         let delivered = 0;
+        const now = Date.now();
+        // The host's clock is injected for the reason `NodeQueueHostOptions.now`
+        // documents: `send` stamps `visible_at` from the host clock, and this case
+        // polls at exactly `now + 60_000`, so on the real clock it has no margin at
+        // all — any millisecond between capturing `now` and the send pushes
+        // `visible_at` past the poll and the message stays invisible. It failed
+        // that way on one CI leg while passing on the other. The neighbouring
+        // cases survive only because they poll at `now + 5000`, several orders of
+        // magnitude more slack than the drift.
         const host = createNodeQueueHost(freshDatabase(), {
+            now: () => now,
             onBatch: (batch) => {
                 delivered += batch.messages.length;
             },
             queues: { delayed },
         });
-
-        const now = Date.now();
 
         await host.bindings.delayed.send("soon", { delaySeconds: 60 });
 
