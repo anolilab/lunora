@@ -10,6 +10,7 @@ require "json"
 require "minitest/autorun"
 
 require_relative "../lib/lunora"
+require_relative "manifest"
 
 module FixtureLoader
   def fixtures_dir
@@ -46,6 +47,8 @@ class TestWireCodec < Minitest::Test
   include FixtureLoader
 
   def test_round_trip_stability
+    ConformanceManifest.covers("wire_codec_round_trip")
+
     cases = fixture("wire-codec.json")["cases"]
     assert_operator cases.length, :>, 10, "fixture should carry the full case set"
 
@@ -62,12 +65,16 @@ class TestStableKey < Minitest::Test
   include FixtureLoader
 
   def test_pure_json_cases
+    ConformanceManifest.covers("stable_wire_key_fixtures")
+
     fixture("stable-wire-key.json")["cases"].each do |entry|
       assert_equal entry["key"], Lunora.stable_wire_key(entry["args"]), entry["name"]
     end
   end
 
   def test_typed_cases
+    ConformanceManifest.covers("stable_wire_key_fixtures")
+
     fixture("stable-wire-key.json")["typed"].each do |entry|
       decoded = Lunora.decode_wire(entry["wireArgs"])
 
@@ -80,6 +87,8 @@ class TestRpc < Minitest::Test
   include FixtureLoader
 
   def test_request_bodies
+    ConformanceManifest.covers("rpc_request_bodies")
+
     fixture("rpc.json")["request"]["cases"].each do |entry|
       args = entry.key?("args") ? entry["args"] : Lunora.decode_wire(entry["argsWire"])
       body = Lunora.build_rpc_body(entry["functionPath"], args, entry["shardKey"])
@@ -89,6 +98,8 @@ class TestRpc < Minitest::Test
   end
 
   def test_response_ok
+    ConformanceManifest.covers("rpc_responses")
+
     fixture("rpc.json")["responseOk"].each do |entry|
       value = Lunora.parse_rpc_response(entry["response"], 200)
 
@@ -97,6 +108,8 @@ class TestRpc < Minitest::Test
   end
 
   def test_response_error
+    ConformanceManifest.covers("rpc_responses")
+
     fixture("rpc.json")["responseError"].each do |entry|
       error = assert_raises(Lunora::ApiError, entry["name"]) do
         Lunora.parse_rpc_response(entry["response"], 400)
@@ -107,12 +120,30 @@ class TestRpc < Minitest::Test
       assert_equal canonical(entry["dataWire"]), canonical(Lunora.encode_wire(error.data)) if entry.key?("dataWire")
     end
   end
+
+  # protocol/README.md §4.2: a non-2xx whose body carries no +error+ envelope is
+  # an INTERNAL transport error. Without the status check the call returns nil and
+  # raises nothing, so the caller believes its mutation committed.
+  #
+  # The manifest listed this case from the start; the Ruby port never had it, and
+  # nothing noticed until the manifest became a gate.
+  def test_non_2xx_without_error_envelope_fails
+    ConformanceManifest.covers("non_2xx_without_error_envelope_fails")
+
+    error = assert_raises(Lunora::ApiError) do
+      Lunora.parse_rpc_response({ "message" => "bad gateway" }, 502)
+    end
+
+    assert_equal "INTERNAL", error.code
+  end
 end
 
 class TestWsFrames < Minitest::Test
   include FixtureLoader
 
   def test_client_frames
+    ConformanceManifest.covers("client_frame_builders")
+
     frames = fixture("ws-frames.json")["clientFrames"]
 
     assert_equal canonical(frames["connect"]), canonical(Lunora.build_connect_frame("client-test"))
@@ -127,6 +158,8 @@ class TestWsFrames < Minitest::Test
   end
 
   def test_server_frames
+    ConformanceManifest.covers("server_frame_consumer")
+
     fixture("ws-frames.json")["serverFrames"].each do |entry|
       client = Lunora::Client.new("https://app.example")
       client.attach_socket(->(_frame) {})
@@ -153,6 +186,8 @@ class TestWsFrames < Minitest::Test
   end
 
   def test_shape_subscribe_frame
+    ConformanceManifest.covers("shape_subscribe_frame")
+
     shape = fixture("ws-frames.json")["shape"]
 
     assert_equal canonical(shape["shape-subscribe-cold"]),
@@ -160,6 +195,8 @@ class TestWsFrames < Minitest::Test
   end
 
   def test_poke_sequence_materialises_rows
+    ConformanceManifest.covers("poke_sequence_materialises_rows")
+
     shape = fixture("ws-frames.json")["shape"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
@@ -173,6 +210,8 @@ class TestWsFrames < Minitest::Test
   end
 
   def test_poke_parts_do_not_apply_before_poke_end
+    ConformanceManifest.covers("poke_parts_do_not_apply_before_poke_end")
+
     shape = fixture("ws-frames.json")["shape"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})

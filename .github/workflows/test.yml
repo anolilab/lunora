@@ -384,7 +384,10 @@
                     - "language": "go"
                       "runner": "ubuntu-latest"
                       "directory": "sdks/go"
-                      "run": "go test ./... -v -race"
+                      # -count=1 disables the test cache: the fixtures and the
+                      # conformance manifest live outside the Go module, so the
+                      # cache cannot see them change and would replay a stale PASS.
+                      "run": "go test ./... -v -race -count=1"
                       "generatedOut": "sdks/go/generatedcheck"
                       "buildGenerated": "go build ./... && go test -tags generatedcheck ./smoke/..."
                     - "language": "ruby"

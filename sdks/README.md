@@ -107,21 +107,62 @@ same files the TypeScript client is tested against.
 coverage drifted badly before that list existed, leaving the decode-side bounds
 unasserted in two ports for several commits with every gate green.
 
+**All seven suites read that file at run time and fail if the run did not cover
+it**, so adding a name there turns every language red until it is covered. The
+evidence is produced by the case executing, never by a suite listing names it
+claims to cover, and the mechanism is whatever each runner offers rather than one
+shape forced onto all seven:
+
+| Language | Mechanism                                                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------- |
+| python   | each case calls `covers()`; `tests/test_zz_manifest.py` (sorted last by discovery) compares the two sets |
+| go       | each case calls `covers()`; `TestMain` compares after `m.Run()` — a `-run`-filtered run is exempt        |
+| ruby     | each case calls `ConformanceManifest.covers`; `Minitest.after_run` aborts on a gap                       |
+| rust     | no after-all hook in libtest, so the manifest **drives** the run: each name dispatches to its case       |
+| swift    | no after-all hook that can fail in XCTest, so likewise — hence `caseX` methods and one dispatching test  |
+| java     | each case calls `covers()`; the end of `main` is the after-all hook                                      |
+| kotlin   | as java                                                                                                  |
+
+Where the manifest drives the run, a required name with no dispatch arm fails,
+which is the same guarantee from the other direction: the only way to go green is
+to execute a case under that name.
+
 Run all of them at once with `./sdks/run-all.sh`, which fans the suites out in
 parallel — they are seven independent toolchains reading the same read-only
 fixtures, so the whole set costs about as long as the slowest compiler rather
 than the sum of all seven. Pass language names to narrow it
 (`./sdks/run-all.sh go rust`). Or one at a time:
 
-| Language | Run the suite                                | Toolchain       |
-| -------- | -------------------------------------------- | --------------- |
-| python   | `python3 -m unittest discover -s tests -t .` | stdlib only     |
-| go       | `go test ./... -race`                        | stdlib only     |
-| ruby     | `ruby -Ilib test/test_conformance.rb`        | stdlib minitest |
-| rust     | `cargo test`                                 | `serde_json`    |
-| swift    | `swift test`                                 | Foundation only |
-| java     | `bash build.sh`                              | JDK only        |
-| kotlin   | `bash build.sh`                              | kotlinc + JDK   |
+| Language | Run the suite                                                           | Toolchain           |
+| -------- | ----------------------------------------------------------------------- | ------------------- |
+| python   | `python3 -m unittest discover -s tests -t .`                            | stdlib only         |
+| go       | `go test ./... -race -count=1`                                          | stdlib only         |
+| ruby     | `ruby -Ilib -e 'Dir["test/test_*.rb"].each { \|f\| require "./#{f}" }'` | stdlib minitest     |
+| rust     | `cargo test`                                                            | `serde_json`        |
+| swift    | `swift test`                                                            | Foundation only     |
+| java     | `PATH="$JDK_BIN:$PATH" bash build.sh`                                   | JDK only, see below |
+| kotlin   | `PATH="$JDK_BIN:$PATH" bash build.sh`                                   | kotlinc + JDK       |
+
+**The JVM legs need a real JDK on `PATH`.** On macOS `/usr/bin/java` is Apple's
+stub, which reports "No Java runtime present" and does not run anything, so
+`bash build.sh` on its own fails there. `run-all.sh` and `lint-all.sh` prepend the
+Homebrew JDK for you; running `build.sh` directly does not, hence the prefix
+above — with Homebrew that is:
+
+```bash
+export JDK_BIN=/opt/homebrew/opt/openjdk/bin
+```
+
+**Only the full run is held to the manifest.** The ruby command above loads every
+`test/test_*.rb` (a single file records coverage but is not held to a list it
+cannot cover), and the go check exempts a `-run`-filtered run for the same
+reason.
+
+**`-count=1` on the go leg is load-bearing.** Everything these suites assert
+against — `protocol/fixtures/*.json` and `protocol/conformance-cases.json` — lives
+outside the Go module, so the test cache cannot see those files change and replays
+a PASS recorded before the edit. Without it, editing a fixture or the manifest
+leaves the go leg green without having run.
 
 CI runs all seven per PR (`sdk-conformance` in `.github/workflows/test.yml`),
 and each leg also generates an SDK from a committed fixture, builds the result,

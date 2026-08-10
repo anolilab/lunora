@@ -19,10 +19,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import LunoraClient, LunoraError, parse_rpc_response
 from lunora.wire import MAX_BIGINT_DIGITS, MAX_DEPTH, TAG, UNDEFINED, decode_wire, encode_wire, stable_stringify
+from tests._manifest import covers
 
 
 class TestDecodeBounds(unittest.TestCase):
     def test_over_long_bigint_rejected(self):
+        covers("over_long_bigint_rejected")
+
         # Decimal parsing is superlinear; an unbounded digit string is a DoS.
         with self.assertRaises(ValueError):
             decode_wire([TAG, "bigint", "9" * (MAX_BIGINT_DIGITS + 1)])
@@ -33,6 +36,8 @@ class TestDecodeBounds(unittest.TestCase):
         self.assertEqual(decode_wire([TAG, "bigint", "-42"]).value, -42)
 
     def test_depth_cap_enforced(self):
+        covers("depth_cap_enforced")
+
         nested = "leaf"
         for _ in range(MAX_DEPTH + 2):
             nested = [nested]
@@ -50,6 +55,8 @@ class TestDecodeBounds(unittest.TestCase):
 
 class TestUndefinedSemantics(unittest.TestCase):
     def test_undefined_is_distinct_from_none(self):
+        covers("undefined_is_distinct_from_null")
+
         encoded = encode_wire({"dropped": UNDEFINED, "kept": None})
 
         self.assertNotIn("dropped", encoded, "an UNDEFINED object field must be dropped, matching JSON.stringify")
@@ -76,10 +83,14 @@ class TestEcmaScriptSpellings(unittest.TestCase):
     ]
 
     def test_format_number_matches_ecmascript(self):
+        covers("format_number_matches_ecmascript")
+
         for value, want in self.CASES:
             self.assertEqual(stable_stringify(value), want, f"formatting {value}")
 
     def test_key_order_matches_utf16(self):
+        covers("key_order_matches_utf16")
+
         # JavaScript sorts by UTF-16 code unit: an astral character is its high
         # surrogate, so it sorts after U+2028 but before U+FFFD.
         rendered = stable_stringify({"�": 4, "\U0001f600": 3, " ": 2, "A": 1})
@@ -87,6 +98,8 @@ class TestEcmaScriptSpellings(unittest.TestCase):
         self.assertEqual(rendered, '{"A":1," ":2,"\U0001f600":3,"�":4}')
 
     def test_string_escaping_matches_json_stringify(self):
+        covers("string_escaping_matches_json_stringify")
+
         # JSON.stringify leaves <, > and & raw and does not escape U+2028/9.
         self.assertEqual(stable_stringify("a<b>&c"), '"a<b>&c"')
         self.assertEqual(stable_stringify("  "), '"  "')
@@ -94,6 +107,8 @@ class TestEcmaScriptSpellings(unittest.TestCase):
 
 class TestTransportErrors(unittest.TestCase):
     def test_non_2xx_without_error_envelope_fails(self):
+        covers("non_2xx_without_error_envelope_fails")
+
         # protocol/README.md §4.2 — without the status check this returned None
         # and raised nothing, so a caller believes its mutation committed.
         with self.assertRaises(LunoraError) as caught:
@@ -104,6 +119,8 @@ class TestTransportErrors(unittest.TestCase):
 
 class TestPokeAtomicity(unittest.TestCase):
     def test_poke_parts_do_not_apply_before_poke_end(self):
+        covers("poke_parts_do_not_apply_before_poke_end")
+
         here = os.path.dirname(os.path.abspath(__file__))
         root = here
         for _ in range(8):

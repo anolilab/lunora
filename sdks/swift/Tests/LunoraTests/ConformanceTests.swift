@@ -30,9 +30,51 @@ final class ConformanceTests: XCTestCase {
     /// order, independent of the order the fixture file happens to use.
     private func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
 
+    // MARK: - Manifest coverage
+
+    /// Fails if this run did not exercise every case in the shared manifest.
+    ///
+    /// XCTest has no after-all hook that can record a failure — `class func
+    /// tearDown()` runs outside any test's context — so the manifest DRIVES the
+    /// run rather than auditing it afterwards: every name in
+    /// `protocol/conformance-cases.json` is dispatched to the method that asserts
+    /// it, and a name with no arm fails here. That is also why the cases are
+    /// `caseX` rather than `testX`: this is their only entry point, so a case
+    /// cannot be silently detached from its manifest name.
+    func testConformanceManifestIsCovered() throws {
+        let url = try fixturesDirectory().deletingLastPathComponent().appendingPathComponent("conformance-cases.json")
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: try Data(contentsOf: url)) as? [String: Any])
+        let required = try XCTUnwrap(manifest["required"] as? [String])
+
+        XCTAssertFalse(required.isEmpty, "the manifest must list at least one required case")
+
+        for name in required {
+            switch name {
+            case "wire_codec_round_trip": try caseWireCodecRoundTrip()
+            case "undefined_is_distinct_from_null": try caseUndefinedIsDistinctFromNull()
+            case "over_long_bigint_rejected": caseOverLongBigIntRejected()
+            case "depth_cap_enforced": caseDepthCapEnforced()
+            case "stable_wire_key_fixtures": try caseStableWireKeyFixtures()
+            case "format_number_matches_ecmascript": caseFormatDoubleMatchesEcmaScript()
+            case "key_order_matches_utf16": caseKeyOrderMatchesUTF16()
+            case "string_escaping_matches_json_stringify": caseStringEscapingMatchesJSONStringify()
+            case "rpc_request_bodies": try caseRPCRequestBodies()
+            case "rpc_responses": try caseRPCResponses()
+            case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
+            case "client_frame_builders": try caseClientFrameBuilders()
+            case "server_frame_consumer": try caseServerFrameConsumer()
+            case "shape_subscribe_frame": try caseShapeSubscribeFrame()
+            case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
+            case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
+            default:
+                XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
+            }
+        }
+    }
+
     // MARK: - Wire codec
 
-    func testWireCodecRoundTrip() throws {
+    func caseWireCodecRoundTrip() throws {
         let cases = try XCTUnwrap(fixture("wire-codec.json")["cases"] as? [[String: Any]])
         XCTAssertGreaterThan(cases.count, 10, "fixture should carry the full case set")
 
@@ -44,7 +86,7 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    func testUndefinedIsDistinctFromNull() throws {
+    func caseUndefinedIsDistinctFromNull() throws {
         let encoded = try XCTUnwrap(
             Wire.encode(["dropped": WireUndefined.shared, "kept": NSNull()]) as? [String: Any]
         )
@@ -57,14 +99,14 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(first[1] as? String, "undefined")
     }
 
-    func testOverLongBigIntRejected() {
+    func caseOverLongBigIntRejected() {
         let overLong = String(repeating: "9", count: Wire.maxBigIntDigits + 1)
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", overLong]))
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", "12x4"]))
         XCTAssertNoThrow(try Wire.decode([Wire.tag, "bigint", "-42"]))
     }
 
-    func testDepthCapEnforced() {
+    func caseDepthCapEnforced() {
         var nested: Any = "leaf"
         for _ in 0..<(Wire.maxDepth + 2) { nested = [nested] }
         XCTAssertThrowsError(try Wire.encode(nested))
@@ -73,7 +115,7 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - Stable key
 
-    func testStableWireKeyFixtures() throws {
+    func caseStableWireKeyFixtures() throws {
         let document = try fixture("stable-wire-key.json")
 
         for testCase in try XCTUnwrap(document["cases"] as? [[String: Any]]) {
@@ -90,7 +132,7 @@ final class ConformanceTests: XCTestCase {
 
     /// Expected spellings captured from a real JS engine, not derived from the
     /// spec — the two disagreed for the Go and Ruby ports before this existed.
-    func testFormatDoubleMatchesEcmaScript() {
+    func caseFormatDoubleMatchesEcmaScript() {
         let cases: [(Double, String)] = [
             (0, "0"), (3, "3"), (1.5, "1.5"), (-2.5, "-2.5"),
             (1e-5, "0.00001"), (1e-6, "0.000001"), (1e-7, "1e-7"), (1.5e-7, "1.5e-7"),
@@ -104,13 +146,13 @@ final class ConformanceTests: XCTestCase {
     /// JavaScript sorts by UTF-16 code unit, so an astral character is its high
     /// surrogate (0xD83D) and sorts after U+2028 but before U+FFFD. Swift's
     /// scalar-wise `<` puts it last — a different dedup key for identical args.
-    func testKeyOrderMatchesUTF16() {
+    func caseKeyOrderMatchesUTF16() {
         let rendered = Wire.stableStringify(["A": 1, "\u{2028}": 2, "\u{1F600}": 3, "\u{FFFD}": 4])
         let want = "{\"A\":1,\"\u{2028}\":2,\"\u{1F600}\":3,\"\u{FFFD}\":4}"
         XCTAssertEqual(rendered, want)
     }
 
-    func testStringEscapingMatchesJSONStringify() {
+    func caseStringEscapingMatchesJSONStringify() {
         // JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
         XCTAssertEqual(Wire.jsonString("a<b>&c"), "\"a<b>&c\"")
         XCTAssertEqual(Wire.jsonString("\u{2028}\u{2029}"), "\"\u{2028}\u{2029}\"")
@@ -119,7 +161,7 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - RPC
 
-    func testRPCRequestBodies() throws {
+    func caseRPCRequestBodies() throws {
         let request = try XCTUnwrap(fixture("rpc.json")["request"] as? [String: Any])
 
         for testCase in try XCTUnwrap(request["cases"] as? [[String: Any]]) {
@@ -134,7 +176,7 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    func testRPCResponses() throws {
+    func caseRPCResponses() throws {
         let document = try fixture("rpc.json")
 
         for testCase in try XCTUnwrap(document["responseOk"] as? [[String: Any]]) {
@@ -155,7 +197,7 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
-    func testNon2xxWithoutErrorEnvelopeThrows() {
+    func caseNon2xxWithoutErrorEnvelopeThrows() {
         // protocol/README.md §4.2. Without the status check this returned a nil
         // result and threw nothing — the caller believes its mutation committed.
         XCTAssertThrowsError(try LunoraClient.parseRPCResponse(["message": "bad gateway"], status: 502))
@@ -163,7 +205,7 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - WebSocket frames
 
-    func testClientFrameBuilders() throws {
+    func caseClientFrameBuilders() throws {
         let frames = try XCTUnwrap(fixture("ws-frames.json")["clientFrames"] as? [String: Any])
 
         XCTAssertEqual(canonical(LunoraClient.buildConnectFrame(clientID: "client-test")), canonical(frames["connect"]))
@@ -186,7 +228,7 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(canonical(LunoraClient.buildUnsubscribeFrame(id: "sub_1")), canonical(frames["unsubscribe"]))
     }
 
-    func testServerFrameConsumer() throws {
+    func caseServerFrameConsumer() throws {
         for testCase in try XCTUnwrap(fixture("ws-frames.json")["serverFrames"] as? [[String: Any]]) {
             let name = testCase["name"] as? String ?? "?"
             let client = LunoraClient(url: "https://app.example")
@@ -216,13 +258,13 @@ final class ConformanceTests: XCTestCase {
 
     // MARK: - Shapes
 
-    func testShapeSubscribeFrame() throws {
+    func caseShapeSubscribeFrame() throws {
         let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
         let frame = try LunoraClient.buildShapeSubscribeFrame(id: "shape_1", name: "roomMessages", args: ["room": "general"])
         XCTAssertEqual(canonical(frame), canonical(shape["shape-subscribe-cold"]))
     }
 
-    func testPokeSequenceMaterialisesRows() throws {
+    func casePokeSequenceMaterialisesRows() throws {
         let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
         let sequence = try XCTUnwrap(shape["pokeSequence"] as? [Any])
 
@@ -241,7 +283,7 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(canonical(delivered.last), canonical(shape["expectedRows"]))
     }
 
-    func testPokePartsDoNotApplyBeforePokeEnd() throws {
+    func casePokePartsDoNotApplyBeforePokeEnd() throws {
         let shape = try XCTUnwrap(fixture("ws-frames.json")["shape"] as? [String: Any])
         let sequence = try XCTUnwrap(shape["pokeSequence"] as? [Any])
 

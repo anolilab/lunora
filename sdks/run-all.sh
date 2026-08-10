@@ -32,7 +32,13 @@ trap 'rm -rf "$WORK"' EXIT
 run_suite() {
     case "$1" in
         python) (cd "$ROOT/sdks/python" && python3 -m unittest discover -s tests -t .) ;;
-        go) (cd "$ROOT/sdks/go" && go test ./... -race) ;;
+        # -count=1 disables the test cache. Every input this suite asserts against
+        # — protocol/fixtures/*.json and protocol/conformance-cases.json — lives
+        # outside the Go module, so the cache cannot see it change and happily
+        # replays a PASS recorded before the fixture or the manifest was edited.
+        # That is a gate reporting green without running, which is the one failure
+        # mode worse than a slow suite.
+        go) (cd "$ROOT/sdks/go" && go test ./... -race -count=1) ;;
         ruby) (cd "$ROOT/sdks/ruby" && ruby -Ilib -e 'Dir["test/test_*.rb"].each { |f| require File.expand_path(f) }') ;;
         rust) (cd "$ROOT/sdks/rust" && cargo test) ;;
         swift) (cd "$ROOT/sdks/swift" && swift test) ;;

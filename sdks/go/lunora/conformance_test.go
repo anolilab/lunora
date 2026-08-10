@@ -16,28 +16,12 @@ import (
 func fixturesDir(t *testing.T) string {
 	t.Helper()
 
-	directory, err := os.Getwd()
+	directory, err := findUp(filepath.Join("protocol", "fixtures"))
 	if err != nil {
-		t.Fatalf("cwd: %v", err)
+		t.Fatal(err)
 	}
 
-	for range 8 {
-		candidate := filepath.Join(directory, "protocol", "fixtures")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-
-		parent := filepath.Dir(directory)
-		if parent == directory {
-			break
-		}
-
-		directory = parent
-	}
-
-	t.Fatal("could not locate protocol/fixtures")
-
-	return ""
+	return directory
 }
 
 func loadFixture(t *testing.T, name string) map[string]any {
@@ -74,6 +58,8 @@ func canonical(t *testing.T, value any) string {
 // TestWireCodecRoundTrip is the core conformance contract: re-encoding a
 // decoded fixture must reproduce the fixture exactly.
 func TestWireCodecRoundTrip(t *testing.T) {
+	covers("wire_codec_round_trip")
+
 	fixture := loadFixture(t, "wire-codec.json")
 
 	cases, ok := fixture["cases"].([]any)
@@ -106,6 +92,8 @@ func TestWireCodecRoundTrip(t *testing.T) {
 }
 
 func TestStableWireKeyFixtures(t *testing.T) {
+	covers("stable_wire_key_fixtures")
+
 	fixture := loadFixture(t, "stable-wire-key.json")
 
 	cases, _ := fixture["cases"].([]any)
@@ -149,6 +137,8 @@ func TestStableWireKeyFixtures(t *testing.T) {
 }
 
 func TestRPCRequestBodies(t *testing.T) {
+	covers("rpc_request_bodies")
+
 	fixture := loadFixture(t, "rpc.json")
 	request, _ := fixture["request"].(map[string]any)
 	cases, _ := request["cases"].([]any)
@@ -185,6 +175,8 @@ func TestRPCRequestBodies(t *testing.T) {
 }
 
 func TestRPCResponses(t *testing.T) {
+	covers("rpc_responses")
+
 	fixture := loadFixture(t, "rpc.json")
 
 	ok, _ := fixture["responseOk"].([]any)
@@ -250,6 +242,8 @@ func TestRPCResponses(t *testing.T) {
 }
 
 func TestClientFrameBuilders(t *testing.T) {
+	covers("client_frame_builders")
+
 	fixture := loadFixture(t, "ws-frames.json")
 	frames, _ := fixture["clientFrames"].(map[string]any)
 
@@ -283,6 +277,8 @@ func TestClientFrameBuilders(t *testing.T) {
 }
 
 func TestServerFrameConsumer(t *testing.T) {
+	covers("server_frame_consumer")
+
 	fixture := loadFixture(t, "ws-frames.json")
 	frames, _ := fixture["serverFrames"].([]any)
 
@@ -347,10 +343,37 @@ func TestServerFrameConsumer(t *testing.T) {
 	}
 }
 
+// TestNon2xxWithoutErrorEnvelopeFails covers protocol/README.md §4.2: a non-2xx
+// whose body carries no `error` envelope is an INTERNAL transport error. Without
+// the status check ParseRPCResponse returns a nil result AND a nil error, so the
+// caller believes its mutation committed.
+//
+// The manifest listed this case from the start; the Go port never had it, and
+// nothing noticed until the manifest became a gate.
+func TestNon2xxWithoutErrorEnvelopeFails(t *testing.T) {
+	covers("non_2xx_without_error_envelope_fails")
+
+	value, err := ParseRPCResponse(502, []byte(`{"message":"bad gateway"}`))
+	if err == nil {
+		t.Fatalf("a 502 without an error envelope must fail, got value %#v", value)
+	}
+
+	apiError, ok := err.(APIError)
+	if !ok {
+		t.Fatalf("error = %T, want APIError", err)
+	}
+
+	if apiError.Code != "INTERNAL" {
+		t.Errorf("code = %q, want INTERNAL", apiError.Code)
+	}
+}
+
 // TestUndefinedIsDistinctFromNil guards the one wrapper Go could plausibly
 // collapse: JSON null and JavaScript undefined are different values, and an
 // object field carrying undefined must be dropped rather than emitted as null.
 func TestUndefinedIsDistinctFromNil(t *testing.T) {
+	covers("undefined_is_distinct_from_null")
+
 	encoded, err := EncodeWire(map[string]any{"kept": nil, "dropped": Undefined})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -384,6 +407,8 @@ func TestUndefinedIsDistinctFromNil(t *testing.T) {
 // fixture group, so the suite went green on an unimplemented protocol.
 
 func TestShapeSubscribeFrame(t *testing.T) {
+	covers("shape_subscribe_frame")
+
 	fixture := loadFixture(t, "ws-frames.json")
 
 	shape, ok := fixture["shape"].(map[string]any)
@@ -402,6 +427,8 @@ func TestShapeSubscribeFrame(t *testing.T) {
 }
 
 func TestPokeSequenceMaterialisesRows(t *testing.T) {
+	covers("poke_sequence_materialises_rows")
+
 	fixture := loadFixture(t, "ws-frames.json")
 
 	shape, ok := fixture["shape"].(map[string]any)
@@ -446,6 +473,8 @@ func TestPokeSequenceMaterialisesRows(t *testing.T) {
 // TestPokePartsDoNotApplyBeforePokeEnd pins the atomicity the protocol
 // specifies: a socket dropping mid-poke must leave no partial view.
 func TestPokePartsDoNotApplyBeforePokeEnd(t *testing.T) {
+	covers("poke_parts_do_not_apply_before_poke_end")
+
 	fixture := loadFixture(t, "ws-frames.json")
 	shape, _ := fixture["shape"].(map[string]any)
 	sequence, _ := shape["pokeSequence"].([]any)

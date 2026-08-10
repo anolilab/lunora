@@ -5,8 +5,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -19,6 +21,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class ConformanceTest {
     private static int checks;
+
+    /**
+     * Manifest case names recorded by the cases that actually ran. The evidence is produced by
+     * executing the case, not by a hand-kept list of names this suite claims to cover.
+     */
+    private static final Set<String> covered = new LinkedHashSet<>();
 
     public static void main(String[] args) throws IOException, InterruptedException {
         if (!ConformanceTest.class.desiredAssertionStatus()) {
@@ -43,6 +51,8 @@ public final class ConformanceTest {
         pokePartsDoNotApplyBeforePokeEnd();
         concurrentSubscribeAndHandleFrame();
 
+        assertManifestCovered();
+
         System.out.println("OK — " + checks + " assertions");
     }
 
@@ -52,6 +62,43 @@ public final class ConformanceTest {
         if (!condition) {
             throw new AssertionError(message);
         }
+    }
+
+    /** Records that the running case exercises the manifest case {@code name}. */
+    private static void covers(String name) {
+        covered.add(name);
+    }
+
+    /**
+     * Fails if this run did not exercise every case in {@code protocol/conformance-cases.json}.
+     *
+     * <p>The suite is a plain {@code main}, so the end of it is the after-all hook: the recorded
+     * set comes from the cases that ran, the expected set from the manifest, and neither is
+     * enumerated here.
+     */
+    @SuppressWarnings("unchecked")
+    private static void assertManifestCovered() throws IOException {
+        Path path = fixturesDir().getParent().resolve("conformance-cases.json");
+        Map<String, Object> manifest = (Map<String, Object>) Json.parse(Files.readString(path));
+        List<Object> required = (List<Object>) manifest.get("required");
+
+        check(
+                required != null && !required.isEmpty(),
+                "the manifest must list at least one required case");
+
+        List<Object> missing = new ArrayList<>();
+
+        for (Object name : required) {
+            if (!covered.contains(name)) {
+                missing.add(name);
+            }
+        }
+
+        check(
+                missing.isEmpty(),
+                "protocol/conformance-cases.json requires cases this suite did not run: "
+                        + missing
+                        + " (add a covers() call to the case that asserts it)");
     }
 
     private static Path fixturesDir() {
@@ -88,6 +135,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void wireCodecRoundTrip() throws IOException {
+        covers("wire_codec_round_trip");
+
         List<Object> cases = (List<Object>) fixture("wire-codec.json").get("cases");
 
         check(cases.size() > 10, "fixture should carry the full case set");
@@ -105,6 +154,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void undefinedIsDistinctFromNull() {
+        covers("undefined_is_distinct_from_null");
+
         Map<String, Object> source = new LinkedHashMap<>();
 
         source.put("dropped", Wire.UNDEFINED);
@@ -126,6 +177,8 @@ public final class ConformanceTest {
     }
 
     private static void overLongBigIntRejected() {
+        covers("over_long_bigint_rejected");
+
         String overLong = "9".repeat(Wire.MAX_BIGINT_DIGITS + 1);
 
         check(
@@ -153,6 +206,8 @@ public final class ConformanceTest {
     }
 
     private static void depthCapEnforced() {
+        covers("depth_cap_enforced");
+
         Object nested = "leaf";
 
         for (int depth = 0; depth < Wire.MAX_DEPTH + 2; depth++) {
@@ -164,6 +219,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void stableWireKeyFixtures() throws IOException {
+        covers("stable_wire_key_fixtures");
+
         Map<String, Object> document = fixture("stable-wire-key.json");
 
         for (Object entry : (List<Object>) document.get("cases")) {
@@ -186,6 +243,8 @@ public final class ConformanceTest {
 
     /** Expected spellings captured from a real JS engine, not derived from the spec. */
     private static void formatNumberMatchesEcmaScript() {
+        covers("format_number_matches_ecmascript");
+
         Object[][] cases = {
             {0.0, "0"}, {3.0, "3"}, {1.5, "1.5"}, {-2.5, "-2.5"},
             {1e-5, "0.00001"}, {1e-6, "0.000001"}, {1e-7, "1e-7"}, {1.5e-7, "1.5e-7"},
@@ -202,6 +261,8 @@ public final class ConformanceTest {
     }
 
     private static void keyOrderMatchesUtf16() {
+        covers("key_order_matches_utf16");
+
         // JavaScript sorts by UTF-16 code unit, and Java's String.compareTo does
         // too — the one language in this set that needs no adjustment.
         Map<String, Object> source = new LinkedHashMap<>();
@@ -217,6 +278,8 @@ public final class ConformanceTest {
     }
 
     private static void stringEscapingMatchesJsonStringify() {
+        covers("string_escaping_matches_json_stringify");
+
         // JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
         check(
                 Key.jsonString("a<b>&c").equals("\"a<b>&c\""),
@@ -229,6 +292,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void rpcRequestBodies() throws IOException {
+        covers("rpc_request_bodies");
+
         Map<String, Object> request = (Map<String, Object>) fixture("rpc.json").get("request");
 
         for (Object entry : (List<Object>) request.get("cases")) {
@@ -251,6 +316,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void rpcResponses() throws IOException {
+        covers("rpc_responses");
+
         Map<String, Object> document = fixture("rpc.json");
 
         for (Object entry : (List<Object>) document.get("responseOk")) {
@@ -280,6 +347,8 @@ public final class ConformanceTest {
     }
 
     private static void non2xxWithoutEnvelopeThrows() {
+        covers("non_2xx_without_error_envelope_fails");
+
         // protocol/README.md §4.2. Without the status check this returned null
         // and threw nothing — the caller believes its mutation committed.
         Map<String, Object> body = new LinkedHashMap<>();
@@ -296,6 +365,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void clientFrameBuilders() throws IOException {
+        covers("client_frame_builders");
+
         Map<String, Object> frames =
                 (Map<String, Object>) fixture("ws-frames.json").get("clientFrames");
         Map<String, Object> args = new LinkedHashMap<>();
@@ -334,6 +405,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void serverFrameConsumer() throws IOException {
+        covers("server_frame_consumer");
+
         for (Object entry : (List<Object>) fixture("ws-frames.json").get("serverFrames")) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             Client client = new Client("https://app.example", null);
@@ -371,6 +444,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void shapeSubscribeFrame() throws IOException {
+        covers("shape_subscribe_frame");
+
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Map<String, Object> args = new LinkedHashMap<>();
 
@@ -386,6 +461,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void pokeSequenceMaterialisesRows() throws IOException {
+        covers("poke_sequence_materialises_rows");
+
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 
@@ -410,6 +487,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void pokePartsDoNotApplyBeforePokeEnd() throws IOException {
+        covers("poke_parts_do_not_apply_before_poke_end");
+
         Map<String, Object> shape = (Map<String, Object>) fixture("ws-frames.json").get("shape");
         Client client = new Client("https://app.example", null);
 

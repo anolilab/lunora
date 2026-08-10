@@ -8,6 +8,8 @@ package lunora
 import "testing"
 
 func TestFormatNumberMatchesEcmaScript(t *testing.T) {
+	covers("format_number_matches_ecmascript")
+
 	// Go's %g switches to exponent notation below 1e-4 and zero-pads the
 	// exponent; ECMAScript switches below 1e-7 and never pads.
 	for _, testCase := range []struct {
@@ -33,6 +35,8 @@ func TestFormatNumberMatchesEcmaScript(t *testing.T) {
 }
 
 func TestKeyOrderMatchesUTF16(t *testing.T) {
+	covers("key_order_matches_utf16")
+
 	// JavaScript sorts by UTF-16 code unit. An astral character is its HIGH
 	// SURROGATE (U+1F600 -> 0xD83D), so it sorts after U+2028 but before U+FFFD.
 	// Go's default `<` is UTF-8 byte-wise, which puts the astral character last —
@@ -49,6 +53,8 @@ func TestKeyOrderMatchesUTF16(t *testing.T) {
 }
 
 func TestStringEscapingMatchesJSONStringify(t *testing.T) {
+	covers("string_escaping_matches_json_stringify")
+
 	// Go escapes <, > and & for HTML safety and U+2028/U+2029 for JS-source
 	// safety; JSON.stringify does neither.
 	for _, testCase := range []struct {

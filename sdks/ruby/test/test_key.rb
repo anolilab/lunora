@@ -7,6 +7,7 @@
 require "minitest/autorun"
 
 require_relative "../lib/lunora"
+require_relative "manifest"
 
 class TestFormatNumber < Minitest::Test
   # Ruby's Float#to_s switches to exponent notation from 1e16 and below 1e-4,
@@ -27,6 +28,8 @@ class TestFormatNumber < Minitest::Test
   }.freeze
 
   def test_matches_ecmascript
+    ConformanceManifest.covers("format_number_matches_ecmascript")
+
     CASES.each do |value, want|
       assert_equal want, Lunora.format_number(value), "format_number(#{value})"
     end
@@ -35,6 +38,8 @@ end
 
 class TestKeyOrder < Minitest::Test
   def test_matches_utf16_code_unit_order
+    ConformanceManifest.covers("key_order_matches_utf16")
+
     # JavaScript sorts by UTF-16 code unit. An astral character is its HIGH
     # SURROGATE (U+1F600 -> 0xD83D), so it sorts after U+2028 but before
     # U+FFFD. Ruby's byte-wise String <=> puts it last — a different dedup key
@@ -50,6 +55,8 @@ end
 
 class TestStringEscaping < Minitest::Test
   def test_matches_json_stringify
+    ConformanceManifest.covers("string_escaping_matches_json_stringify")
+
     # JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
     assert_equal %("a<b>&c"), Lunora.json_string("a<b>&c")
     assert_equal %("  "), Lunora.json_string("  ")
@@ -60,6 +67,8 @@ end
 
 class TestWireEdgeCases < Minitest::Test
   def test_over_long_bigint_rejected
+    ConformanceManifest.covers("over_long_bigint_rejected")
+
     over_long = "9" * (Lunora::MAX_BIGINT_DIGITS + 1)
 
     assert_raises(Lunora::WireFormatError) { Lunora.decode_wire([Lunora::TAG, "bigint", over_long]) }
@@ -71,6 +80,8 @@ class TestWireEdgeCases < Minitest::Test
   end
 
   def test_depth_cap_enforced
+    ConformanceManifest.covers("depth_cap_enforced")
+
     nested = "leaf"
     (Lunora::MAX_DEPTH + 2).times { nested = [nested] }
 
@@ -79,6 +90,8 @@ class TestWireEdgeCases < Minitest::Test
   end
 
   def test_undefined_is_distinct_from_nil
+    ConformanceManifest.covers("undefined_is_distinct_from_null")
+
     encoded = Lunora.encode_wire({ "dropped" => Lunora::UNDEFINED, "kept" => nil })
 
     refute encoded.key?("dropped"), "an UNDEFINED object field must be dropped, matching JSON.stringify"

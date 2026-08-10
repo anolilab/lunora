@@ -86,6 +86,8 @@ func TestUnsupportedValueIsRejected(t *testing.T) {
 }
 
 func TestOverLongBigIntRejected(t *testing.T) {
+	covers("over_long_bigint_rejected")
+
 	// Decimal parsing is superlinear; an unbounded digit string is a DoS.
 	overLong := strings.Repeat("9", MaxBigIntDigits+1)
 
@@ -108,6 +110,8 @@ func TestOverLongBigIntRejected(t *testing.T) {
 }
 
 func TestDepthCapIsEnforced(t *testing.T) {
+	covers("depth_cap_enforced")
+
 	var nested any = "leaf"
 
 	for range MaxDepth + 2 {

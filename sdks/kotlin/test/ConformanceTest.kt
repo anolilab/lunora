@@ -13,10 +13,45 @@ import java.math.BigInteger
  */
 private var checks = 0
 
+/**
+ * Manifest case names recorded by the cases that actually ran. The evidence is
+ * produced by executing the case, not by a hand-kept list of names this suite
+ * claims to cover.
+ */
+private val covered = linkedSetOf<String>()
+
 private fun check(condition: Boolean, message: String) {
     checks++
 
     if (!condition) throw AssertionError(message)
+}
+
+/** Records that the running case exercises the manifest case [name]. */
+private fun covers(name: String) {
+    covered.add(name)
+}
+
+/**
+ * Fails if this run did not exercise every case in
+ * `protocol/conformance-cases.json`.
+ *
+ * The suite is a plain `main`, so the end of it is the after-all hook: the
+ * recorded set comes from the cases that ran, the expected set from the
+ * manifest, and neither is enumerated here.
+ */
+private fun assertManifestCovered() {
+    val manifest = Json.parse(File(fixturesDir().parentFile, "conformance-cases.json").readText()) as Map<*, *>
+    val required = manifest["required"] as? List<*>
+
+    check(!required.isNullOrEmpty(), "the manifest must list at least one required case")
+
+    val missing = required.orEmpty().filterNot { covered.contains(it) }
+
+    check(
+        missing.isEmpty(),
+        "protocol/conformance-cases.json requires cases this suite did not run: $missing " +
+            "(add a covers() call to the case that asserts it)",
+    )
 }
 
 private fun fixturesDir(): File {
@@ -39,6 +74,8 @@ private fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), na
 private fun canonical(value: Any?): String = Key.stableStringify(value)
 
 private fun wireCodecRoundTrip() {
+    covers("wire_codec_round_trip")
+
     val cases = fixture("wire-codec.json")["cases"] as List<*>
 
     check(cases.size > 10, "fixture should carry the full case set")
@@ -53,6 +90,8 @@ private fun wireCodecRoundTrip() {
 }
 
 private fun undefinedIsDistinctFromNull() {
+    covers("undefined_is_distinct_from_null")
+
     val encoded = Wire.encode(
         WireValue.Obj(listOf("dropped" to WireValue.Undefined, "kept" to WireValue.Null)),
     ) as Map<*, *>
@@ -67,6 +106,8 @@ private fun undefinedIsDistinctFromNull() {
 }
 
 private fun overLongBigIntRejected() {
+    covers("over_long_bigint_rejected")
+
     val overLong = "9".repeat(Wire.MAX_BIGINT_DIGITS + 1)
 
     check(rejects(listOf(Wire.TAG, "bigint", overLong)), "an over-long bigint must be rejected")
@@ -82,6 +123,8 @@ private fun rejects(value: Any?): Boolean = try {
 }
 
 private fun depthCapEnforced() {
+    covers("depth_cap_enforced")
+
     var nested: Any? = "leaf"
 
     repeat(Wire.MAX_DEPTH + 2) { nested = listOf(nested) }
@@ -90,6 +133,8 @@ private fun depthCapEnforced() {
 }
 
 private fun stableWireKeyFixtures() {
+    covers("stable_wire_key_fixtures")
+
     val document = fixture("stable-wire-key.json")
 
     for (entry in document["cases"] as List<*>) {
@@ -113,6 +158,8 @@ private fun stableWireKeyFixtures() {
 
 /** Expected spellings captured from a real JS engine, not derived from the spec. */
 private fun formatNumberMatchesEcmaScript() {
+    covers("format_number_matches_ecmascript")
+
     val cases = listOf(
         0.0 to "0", 3.0 to "3", 1.5 to "1.5", -2.5 to "-2.5",
         1e-5 to "0.00001", 1e-6 to "0.000001", 1e-7 to "1e-7", 1.5e-7 to "1.5e-7",
@@ -125,6 +172,8 @@ private fun formatNumberMatchesEcmaScript() {
 }
 
 private fun keyOrderMatchesUtf16() {
+    covers("key_order_matches_utf16")
+
     // The JVM's String.compareTo already compares UTF-16 code units, which is
     // exactly JavaScript's ordering.
     val rendered = Key.stableStringify(linkedMapOf("�" to 4.0, "😀" to 3.0, " " to 2.0, "A" to 1.0))
@@ -133,12 +182,16 @@ private fun keyOrderMatchesUtf16() {
 }
 
 private fun stringEscapingMatchesJsonStringify() {
+    covers("string_escaping_matches_json_stringify")
+
     check(Key.jsonString("a<b>&c") == "\"a<b>&c\"", "angle brackets and ampersand stay raw")
     check(Key.jsonString("  ") == "\"  \"", "line separators stay raw")
     check(Key.jsonString("tab\there") == "\"tab\\there\"", "control characters are escaped")
 }
 
 private fun rpcRequestBodies() {
+    covers("rpc_request_bodies")
+
     val request = fixture("rpc.json")["request"] as Map<*, *>
 
     for (entry in request["cases"] as List<*>) {
@@ -151,6 +204,8 @@ private fun rpcRequestBodies() {
 }
 
 private fun rpcResponses() {
+    covers("rpc_responses")
+
     val document = fixture("rpc.json")
 
     for (entry in document["responseOk"] as List<*>) {
@@ -176,6 +231,8 @@ private fun rpcResponses() {
 }
 
 private fun non2xxWithoutEnvelopeThrows() {
+    covers("non_2xx_without_error_envelope_fails")
+
     // protocol/README.md §4.2. Without the status check this returned null and
     // threw nothing — the caller believes its mutation committed.
     try {
@@ -187,6 +244,8 @@ private fun non2xxWithoutEnvelopeThrows() {
 }
 
 private fun clientFrameBuilders() {
+    covers("client_frame_builders")
+
     val frames = fixture("ws-frames.json")["clientFrames"] as Map<*, *>
     val args = WireValue.Obj(listOf("channel" to WireValue.Text("general")))
 
@@ -209,6 +268,8 @@ private fun clientFrameBuilders() {
 }
 
 private fun serverFrameConsumer() {
+    covers("server_frame_consumer")
+
     for (entry in fixture("ws-frames.json")["serverFrames"] as List<*>) {
         val testCase = entry as Map<*, *>
         val client = Client("https://app.example")
@@ -243,6 +304,8 @@ private fun serverFrameConsumer() {
 }
 
 private fun shapeSubscribeFrame() {
+    covers("shape_subscribe_frame")
+
     val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
     val args = WireValue.Obj(listOf("room" to WireValue.Text("general")))
 
@@ -254,6 +317,8 @@ private fun shapeSubscribeFrame() {
 }
 
 private fun pokeSequenceMaterialisesRows() {
+    covers("poke_sequence_materialises_rows")
+
     val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
     val client = Client("https://app.example")
 
@@ -275,6 +340,8 @@ private fun pokeSequenceMaterialisesRows() {
 }
 
 private fun pokePartsDoNotApplyBeforePokeEnd() {
+    covers("poke_parts_do_not_apply_before_poke_end")
+
     val shape = fixture("ws-frames.json")["shape"] as Map<*, *>
     val client = Client("https://app.example")
 
@@ -350,6 +417,8 @@ fun main() {
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     concurrentSubscribeAndHandleFrame()
+
+    assertManifestCovered()
 
     println("OK — $checks assertions")
 }

@@ -8,8 +8,19 @@
         "and MAX_BIGINT_DIGITS - both justified as defences against a hostile peer -",
         "went unasserted in Python and Go for several commits with every gate green.",
         "",
-        "Each suite asserts it ran every name below. Adding a case here turns every",
-        "language red until it is covered, which is the point."
+        "Each suite READS this file at run time and fails if the run did not cover",
+        "it, so adding a case here turns every language red until it is covered,",
+        "which is the point. The evidence is produced by the case executing — a",
+        "suite cannot satisfy the check by listing names it claims to cover.",
+        "",
+        "The mechanism is per runner, not one shape forced onto seven: python has a",
+        "last-sorted module, go a TestMain, ruby Minitest.after_run, java and kotlin",
+        "the end of main. Rust's libtest and Swift's XCTest have no after-all hook",
+        "that can fail, so there the manifest DRIVES the run — a required name with",
+        "no dispatch arm fails. sdks/README.md records the mapping.",
+        "",
+        "This paragraph was once false: nothing read the file, and the coverage it",
+        "was created to hold could drift again unnoticed. It was, in two ports."
     ],
     "required": [
         "wire_codec_round_trip",

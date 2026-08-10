@@ -125,7 +125,31 @@ lint_suite() {
                 return 3
             }
             cd "$ROOT/sdks/kotlin" || return 1
-            ktlint "src/**/*.kt" "test/**/*.kt" "GeneratedSmoke.kt"
+            # ktlint exits 0 when a glob matches nothing — it only warns "No files
+            # matched", so moving or renaming a source file would leave this leg
+            # green without linting it. Resolve the paths here instead, and hold
+            # every input to at least one file: a total count would still pass
+            # while one of the three inputs contributed nothing.
+            local kotlin_files=()
+            local kotlin_input
+
+            for kotlin_input in src test GeneratedSmoke.kt; do
+                local kotlin_found=()
+
+                while IFS= read -r kotlin_file; do
+                    kotlin_found+=("$kotlin_file")
+                done < <(find "$kotlin_input" -name '*.kt' 2>/dev/null | sort)
+
+                if [ "${#kotlin_found[@]}" -eq 0 ]; then
+                    printf 'no .kt files at %s — ktlint would have reported PASS without linting it\n' "$kotlin_input"
+
+                    return 1
+                fi
+
+                kotlin_files+=("${kotlin_found[@]}")
+            done
+
+            ktlint "${kotlin_files[@]}"
             ;;
         *)
             echo "unknown language: $1" >&2

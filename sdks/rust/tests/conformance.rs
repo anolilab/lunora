@@ -45,7 +45,51 @@ fn canonical(value: &Value) -> String {
     stable_stringify(value)
 }
 
+/// Fails if this run did not exercise every case in the shared manifest.
+///
+/// libtest has no after-all hook and no cross-test state a final check could
+/// read, so the manifest DRIVES the run rather than auditing it afterwards:
+/// every name in `protocol/conformance-cases.json` is dispatched to the function
+/// that asserts it, and a name with no arm fails here. The cases below are plain
+/// functions rather than `#[test]`s for that reason — this is the only entry
+/// point, so a case cannot be silently detached from its manifest name. The cost
+/// is that the first failing case ends the run; the panic names the assertion.
 #[test]
+fn conformance_manifest_is_covered() {
+    let manifest: Value = {
+        let path = fixtures_dir().parent().expect("protocol dir").join("conformance-cases.json");
+        let raw = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{} unreadable: {error}", path.display()));
+
+        serde_json::from_str(&raw).expect("manifest parses")
+    };
+
+    let required = manifest["required"].as_array().expect("required");
+
+    assert!(!required.is_empty(), "the manifest must list at least one required case");
+
+    for name in required {
+        match name.as_str().expect("case name is a string") {
+            "wire_codec_round_trip" => wire_codec_round_trip(),
+            "undefined_is_distinct_from_null" => undefined_is_distinct_from_null(),
+            "over_long_bigint_rejected" => over_long_bigint_rejected(),
+            "depth_cap_enforced" => depth_cap_enforced(),
+            "stable_wire_key_fixtures" => stable_wire_key_fixtures(),
+            "format_number_matches_ecmascript" => format_number_matches_ecmascript(),
+            "key_order_matches_utf16" => key_order_matches_utf16(),
+            "string_escaping_matches_json_stringify" => string_escaping_matches_json_stringify(),
+            "rpc_request_bodies" => rpc_request_bodies(),
+            "rpc_responses" => rpc_responses(),
+            "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
+            "client_frame_builders" => client_frame_builders(),
+            "server_frame_consumer" => server_frame_consumer(),
+            "shape_subscribe_frame" => shape_subscribe_frame(),
+            "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
+            "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
+        }
+    }
+}
+
 fn wire_codec_round_trip() {
     let document = fixture("wire-codec.json");
     let cases = document["cases"].as_array().expect("cases");
@@ -61,7 +105,6 @@ fn wire_codec_round_trip() {
     }
 }
 
-#[test]
 fn undefined_is_distinct_from_null() {
     let encoded = encode_wire(&WireValue::Object(vec![
         ("dropped".into(), WireValue::Undefined),
@@ -81,7 +124,6 @@ fn undefined_is_distinct_from_null() {
     assert_eq!(in_array[0], json!([TAG, "undefined"]));
 }
 
-#[test]
 fn over_long_bigint_rejected() {
     let over_long = "9".repeat(MAX_BIGINT_DIGITS + 1);
 
@@ -90,7 +132,6 @@ fn over_long_bigint_rejected() {
     assert_eq!(decode_wire(&json!([TAG, "bigint", "-42"])).expect("decode"), WireValue::BigInt("-42".into()));
 }
 
-#[test]
 fn depth_cap_enforced() {
     let mut nested = json!("leaf");
 
@@ -101,7 +142,6 @@ fn depth_cap_enforced() {
     assert!(decode_wire(&nested).is_err());
 }
 
-#[test]
 fn stable_wire_key_fixtures() {
     let document = fixture("stable-wire-key.json");
 
@@ -122,7 +162,6 @@ fn stable_wire_key_fixtures() {
 
 /// Expected spellings captured from a real JS engine, not derived from the spec
 /// — the two disagreed for the Go and Ruby ports before this test existed.
-#[test]
 fn format_number_matches_ecmascript() {
     for (value, want) in [
         (0.0, "0"),
@@ -144,14 +183,12 @@ fn format_number_matches_ecmascript() {
 /// JavaScript sorts by UTF-16 code unit, so an astral character is its high
 /// surrogate (0xD83D) and sorts after U+2028 but before U+FFFD. Rust's UTF-8
 /// byte-wise `Ord` puts it last — a different dedup key for identical args.
-#[test]
 fn key_order_matches_utf16() {
     let rendered = stable_stringify(&json!({ "A": 1, "\u{2028}": 2, "\u{1F600}": 3, "\u{FFFD}": 4 }));
 
     assert_eq!(rendered, "{\"A\":1,\"\u{2028}\":2,\"\u{1F600}\":3,\"\u{FFFD}\":4}");
 }
 
-#[test]
 fn string_escaping_matches_json_stringify() {
     // JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
     assert_eq!(stable_stringify(&json!("a<b>&c")), "\"a<b>&c\"");
@@ -159,7 +196,6 @@ fn string_escaping_matches_json_stringify() {
     assert_eq!(stable_stringify(&json!("tab\there")), "\"tab\\there\"");
 }
 
-#[test]
 fn rpc_request_bodies() {
     let document = fixture("rpc.json");
 
@@ -182,7 +218,6 @@ fn rpc_request_bodies() {
     }
 }
 
-#[test]
 fn rpc_responses() {
     let document = fixture("rpc.json");
 
@@ -210,14 +245,12 @@ fn rpc_responses() {
     }
 }
 
-#[test]
 fn non_2xx_without_error_envelope_fails() {
     // protocol/README.md §4.2. Without the status check this returned a null
     // result and no error — the caller believes its mutation committed.
     assert!(parse_rpc_response(&json!({ "message": "bad gateway" }), 502).is_err());
 }
 
-#[test]
 fn client_frame_builders() {
     let document = fixture("ws-frames.json");
     let frames = &document["clientFrames"];
@@ -239,7 +272,6 @@ fn client_frame_builders() {
     assert_eq!(canonical(&build_unsubscribe_frame("sub_1")), canonical(&frames["unsubscribe"]));
 }
 
-#[test]
 fn server_frame_consumer() {
     let document = fixture("ws-frames.json");
 
@@ -278,7 +310,6 @@ fn server_frame_consumer() {
     }
 }
 
-#[test]
 fn shape_subscribe_frame() {
     let document = fixture("ws-frames.json");
     let args = WireValue::Object(vec![("room".into(), WireValue::String("general".into()))]);
@@ -287,7 +318,6 @@ fn shape_subscribe_frame() {
     assert_eq!(canonical(&frame), canonical(&document["shape"]["shape-subscribe-cold"]));
 }
 
-#[test]
 fn poke_sequence_materialises_rows() {
     let document = fixture("ws-frames.json");
     let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
@@ -317,7 +347,6 @@ fn poke_sequence_materialises_rows() {
     assert_eq!(canonical(&encode_wire(&rows).expect("encode")), canonical(&document["shape"]["expectedRows"]));
 }
 
-#[test]
 fn poke_parts_do_not_apply_before_poke_end() {
     let document = fixture("ws-frames.json");
     let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
