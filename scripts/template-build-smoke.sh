@@ -177,7 +177,9 @@ is_skipped() {
 #                     checkers with a different format. See the vacuous-pass guard
 #                     below for why this is not the same question as ERROR_RE.
 #   COVERAGE_MODE   — how this checker PROVES it read the payload, `listfiles` or
-#                     `canary`. See the coverage floor below.
+#                     `canary`. Either way the floor demands evidence for BOTH
+#                     `core/sign-in.ts` and the framework view. See the coverage
+#                     floor below.
 #
 # The checker is injected into the scaffold at smoke time (see
 # inject_typecheck_dep, same idea as inject_peer_deps) rather than added to
@@ -223,6 +225,14 @@ set_typecheck() {
             # and the payload's `core/*.ts` would go unchecked. `--output machine`:
             # the human formats put the path and the `Error:` on separate lines,
             # which no single-line pattern can gate on.
+            #
+            # There is no way to scope this run: svelte-check reports every file in
+            # the tsconfig's PROGRAM (`getSourceFiles()`, skipping only lib files and
+            # `node_modules/**.js`), and its `--ignore` is rejected unless
+            # `--no-tsconfig` is also passed — which drops `core/*.ts`, the thing the
+            # `--tsconfig` above is here for. So the emitted `.svelte-kit/output/**`
+            # bundle is kept out of the DIAGNOSTICS instead, by `checkJs: false` in
+            # `templates/sveltekit/tsconfig.json`; see the comment there.
             TYPECHECK_DEP="svelte-check@^4.7.3"
             TYPECHECK_PREP=(pnpm exec svelte-kit sync)
             TYPECHECK_CMD=(pnpm exec svelte-check --tsconfig ./tsconfig.json --output machine --threshold error)
@@ -296,6 +306,59 @@ typecheck_never_ran() {
     local error_re="$3"
 
     [[ "$status" -ne 0 ]] && ! grep -qE "$error_re" "$log"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: plant a deliberate type error in a payload file (the coverage canary).
+# ---------------------------------------------------------------------------
+# Used by the `canary` COVERAGE_MODE below. The insertion point depends on the
+# file's shape:
+#
+#   .ts/.tsx — append. Top level, nothing follows it.
+#   .svelte/.vue — insert immediately before the LAST `</script>`, i.e. at the
+#     end of the component's script block. Matching the last closing tag is what
+#     makes this deterministic: an SFC may carry a second `<script>` (Svelte's
+#     `module` context, Vue's non-`setup` block) and both toolchains require the
+#     instance/setup block to be the final one, so the last `</script>` always
+#     closes a TS script block. Appending after the tag instead would land the
+#     const in the template markup, where it is not TypeScript at all.
+#
+# Exits non-zero rather than writing a file it could not place the canary in —
+# a silently-unplanted canary would make the coverage gate below vacuous, which
+# is the exact failure it exists to catch.
+plant_canary() {
+    node -e '
+const fs = require("fs");
+const file = process.argv[1];
+const canary = "\n// coverage canary — injected by scripts/template-build-smoke.sh, restored below.\nconst __lunoraCoverageCanary: number = \"not a number\";\n";
+const source = fs.readFileSync(file, "utf8");
+
+if (/\.(svelte|vue)$/.test(file)) {
+    const at = source.lastIndexOf("</script>");
+
+    if (at === -1) {
+        console.error(`no </script> in ${file} — cannot plant a canary inside its script block`);
+        process.exit(1);
+    }
+
+    fs.writeFileSync(file, source.slice(0, at) + canary + source.slice(at));
+} else {
+    fs.writeFileSync(file, source + canary);
+}
+' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Helper: AUTHUI_RE narrowed to ONE payload file.
+# ---------------------------------------------------------------------------
+# Every AUTHUI_RE contains the literal `lunora/auth-ui/` (that is what it gates
+# on); splicing the payload-relative path in right after it yields a pattern
+# that matches a diagnostic for THAT file only, in whichever format the current
+# checker prints. Keeps the per-file coverage gate free of a second set of
+# per-template patterns that could drift from the first.
+authui_file_re() {
+    local literal='lunora/auth-ui/'
+    printf '%s' "${AUTHUI_RE/"$literal"/$literal$1}"
 }
 
 # ---------------------------------------------------------------------------
@@ -778,9 +841,11 @@ for tname in "${TEMPLATES[@]}"; do
         # Strip ANSI: `astro check` prints through TypeScript's colour formatter
         # unconditionally, so the escape codes land BEFORE the path and defeat an
         # anchored match. A literal ESC via printf — BSD sed has no `\x1b`.
+        typecheck_started=$SECONDS
         typecheck_status=0
         { (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
             | sed -E "s/$(printf '\033')\[[0-9;]*m//g" >> "$typecheck_log"; } || typecheck_status=$?
+        typecheck_elapsed=$((SECONDS - typecheck_started))
 
         if typecheck_never_ran "$typecheck_status" "$typecheck_log" "$ERROR_RE"; then
             echo "  FAIL: ${TYPECHECK_CMD[*]} in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
@@ -859,32 +924,65 @@ for tname in "${TEMPLATES[@]}"; do
             # left is to break the payload and require the complaint. Costs a second
             # checker pass; only these two templates pay it.
             #
-            # `core/sign-in.ts` is the target because every framework's payload ships
-            # it as plain TypeScript — appending to a `.svelte`/`.vue` SFC would mean
-            # knowing where its script block ends. That does leave the framework view
-            # itself proven only by the negative gate for these two templates.
-            canary_src="$scaffold_dir/lunora/auth-ui/core/sign-in.ts"
-            # Backup outside the payload tree, not next to it: `allowJs`/`checkJs` are
+            # BOTH payload files carry a canary, planted in the same pass, and BOTH
+            # complaints are required — matching what `listfiles` demands of the
+            # tsc-family checkers. The framework view needs its own canary because it
+            # takes a DIFFERENT toolchain path than the plain `core/*.ts` module: a
+            # `.svelte` view is only read via svelte2tsx, and `svelte-check` without
+            # `--tsconfig` reads `.svelte` files and nothing else — so "reads the .ts"
+            # and "parses the SFC" are two questions and either can be the one that
+            # regresses. See plant_canary for where the canary lands in an SFC.
+            canary_dir="$SCRATCH/${tname}-canary"
+            # Backups outside the payload tree, not next to it: `allowJs`/`checkJs` are
             # on in some of these tsconfigs and a stray sibling is a needless risk.
-            canary_backup="$SCRATCH/${tname}-canary-sign-in.ts"
-            cp "$canary_src" "$canary_backup"
-            printf '\n// coverage canary — injected by scripts/template-build-smoke.sh, restored below.\nconst __lunoraCoverageCanary: number = "not a number";\n' >> "$canary_src"
+            rm -rf "$canary_dir"
+            mkdir -p "$canary_dir"
+            canary_targets=("core/sign-in.ts" "$authui_view")
 
-            echo "  ==> ${TYPECHECK_CMD[*]} again, against a deliberately broken core/sign-in.ts"
+            plant_failed=""
+            for rel in "${canary_targets[@]}"; do
+                cp "$scaffold_dir/lunora/auth-ui/$rel" "$canary_dir/${rel//\//_}"
+                plant_canary "$scaffold_dir/lunora/auth-ui/$rel" || plant_failed="$rel"
+            done
+
+            restore_canaries() {
+                for rel in "${canary_targets[@]}"; do
+                    cp "$canary_dir/${rel//\//_}" "$scaffold_dir/lunora/auth-ui/$rel"
+                done
+            }
+
+            if [[ -n "$plant_failed" ]]; then
+                restore_canaries
+                echo "  FAIL: could not plant a coverage canary in lunora/auth-ui/$plant_failed ($tname)"
+                FAIL+=("$tname(auth-ui:coverage)")
+                continue
+            fi
+
+            echo "  ==> ${TYPECHECK_CMD[*]} again, against deliberately broken ${canary_targets[*]}"
+            canary_started=$SECONDS
             (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
                 | sed -E "s/$(printf '\033')\[[0-9;]*m//g" > "$coverage_log" || true
+            canary_elapsed=$((SECONDS - canary_started))
 
-            mv "$canary_backup" "$canary_src"
+            restore_canaries
 
-            if ! grep -qE "$AUTHUI_RE" "$coverage_log"; then
-                echo "  FAIL: $tname did not report a type error planted in lunora/auth-ui/core/sign-in.ts — the gate above proved nothing (see $coverage_log)"
-                echo "        \`${TYPECHECK_CMD[*]}\` cannot be reading the payload. Look at the tsconfig 'include'/'files' it resolved,"
+            canary_missed=()
+            for rel in "${canary_targets[@]}"; do
+                grep -qE "$(authui_file_re "$rel")" "$coverage_log" || canary_missed+=("$rel")
+            done
+
+            if [[ ${#canary_missed[@]} -gt 0 ]]; then
+                echo "  FAIL: $tname did not report the type error(s) planted in ${canary_missed[*]} — the gate above proved nothing for ${canary_missed[*]} (see $coverage_log)"
+                echo "        \`${TYPECHECK_CMD[*]}\` cannot be reading that file. Look at the tsconfig 'include'/'files' it resolved,"
                 echo "        and at whether the prep step wrote the config it expects."
                 FAIL+=("$tname(auth-ui:coverage)")
                 continue
             fi
 
-            echo "  ==> coverage OK (planted error in core/sign-in.ts was reported)"
+            # Print both passes' wall times. The canary pass is the whole price of
+            # this coverage mode, and the first pass is the same work without it —
+            # so the pair is the cost, not a number anyone has to re-derive.
+            echo "  ==> coverage OK (planted errors in ${canary_targets[*]} were both reported; ${canary_elapsed}s for the canary pass vs ${typecheck_elapsed}s for the gate pass)"
         fi
 
         echo "  ==> typecheck OK"
