@@ -41,11 +41,15 @@ change that adds or removes a capability.
 | Concurrency-safe client       | ✅     | ✅  | ❌   | ❌   | ✅    | ✅   | ✅     |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
 
-**Typed models, JVM.** quicktype's Java and Kotlin backends rename fields (a
+**Typed models, JVM.** quicktype's Java and Kotlin backends rename properties (a
 wire `channelId` becomes `channelID`) and emit no mapping metadata under
 `just-types`, so a generated model cannot be projected back onto the wire.
 Sending the wrong key silently is worse than staying untyped, so both take
-wire-shaped arguments. `targets/java.ts` records what would unlock this.
+wire-shaped arguments. The backends do emit the wire name the moment `just-types`
+is dropped — as a Jackson, Klaxon or kotlinx annotation, every one of which needs
+a library on the classpath, which is the one thing these transports do not have.
+`targets/java.ts` records every renderer option that was measured, and what a
+real fix would cost.
 
 **Concurrency.** Go, Java, Kotlin and Swift hold a lock over the subscription
 registry, the shape views and the id counters, and dispatch frames and user

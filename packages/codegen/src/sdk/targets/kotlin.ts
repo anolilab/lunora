@@ -4,17 +4,23 @@
  *
  * ## Why this target emits no typed models
  *
- * The same reason as the Java target. quicktype's JVM backends RENAME fields —
- * a wire `channelId` becomes `channelID` — and under `just-types` they emit no
- * mapping metadata, so a generated model cannot be projected back onto the
- * wire. Reflection over it yields `channelID`, which the server rejects, and
- * recovering the real name would mean replicating quicktype's renaming rules,
- * exactly the re-derivation this design forbids everywhere else.
+ * The same reason as the Java target, which carries the measurements for both:
+ * quicktype's JVM backends RENAME properties — a wire `channelId` becomes
+ * `channelID` — and under `just-types` they emit no mapping metadata, so a
+ * generated model cannot be projected back onto the wire. A typed model that
+ * silently sends wrong keys is worse than none, so the surface takes
+ * wire-shaped arguments.
  *
- * A typed model that silently sends wrong keys is worse than none, so the
- * surface takes wire-shaped arguments. Typed arguments become possible once
- * `SdkMethod` carries the schema's property names and this target emits an
- * explicit projection — worth doing when someone needs it, not before.
+ * Kotlin is the harder of the two, and the extra reason is worth stating here
+ * rather than only in `targets/java.ts`: under `just-types` this backend also
+ * erases enum wire values. A `v.union(v.literal("text"), v.literal("image"))`
+ * renders as `enum class Kind { Image, Text }` with the strings `"text"` and
+ * `"image"` nowhere in the output, so even a perfect property-name projection
+ * could not encode the committed fixture's own `kind` argument. Java's
+ * `just-types` enum keeps `toValue()`/`forValue()`. Restoring the mapping means
+ * picking a `framework` (`jackson`, `klaxon`, `kotlinx`), each of which drags a
+ * third-party library into a transport that hand-rolls `Json.kt` precisely to
+ * avoid one.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
