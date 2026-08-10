@@ -414,6 +414,8 @@ describe("expression-depth cap", () => {
         renderSql("sqlite", compileWhereSql(wideWhere, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value })!);
 
     it("measures terms per level, not total nesting", () => {
+        expect.assertions(2);
+
         // The flat form this replaced — the one that blows the cap — nests only
         // one paren deep, so a nesting count would have called it healthy.
         expect(widestChain("(a) AND (b) AND (c)", "AND")).toBe(3);
@@ -435,6 +437,8 @@ describe("expression-depth cap", () => {
     });
 
     it("still matches the same rows on a real SQLite build", async () => {
+        expect.assertions(2);
+
         const harness = createSqliteExec();
 
         try {
