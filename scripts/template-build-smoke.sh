@@ -152,78 +152,114 @@ is_skipped() {
 }
 
 # ---------------------------------------------------------------------------
-# Templates whose scaffold cannot typecheck the copied auth-ui payload with the
-# tooling it ships. A scaffold's only checker is `typescript` — no `vue-tsc`, no
-# `svelte-check`, no `@astrojs/check` — so a port written as SFCs, or a tsconfig
-# whose `include` pulls in files `tsc` cannot parse, has no in-scaffold gate.
+# Per-template in-scaffold typechecker.
 #
-# These are NOT unchecked: `pnpm --filter @lunora/auth-ui run lint:types` runs
-# vue-tsc and svelte-check over the same sources in the monorepo. What is missing
-# is only the proof that they compile against the meta-framework's own tsconfig.
-# Adding the matching checker to those templates' devDependencies would close it.
+# `tsc` cannot read every payload: the Vue and Svelte ports are single-file
+# components, and Astro needs the `.astro`-aware language server. So each
+# template names the checker that CAN read its payload, together with the two
+# patterns that recognise a diagnostic line in that checker's output format —
+# because those formats differ, and a gate that matches nothing is worse than
+# no gate at all.
+#
+#   TYPECHECK_DEP   — devDependency the scaffold needs for the checker (empty
+#                     when the template already ships the binary)
+#   TYPECHECK_PREP  — argv run first, to generate the framework's own tsconfig
+#                     and ambient types (empty when there is nothing to generate)
+#   TYPECHECK_CMD   — the checker itself
+#   AUTHUI_RE       — ERE matching ONE diagnostic for a file under lunora/auth-ui/
+#   ERROR_RE        — ERE matching ONE diagnostic for ANY file
+#
+# The checker is injected into the scaffold at smoke time (see
+# inject_typecheck_dep, same idea as inject_peer_deps) rather than added to
+# `templates/*/package.json`: a real user should not be made to install a
+# typechecker they never asked for just so this matrix can run one.
 # ---------------------------------------------------------------------------
-typecheck_skip_reason() {
+set_typecheck() {
+    TYPECHECK_DEP=""
+    TYPECHECK_PREP=()
+
     case "$1" in
-        astro) echo "tsconfig includes .astro files; needs @astrojs/check" ;;
-        nuxt) echo "Vue SFC payload; needs vue-tsc + a nuxt prepare" ;;
-        sveltekit) echo "Svelte SFC payload; needs svelte-check + a svelte-kit sync" ;;
-        *) echo "no in-scaffold checker" ;;
+        astro)
+            # `astro check` is @astrojs/language-server driven from the project's
+            # tsconfig, so it reads `.astro` AND the `.tsx` auth-ui payload that
+            # tsconfig's `include` lists. It prints via TypeScript's
+            # `formatDiagnosticsWithColorAndContext` — which always colours, hence
+            # the ANSI strip at the call site — and rewrites `TS1234` to `ts(1234)`.
+            TYPECHECK_DEP="@astrojs/check@^0.9.10"
+            TYPECHECK_CMD=(pnpm exec astro check)
+            AUTHUI_RE='^lunora/auth-ui/.*error ts\('
+            ERROR_RE='error ts\('
+            ;;
+        nuxt)
+            # `nuxt prepare` writes `.nuxt/tsconfig.json` — the config the
+            # template's root tsconfig extends. Without it there is no `include`,
+            # so nothing to check.
+            TYPECHECK_DEP="vue-tsc@^3.3.8"
+            TYPECHECK_PREP=(pnpm exec nuxt prepare)
+            TYPECHECK_CMD=(pnpm exec vue-tsc --noEmit)
+            AUTHUI_RE='^lunora/auth-ui/'
+            ERROR_RE='error TS'
+            ;;
+        sveltekit)
+            # `--tsconfig`: without it svelte-check looks at `.svelte` files ONLY
+            # and the payload's `core/*.ts` would go unchecked. `--output machine`:
+            # the human formats put the path and the `Error:` on separate lines,
+            # which no single-line pattern can gate on.
+            TYPECHECK_DEP="svelte-check@^4.7.3"
+            TYPECHECK_PREP=(pnpm exec svelte-kit sync)
+            TYPECHECK_CMD=(pnpm exec svelte-check --tsconfig ./tsconfig.json --output machine --threshold error)
+            AUTHUI_RE='^[0-9]+ ERROR "lunora/auth-ui/'
+            ERROR_RE='^[0-9]+ ERROR "'
+            ;;
+        *)
+            TYPECHECK_CMD=(pnpm exec tsc --noEmit)
+            AUTHUI_RE='^lunora/auth-ui/'
+            ERROR_RE='error TS'
+            ;;
     esac
 }
 
-TYPECHECK_UNSUPPORTED=("astro" "nuxt" "sveltekit")
-
 # ---------------------------------------------------------------------------
-# Typecheck a scaffold, preferring the template's OWN `typecheck` script.
-#
-# A bare `tsc --noEmit` is wrong for frameworks that emit route types from a
-# separate generator: react-router ships
-# `lunora codegen && react-router typegen && tsc`, and without the typegen step
-# every `./+types/<route>` import fails to resolve. The template already knows
-# the right incantation — run it rather than second-guessing it here.
+# Helper: add the scaffold's typechecker as a local devDep.
 # ---------------------------------------------------------------------------
-run_typecheck() {
+inject_typecheck_dep() {
     local scaffold_dir="$1"
-    local log="$2"
-    local has_script
+    local spec="$2"
 
-    has_script="$(node -e "
-        try {
-            const p = require('$scaffold_dir/package.json');
-            process.stdout.write(p.scripts && p.scripts.typecheck ? 'yes' : 'no');
-        } catch { process.stdout.write('no'); }
-    " 2>/dev/null)"
+    node -e "
+const fs = require('fs');
+const spec = process.argv[1];
+const at = spec.lastIndexOf('@');
+const name = spec.slice(0, at);
+const range = spec.slice(at + 1);
+const file = '$scaffold_dir/package.json';
+const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
 
-    # Returns the checker's exit status — callers need it. A `|| true` here would
-    # make "the checker refused to run" (missing binary, a failed `lunora codegen`
-    # inside a template's own `typecheck` script) indistinguishable from a clean
-    # pass, because neither produces an `error TS` line to grep for.
-    if [[ "$has_script" == "yes" ]]; then
-        (cd "$scaffold_dir" && pnpm run typecheck 2>&1) > "$log"
-    else
-        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$log"
-    fi
+pkg.devDependencies ??= {};
+
+// Never shadow a spec the template declares itself — that spec is part of what
+// this matrix is testing.
+if (!pkg.dependencies?.[name] && !pkg.devDependencies[name]) {
+    pkg.devDependencies[name] = range;
+}
+
+fs.writeFileSync(file, JSON.stringify(pkg, null, 4) + '\n');
+" "$spec"
 }
 
 # ---------------------------------------------------------------------------
-# A nonzero typecheck exit is only interesting when NOTHING was reported: `tsc`
-# exits 1 whenever it finds type errors, and those are gated (and printed) by the
-# caller. An exit with no diagnostic at all means the checker never got as far as
-# reading source, so a green result would prove nothing.
+# A nonzero typecheck exit is only interesting when NOTHING was reported: every
+# checker here exits nonzero whenever it finds type errors, and those are gated
+# (and printed) by the caller. An exit with no diagnostic at all means the
+# checker never got as far as reading source, so a green result would prove
+# nothing. Takes the per-template pattern — `error TS` is only tsc's shape.
 # ---------------------------------------------------------------------------
 typecheck_never_ran() {
     local status="$1"
     local log="$2"
+    local error_re="$3"
 
-    [[ "$status" -ne 0 ]] && ! grep -q 'error TS' "$log"
-}
-
-is_typecheck_unsupported() {
-    local name="$1"
-    for s in "${TYPECHECK_UNSUPPORTED[@]+"${TYPECHECK_UNSUPPORTED[@]}"}"; do
-        [[ "$s" == "$name" ]] && return 0
-    done
-    return 1
+    [[ "$status" -ne 0 ]] && ! grep -qE "$error_re" "$log"
 }
 
 # ---------------------------------------------------------------------------
@@ -445,7 +481,6 @@ FAIL=()
 XFAIL=()
 XPASS=()
 SKIP_BUILD=()
-TYPECHECK_SKIPPED=()
 
 # ---------------------------------------------------------------------------
 # Per-template loop.
@@ -490,6 +525,14 @@ for tname in "${TEMPLATES[@]}"; do
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
     inject_peer_deps "$scaffold_dir"
+
+    # Resolve the checker for this template and add it to the manifest BEFORE the
+    # install, so it is present without a third install pass.
+    set_typecheck "$tname"
+    if [[ -n "$TYPECHECK_DEP" ]]; then
+        echo "  ==> injecting typechecker $TYPECHECK_DEP"
+        inject_typecheck_dep "$scaffold_dir" "$TYPECHECK_DEP"
+    fi
 
     # -- pnpm install -------------------------------------------------------
     echo "  ==> pnpm install"
@@ -601,11 +644,11 @@ for tname in "${TEMPLATES[@]}"; do
         # Run its own `codegen` script (every source file imports
         # `#lunora/_generated/*`, which only exists afterwards), then typecheck.
         #
-        # Unlike the auth-ui gate below this fails on ANY diagnostic rather than
-        # only ones under `lunora/auth-ui/`. That is affordable exactly because
-        # there is no build: no framework-generated route types to trip over, and
-        # the tsconfig `include` covers precisely the files the template ships.
-        echo "  ==> NOTICE: no build script in $tname — codegen + tsc --noEmit instead"
+        # It runs the same per-template checker the auth-ui gate uses — a
+        # build-less template falls to the `tsc --noEmit` default, but routing it
+        # through `set_typecheck` means a future one that needs a prep step or a
+        # different diagnostic format is already handled.
+        echo "  ==> NOTICE: no build script in $tname — codegen + ${TYPECHECK_CMD[*]} instead"
         SKIP_BUILD+=("$tname")
 
         codegen_log="$RESULTS_DIR/${tname}-codegen.log"
@@ -617,20 +660,28 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-        typecheck_status=0
-        run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
+        : > "$typecheck_log"
 
-        if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
-            echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+        if [[ ${#TYPECHECK_PREP[@]} -gt 0 ]]; then
+            (cd "$scaffold_dir" && "${TYPECHECK_PREP[@]}" 2>&1) >> "$typecheck_log" || true
+        fi
+
+        typecheck_status=0
+        { (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
+            | sed -E "s/$(printf '\033')\[[0-9;]*m//g" >> "$typecheck_log"; } || typecheck_status=$?
+
+        if typecheck_never_ran "$typecheck_status" "$typecheck_log" "$ERROR_RE"; then
+            echo "  FAIL: ${TYPECHECK_CMD[*]} in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+            echo "        A checker that fails without a diagnostic never read the payload, so this run proves nothing."
             tail -20 "$typecheck_log" | sed 's/^/    /'
             FAIL+=("$tname(typecheck:never-ran)")
             continue
         fi
 
-        ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+        ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
         if [[ "$ts_errors" -gt 0 ]]; then
             echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
-            grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
+            grep -E "$ERROR_RE" "$typecheck_log" | head -25 | sed 's/^/    /'
             FAIL+=("$tname(typecheck)")
             continue
         fi
@@ -664,33 +715,45 @@ for tname in "${TEMPLATES[@]}"; do
     # prop that does not exist, so the provider mounted without a client). They
     # are all fixed now, so the cheapest way to keep them fixed is to stop
     # distinguishing.
+    #
+    # Which checker runs, and what a diagnostic line looks like, is per-template —
+    # see set_typecheck.
     if [[ "$AUTHUI_ADDED" == "yes" ]]; then
-        if is_typecheck_unsupported "$tname"; then
-            echo "  ==> NOTICE: no in-scaffold typecheck for $tname ($(typecheck_skip_reason "$tname"))"
-            TYPECHECK_SKIPPED+=("$tname")
-        else
-            echo "  ==> typecheck (compiling the copied screens)"
-            typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-            typecheck_status=0
-            run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
+        typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+        : > "$typecheck_log"
 
-            if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
-                echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
-                tail -20 "$typecheck_log" | sed 's/^/    /'
-                FAIL+=("$tname(typecheck:never-ran)")
-                continue
-            fi
-
-            ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
-            if [[ "$ts_errors" -gt 0 ]]; then
-                echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
-                grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
-                FAIL+=("$tname(typecheck)")
-                continue
-            fi
-
-            echo "  ==> typecheck OK"
+        if [[ ${#TYPECHECK_PREP[@]} -gt 0 ]]; then
+            echo "  ==> ${TYPECHECK_PREP[*]} (generating the framework's tsconfig)"
+            (cd "$scaffold_dir" && "${TYPECHECK_PREP[@]}" 2>&1) >> "$typecheck_log" || true
         fi
+
+        echo "  ==> ${TYPECHECK_CMD[*]} (compiling the copied screens)"
+
+        # Strip ANSI: `astro check` prints through TypeScript's colour formatter
+        # unconditionally, so the escape codes land BEFORE the path and defeat an
+        # anchored match. A literal ESC via printf — BSD sed has no `\x1b`.
+        typecheck_status=0
+        { (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
+            | sed -E "s/$(printf '\033')\[[0-9;]*m//g" >> "$typecheck_log"; } || typecheck_status=$?
+
+        if typecheck_never_ran "$typecheck_status" "$typecheck_log" "$ERROR_RE"; then
+            echo "  FAIL: ${TYPECHECK_CMD[*]} in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+            echo "        A checker that fails without a diagnostic never read the payload, so this run proves nothing."
+            tail -20 "$typecheck_log" | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:never-ran)")
+            continue
+        fi
+
+        ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
+
+        if [[ "$ts_errors" -gt 0 ]]; then
+            echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+            grep -E "$ERROR_RE" "$typecheck_log" | head -25 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck)")
+            continue
+        fi
+
+        echo "  ==> typecheck OK"
     fi
 
     if [[ $build_exit -eq 0 ]]; then
@@ -746,17 +809,6 @@ echo "  PASS     : ${#PASS[@]}   (${PASS[*]+${PASS[*]}})"
 echo "  XFAIL    : ${#XFAIL[@]}  (${XFAIL[*]+${XFAIL[*]}})"
 echo "  FAIL     : ${#FAIL[@]}   (${FAIL[*]+${FAIL[*]}})"
 echo "  XPASS    : ${#XPASS[@]}  (${XPASS[*]+${XPASS[*]}})"
-
-# State what the run did NOT cover, so a green matrix can't be read as more than
-# it is. A template listed here installed and built, but no compiler in the
-# scaffold ever looked at the auth-ui files it copied in.
-if [[ ${#TYPECHECK_SKIPPED[@]} -gt 0 ]]; then
-    echo ""
-    echo "  NOT typechecked in-scaffold (payload compiled only by the monorepo's lint:types):"
-    for t in "${TYPECHECK_SKIPPED[@]}"; do
-        printf "    %-20s  %s\n" "$t" "$(typecheck_skip_reason "$t")"
-    done
-fi
 
 # ---------------------------------------------------------------------------
 # Exit code.
