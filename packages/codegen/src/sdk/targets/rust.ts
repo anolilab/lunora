@@ -126,8 +126,11 @@ const renderSubscribe = (method: SdkMethod): string => {
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
         `    pub fn subscribe_${memberName(method.functionName)}(`,
         `        &mut self,`,
-        `        ${argument}on_data: Option<Box<dyn Fn(&WireValue)>>,`,
-        `        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,`,
+        // The crate's own aliases rather than the boxed closure spelt out: they
+        // carry a `Send` bound (without which `Client` is not `Send` and cannot be
+        // shared at all), and a hand-written copy here would not follow it.
+        `        ${argument}on_data: DataHandler,`,
+        `        on_error: ErrorHandler,`,
         `        shard_key: Option<&str>,`,
         `    ) -> Result<String, ClientError> {`,
         `        let _ = shard_key;`,
@@ -171,7 +174,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         GENERATED_HEADER,
         `#![allow(dead_code, unused_imports)]\n`,
         `\n`,
-        `use lunora::client::{Client, ClientError, SubscriptionError, Verb};\n`,
+        `use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, Verb};\n`,
         `use lunora::wire::{encode_wire, from_model_json, WireValue};\n`,
         `\n`,
         `use crate::models::*;\n`,

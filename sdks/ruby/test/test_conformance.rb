@@ -223,3 +223,57 @@ class TestWsFrames < Minitest::Test
     assert_equal 0, fired, "the view would be torn if parts applied before pokeEnd"
   end
 end
+
+# The topology every real consumer has: a socket read loop on one thread and
+# application code subscribing on others.
+#
+# The assertion is the surviving subscription COUNT, as in the Go, Swift, Java
+# and Kotlin suites — a lost +@next_id += 1+ silently forgets a live
+# subscription, which is deterministic where waiting for a Hash to corrupt is
+# not. The reader also drives the reconnect resend, so the registry is being
+# walked while the four threads insert into it; unsynchronised, MRI raises
+# "can't add a new key into hash during iteration" on the inserting thread and
+# every subscribe is lost.
+#
+# No +ConformanceManifest.covers+ call: protocol/conformance-cases.json lists the
+# cases EVERY language must have, and the concurrency case is per-language by
+# construction (Go asserts on its map detector, Swift under TSan).
+#
+# The sender yields the GVL, which is what makes this deterministic rather than
+# lucky. It is also what a REAL sender does: writing a frame to a socket blocks,
+# and MRI releases the GVL around blocking IO. Without that, four CPU-bound
+# threads each run to completion inside one 100ms MRI time slice and never
+# interleave at all — the test then passes with the lock removed, which is to say
+# it tests nothing.
+class TestClientConcurrency < Minitest::Test
+  THREADS = 4
+  PER_THREAD = 250
+
+  def test_concurrent_subscribe_and_handle_frame
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) { Thread.pass })
+
+    reading = true
+    reader = Thread.new do
+      while reading
+        client.handle_frame(%({"type":"data","id":"sub_1","data":1,"cursor":1}))
+        client.resend_subscriptions
+      end
+    end
+
+    workers = Array.new(THREADS) do
+      Thread.new { PER_THREAD.times { client.subscribe("messages:list", nil, ->(_value) {}) } }
+    end
+
+    workers.each(&:join)
+    reading = false
+    reader.join
+
+    # Attached only now, so the count below sees resend frames alone.
+    resent = 0
+    client.attach_socket(->(_frame) { resent += 1 })
+    client.resend_subscriptions
+
+    assert_equal THREADS * PER_THREAD, resent, "every concurrent subscribe survived with a distinct id"
+  end
+end

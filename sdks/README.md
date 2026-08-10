@@ -38,7 +38,7 @@ change that adds or removes a capability.
 | Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
-| Concurrency-safe client       | ✅     | ✅  | ❌   | ❌   | ✅    | ✅   | ✅     |
+| Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
 
 **Typed models, JVM.** quicktype's Java and Kotlin backends rename properties (a
@@ -51,15 +51,28 @@ a library on the classpath, which is the one thing these transports do not have.
 `targets/java.ts` records every renderer option that was measured, and what a
 real fix would cost.
 
-**Concurrency.** Go, Java, Kotlin and Swift hold a lock over the subscription
-registry, the shape views and the id counters, and dispatch frames and user
-callbacks after releasing it. Every one of those four has a test that starts a
-socket reader and four subscriber threads and asserts on the resulting
-subscription count — a lost `nextId++` silently forgets a live subscription, and
-that is deterministic where waiting for a hash map to corrupt is not. The Swift
-leg additionally runs under `--sanitize=thread`. Python's client is safe by
-virtue of the GIL for the operations it performs. Ruby and Rust assume
-single-threaded use; wrap them if you share one.
+**Concurrency.** Go, Ruby, Java, Kotlin and Swift hold a lock over the
+subscription registry, the shape views and the id counters, and dispatch frames
+and user callbacks after releasing it. Resume frames are BUILT under that lock,
+because each one reads a `cursor` the frame handler writes. Every one of those
+five has a test that starts a socket reader and four subscriber threads and
+asserts on the resulting subscription count — a lost `nextId++` silently forgets
+a live subscription, and that is deterministic where waiting for a hash map to
+corrupt is not. The Swift leg additionally runs under `--sanitize=thread`; the
+Ruby one gives its injected sender a `Thread.pass`, because MRI's 100ms time
+slice otherwise lets four CPU-bound threads each run to completion without ever
+interleaving, and the case then passes with the lock removed. Python's client is
+safe by virtue of the GIL for the operations it performs.
+
+Rust carries no lock and needs none: every method that touches that state takes
+`&mut self`, so two threads reaching it at once is a compile error rather than a
+data race, and with no interior mutability, `static` or `unsafe` in the client
+that holds totally. Sharing is the caller's `Arc<Mutex<Client>>` — which required
+`Client: Send`, so the injected poster, sender and handlers carry a `+ Send`
+bound; without it one non-`Send` closure made the whole struct unshareable and no
+amount of wrapping helped. Note the difference that follows: the other five
+release their lock before invoking your callback and a caller's `Mutex` cannot,
+so a Rust handler must not re-lock the client it was called from.
 
 **HTTP and sockets are injected in every language, deliberately.** The
 conformance suites run with no network, and a consumer keeps its own transport,

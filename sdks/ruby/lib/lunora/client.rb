@@ -88,6 +88,13 @@ module Lunora
   # The HTTP poster and the socket frame sender are injected rather than
   # assumed, so the conformance suite runs with no network and a consumer keeps
   # its own transport, timeouts and socket library instead of inheriting ours.
+  #
+  # Safe to share across threads. One lock covers the subscription registry, the
+  # shape views, the id counters and the socket sender, because the topology
+  # every consumer has is a socket read loop on one thread and application code
+  # subscribing on others. Frames and user callbacks are dispatched with the
+  # lock RELEASED: +Mutex+ is not reentrant, so a callback that subscribes or a
+  # sender that unsubscribes on a write failure would otherwise deadlock.
   class Client
     attr_accessor :auth_token
 
@@ -102,9 +109,10 @@ module Lunora
       @pokes = {}
       @next_id = 0
       @next_shape_id = 0
+      @mutex = Mutex.new
     end
 
-    def attach_socket(sender) = @send = sender
+    def attach_socket(sender) = @mutex.synchronize { @send = sender }
 
     def query(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
 
@@ -123,33 +131,45 @@ module Lunora
     # otherwise unused — this client holds one socket, so it must already be the
     # shard that socket was opened against.
     def subscribe(function_path, args, on_data, on_error = nil, shard_key = nil)
-      @next_id += 1
-      id = "sub_#{@next_id}"
       _ = shard_key
-      @subscriptions[id] = {
-        args: args, cursor: nil, epoch: nil, function_path: function_path,
-        on_data: on_data, on_error: on_error
-      }
-      @send&.call(Lunora.build_subscribe_frame(id, function_path, args))
+      id = nil
+
+      locked_send do
+        @next_id += 1
+        id = "sub_#{@next_id}"
+        @subscriptions[id] = {
+          args: args, cursor: nil, epoch: nil, function_path: function_path,
+          on_data: on_data, on_error: on_error
+        }
+        Lunora.build_subscribe_frame(id, function_path, args)
+      end
 
       lambda do
-        @subscriptions.delete(id)
-        @send&.call(Lunora.build_unsubscribe_frame(id))
+        locked_send do
+          @subscriptions.delete(id)
+          Lunora.build_unsubscribe_frame(id)
+        end
       end
     end
 
     # Open a partially-replicated keyed view. +on_rows+ fires once per applied
     # poke with the view's full contents, in insertion order.
     def subscribe_shape(name, args, on_rows, on_error = nil)
-      @next_shape_id += 1
-      id = "shape_#{@next_shape_id}"
-      @shapes[id] = { args: args, checkpoint: nil, epoch: nil, name: name, on_error: on_error, on_rows: on_rows,
-                      order: [], rows: {} }
-      @send&.call(Lunora.build_shape_subscribe_frame(id, name, args))
+      id = nil
+
+      locked_send do
+        @next_shape_id += 1
+        id = "shape_#{@next_shape_id}"
+        @shapes[id] = { args: args, checkpoint: nil, epoch: nil, name: name, on_error: on_error, on_rows: on_rows,
+                        order: [], rows: {} }
+        Lunora.build_shape_subscribe_frame(id, name, args)
+      end
 
       lambda do
-        @shapes.delete(id)
-        @send&.call(Lunora.build_shape_unsubscribe_frame(id))
+        locked_send do
+          @shapes.delete(id)
+          Lunora.build_shape_unsubscribe_frame(id)
+        end
       end
     end
 
@@ -158,17 +178,25 @@ module Lunora
     #
     # Without this the cursor/epoch tracked on every +data+ frame would be
     # write-only state and a reconnect would silently re-seed from scratch.
+    # The frames are BUILT under the lock, not merely collected: each one carries
+    # a +cursor+ the frame handler writes, so snapshotting the entries and
+    # reading their cursors afterwards resends a torn frame.
     def resend_subscriptions
-      return if @send.nil?
+      sender = nil
 
-      @subscriptions.each do |id, entry|
-        @send.call(
+      frames = @mutex.synchronize do
+        sender = @send
+        next [] if sender.nil?
+
+        @subscriptions.map do |id, entry|
           Lunora.build_subscribe_frame(
             id, entry[:function_path], entry[:args],
             since_seq: entry[:cursor], since_epoch: entry[:epoch]
           )
-        )
+        end
       end
+
+      frames.each { |frame| sender.call(frame) }
     end
 
     # Apply one server frame and return its type. Unknown types are ignored,
@@ -181,22 +209,40 @@ module Lunora
       # Non-JSON frames are ignored by the client parser, not fatal.
       return nil if frame.nil?
 
-      dispatch(frame)
+      deferred = []
+      kind = @mutex.synchronize { dispatch(frame, deferred) }
+      deferred.each(&:call)
+      kind
     end
 
     private
 
-    def dispatch(frame)
+    # Mutate the guarded state, then send the frame the block returns with the
+    # lock released. A nil frame sends nothing.
+    def locked_send
+      frame = nil
+
+      sender = @mutex.synchronize do
+        frame = yield
+        @send
+      end
+
+      sender.call(frame) unless sender.nil? || frame.nil?
+    end
+
+    # Runs with the lock held. Anything that calls back into user code is pushed
+    # onto +deferred+ for +handle_frame+ to run once it has released the lock.
+    def dispatch(frame, deferred)
       kind = frame["type"]
       entry = @subscriptions[frame["id"]]
 
       case kind
       when "ack" then kind
-      when "data", "delta" then deliver(entry, frame, kind)
+      when "data", "delta" then deliver(entry, frame, kind, deferred)
       when "resume", "settled"
         advance(entry, frame)
         kind
-      when "error" then deliver_error(frame, kind)
+      when "error" then deliver_error(frame, kind, deferred)
       when "complete"
         @subscriptions.delete(frame["id"])
         kind
@@ -204,7 +250,7 @@ module Lunora
         @pokes[frame["pokeId"]] = {}
         kind
       when "pokePart" then buffer_poke_part(frame)
-      when "pokeEnd" then apply_poke(frame)
+      when "pokeEnd" then apply_poke(frame, deferred)
       else kind
       end
     end
@@ -215,25 +261,29 @@ module Lunora
       nil
     end
 
-    def deliver(entry, frame, kind)
+    def deliver(entry, frame, kind, deferred)
       payload = frame.key?("data") && !frame["data"].nil? ? frame["data"] : frame["delta"]
       value = Lunora.decode_wire(payload)
 
       if entry
         advance(entry, frame)
-        entry[:on_data]&.call(value)
+        handler = entry[:on_data]
+        deferred << -> { handler.call(value) } unless handler.nil?
       end
 
       kind
     end
 
-    def deliver_error(frame, kind)
+    def deliver_error(frame, kind, deferred)
       envelope = frame["error"] || {}
       message = frame["message"] || envelope["message"] || "subscription error"
       error = SubscriptionError.new(envelope["code"], message)
       id = frame["id"]
-      @subscriptions[id]&.fetch(:on_error, nil)&.call(error)
-      @shapes[id]&.fetch(:on_error, nil)&.call(error)
+
+      [@subscriptions[id]&.fetch(:on_error, nil), @shapes[id]&.fetch(:on_error, nil)].compact.each do |handler|
+        deferred << -> { handler.call(error) }
+      end
+
       kind
     end
 
@@ -258,7 +308,7 @@ module Lunora
       "pokePart"
     end
 
-    def apply_poke(frame)
+    def apply_poke(frame, deferred)
       buffer = @pokes.delete(frame["pokeId"])
       return "pokeEnd" if buffer.nil?
 
@@ -269,7 +319,14 @@ module Lunora
         operations.each { |operation| apply_row_op(shape, operation) }
         shape[:checkpoint] = frame["checkpoint"] if frame.key?("checkpoint")
         shape[:epoch] = frame["epoch"] if frame.key?("epoch")
-        shape[:on_rows]&.call(shape[:order].map { |key| shape[:rows][key] })
+        handler = shape[:on_rows]
+        next if handler.nil?
+
+        # Snapshot under the lock, for the same reason the resend frames are
+        # built under it: the callback must see the view THIS poke produced, not
+        # whatever a later one leaves behind while it is queued.
+        rows = shape[:order].map { |key| shape[:rows][key] }
+        deferred << -> { handler.call(rows) }
       end
 
       "pokeEnd"

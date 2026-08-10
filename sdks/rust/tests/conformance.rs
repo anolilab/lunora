@@ -2,10 +2,10 @@
 //! fixtures in `protocol/fixtures/`, the same files the TypeScript client and
 //! the Python, Go, Ruby and Swift ports are tested against.
 
-use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
@@ -281,16 +281,19 @@ fn server_frame_consumer() {
 
         client.attach_socket(Box::new(|_frame| {}));
 
-        let seen: Rc<RefCell<Vec<WireValue>>> = Rc::new(RefCell::new(Vec::new()));
-        let errors = Rc::new(RefCell::new(Vec::new()));
-        let seen_handle = Rc::clone(&seen);
-        let errors_handle = Rc::clone(&errors);
+        // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
+        // `Send`, which is what makes `Client` itself `Send` and shareable — see
+        // `concurrent_subscribe_and_handle_frame`.
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+        let errors_handle = Arc::clone(&errors);
 
         client.subscribe(
             "messages:list",
             WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
-            Some(Box::new(move |value| seen_handle.borrow_mut().push(value.clone()))),
-            Some(Box::new(move |error| errors_handle.borrow_mut().push(error.clone()))),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.clone()))),
         );
 
         let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
@@ -299,13 +302,17 @@ fn server_frame_consumer() {
         assert_eq!(kind.as_deref(), expect["kind"].as_str(), "{name}");
 
         if let Some(value_wire) = expect.get("valueWire") {
-            assert_eq!(seen.borrow().len(), 1, "onData should fire once for {name}");
-            assert_eq!(canonical(&encode_wire(&seen.borrow()[0]).expect("encode")), canonical(value_wire), "{name}");
+            let seen = seen.lock().expect("seen");
+
+            assert_eq!(seen.len(), 1, "onData should fire once for {name}");
+            assert_eq!(canonical(&encode_wire(&seen[0]).expect("encode")), canonical(value_wire), "{name}");
         }
 
         if expect["kind"] == json!("error") {
-            assert_eq!(errors.borrow().len(), 1, "{name}");
-            assert_eq!(errors.borrow()[0].code.as_deref(), expect["code"].as_str(), "{name}");
+            let errors = errors.lock().expect("errors");
+
+            assert_eq!(errors.len(), 1, "{name}");
+            assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
     }
 }
@@ -326,13 +333,13 @@ fn poke_sequence_materialises_rows() {
 
     client.attach_socket(Box::new(|_frame| {}));
 
-    let delivered: Rc<RefCell<Vec<Vec<WireValue>>>> = Rc::new(RefCell::new(Vec::new()));
-    let handle = Rc::clone(&delivered);
+    let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::clone(&delivered);
 
     client.subscribe_shape(
         "roomMessages",
         Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
-        Some(Box::new(move |rows| handle.borrow_mut().push(rows.to_vec()))),
+        Some(Box::new(move |rows| handle.lock().expect("delivered").push(rows.to_vec()))),
         None,
     );
 
@@ -340,9 +347,11 @@ fn poke_sequence_materialises_rows() {
         client.handle_frame(&frame.to_string()).expect("handle");
     }
 
-    assert_eq!(delivered.borrow().len(), 1, "a poke applies atomically at pokeEnd");
+    let delivered = delivered.lock().expect("delivered");
 
-    let rows = WireValue::Array(delivered.borrow()[0].clone());
+    assert_eq!(delivered.len(), 1, "a poke applies atomically at pokeEnd");
+
+    let rows = WireValue::Array(delivered[0].clone());
 
     assert_eq!(canonical(&encode_wire(&rows).expect("encode")), canonical(&document["shape"]["expectedRows"]));
 }
@@ -355,14 +364,86 @@ fn poke_parts_do_not_apply_before_poke_end() {
 
     client.attach_socket(Box::new(|_frame| {}));
 
-    let fired = Rc::new(RefCell::new(0));
-    let handle = Rc::clone(&fired);
+    let fired = Arc::new(Mutex::new(0));
+    let handle = Arc::clone(&fired);
 
-    client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.borrow_mut() += 1)), None);
+    client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.lock().expect("fired") += 1)), None);
 
     for frame in &sequence[..sequence.len() - 1] {
         client.handle_frame(&frame.to_string()).expect("handle");
     }
 
-    assert_eq!(*fired.borrow(), 0, "the view would be torn if parts applied before pokeEnd");
+    assert_eq!(*fired.lock().expect("fired"), 0, "the view would be torn if parts applied before pokeEnd");
+}
+
+/// The topology every real consumer has: a socket read loop on one thread and
+/// application code subscribing on others.
+///
+/// Rust reaches this differently from the sibling ports. They hold an internal
+/// lock because nothing stops two threads entering the client at once; here every
+/// mutating method takes `&mut self`, so that is a COMPILE error and sharing goes
+/// through the caller's `Arc<Mutex<Client>>`. What this asserts is that the
+/// arrangement is actually available — `Client` has to be `Send` for it, and it
+/// was not until the injected callbacks gained that bound.
+///
+/// The assertion is the surviving subscription COUNT, as in the Go, Swift, Java
+/// and Kotlin suites: a lost `next_id += 1` silently forgets a live subscription.
+/// It cannot be lost here, and that is the point — the test is a standing witness
+/// that nothing has been added to `Client` (an interior-mutability field, a
+/// `static`, an `unsafe` cell) that would make the compiler stop enforcing it.
+#[test]
+fn concurrent_subscribe_and_handle_frame() {
+    const THREADS: usize = 4;
+    const PER_THREAD: usize = 250;
+
+    let client = Arc::new(Mutex::new(Client::new("https://app.example", None)));
+
+    client.lock().expect("client").attach_socket(Box::new(|_frame| {}));
+
+    let workers: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let shared = Arc::clone(&client);
+
+            thread::spawn(move || {
+                for _ in 0..PER_THREAD {
+                    shared
+                        .lock()
+                        .expect("client")
+                        .subscribe("messages:list", WireValue::Object(Vec::new()), Some(Box::new(|_value| {})), None);
+                }
+            })
+        })
+        .collect();
+
+    let reader = {
+        let shared = Arc::clone(&client);
+
+        thread::spawn(move || {
+            for cursor in 0..THREADS * PER_THREAD {
+                let frame = format!(r#"{{"type":"data","id":"sub_1","data":1,"cursor":{cursor}}}"#);
+
+                shared.lock().expect("client").handle_frame(&frame).expect("handle");
+            }
+        })
+    };
+
+    for worker in workers {
+        worker.join().expect("worker");
+    }
+
+    reader.join().expect("reader");
+
+    // Attached only now, so the count below sees resend frames alone.
+    let resent = Arc::new(Mutex::new(0_usize));
+    let counter = Arc::clone(&resent);
+    let mut guard = client.lock().expect("client");
+
+    guard.attach_socket(Box::new(move |_frame| *counter.lock().expect("resent") += 1));
+    guard.resend_subscriptions().expect("resend");
+
+    assert_eq!(
+        *resent.lock().expect("resent"),
+        THREADS * PER_THREAD,
+        "every concurrent subscribe survived with a distinct id"
+    );
 }

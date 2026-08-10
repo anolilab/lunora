@@ -76,20 +76,24 @@ impl From<WireError> for ClientError {
 
 /// Performs one POST. Injected rather than assumed so the conformance suite runs
 /// with no network and a consumer keeps its own HTTP stack, timeouts and retries.
-pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Result<(u16, Vec<u8>), String>>;
+///
+/// `Send` for the reason spelt out on [`Client`]: every injected callback the
+/// client stores is part of the client's type, so one non-`Send` closure makes
+/// `Client` itself non-`Send` and no amount of wrapping can then share it.
+pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Result<(u16, Vec<u8>), String> + Send>;
 
 /// Writes one JSON frame to an open socket. Injected for the same reason: this
 /// crate stays free of a socket dependency.
-pub type FrameSender = Box<dyn Fn(&Value)>;
+pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 
 /// Receives each result a live query produces.
-pub type DataHandler = Option<Box<dyn Fn(&WireValue)>>;
+pub type DataHandler = Option<Box<dyn Fn(&WireValue) + Send>>;
 
 /// Receives a subscription-scoped error the server pushed.
-pub type ErrorHandler = Option<Box<dyn Fn(&SubscriptionError)>>;
+pub type ErrorHandler = Option<Box<dyn Fn(&SubscriptionError) + Send>>;
 
 /// Receives a shape view's full contents after each applied poke.
-pub type RowsHandler = Option<Box<dyn Fn(&[WireValue])>>;
+pub type RowsHandler = Option<Box<dyn Fn(&[WireValue]) + Send>>;
 
 /// Builds the `POST /_lunora/rpc` body. `shard_key` is omitted when `None`,
 /// which routes to the default shard.
@@ -238,6 +242,29 @@ struct ShapeSubscription {
 }
 
 /// A Lunora deployment client.
+///
+/// # Concurrency
+///
+/// This client carries no lock, and does not need one: every method that touches
+/// the subscription registry, the shape views or the id counters takes
+/// `&mut self`, so the borrow checker rejects two threads reaching it at once at
+/// COMPILE time. There is no interior mutability, no `static` and no `unsafe`
+/// here, which is what makes that guarantee total rather than a convention — the
+/// data race the sibling ports need a mutex to prevent is not expressible.
+///
+/// Sharing is therefore the caller's `Arc<Mutex<Client>>`, which is idiomatic
+/// and, unlike a lock inside the client, cannot be bypassed. What that DID need
+/// is `Client: Send`: the injected poster, frame sender and handlers are stored
+/// in the client, so a non-`Send` boxed closure infects the whole struct and
+/// `Arc<Mutex<Client>>` stops compiling. Hence the `+ Send` on the callback
+/// aliases above; `conformance.rs::concurrent_subscribe_and_handle_frame` is the
+/// proof, and it asserts the same subscription count the Go, Swift, Java and
+/// Kotlin suites do.
+///
+/// One consequence to be aware of, because it differs from those four: they
+/// release their internal lock before invoking your callback, and a caller's
+/// `Mutex` cannot. A handler that runs while the guard is held must not re-lock
+/// the same client — take what it needs and hand off.
 pub struct Client {
     base_url: String,
     post: Option<HttpPoster>,

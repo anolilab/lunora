@@ -3,7 +3,7 @@
 
 #![allow(dead_code, unused_imports)]
 
-use lunora::client::{Client, ClientError, SubscriptionError, Verb};
+use lunora::client::{Client, ClientError, DataHandler, ErrorHandler, Verb};
 use lunora::wire::{encode_wire, from_model_json, WireValue};
 
 use crate::models::*;
@@ -22,8 +22,8 @@ impl<'client> MessagesApi<'client> {
     /// live query: messages:list — re-runs on every write to the tables it reads.
     pub fn subscribe_list(
         &mut self,
-        args: &MessagesListArgs, on_data: Option<Box<dyn Fn(&WireValue)>>,
-        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
+        args: &MessagesListArgs, on_data: DataHandler,
+        on_error: ErrorHandler,
         shard_key: Option<&str>,
     ) -> Result<String, ClientError> {
         let _ = shard_key;
