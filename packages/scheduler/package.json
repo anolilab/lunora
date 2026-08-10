@@ -1,6 +1,6 @@
 {
     "name": "@lunora/scheduler",
-    "version": "1.0.0-alpha.26",
+    "version": "1.0.0-alpha.27",
     "description": "Scheduling for Lunora: runAfter / runAt and Cron Triggers via SchedulerDO",
     "keywords": [
         "cloudflare",
@@ -61,8 +61,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.18",
-        "@lunora/platform": "1.0.0-alpha.8",
+        "@lunora/errors": "1.0.0-alpha.19",
+        "@lunora/platform": "1.0.0-alpha.9",
         "cron-parser": "5.6.2"
     },
     "devDependencies": {
