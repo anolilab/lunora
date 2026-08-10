@@ -19,6 +19,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { sqliteInList, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import type { FieldOperators, WhereInput } from "./where-types";
 import { RELATION_EXISTS_KEY } from "./where-types";
 
@@ -29,17 +30,45 @@ type FieldRefSql = (field: string) => SQL;
 type SerializeValue = (value: unknown) => unknown;
 
 interface WhereSqlStrategy {
+    /**
+     * Dialect substring test, given the field reference and the bound search
+     * term. Absent ⇒ SQLite's `instr(lower(ref), lower(term)) > 0`.
+     *
+     * A position function rather than `LIKE '%…%'` on purpose: Workerd caps
+     * `SQLITE_LIMIT_LIKE_PATTERN_LENGTH` at 50 bytes, so a `contains` on a term
+     * longer than ~48 characters is a runtime error ("LIKE or GLOB pattern too
+     * complex") on Durable Objects and D1 alike. It also needs no wildcard
+     * escaping, which removes the pathological-pattern scan a raw term invited.
+     *
+     * Each dialect's expression must fold case the way that dialect's `LIKE`
+     * does, since that is the behaviour callers already have: SQLite's `LIKE` is
+     * ASCII-case-insensitive (so `lower()` on both sides), MySQL's follows the
+     * column collation (`LOCATE`, case-insensitive by default), Postgres' is
+     * case-sensitive (`strpos`).
+     */
+    containsExpr?: (reference: SQL, term: SQL) => SQL;
+
     fieldRef: FieldRefSql;
 
     /**
-     * Dialect `contains` rendering given the field reference and the (already
-     * bound, already wildcard-escaped) search term. Absent ⇒ the portable
-     * `… LIKE '%' || term || '%' ESCAPE '\'` concat form (SQLite/Postgres); MySQL
-     * supplies a `CONCAT(...)` variant. The term is escaped by
-     * {@link compileContains}, so an implementation MUST pair it with
-     * `ESCAPE '\'` for the literal-match to hold.
+     * Dialect `IN` / `NOT IN` rendering over an already-serialized value list.
+     * Absent ⇒ SQLite's {@link sqliteInList}, which switches a wide list to a
+     * single `json_each` parameter.
+     *
+     * Defaulted to the bounded form rather than to a literal `IN (?, ?, …)` for
+     * the same reason the substring hook above is: Workerd and D1 cap a statement at
+     * 100 bound parameters, and a wide `in` (or the relation semijoin, good for
+     * 5,000 join keys) blows straight through it. A strategy that forgets to
+     * opt in would fail with a runtime `SQLITE_ERROR` that no test catches,
+     * whereas a non-SQLite dialect that forgets to override fails loudly and
+     * immediately — Postgres and MySQL have no `json_each`.
+     *
+     * `budget` is how many placeholders THIS list may spend — the compiler
+     * divides {@link WHERE_LIST_PARAM_BUDGET} by the number of lists in the
+     * tree, so several `in` filters in one `where` cannot add up past the cap
+     * the way a fixed per-list threshold lets them.
      */
-    likeContains?: (reference: SQL, term: SQL) => SQL;
+    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
 
     /**
      * Optional correlated-EXISTS push-down hook: compiles a {@link RELATION_EXISTS_KEY}
@@ -72,20 +101,15 @@ const isOperatorObject = (value: unknown): value is FieldOperators => {
 };
 
 /**
- * Escape LIKE wildcards (`%`, `_`) and the escape char (`\`) in a `contains`
- * term so they match literally. Without this a client-supplied term like `%` or
- * `a%b%c%…` becomes a live pattern — matching every row, or forcing a pathological
- * pattern scan (a mild DoS). The escaped term pairs with `ESCAPE '\'` on the LIKE.
- * Non-string values pass through unchanged (a `contains` on a non-string is odd,
- * but not our concern here).
+ * Render a `contains` substring match, binding the term (never interpolating
+ * raw). The term needs no wildcard escaping: a position function takes it
+ * literally, so a client-supplied `%` or `a%b%c%…` is just text rather than a
+ * live pattern.
  */
-const escapeLikeTerm = (value: unknown): unknown => (typeof value === "string" ? value.replaceAll(/[\\%_]/g, (character) => `\\${character}`) : value);
-
-/** Render a `contains` substring match, binding the (wildcard-escaped) term (never interpolating raw). */
 const compileContains = (reference: SQL, value: unknown, strategy: WhereSqlStrategy): SQL => {
-    const term = sql`${strategy.serialize(escapeLikeTerm(value))}`;
+    const term = sql`${strategy.serialize(value)}`;
 
-    return strategy.likeContains ? strategy.likeContains(reference, term) : sql`${reference} LIKE '%' || ${term} || '%' ESCAPE '\\'`;
+    return strategy.containsExpr ? strategy.containsExpr(reference, term) : sql`instr(lower(${reference}), lower(${term})) > 0`;
 };
 
 const compileComparator = (reference: SQL, operator: string, comparator: string, value: unknown, strategy: WhereSqlStrategy): SQL => {
@@ -105,12 +129,20 @@ const compileInList = (reference: SQL, keyword: "IN" | "NOT IN", value: unknown,
         return keyword === "IN" ? sql`0 = 1` : sql`1 = 1`;
     }
 
+    const serialized = items.map((item) => strategy.serialize(item));
+    const negated = keyword === "NOT IN";
+
+    return (strategy.inList ?? sqliteInList)(reference, serialized, negated);
+};
+
+/** The `IN` / `NOT IN` rendering a dialect with no bounded list form uses: one bound placeholder per item. */
+const literalInList = (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean): SQL => {
     const list = sql.join(
-        items.map((item) => sql`${strategy.serialize(item)}`),
+        items.map((item) => sql`${item}`),
         sql`, `,
     );
 
-    return keyword === "IN" ? sql`${reference} IN (${list})` : sql`${reference} NOT IN (${list})`;
+    return negated ? sql`${reference} NOT IN (${list})` : sql`${reference} IN (${list})`;
 };
 
 const compileFieldOperators = (reference: SQL, operators: FieldOperators, strategy: WhereSqlStrategy): SQL[] => {
@@ -232,6 +264,48 @@ const compileNode = (where: WhereInput, strategy: WhereSqlStrategy): SQL | undef
 };
 
 /**
+ * Placeholders every `in` / `notIn` list in one `where` may spend between them.
+ *
+ * Half of Workerd's per-statement parameter cap, leaving the other half for the
+ * rest of the statement — the comparators, the cursor, the limit. It is a
+ * whole-statement budget rather than a per-list one because three 40-item `in`
+ * filters are ordinary app code and would otherwise bind 120 placeholders while
+ * each list sat "within budget" on its own.
+ *
+ * The cap is SQLite's, and so is the default `inList` it feeds; a dialect that
+ * overrides the hook is free to ignore the budget it is handed.
+ */
+const WHERE_LIST_PARAM_BUDGET = WORKERD_SQLITE_LIMITS.boundParams / 2;
+
+/** Count the `in` / `notIn` operators anywhere in the tree, so the budget above can be split evenly between them. */
+const countLists = (node: unknown): number => {
+    if (Array.isArray(node)) {
+        return node.reduce<number>((total, branch) => total + countLists(branch), 0);
+    }
+
+    if (node === null || typeof node !== "object") {
+        return 0;
+    }
+
+    let total = 0;
+
+    for (const [key, value] of Object.entries(node)) {
+        if (key === "in" || key === "notIn") {
+            total += 1;
+        } else if (key === "AND" || key === "NOT" || key === "OR") {
+            total += countLists(value);
+        }
+        // Anything else is a field whose value is either an equality literal or
+        // an operator object; only the latter can hold a list.
+        else if (isOperatorObject(value)) {
+            total += countLists(value);
+        }
+    }
+
+    return total;
+};
+
+/**
  * Compile a structural {@link WhereInput} into a drizzle `SQL` predicate, or
  * `undefined` when the input imposes no constraint (empty `where`).
  */
@@ -240,7 +314,23 @@ export const compileWhereSql = (where: WhereInput | undefined, strategy: WhereSq
         return undefined;
     }
 
-    return compileNode(where, strategy);
+    const inList = strategy.inList ?? sqliteInList;
+    const listCount = countLists(where);
+
+    if (listCount === 0) {
+        return compileNode(where, strategy);
+    }
+
+    // Split the statement's list budget across however many lists the tree
+    // holds, so each one switches to its dialect's bounded form early enough
+    // that the total still fits. `Math.max(1, …)` keeps a pathologically wide
+    // `where` from computing a 0-placeholder budget; past 50 lists the
+    // one-placeholder floor per list is itself the ceiling, and `maxInValues` /
+    // the procedure's own arg validation is what bounds that.
+    const perList = Math.max(1, Math.floor(WHERE_LIST_PARAM_BUDGET / listCount));
+
+    return compileNode(where, { ...strategy, inList: (reference, items, negated) => inList(reference, items, negated, perList) });
 };
 
+export { literalInList };
 export type { WhereSqlStrategy };

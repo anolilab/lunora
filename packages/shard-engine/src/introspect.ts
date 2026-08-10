@@ -711,7 +711,7 @@ interface TablePage {
     total?: number;
 }
 
-/** Comparison a {@link FilterClause} applies. `contains` is a case-sensitive substring (LIKE); the rest are direct SQL comparisons. */
+/** Comparison a {@link FilterClause} applies. `contains` is a case-insensitive substring test (see {@link containsSql}); the rest are direct SQL comparisons. */
 type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
 
 /**
@@ -952,8 +952,17 @@ const expandDocumentRows = (columns: string[], rows: Record<string, unknown>[]):
     return { columns: [...metaColumns, ...documentKeys], rows: parsed };
 };
 
-/** Escape LIKE wildcards so a user's literal `%`/`_`/`\` match themselves (paired with `ESCAPE '\'`). */
-const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
+/**
+ * A case-insensitive substring test on `expression`, matching the bound term
+ * literally.
+ *
+ * `instr` rather than `LIKE '%…%'` because Workerd caps
+ * `SQLITE_LIMIT_LIKE_PATTERN_LENGTH` at 50 bytes — a data-browser filter or
+ * search term longer than ~48 characters fails the whole query with "LIKE or
+ * GLOB pattern too complex". It also drops the wildcard escaping the LIKE form
+ * needed: the term is compared as text, so a typed `%` is just a `%`.
+ */
+const containsSql = (expression: string): string => `instr(lower(CAST(${expression} AS TEXT)), lower(?)) > 0`;
 
 /**
  * Tables the data browser must never surface: SQLite's own bookkeeping
@@ -1010,10 +1019,10 @@ const physicalColumnNames = (sql: SqlExec, quotedTable: string): string[] =>
         .toArray()
         .map((column) => column.name);
 
-/** SQL operator per direct {@link FilterOperator} (everything but `contains`, which uses LIKE). */
+/** SQL operator per direct {@link FilterOperator} (everything but `contains`, which uses {@link containsSql}). */
 const FILTER_SQL_OPERATOR: Record<Exclude<FilterOperator, "contains">, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
 
-/** Coerce a filter value to its LIKE-pattern text, treating non-primitives as empty (they can't meaningfully substring-match). */
+/** Coerce a filter value to its comparison text, treating non-primitives as empty (they can't meaningfully substring-match). */
 const filterValueText = (value: unknown): string => {
     if (typeof value === "string") {
         return value;
@@ -1061,10 +1070,7 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
     const { expression, params: pathParameters } = resolved;
 
     if (clause.operator === "contains") {
-        return {
-            params: [...pathParameters, `%${escapeLike(filterValueText(clause.value))}%`],
-            sql: String.raw`CAST(${expression} AS TEXT) LIKE ? ESCAPE '\'`,
-        };
+        return { params: [...pathParameters, filterValueText(clause.value)], sql: containsSql(expression) };
     }
 
     return { params: [...pathParameters, clause.value], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
@@ -1136,7 +1142,7 @@ const datePrefixRange = (needle: string): undefined | { from: number; to: number
  * names come from PRAGMA (validated) and every value/path is a bound parameter,
  * so the assembled `where` can never inject SQL.
  *
- * The search conjunct is a case-insensitive LIKE OR'd across every PHYSICAL
+ * The search conjunct is a case-insensitive substring test OR'd across every PHYSICAL
  * column — for doc-stored tables `__doc__` holds every field value, so this
  * still covers all user fields — plus, when the term parses as a date or a
  * date-time prefix, a typed RANGE predicate (see {@link datePrefixRange}).
@@ -1149,10 +1155,9 @@ const buildTablePredicate = (columns: string[], needle: string, filters: FilterC
     const parameters: unknown[] = [];
 
     if (needle !== "" && columns.length > 0) {
-        const pattern = `%${escapeLike(needle)}%`;
-        const disjuncts = columns.map((name) => String.raw`CAST(${quoteIdentifier(name)} AS TEXT) LIKE ? ESCAPE '\'`);
+        const disjuncts = columns.map((name) => containsSql(quoteIdentifier(name)));
 
-        parameters.push(...columns.map(() => pattern));
+        parameters.push(...columns.map(() => needle));
 
         // A date-shaped term additionally matches timestamp columns by RANGE, so
         // `2026-07` finds July's rows rather than only those whose rendered text

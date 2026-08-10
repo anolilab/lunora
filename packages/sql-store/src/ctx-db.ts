@@ -70,6 +70,7 @@ import {
     fanOutScalarCounts,
     foldAggregateTally,
     hasTrigger,
+    literalInList,
     matchesRankStaticWhere,
     matchesStaticWhere,
     mergeWhere,
@@ -961,18 +962,23 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // Value encode stays the shared SQLite codec (`serializeColumnValue`) on every
     // engine — storage is SQLite-shaped everywhere. Identifier quoting and
     // placeholder numbering are drizzle's job (rendered per-engine via renderSql),
-    // so the strategy only carries the one per-engine WHERE difference: MySQL has
-    // no `||` string concat, so `contains` uses `CONCAT`.
+    // so the strategy only carries the per-engine WHERE differences: the
+    // substring test's position function, and (on D1) the bound-parameter budget.
     const whereSqlStrategy: WhereSqlStrategy = {
         fieldRef: columnRefSql,
         serialize: serializeColumnValue,
-        // MySQL has no `||` string concat; the rest use the portable form compileWhereSql defaults to.
-        // The term is wildcard-escaped by compileContains, so pair it with a backslash `ESCAPE` for literal
-        // matching. MySQL treats backslash as a string-literal escape, so the SQL text must contain a DOUBLED
-        // backslash (`ESCAPE '\\'`) to denote one literal backslash; drizzle's `sql` tag uses the COOKED
-        // template string, so `'\\\\'` here renders `'\\'` in the SQL (a single `'\'` would escape the closing
-        // quote and raise a syntax error). SQLite/Postgres take backslash literally and use the portable default.
-        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\\\'` } : {}),
+        // `contains` must fold case the way each engine's `LIKE` does, since that is
+        // the behaviour callers already have: SQLite's is ASCII-case-insensitive
+        // (the compiler's `instr(lower(…), lower(…))` default), MySQL's follows the
+        // column collation (`LOCATE`, case-insensitive by default), Postgres' is
+        // case-sensitive (`strpos`).
+        ...(dialect.name === "mysql" ? { containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0` } : {}),
+        ...(dialect.name === "postgres" ? { containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0` } : {}),
+        // The compiler defaults `inList` to SQLite's bounded `json_each` form,
+        // because D1 is the same Workerd build as a Durable Object and caps a
+        // statement at 100 bound parameters. The other two engines bind
+        // thousands and have no `json_each`, so they take the literal list.
+        ...(dialect.name === "sqlite" ? {} : { inList: literalInList }),
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */

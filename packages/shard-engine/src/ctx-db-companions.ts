@@ -38,7 +38,7 @@ import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggr
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
-import { param } from "./drizzle";
+import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
 import { isLiveForCompanion } from "./query-args";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
@@ -249,7 +249,8 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
         runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(aggTable)}`);
 
-        const CHUNK_ROWS = 32; // 3 params/row → 96 bound params, under SQLite's per-statement cap
+        // 3 params/row, so one statement lands just under Workerd's per-statement parameter cap.
+        const CHUNK_ROWS = Math.floor(WORKERD_SQLITE_LIMITS.boundParams / 3);
         const entries = [...tallies];
 
         for (let start = 0; start < entries.length; start += CHUNK_ROWS) {

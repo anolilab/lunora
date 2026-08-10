@@ -105,7 +105,7 @@ export {
     tryRowToDocument,
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
-export { param, renderSql } from "./drizzle";
+export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";
@@ -356,6 +356,6 @@ export type {
     SubscriptionQuery,
 } from "./types";
 export type { WhereSqlStrategy } from "./where-sql";
-export { compileWhereSql } from "./where-sql";
+export { compileWhereSql, literalInList } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";
 export { RELATION_EXISTS_KEY } from "./where-types";

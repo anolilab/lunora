@@ -354,6 +354,48 @@ describe("global search provisioning", () => {
             expect(rows.map((document) => document["_id"])).toStrictEqual(["b"]);
         });
 
+        it("matches every term of a multi-token query, the last one as a prefix", async () => {
+            expect.assertions(2);
+
+            // The one shape the inverted layout's `WHERE` mixes predicate forms
+            // in: the leading terms compile to equalities and the final one to a
+            // half-open range, all OR'd together, with a `HAVING` that requires
+            // each to have matched. A document holding only some of the terms
+            // must not come back.
+            createNotesTable();
+            insertNote("a", "hello wonderful world");
+            insertNote("b", "hello there");
+            insertNote("c", "wandering alone");
+
+            await runSqlSearchMigrations(exec, searchSchema, dialect);
+
+            const both = await runSqlSearch(
+                exec,
+                dialect,
+                notesDefinition,
+                "notes",
+                { definition: BY_BODY, field: "body", filters: [], hasQuery: true, indexName: "by_body", query: "hello wo" },
+                10,
+            );
+
+            expect(both.map((document) => document["_id"])).toStrictEqual(["a"]);
+
+            // And the prefix term alone still matches the document holding both
+            // of its tokens ("wonderful", "world"), so the range half is doing
+            // work rather than silently matching nothing. "wandering" is outside
+            // the `wo` range, so document "c" must not come back.
+            const prefixOnly = await runSqlSearch(
+                exec,
+                dialect,
+                notesDefinition,
+                "notes",
+                { definition: BY_BODY, field: "body", filters: [], hasQuery: true, indexName: "by_body", query: "wo" },
+                10,
+            );
+
+            expect(prefixOnly.map((document) => document["_id"])).toStrictEqual(["a"]);
+        });
+
         it("prefix-matches a final token ending in an astral (surrogate-pair) character (plan 272)", async () => {
             expect.assertions(1);
 

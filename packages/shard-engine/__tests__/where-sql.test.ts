@@ -22,8 +22,14 @@ const baseStrategy: WhereSqlStrategy = {
 };
 
 const mysqlStrategy: WhereSqlStrategy = {
+    containsExpr: (reference, term) => sql`LOCATE(${term}, ${reference}) > 0`,
     fieldRef: (field) => sql`${sql.identifier(field)}`,
-    likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\'`,
+    serialize,
+};
+
+const postgresStrategy: WhereSqlStrategy = {
+    containsExpr: (reference, term) => sql`strpos(${reference}, ${term}) > 0`,
+    fieldRef: (field) => sql`${sql.identifier(field)}`,
     serialize,
 };
 
@@ -103,30 +109,37 @@ describe("compileWhereSql — per-engine rendering", () => {
         });
     });
 
-    it("renders `contains` with the portable `||` form, and MySQL's CONCAT variant", () => {
-        expect.assertions(2);
+    it("renders `contains` as a position test per dialect, never as a LIKE pattern", () => {
+        expect.assertions(3);
 
-        expect(render({ title: { contains: "O'Brien" } }, "postgres")).toEqual({
+        // Workerd caps a LIKE pattern at 50 bytes, so `contains` uses a position
+        // function; each dialect's must fold case the way its LIKE does.
+        expect(render({ title: { contains: "O'Brien" } }, "sqlite")).toEqual({
             params: ["O'Brien"],
-            sql: String.raw`"title" LIKE '%' || $1 || '%' ESCAPE '\'`,
+            sql: `instr(lower("title"), lower(?)) > 0`,
         });
         expect(render({ title: { contains: "O'Brien" } }, "mysql", mysqlStrategy)).toEqual({
             params: ["O'Brien"],
-            sql: "`title` LIKE CONCAT('%', ?, '%') ESCAPE '\\'",
+            sql: "LOCATE(?, `title`) > 0",
+        });
+        expect(render({ title: { contains: "O'Brien" } }, "postgres", postgresStrategy)).toEqual({
+            params: ["O'Brien"],
+            sql: `strpos("title", $1) > 0`,
         });
     });
 
-    it("escapes LIKE wildcards in a `contains` term so they match literally", () => {
+    it("binds a `contains` term literally — wildcards need no escaping in a position test", () => {
         expect.assertions(2);
 
-        // `%`, `_`, and `\` are escaped in the bound param and paired with ESCAPE '\'.
-        expect(render({ title: { contains: "50%_off\\" } }, "postgres")).toEqual({
-            params: ["50\\%\\_off\\\\"],
-            sql: String.raw`"title" LIKE '%' || $1 || '%' ESCAPE '\'`,
+        // Pre-fix these were rewritten to `50\\%\\_off\\\\` to survive LIKE; a position
+        // function takes the term as-is, so a client-supplied `%` is just text.
+        expect(render({ title: { contains: "50%_off\\" } }, "sqlite")).toEqual({
+            params: ["50%_off\\"],
+            sql: `instr(lower("title"), lower(?)) > 0`,
         });
         expect(render({ title: { contains: "a_b" } }, "sqlite")).toEqual({
-            params: [String.raw`a\_b`],
-            sql: String.raw`"title" LIKE '%' || ? || '%' ESCAPE '\'`,
+            params: ["a_b"],
+            sql: `instr(lower("title"), lower(?)) > 0`,
         });
     });
 

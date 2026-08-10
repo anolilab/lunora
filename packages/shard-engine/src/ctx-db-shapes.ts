@@ -28,6 +28,7 @@ import { sql as dsql } from "drizzle-orm";
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { DOC_COLUMN, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import { sqliteInList } from "./drizzle";
 import type { WhereSqlStrategy } from "./where-sql";
 import { compileWhereSql } from "./where-sql";
 import type { WhereInput } from "./where-types";
@@ -41,10 +42,7 @@ const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {
         return undefined;
     }
 
-    return dsql`id IN (${dsql.join(
-        ids.map((id) => dsql`${id}`),
-        dsql`, `,
-    )})`;
+    return sqliteInList(dsql`${dsql.identifier("id")}`, ids, false);
 };
 
 /** AND-compose an optional id restriction with the compiled `effectiveWhere`, returning the trailing `WHERE …` fragment (empty when unconstrained). */

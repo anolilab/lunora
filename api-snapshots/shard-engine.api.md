@@ -2843,8 +2843,9 @@ interface WhereInput {
 
 ```ts
 interface WhereSqlStrategy {
+    containsExpr?: (reference: SQL, term: SQL) => SQL;
     fieldRef: FieldRefSql;
-    likeContains?: (reference: SQL, term: SQL) => SQL;
+    inList?: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
     relationExists?: (request: unknown) => SQL;
     serialize: SerializeValue;
 }
@@ -3460,6 +3461,12 @@ const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
 const listTables: (sql: SqlExec) => TableInfo[];
 ```
 
+### `literalInList` (const)
+
+```ts
+const literalInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean) => SQL;
+```
+
 ### `matchesRankStaticWhere` (const)
 
 ```ts
@@ -4050,6 +4057,12 @@ const softDeleteScope: (softDeleteMode: {
 const sortColumnName: (i: number) => string;
 ```
 
+### `sqliteInList` (const)
+
+```ts
+const sqliteInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number) => SQL;
+```
+
 ### `stableStringify` (const)
 
 ```ts
@@ -4127,6 +4140,12 @@ const tryRowToDocument: (row: Record<string, unknown> | undefined) => Record<str
 
 ```ts
 const trySendFrame: (ws: FrameSink, frame: string) => boolean;
+```
+
+### `unionAll` (const)
+
+```ts
+const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
 ```
 
 ### `validateImportRow` (const)

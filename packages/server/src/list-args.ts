@@ -33,7 +33,7 @@
  *
  *     Note what this does NOT promise: publishing only indexed columns bounds
  *     WHICH columns are reachable, not the cost of every predicate over them.
- *     `contains` compiles to a leading-wildcard `LIKE`, and `ne` / `notIn` /
+ *     `contains` compiles to a substring position test, and `ne` / `notIn` /
  *     `isNull: false` are likewise non-sargable — all of them scan whatever the
  *     column's index would otherwise have narrowed. `maxInValues` and `maxLimit`
  *     bound request size; they don't make a scan into a seek.

@@ -33,6 +33,7 @@ import {
     tokenizeSearch,
 } from "@lunora/search-core";
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
+import { unionAll } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -117,6 +118,12 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string): SQL => {
  * Rows per companion `INSERT`. Keeps the bound-parameter count of one statement
  * far under every engine's cap (3 params per row) while still turning a
  * many-token document into a handful of round trips rather than one per token.
+ *
+ * Deliberately NOT sized to Workerd's cap of 100, unlike its namesake in
+ * `@lunora/shard-engine`: `chooseLayout` picks this layout only when the dialect
+ * has no FTS5, and the only such dialects are Hyperdrive's Postgres and MySQL,
+ * which bind thousands. D1's SQLite dialect sets `supportsFts5: true` and never
+ * reaches here.
  */
 const INSERT_CHUNK_ROWS = 50;
 
@@ -125,6 +132,17 @@ const INSERT_CHUNK_ROWS = 50;
  * equality, except for the query's final term, which matches as a prefix so a
  * search behaves as-you-type. Tokens are `[\p{L}\p{N}]+` by construction, so
  * the `LIKE` pattern carries no wildcard or escape character.
+ *
+ * `LIKE`, not the half-open range the vocabulary scorer uses, for the same
+ * reason the chunk above is not 32: this layout runs only on Postgres and
+ * MySQL, so Workerd's 50-byte LIKE cap cannot apply — and on Postgres a range
+ * would be strictly worse. The companion's token btree declares
+ * `text_pattern_ops` precisely so a prefix `LIKE` stays indexed under a
+ * linguistic collation, and a `xxx_pattern_ops` class cannot answer `>=` / `<`
+ * at all. A collation-ordered range is also a different set from a
+ * character-wise `LIKE` (under `en_US.UTF-8`, `straße` falls inside the range
+ * for `stras` but does not match `stras%`), which would put this backend's
+ * results at odds with the FTS5 ones the shared scorer exists to keep aligned.
  */
 const searchTermPredicate = (token: string, isLast: boolean): SQL =>
     isLast ? sql`${sql.identifier(FTS_TOKEN_COLUMN)} LIKE ${`${token}%`}` : sql`${sql.identifier(FTS_TOKEN_COLUMN)} = ${token}`;
@@ -275,7 +293,7 @@ const runFtsSearch = async (
     const perTerm = tokens.map(
         (_, index) => sql`SUM(CASE WHEN u.${sql.identifier("__term__")} = ${sql.raw(String(index))} THEN u.${sql.identifier("__n__")} ELSE 0 END)`,
     );
-    const scored = sql`SELECT f.${sql.identifier(FTS_ID_COLUMN)} AS ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM (${sql.join(branches, sql` UNION ALL `)}) u JOIN ${sql.identifier(companion)} f ON f.rowid = u.${sql.identifier("doc")} GROUP BY f.${sql.identifier(FTS_ID_COLUMN)} HAVING ${sql.join(
+    const scored = sql`SELECT f.${sql.identifier(FTS_ID_COLUMN)} AS ${sql.identifier(FTS_ID_COLUMN)}, ${sql.join(perTerm, sql` + `)} AS ${sql.identifier("__score__")} FROM (${unionAll(branches)}) u JOIN ${sql.identifier(companion)} f ON f.rowid = u.${sql.identifier("doc")} GROUP BY f.${sql.identifier(FTS_ID_COLUMN)} HAVING ${sql.join(
         perTerm.map((term) => sql`${term} > 0`),
         sql` AND `,
     )}`;
