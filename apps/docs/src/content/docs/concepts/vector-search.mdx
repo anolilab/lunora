@@ -102,7 +102,12 @@ reactive `query`.
 ### Similarity search
 
 `query` takes either a precomputed `vector` or an `input` plus an `embed`
-function. `topK` is capped at 100; `filter` and `namespace` scope the search.
+function. `filter` and `namespace` scope the search.
+
+`topK` is capped at 100 for id/score-only queries, and at 20 once the query also
+asks for the heavy payload — `returnValues: true` or `returnMetadata: "all"`.
+Over either ceiling the call is refused locally with a message naming which one
+applied, rather than being silently capped at the far side.
 
 ```ts
 // lunora/searchDocs.ts
