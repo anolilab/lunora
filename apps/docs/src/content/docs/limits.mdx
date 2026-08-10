@@ -73,12 +73,13 @@ Two are yours to respect, because no rewrite can absorb them:
 
 ## Workers
 
-| Limit           | Value                           | Implication                                         |
-| --------------- | ------------------------------- | --------------------------------------------------- |
-| Bundle size     | **10 MB**                       | Lazy-load big deps; avoid bundling unused providers |
-| CPU per request | **30 s**                        | Same envelope as DO                                 |
-| Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
-| Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
+| Limit                 | Value                                                    | Implication                                                           |
+| --------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                   |
+| CPU per request       | **30 s**                                                 | Same envelope as DO                                                   |
+| Subrequests, external | **50** (Free) / **10 000** (Paid)                        | `fetch()` to the internet                                             |
+| Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1 — a cross-shard read spends one per shard |
+| Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                    |
 
 ## Queues
 
@@ -161,13 +162,13 @@ unlike R2, which is free. See the
 ## When Lunora warns you
 
 The Studio's **Advisors** pages carry the limit warnings, alongside the rest of
-the schema and performance lints. The ones that watch a ceiling:
+the schema and performance lints:
 
-| Lint                             | Fires when                                                              |
-| -------------------------------- | ----------------------------------------------------------------------- |
-| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100            |
-| `fan_out_breadth`                | A cross-shard read spans **500** shards, against the subrequest ceiling |
-| `hot_shard`                      | One shard takes a dominant share of its group's traffic                 |
+| Lint                             | Fires when                                                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100                                                                           |
+| `fan_out_breadth`                | A shard group reaches **500** active shards — wide enough that a cross-shard read over it would strain the internal-subrequest ceiling |
+| `hot_shard`                      | One shard takes a dominant share of its group's traffic (a distribution, not a ceiling)                                                |
 
 Each fires with runway, because the remediation is a design change — split a
 table, narrow a read, re-key a shard — and that is not something you can act on

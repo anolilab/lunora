@@ -3353,8 +3353,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // mutation runs inside the DO's `storage.transaction`, which
                 // rolls back the DO's SQLite and nothing else. Charging after
                 // meant a ceiling breach threw with the D1 row already committed
-                // and no way to undo it — a rollback that silently kept half the
-                // write.
+                // and no way to undo it.
+                //
+                // The trade is a charge for a row that was never written when the
+                // throw is caught — `insertMany`'s `skipDuplicates` swallows the
+                // D1 unique violation, so a re-run over mostly-duplicate rows now
+                // consumes ceiling for the skips. Failing closed is the right side
+                // of that: over-counting costs a retry, under-counting costs an
+                // isolate.
                 if (!meterExempt) {
                     headroom?.recordWrite(document);
                 }
@@ -3465,19 +3471,23 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // per-row global writer (the throughput win is shard-local only).
                 const globalIds: string[] = [];
 
+                // Charge the WHOLE batch before writing any of it, the way the
+                // shard-local branch below does. These rows land in D1, which the
+                // DO's `storage.transaction` cannot roll back, so a breach found
+                // mid-loop would leave every earlier row committed with no way to
+                // undo them. Metering up front means the batch is refused while
+                // that is still true of none of them.
+                if (!meterExempt) {
+                    for (const document of documents) {
+                        headroom?.recordWrite(document);
+                    }
+                }
+
                 for (const document of documents) {
                     // Forward `allowExplicitId` so a trusted import preserves the
                     // supplied `_id` across the D1 boundary too — mirrors the single
                     // `insert` global branch; without it the D1 writer would silently
                     // re-key every row (thermos HIGH).
-                    // Charged before the write for the same reason as the single
-                    // `insert` global branch: the row lands in D1, which the DO's
-                    // transaction cannot roll back. Charging after would leave
-                    // every row up to the breach committed in another backend.
-                    if (!meterExempt) {
-                        headroom?.recordWrite(document);
-                    }
-
                     // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
                     const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
 

@@ -12,14 +12,14 @@ const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ s
 
 const functionMetrics = (entries: AdvisorFunctionMetrics[]): LintContext => baseContext({ functionMetrics: entries });
 
-/** `count` shards in one group, each with negligible traffic — breadth is what this lint reads. */
+/** `count` active shards in one group — breadth is what this lint reads. */
 const shardsInGroup = (group: string, count: number): AdvisorShardTraffic[] =>
     Array.from({ length: count }, (_unused, index) => {
         return { group, requests: 1, shardKey: `${group}-${String(index)}` };
     });
 
 describe("fan_out_breadth", () => {
-    it("flags a fan-out approaching the per-invocation subrequest ceiling", () => {
+    it("flags a shard set wide enough to strain a cross-shard read", () => {
         expect.assertions(2);
 
         const findings = fanOutBreadth.run(traffic(shardsInGroup("listRooms", 500)));
@@ -34,14 +34,25 @@ describe("fan_out_breadth", () => {
         expect(fanOutBreadth.run(traffic(shardsInGroup("listRooms", 499)))).toHaveLength(0);
     });
 
-    it("counts per function group, since the ceiling is per invocation", () => {
+    // The studio feeder reports every live shard including failed ones at
+    // `requests: 0`. Counting those would let a long tail of dormant tenants
+    // raise the alarm on a deployment that never fans out.
+    it("ignores idle shards, as hot_shard does", () => {
         expect.assertions(1);
 
-        // Two functions, 400 shards each: 800 shards in the deployment, but no
-        // single invocation fans out over more than 400.
-        const findings = fanOutBreadth.run(traffic([...shardsInGroup("listRooms", 400), ...shardsInGroup("listUsers", 400)]));
+        const idle = Array.from({ length: 600 }, (_unused, index) => {
+            return { requests: 0, shardKey: `dormant-${String(index)}` };
+        });
 
-        expect(findings).toHaveLength(0);
+        expect(fanOutBreadth.run(traffic(idle))).toHaveLength(0);
+    });
+
+    it("groups where the feeder supplies one, since the ceiling is per invocation", () => {
+        expect.assertions(1);
+
+        // Two groups of 400: 800 shards live, but no single shard set is wide
+        // enough for a fan-out over it to approach the ceiling.
+        expect(fanOutBreadth.run(traffic([...shardsInGroup("listRooms", 400), ...shardsInGroup("listUsers", 400)]))).toHaveLength(0);
     });
 
     it("finds nothing for a static caller with no traffic feeder", () => {

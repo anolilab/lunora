@@ -44,12 +44,7 @@ const render = (where: Record<string, unknown>, engine: SqlEngine, strategy: Whe
     return renderSql(engine, compiled);
 };
 
-// Clause chains render BALANCED, not flat: `a AND (b AND c)` rather than
-// `a AND b AND c`. SQLite parses a flat chain left-deep, one expression-tree
-// node per clause, against Workerd's depth cap of 100 — so the compiler splits
-// the chain in half recursively. AND/OR are associative under three-valued
-// logic, so the grouping is invisible to what matches, and placeholder
-// numbering stays left-to-right.
+// Clause chains render BALANCED, not flat — see `joinClauses` for why.
 describe("compileWhereSql — per-engine rendering", () => {
     it("renders equality shorthand with the engine's identifier quoting + placeholder style", () => {
         expect.assertions(3);

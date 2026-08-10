@@ -280,13 +280,16 @@ describe(defineRag, () => {
     });
 
     it("rejects a chunkSize that cannot fit Vectorize's metadata limit", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // In metadata mode the chunk text IS the vector's metadata, so a chunk
         // larger than 10 KiB could never be upserted.
         expect(() => defineRag({ chunkSize: 20_000, index: "docs" })).toThrow(/metadata limit/u);
         // A textStore moves the text out, so the ceiling no longer applies.
-        expect(() => defineRag({ chunkSize: 20_000, index: "docs", textStore: { get: async () => undefined, put: async () => undefined } })).not.toThrow();
+        expect(() => defineRag({ chunkSize: 20_000, index: "docs", textStore: { getMany: async () => [], put: async () => undefined } })).not.toThrow();
+        // A custom splitter never reads `chunkSize`, so the value is inert and
+        // rejecting it would refuse a config that works.
+        expect(() => defineRag({ chunk: (text: string) => [text], chunkSize: 20_000, index: "docs" })).not.toThrow();
     });
 
     it("chunks, embeds and upserts with deterministic ids and linking metadata", async () => {

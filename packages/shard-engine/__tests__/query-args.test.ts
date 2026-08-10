@@ -113,9 +113,7 @@ describe("buildSeekWhere", () => {
         );
         const compiled = compile(where);
 
-        // Balanced grouping — the compiler splits long chains to stay under
-        // Workerd's expression-depth cap. OR/AND are associative, so this matches
-        // exactly what the flat form did, with the same bound-parameter order.
+        // Balanced grouping (see `joinClauses`); same terms, same param order.
         expect(compiled.sql).toBe(
             `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id > ?))))`,
         );

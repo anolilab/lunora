@@ -12,15 +12,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
-import { renderSql } from "./drizzle";
-
-/**
- * Workerd's `SQLITE_LIMIT_SQL_LENGTH` (stock SQLite allows 1 GB) and
- * `SQLITE_LIMIT_VARIABLE_NUMBER` (stock allows 500,000). Past either, SQLite
- * refuses to prepare the statement.
- */
-const MAX_SQL_TEXT_LENGTH = 100_000;
-const MAX_BOUND_PARAMS = 100;
+import { renderSql, WORKERD_SQLITE_LIMITS } from "./drizzle";
 
 /**
  * Run a raw SQL statement. Routes through a `.call(sql, ...)` indirection rather
@@ -39,15 +31,18 @@ export const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: strin
     // SQLite measures; statement text is identifiers and placeholders (values
     // are bound, not inlined), so the two agree in practice, and where they
     // diverge this under-reports — it can miss a violation, never invent one.
-    if (query.length > MAX_SQL_TEXT_LENGTH) {
+    if (query.length > WORKERD_SQLITE_LIMITS.sqlTextLength) {
         throw new LunoraError(
             "INTERNAL",
-            `SQL statement is ${String(query.length)} characters, over this runtime's ${String(MAX_SQL_TEXT_LENGTH)}-character limit`,
+            `SQL statement is ${String(query.length)} characters, over this runtime's ${String(WORKERD_SQLITE_LIMITS.sqlTextLength)}-character limit`,
         );
     }
 
-    if (params.length > MAX_BOUND_PARAMS) {
-        throw new LunoraError("INTERNAL", `SQL statement binds ${String(params.length)} parameters, over this runtime's limit of ${String(MAX_BOUND_PARAMS)}`);
+    if (params.length > WORKERD_SQLITE_LIMITS.boundParams) {
+        throw new LunoraError(
+            "INTERNAL",
+            `SQL statement binds ${String(params.length)} parameters, over this runtime's limit of ${String(WORKERD_SQLITE_LIMITS.boundParams)}`,
+        );
     }
 
     const runner = sql.exec as (this: SqlExec, query: string, ...rest: unknown[]) => SqlCursor<Row>;

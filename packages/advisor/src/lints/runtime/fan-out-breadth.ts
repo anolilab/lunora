@@ -25,8 +25,8 @@ const FREE_PLAN_INTERNAL_SUBREQUESTS = 1000;
 const WARN_AT_SHARDS = 500;
 
 /**
- * `fan_out_breadth` — flag a cross-shard read whose shard count is approaching
- * the per-invocation subrequest ceiling.
+ * `fan_out_breadth` — flag a shard set wide enough that a cross-shard read over
+ * it would approach the per-invocation subrequest ceiling.
  *
  * `.shardBy(key)` makes reads cheap by keeping each one on a single Durable
  * Object. A query that cannot be answered from one shard fans out instead, and
@@ -36,31 +36,39 @@ const WARN_AT_SHARDS = 500;
  * is reached by breadth alone. Bounded concurrency does not help: it paces the
  * fan-out, it does not shrink it.
  *
- * The shard count comes from the same `shardTraffic` feeder `hot_shard` reads,
- * so this costs no extra cross-shard work — the distribution is already
- * collected. Where `hot_shard` looks at the *shape* of that distribution (one
- * shard taking most of the traffic), this one looks only at its *size*.
+ * This measures **capacity, not observed fan-out**, and the distinction is the
+ * whole reason for the wording. The `shardTraffic` feeder reports one entry per
+ * live shard — the studio backend supplies no group at all, and the
+ * Analytics-Engine feeder groups by shard TABLE over its whole retention window
+ * — so neither carries "how many shards one invocation actually touched". What
+ * they do carry is how wide the shard set is, which is the ceiling on any fan-out
+ * over it. An app whose every read is shard-pinned is never at risk; it is told
+ * how much room a cross-shard read would have, not that it made one.
+ *
+ * Idle shards are excluded, matching `hot_shard`: a shard with no traffic in the
+ * window is not evidence of anything, and counting it would let a long tail of
+ * dormant tenants raise the alarm on its own.
  */
 const fanOutBreadth: Lint = {
     categories: ["PERFORMANCE"],
-    description: "A cross-shard read fans out over enough shards to approach the per-invocation subrequest ceiling.",
-    facing: "INTERNAL",
+    description: "A shard set is wide enough that a cross-shard read over it would approach the per-invocation subrequest ceiling.",
+    facing: "EXTERNAL",
     level: "WARN",
     name: "fan_out_breadth",
-    remediation: "Narrow the read to a shard subset, or roll the answer up through a `.global()` table.",
+    remediation: "Keep reads shard-pinned, or roll cross-shard answers up through a `.global()` table.",
     run: (context) => {
-        const traffic = context.shardTraffic ?? [];
+        // Only active shards, for the same reason `hot_shard` filters them.
+        const active = (context.shardTraffic ?? []).filter((shard) => shard.requests > 0);
 
-        if (traffic.length === 0) {
+        if (active.length === 0) {
             return [];
         }
 
-        // Group first: the ceiling applies per invocation, and one invocation
-        // fans out over one function's shard set — not over every shard the
-        // deployment happens to have.
+        // Grouped where the feeder supplies a group, since the ceiling applies to
+        // one invocation over one shard set rather than to the deployment total.
         const byGroup = new Map<string, number>();
 
-        for (const entry of traffic) {
+        for (const entry of active) {
             const group = entry.group ?? "";
 
             byGroup.set(group, (byGroup.get(group) ?? 0) + 1);
@@ -71,13 +79,13 @@ const fanOutBreadth: Lint = {
             .map(([group, shards]) =>
                 emit(fanOutBreadth, {
                     cacheKey: `fan_out_breadth:${group}`,
-                    detail: `${group === "" ? "A cross-shard read" : `Function "${group}"`} fans out over ${String(shards)} shards. One Durable Object subrequest each, against a ceiling of ${String(FREE_PLAN_INTERNAL_SUBREQUESTS)} internal subrequests per invocation on the Free plan (higher on Paid, but finite).`,
+                    detail: `${group === "" ? "This deployment" : `Shard group "${group}"`} has ${String(shards)} active shards, so a cross-shard read over it would issue ${String(shards)} Durable Object subrequests — against a ceiling of ${String(FREE_PLAN_INTERNAL_SUBREQUESTS)} per invocation on the Free plan (higher on Paid, but finite). Shard-pinned reads are unaffected.`,
                     metadata: { freePlanCeiling: FREE_PLAN_INTERNAL_SUBREQUESTS, group, shards },
                 }),
             );
     },
     source: "runtime",
-    title: "Wide cross-shard fan-out",
+    title: "Shard set wide enough to strain a cross-shard read",
 };
 
 export default fanOutBreadth;

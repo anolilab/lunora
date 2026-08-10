@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { runSql } from "../src/do-exec";
 import { renderSql, sqliteInList, unionAll } from "../src/drizzle";
 import { compileWhereSql } from "../src/where-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -340,40 +341,123 @@ describe("bound-parameter cap", () => {
     });
 });
 
-/** Deepest run of unclosed `(` in `text` — the parse-tree depth SQLite bounds. */
-const deepestNesting = (text: string): number => {
+/**
+ * The longest run of `connector`-joined terms at any ONE paren depth in `text` —
+ * the quantity that becomes expression-tree depth.
+ *
+ * Mirrors {@link widestCompound}, and for the same reason: total paren nesting
+ * says nothing useful here, because a FLAT `(a) AND (b) AND (c)` chain nests
+ * only one deep while being exactly the shape that blows the depth cap. What
+ * matters is how many terms share a level.
+ */
+const widestChain = (text: string, connector: "AND" | "OR"): number => {
+    const termsAtDepth = new Map<number, number>();
     let depth = 0;
-    let deepest = 0;
+    let widest = 1;
 
-    for (const character of text) {
-        if (character === "(") {
-            depth += 1;
-            deepest = Math.max(deepest, depth);
-        } else if (character === ")") {
-            depth -= 1;
+    for (const token of text.split(/\s+/u)) {
+        for (const character of token) {
+            if (character === "(") {
+                depth += 1;
+                termsAtDepth.set(depth, 1);
+            } else if (character === ")") {
+                depth -= 1;
+            }
+        }
+
+        if (token === connector) {
+            const terms = (termsAtDepth.get(depth) ?? 1) + 1;
+
+            termsAtDepth.set(depth, terms);
+            widest = Math.max(widest, terms);
         }
     }
 
-    return deepest;
+    return widest;
 };
+
+describe("the statement backstop", () => {
+    // Every builder sizes its own statement, so these fire only when one
+    // regressed or a caller hand-wrote SQL — which is exactly when a message
+    // naming the limit beats a bare SQLITE_ERROR from prepare.
+    const neverRuns = {
+        exec: () => {
+            throw new Error("the backstop must reject before the statement reaches SQLite");
+        },
+    } as unknown as SqlExec;
+
+    it("rejects a statement past the bound-parameter ceiling", () => {
+        expect.assertions(1);
+
+        expect(() => runSql(neverRuns, "SELECT 1", ...(Array.from({ length: 101 }).fill(0) as number[]))).toThrow(/101 parameters/u);
+    });
+
+    it("allows a statement exactly at the ceiling", () => {
+        expect.assertions(1);
+
+        // 100 is the limit, not one past it — the boundary the `>` turns on.
+        expect(() => runSql(neverRuns, "SELECT 1", ...(Array.from({ length: 100 }).fill(0) as number[]))).toThrow(/must reject before/u);
+    });
+
+    it("rejects statement text past the length ceiling", () => {
+        expect.assertions(1);
+
+        expect(() => runSql(neverRuns, `SELECT ${"x".repeat(100_001)}`)).toThrow(/character limit/u);
+    });
+});
 
 describe("expression-depth cap", () => {
     // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
     const depthFieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
+    const wideWhere = Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, index]));
+    const compileWide = (): { params: unknown[]; sql: string } =>
+        renderSql("sqlite", compileWhereSql(wideWhere, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value })!);
 
-    // A flat `a AND b AND c …` parses left-deep — one tree node per clause —
-    // against Workerd's cap of 100. Balanced grouping makes it log2(n) instead.
-    it("nests a long clause chain logarithmically, not linearly", () => {
-        expect.assertions(2);
+    it("measures terms per level, not total nesting", () => {
+        // The flat form this replaced — the one that blows the cap — nests only
+        // one paren deep, so a nesting count would have called it healthy.
+        expect(widestChain("(a) AND (b) AND (c)", "AND")).toBe(3);
+        expect(widestChain("((a) AND (b)) AND ((c) AND (d))", "AND")).toBe(2);
+    });
 
-        const where = Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, index]));
-        const compiled = compileWhereSql(where, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value });
-        const { params, sql: text } = renderSql("sqlite", compiled!);
+    it("never puts more than two terms at one level, however wide the where", () => {
+        expect.assertions(1);
 
-        // log2(200) is about 8; allow room for the one paren wrapping each leaf.
-        expect(deepestNesting(text)).toBeLessThan(20);
-        // Regrouping must not drop or reorder a single clause.
-        expect(params).toStrictEqual(Array.from({ length: 200 }, (_unused, index) => index));
+        // Halving pairs every level, so no level ever chains: this is the
+        // assertion a flat `sql.join` fails at 200.
+        expect(widestChain(compileWide().sql, "AND")).toBe(2);
+    });
+
+    it("keeps every clause, in order", () => {
+        expect.assertions(1);
+
+        expect(compileWide().params).toStrictEqual(Array.from({ length: 200 }, (_unused, index) => index));
+    });
+
+    it("still matches the same rows on a real SQLite build", async () => {
+        const harness = createSqliteExec();
+
+        try {
+            const schema = schemaWith(1);
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+
+            await writer.insert("t0", { title: "kept" });
+
+            // 200 AND'd conditions the row satisfies, then one it does not.
+            const satisfied = Object.fromEntries(Array.from({ length: 200 }, () => ["title", "kept"]));
+            const rows = await writer.findMany("t0", { where: satisfied });
+
+            expect(rows.page).toHaveLength(1);
+
+            const contradicted = await writer.findMany("t0", { where: { ...satisfied, title: "absent" } });
+
+            expect(contradicted.page).toHaveLength(0);
+        } finally {
+            harness.close();
+        }
     });
 });
 
