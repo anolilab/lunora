@@ -325,8 +325,7 @@ object Key {
         return "${mantissa}e$sign$exponent"
     }
 
-    private fun trimTrailingZeros(text: String): String =
-        if (!text.contains('.')) text else text.trimEnd('0').trimEnd('.')
+    private fun trimTrailingZeros(text: String): String = if (!text.contains('.')) text else text.trimEnd('0').trimEnd('.')
 
     /** Quotes a string the way `JSON.stringify` does: `<`, `>`, `&`, U+2028/9 stay raw. */
     fun jsonString(value: String): String {

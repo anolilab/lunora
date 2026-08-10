@@ -32,9 +32,9 @@ MAX_BIGINT_DIGITS = 1024
 class _Undefined:
     """Singleton sentinel for JS ``undefined`` (distinct from ``None``/``null``)."""
 
-    _instance: "_Undefined | None" = None
+    _instance: _Undefined | None = None
 
-    def __new__(cls) -> "_Undefined":
+    def __new__(cls) -> _Undefined:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -60,7 +60,7 @@ class WireDate:
     epoch_ms: float
 
     @classmethod
-    def from_datetime(cls, dt: Any) -> "WireDate":
+    def from_datetime(cls, dt: Any) -> WireDate:
         return cls(int(dt.timestamp() * 1000))
 
     def to_datetime(self) -> Any:
@@ -195,8 +195,7 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
         return result
 
     raise TypeError(
-        f"wire-codec: cannot encode a {type(value).__name__} over the Lunora wire — "
-        "only plain values, dict/list, bytes, and the Wire* wrappers round-trip"
+        f"wire-codec: cannot encode a {type(value).__name__} over the Lunora wire — only plain values, dict/list, bytes, and the Wire* wrappers round-trip"
     )
 
 
@@ -256,7 +255,7 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
 
 
 def _is_bigint_literal(raw: str) -> bool:
-    body = raw[1:] if raw.startswith("-") else raw
+    body = raw.removeprefix("-")
     return len(body) > 0 and body.isdigit()
 
 
@@ -293,7 +292,7 @@ def _format_number(value: Any) -> str:
 def _trim_zeros(text: str, value: float) -> str:
     """Shortest positional spelling that still parses back to ``value``."""
 
-    for precision in range(0, 21):
+    for precision in range(21):
         candidate = f"{value:.{precision}f}"
         if float(candidate) == value:
             text = candidate
@@ -310,7 +309,7 @@ def _exponential(value: float) -> str:
 
     rendered = repr(value)
 
-    for precision in range(0, 18):
+    for precision in range(18):
         candidate = f"{value:.{precision}e}"
         if float(candidate) == value:
             rendered = candidate

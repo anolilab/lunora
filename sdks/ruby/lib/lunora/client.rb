@@ -166,7 +166,7 @@ module Lunora
           Lunora.build_subscribe_frame(
             id, entry[:function_path], entry[:args],
             since_seq: entry[:cursor], since_epoch: entry[:epoch]
-          ),
+          )
         )
       end
     end
@@ -174,14 +174,12 @@ module Lunora
     # Apply one server frame and return its type. Unknown types are ignored,
     # per the protocol's forward-compatibility rule.
     def handle_frame(raw)
-      return nil if ["lunora-ping", "lunora-pong"].include?(raw)
+      return nil if %w[lunora-ping lunora-pong].include?(raw)
 
-      frame = begin
-        JSON.parse(raw)
-      rescue JSON::ParserError
-        # Non-JSON frames are ignored by the client parser, not fatal.
-        return nil
-      end
+      frame = parse_frame(raw)
+
+      # Non-JSON frames are ignored by the client parser, not fatal.
+      return nil if frame.nil?
 
       dispatch(frame)
     end
@@ -209,6 +207,12 @@ module Lunora
       when "pokeEnd" then apply_poke(frame)
       else kind
       end
+    end
+
+    def parse_frame(raw)
+      JSON.parse(raw)
+    rescue JSON::ParserError
+      nil
     end
 
     def deliver(entry, frame, kind)
@@ -309,7 +313,6 @@ module Lunora
 
       "#{endpoint}#{endpoint.include?("?") ? "&" : "?"}#{params.join("&")}"
     end
-
 
     def join_url(path) = "#{@url.sub(%r{/\z}, "")}#{path}"
   end

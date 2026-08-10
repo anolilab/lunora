@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, LunoraError  # noqa: E402
+from lunora.client import LunoraClient, LunoraError
 
 
 def _record():
@@ -50,7 +50,7 @@ class TestRpcVerbs(unittest.TestCase):
     def test_non_2xx_without_an_error_envelope_raises(self):
         # protocol/README.md §4.2. Without the status check this returned None
         # and no exception — a caller would believe its mutation committed.
-        def post(url, headers, body):
+        def post(_url, _headers, _body):
             return 502, {"message": "bad gateway"}
 
         client = LunoraClient("https://app.example", http_post=post)
@@ -61,7 +61,7 @@ class TestRpcVerbs(unittest.TestCase):
         self.assertEqual(caught.exception.code, "INTERNAL")
 
     def test_2xx_without_an_error_envelope_still_returns_the_result(self):
-        def post(url, headers, body):
+        def post(_url, _headers, _body):
             return 200, {"result": {"ok": True}}
 
         client = LunoraClient("https://app.example", http_post=post)

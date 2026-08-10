@@ -111,6 +111,20 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
+/**
+ * Narrow the bare `except:` quicktype emits inside its `from_union` helper.
+ *
+ * A bare handler catches `BaseException`, so a `KeyboardInterrupt` or
+ * `SystemExit` raised while a union member is being decoded is swallowed and the
+ * loop simply tries the next member — the interrupt never reaches the caller.
+ * Every union-typed field in every generated Python SDK routes through that
+ * helper, so it is fixed here rather than left to each consumer.
+ *
+ * Anchored on the line, not a plain substring, so a `except:` inside a rendered
+ * string literal or comment is left alone.
+ */
+const narrowBareExcept = (models: string): string => models.replaceAll(/^([ \t]*)except:$/gmu, "$1except Exception:");
+
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
     const referenced = referencedModels(namespaces);
     const modelImport = referenced.length > 0 ? `from .models import ${referenced.join(", ")}\n` : "";
@@ -153,7 +167,10 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
             `__all__ = [${exported.map((name) => `"${name}"`).join(", ")}]\n`,
         ].join(""),
         "api.py": api,
-        "models.py": models.length > 0 ? `${GENERATED_HEADER}${models}\n` : `${GENERATED_HEADER}# No typed argument or result schemas in this deployment.\n`,
+        "models.py":
+            models.length > 0
+                ? `${GENERATED_HEADER}${narrowBareExcept(models)}\n`
+                : `${GENERATED_HEADER}# No typed argument or result schemas in this deployment.\n`,
     };
 };
 

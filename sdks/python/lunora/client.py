@@ -20,7 +20,8 @@ import asyncio
 import inspect
 import json
 import urllib.request
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable
+from typing import Any, Callable, Optional, Union
 
 from .wire import decode_wire, encode_wire, stable_wire_key
 
@@ -28,7 +29,7 @@ RPC_PATH = "/_lunora/rpc"
 WS_PATH = "/_lunora/ws"
 
 # A WS token provider: a value, a callable returning a value, or an async callable.
-WsToken = Union[None, str, Callable[[], Union[None, str, Awaitable[Optional[str]]]]]
+WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
 Callback = Callable[[Any], None]
 ErrorCallback = Callable[["SubscriptionError"], None]
@@ -149,7 +150,7 @@ def _derive_ws_url(url: str) -> str:
 
 
 def _join(base: str, path: str) -> str:
-    return (base[:-1] if base.endswith("/") else base) + path
+    return (base.removesuffix("/")) + path
 
 
 # --- Client -----------------------------------------------------------------
@@ -211,9 +212,7 @@ class LunoraClient:
     async def query(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=None)
 
-    async def mutation(
-        self, function_path: str, args: Any = None, shard_key: Optional[str] = None, mutation_id: Optional[str] = None
-    ) -> Any:
+    async def mutation(self, function_path: str, args: Any = None, shard_key: Optional[str] = None, mutation_id: Optional[str] = None) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=mutation_id)
 
     async def action(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
@@ -234,9 +233,7 @@ class LunoraClient:
         if mutation_id is not None:
             headers["x-lunora-mutation-id"] = mutation_id
         body = json.dumps(build_rpc_body(function_path, args, shard_key)).encode("utf-8")
-        status, parsed = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body)
-        )
+        status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body))
         return parse_rpc_response(parsed, status)
 
     # --- WS credential ------------------------------------------------------
@@ -317,9 +314,7 @@ class LunoraClient:
     def _send_subscribe(self, sub: _Subscription) -> None:
         if self._send is None:
             return
-        frame = build_subscribe_frame(
-            sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch
-        )
+        frame = build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
         self._send(frame)
 
     # --- Inbound frame dispatch (fixture-tested) ---------------------------
@@ -374,13 +369,11 @@ class LunoraClient:
 
     def _handle_data(self, frame: dict) -> dict:
         sub = self._subs.get(frame.get("id"))
-        if "data" in frame and frame["data"] is not None:
-            value = decode_wire(frame["data"])
-        else:
-            # Minimal delta handling: replace wholesale (the full protocol merges
-            # a mutation-delta into the server base; a wholesale replace is a
-            # correct fallback and keeps the SDK dependency-free).
-            value = decode_wire(frame.get("delta"))
+        # Minimal delta handling: replace wholesale (the full protocol merges a
+        # mutation-delta into the server base; a wholesale replace is a correct
+        # fallback and keeps the SDK dependency-free).
+        has_data = "data" in frame and frame["data"] is not None
+        value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
         if sub is not None:
             sub.last_value = value
             if "cursor" in frame:
@@ -500,7 +493,7 @@ def _percent(value: str) -> str:
 def _urllib_post(url: str, headers: dict, body: bytes) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request) as response:  # noqa: S310 - user-provided origin
+        with urllib.request.urlopen(request) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
         raw = exc.read().decode("utf-8")

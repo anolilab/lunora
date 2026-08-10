@@ -99,28 +99,27 @@ object Wire {
         }
     }
 
-    private fun decodeTagged(items: List<*>, depth: Int): WireValue =
-        when (items.getOrNull(1)) {
-            "undefined" -> WireValue.Undefined
-            "nan" -> WireValue.NaN
-            "inf" -> WireValue.Infinity
-            "-inf" -> WireValue.NegInfinity
-            "bigint" -> decodeBigInt(items)
-            "date" -> WireValue.Date(decode(items.getOrNull(2), depth + 1))
-            "url" -> WireValue.Url(items[2] as String)
-            "map" -> WireValue.WireMap(
-                (items[2] as List<*>).map { entry ->
-                    val pair = entry as List<*>
-                    decode(pair[0], depth + 1) to decode(pair[1], depth + 1)
-                },
-            )
-            "set" -> WireValue.WireSet((items[2] as List<*>).map { decode(it, depth + 1) })
-            "error" -> decodeError(items, depth)
-            "bytes" -> decodeBytes(items)
-            "arr" -> WireValue.Arr((items[2] as List<*>).map { decode(it, depth + 1) })
-            // Unknown tag (forward compatibility): an ordinary array.
-            else -> WireValue.Arr(items.map { decode(it, depth + 1) })
-        }
+    private fun decodeTagged(items: List<*>, depth: Int): WireValue = when (items.getOrNull(1)) {
+        "undefined" -> WireValue.Undefined
+        "nan" -> WireValue.NaN
+        "inf" -> WireValue.Infinity
+        "-inf" -> WireValue.NegInfinity
+        "bigint" -> decodeBigInt(items)
+        "date" -> WireValue.Date(decode(items.getOrNull(2), depth + 1))
+        "url" -> WireValue.Url(items[2] as String)
+        "map" -> WireValue.WireMap(
+            (items[2] as List<*>).map { entry ->
+                val pair = entry as List<*>
+                decode(pair[0], depth + 1) to decode(pair[1], depth + 1)
+            },
+        )
+        "set" -> WireValue.WireSet((items[2] as List<*>).map { decode(it, depth + 1) })
+        "error" -> decodeError(items, depth)
+        "bytes" -> decodeBytes(items)
+        "arr" -> WireValue.Arr((items[2] as List<*>).map { decode(it, depth + 1) })
+        // Unknown tag (forward compatibility): an ordinary array.
+        else -> WireValue.Arr(items.map { decode(it, depth + 1) })
+    }
 
     private fun decodeBigInt(items: List<*>): WireValue {
         val raw = items.getOrNull(2)
@@ -215,12 +214,7 @@ sealed class WireValue {
     /** Any other typed-array view, carrying its constructor name. */
     class TypedBytes(val data: ByteArray, val ctor: String) : WireValue()
 
-    data class Err(
-        val name: String,
-        val message: String,
-        val props: List<Pair<String, WireValue>> = emptyList(),
-        val cause: WireValue? = null,
-    ) : WireValue()
+    data class Err(val name: String, val message: String, val props: List<Pair<String, WireValue>> = emptyList(), val cause: WireValue? = null) : WireValue()
 }
 
 class WireFormatException(message: String) : RuntimeException(message)

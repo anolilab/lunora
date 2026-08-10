@@ -10,9 +10,8 @@ pub mod key;
 pub mod wire;
 
 pub use client::{
-    build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_shape_unsubscribe_frame, build_subscribe_frame,
-    build_unsubscribe_frame, parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, SubscriptionError, Verb,
-    RPC_PATH, WS_PATH,
+    build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_shape_unsubscribe_frame, build_subscribe_frame, build_unsubscribe_frame,
+    parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, SubscriptionError, Verb, RPC_PATH, WS_PATH,
 };
 pub use key::{stable_stringify, stable_wire_key};
 pub use wire::{decode_wire, encode_wire, from_json, from_model_json, WireError, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};

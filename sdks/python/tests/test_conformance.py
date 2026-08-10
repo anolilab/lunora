@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import (  # noqa: E402
+from lunora.client import (
     LunoraClient,
     LunoraError,
     build_connect_frame,
@@ -20,8 +20,8 @@ from lunora.client import (  # noqa: E402
     build_unsubscribe_frame,
     parse_rpc_response,
 )
-from lunora.wire import decode_wire, encode_wire, stable_wire_key  # noqa: E402
-from tests._fixtures import load  # noqa: E402
+from lunora.wire import decode_wire, encode_wire, stable_wire_key
+from tests._fixtures import load
 
 
 class TestWireCodecFixtures(unittest.TestCase):
@@ -79,9 +79,7 @@ class TestWsFrameBuilders(unittest.TestCase):
         frames = load("ws-frames.json")["clientFrames"]
         self.assertEqual(build_connect_frame("client-test"), frames["connect"])
         self.assertEqual(build_connect_frame("client-test", {"roomId": "general"}), frames["connect-with-context"])
-        self.assertEqual(
-            build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}), frames["subscribe-cold"]
-        )
+        self.assertEqual(build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}), frames["subscribe-cold"])
         self.assertEqual(
             build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}, since_seq=12, since_epoch="e1"),
             frames["subscribe-resume"],
@@ -90,9 +88,7 @@ class TestWsFrameBuilders(unittest.TestCase):
 
     def test_shape_subscribe_frame(self):
         shape = load("ws-frames.json")["shape"]
-        self.assertEqual(
-            build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"]
-        )
+        self.assertEqual(build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"])
 
 
 class TestWsFrameConsumer(unittest.TestCase):

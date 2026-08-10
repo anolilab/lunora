@@ -23,7 +23,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora import LunoraClient, WireBigInt  # noqa: E402
+from lunora import LunoraClient, WireBigInt
 
 
 async def main() -> None:
@@ -51,7 +51,7 @@ async def main() -> None:
 
         # A bigint argument is marked explicitly so it rides the wire as v.bigint().
         await client.mutation("ledger:add", {"amount": WireBigInt(1000)})
-    except Exception as exc:  # noqa: BLE001 - example: surface any transport error
+    except Exception as exc:
         print("RPC failed (is the dev server running?):", exc)
 
     # --- Live subscription ---------------------------------------------------

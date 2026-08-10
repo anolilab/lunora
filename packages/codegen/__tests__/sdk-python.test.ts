@@ -153,4 +153,18 @@ describe("generateSdk (python)", () => {
         expect(api).not.toContain("Result.from_dict");
         expect(api.match(/-> Any:/gu)).toHaveLength(2);
     });
+
+    it("narrows the bare `except:` quicktype writes into its from_union helper", async () => {
+        expect.assertions(2);
+
+        // A bare handler catches BaseException, so a KeyboardInterrupt raised
+        // while a union member is being decoded is swallowed and the loop just
+        // tries the next member. Every union-typed field routes through that
+        // helper, so the fix belongs in the emitter rather than in each consumer.
+        const { files } = await generateSdk(fixture(), pythonTarget);
+        const models = files["models.py"] ?? "";
+
+        expect(models).toContain("except Exception:");
+        expect(models).not.toMatch(/^[ \t]*except:[ \t]*$/mu);
+    });
 });

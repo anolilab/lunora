@@ -61,6 +61,41 @@ single-threaded use; wrap them if you share one.
 conformance suites run with no network, and a consumer keeps its own transport,
 timeouts, retries and socket library rather than inheriting ours.
 
+## Lint and format
+
+Each transport is held to its own ecosystem's standard tools, run by
+`./sdks/lint-all.sh` (same parallel shape as `run-all.sh`; pass language names to
+narrow it). CI runs the identical script per leg, so the local check and the gate
+cannot drift.
+
+| Language | Format                                | Lint                       | Config             |
+| -------- | ------------------------------------- | -------------------------- | ------------------ |
+| python   | `ruff format --check`                 | `ruff check`               | `pyproject.toml`   |
+| go       | `gofmt -l`                            | `go vet`                   | — (tool defaults)  |
+| ruby     | `rubocop` (layout cops)               | `rubocop`                  | `.rubocop.yml`     |
+| rust     | `cargo fmt --check`                   | `cargo clippy -D warnings` | `rustfmt.toml`     |
+| swift    | `swift format lint --strict`          | same                       | `.swift-format`    |
+| java     | `google-java-format --aosp --dry-run` | `javac -Xlint:all -Werror` | — (`--aosp` = 4sp) |
+| kotlin   | `ktlint`                              | `ktlint`                   | `.editorconfig`    |
+
+Every tool is pinned in CI by version or by SHA-256, so a new release cannot
+change the rule set under a green PR. A tool missing locally reports `SKIP`, never
+`PASS` — a check that did not run must not read as one that passed.
+
+Two settings are deliberate rather than default: the line width is 160
+everywhere, matching the repo's Prettier `printWidth`, so two ports read the same
+side by side; and Java uses `--aosp` for 4-space indentation for the same reason.
+Where a rule is switched off, the config says which behaviour of this code the
+rule was wrong about — the wire codec's `case`/`when` tables and its
+shortest-round-trip float comparison are the recurring two.
+
+**`generated_check/` is excluded from all of it.** Those trees are
+`lunora sdk generate` output committed as samples; the models come from
+quicktype, whose style this repo does not own, and any correction there is undone
+by the next regeneration. Correctness in generated output is enforced in the
+emitter instead — `narrowBareExcept` in `targets/python.ts` is one such fix, for a
+bare `except:` that swallowed `KeyboardInterrupt` in every generated Python SDK.
+
 ## Conformance
 
 Every SDK asserts itself against the golden frames in `protocol/fixtures/`, the

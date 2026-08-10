@@ -10,12 +10,12 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Protocol-conformance tests: drive the Java SDK against the shared golden
- * fixtures in {@code protocol/fixtures/}, the same files the TypeScript client
- * and the Python, Go, Ruby, Swift and Rust ports are tested against.
+ * Protocol-conformance tests: drive the Java SDK against the shared golden fixtures in {@code
+ * protocol/fixtures/}, the same files the TypeScript client and the Python, Go, Ruby, Swift and
+ * Rust ports are tested against.
  *
- * <p>Plain assertions rather than JUnit, so the suite needs no dependency
- * resolution — run it with {@code java -ea}.
+ * <p>Plain assertions rather than JUnit, so the suite needs no dependency resolution — run it with
+ * {@code java -ea}.
  */
 public final class ConformanceTest {
     private static int checks;
@@ -97,7 +97,9 @@ public final class ConformanceTest {
             Object encoded = testCase.get("encoded");
             Object roundTripped = Wire.encode(Wire.decode(encoded));
 
-            check(canonical(roundTripped).equals(canonical(encoded)), "round-trip mismatch for " + testCase.get("name"));
+            check(
+                    canonical(roundTripped).equals(canonical(encoded)),
+                    "round-trip mismatch for " + testCase.get("name"));
         }
     }
 
@@ -110,24 +112,34 @@ public final class ConformanceTest {
 
         Map<String, Object> encoded = (Map<String, Object>) Wire.encode(source);
 
-        check(!encoded.containsKey("dropped"), "an UNDEFINED object field must be dropped, matching JSON.stringify");
+        check(
+                !encoded.containsKey("dropped"),
+                "an UNDEFINED object field must be dropped, matching JSON.stringify");
         check(encoded.containsKey("kept"), "a null object field must be kept");
 
         // In an array position the slot must survive, or every later element shifts.
         List<Object> inArray = (List<Object>) Wire.encode(List.of(Wire.UNDEFINED, 1.0));
 
-        check(canonical(inArray.get(0)).contains("undefined"), "array-position undefined must stay tagged");
+        check(
+                canonical(inArray.get(0)).contains("undefined"),
+                "array-position undefined must stay tagged");
     }
 
     private static void overLongBigIntRejected() {
         String overLong = "9".repeat(Wire.MAX_BIGINT_DIGITS + 1);
 
-        check(throwsWireError(List.of(Wire.TAG, "bigint", overLong)), "an over-long bigint must be rejected");
-        check(throwsWireError(List.of(Wire.TAG, "bigint", "12x4")), "a non-numeric bigint must be rejected");
+        check(
+                throwsWireError(List.of(Wire.TAG, "bigint", overLong)),
+                "an over-long bigint must be rejected");
+        check(
+                throwsWireError(List.of(Wire.TAG, "bigint", "12x4")),
+                "a non-numeric bigint must be rejected");
 
         Object decoded = Wire.decode(List.of(Wire.TAG, "bigint", "-42"));
 
-        check(decoded instanceof Wire.WireBigInt bigInt && bigInt.value().intValue() == -42, "-42 should decode");
+        check(
+                decoded instanceof Wire.WireBigInt bigInt && bigInt.value().intValue() == -42,
+                "-42 should decode");
     }
 
     private static boolean throwsWireError(Object value) {
@@ -157,14 +169,18 @@ public final class ConformanceTest {
         for (Object entry : (List<Object>) document.get("cases")) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
 
-            check(Key.stableWireKey(testCase.get("args")).equals(testCase.get("key")), "key for " + testCase.get("name"));
+            check(
+                    Key.stableWireKey(testCase.get("args")).equals(testCase.get("key")),
+                    "key for " + testCase.get("name"));
         }
 
         for (Object entry : (List<Object>) document.get("typed")) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
             Object decoded = Wire.decode(testCase.get("wireArgs"));
 
-            check(Key.stableWireKey(decoded).equals(testCase.get("key")), "typed key for " + testCase.get("name"));
+            check(
+                    Key.stableWireKey(decoded).equals(testCase.get("key")),
+                    "typed key for " + testCase.get("name"));
         }
     }
 
@@ -179,7 +195,9 @@ public final class ConformanceTest {
         for (Object[] testCase : cases) {
             String actual = Key.formatNumber((Double) testCase[0]);
 
-            check(actual.equals(testCase[1]), "formatNumber(" + testCase[0] + ") = " + actual + ", want " + testCase[1]);
+            check(
+                    actual.equals(testCase[1]),
+                    "formatNumber(" + testCase[0] + ") = " + actual + ", want " + testCase[1]);
         }
     }
 
@@ -200,9 +218,13 @@ public final class ConformanceTest {
 
     private static void stringEscapingMatchesJsonStringify() {
         // JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
-        check(Key.jsonString("a<b>&c").equals("\"a<b>&c\""), "angle brackets and ampersand stay raw");
+        check(
+                Key.jsonString("a<b>&c").equals("\"a<b>&c\""),
+                "angle brackets and ampersand stay raw");
         check(Key.jsonString("  ").equals("\"  \""), "line separators stay raw");
-        check(Key.jsonString("tab\there").equals("\"tab\\there\""), "control characters are escaped");
+        check(
+                Key.jsonString("tab\there").equals("\"tab\\there\""),
+                "control characters are escaped");
     }
 
     @SuppressWarnings("unchecked")
@@ -211,11 +233,19 @@ public final class ConformanceTest {
 
         for (Object entry : (List<Object>) request.get("cases")) {
             Map<String, Object> testCase = (Map<String, Object>) entry;
-            Object args = testCase.containsKey("args") ? testCase.get("args") : Wire.decode(testCase.get("argsWire"));
-            Map<String, Object> body = Client.buildRpcBody(
-                    (String) testCase.get("functionPath"), args, (String) testCase.get("shardKey"));
+            Object args =
+                    testCase.containsKey("args")
+                            ? testCase.get("args")
+                            : Wire.decode(testCase.get("argsWire"));
+            Map<String, Object> body =
+                    Client.buildRpcBody(
+                            (String) testCase.get("functionPath"),
+                            args,
+                            (String) testCase.get("shardKey"));
 
-            check(canonical(body).equals(canonical(testCase.get("body"))), "body for " + testCase.get("name"));
+            check(
+                    canonical(body).equals(canonical(testCase.get("body"))),
+                    "body for " + testCase.get("name"));
         }
     }
 
@@ -242,7 +272,9 @@ public final class ConformanceTest {
                 check(false, "expected an ApiException for " + testCase.get("name"));
             } catch (Client.ApiException error) {
                 check(error.code.equals(testCase.get("code")), "code for " + testCase.get("name"));
-                check(error.getMessage().equals(testCase.get("message")), "message for " + testCase.get("name"));
+                check(
+                        error.getMessage().equals(testCase.get("message")),
+                        "message for " + testCase.get("name"));
             }
         }
     }
@@ -264,7 +296,8 @@ public final class ConformanceTest {
 
     @SuppressWarnings("unchecked")
     private static void clientFrameBuilders() throws IOException {
-        Map<String, Object> frames = (Map<String, Object>) fixture("ws-frames.json").get("clientFrames");
+        Map<String, Object> frames =
+                (Map<String, Object>) fixture("ws-frames.json").get("clientFrames");
         Map<String, Object> args = new LinkedHashMap<>();
 
         args.put("channel", "general");
@@ -273,19 +306,30 @@ public final class ConformanceTest {
 
         context.put("roomId", "general");
 
-        check(canonical(Client.buildConnectFrame("client-test", null)).equals(canonical(frames.get("connect"))), "connect");
         check(
-                canonical(Client.buildConnectFrame("client-test", context)).equals(canonical(frames.get("connect-with-context"))),
+                canonical(Client.buildConnectFrame("client-test", null))
+                        .equals(canonical(frames.get("connect"))),
+                "connect");
+        check(
+                canonical(Client.buildConnectFrame("client-test", context))
+                        .equals(canonical(frames.get("connect-with-context"))),
                 "connect-with-context");
         check(
-                canonical(Client.buildSubscribeFrame("sub_1", "messages:list", args, null, null, null))
+                canonical(
+                                Client.buildSubscribeFrame(
+                                        "sub_1", "messages:list", args, null, null, null))
                         .equals(canonical(frames.get("subscribe-cold"))),
                 "subscribe-cold");
         check(
-                canonical(Client.buildSubscribeFrame("sub_1", "messages:list", args, null, 12.0, "e1"))
+                canonical(
+                                Client.buildSubscribeFrame(
+                                        "sub_1", "messages:list", args, null, 12.0, "e1"))
                         .equals(canonical(frames.get("subscribe-resume"))),
                 "subscribe-resume");
-        check(canonical(Client.buildUnsubscribeFrame("sub_1")).equals(canonical(frames.get("unsubscribe"))), "unsubscribe");
+        check(
+                canonical(Client.buildUnsubscribeFrame("sub_1"))
+                        .equals(canonical(frames.get("unsubscribe"))),
+                "unsubscribe");
     }
 
     @SuppressWarnings("unchecked")
@@ -311,13 +355,16 @@ public final class ConformanceTest {
             if (expect.containsKey("valueWire")) {
                 check(seen.size() == 1, "onData should fire once for " + testCase.get("name"));
                 check(
-                        canonical(Wire.encode(seen.get(0))).equals(canonical(expect.get("valueWire"))),
+                        canonical(Wire.encode(seen.get(0)))
+                                .equals(canonical(expect.get("valueWire"))),
                         "value for " + testCase.get("name"));
             }
 
             if ("error".equals(expect.get("kind"))) {
                 check(errors.size() == 1, "onError should fire once");
-                check(java.util.Objects.equals(errors.get(0).code(), expect.get("code")), "error code");
+                check(
+                        java.util.Objects.equals(errors.get(0).code(), expect.get("code")),
+                        "error code");
             }
         }
     }
@@ -330,7 +377,9 @@ public final class ConformanceTest {
         args.put("room", "general");
 
         check(
-                canonical(Client.buildShapeSubscribeFrame("shape_1", "roomMessages", args, null, null))
+                canonical(
+                                Client.buildShapeSubscribeFrame(
+                                        "shape_1", "roomMessages", args, null, null))
                         .equals(canonical(shape.get("shape-subscribe-cold"))),
                 "shape-subscribe-cold");
     }
@@ -354,7 +403,8 @@ public final class ConformanceTest {
 
         check(delivered.size() == 1, "a poke applies atomically at pokeEnd");
         check(
-                canonical(delivered.get(delivered.size() - 1)).equals(canonical(shape.get("expectedRows"))),
+                canonical(delivered.get(delivered.size() - 1))
+                        .equals(canonical(shape.get("expectedRows"))),
                 "materialised rows");
     }
 
@@ -379,14 +429,13 @@ public final class ConformanceTest {
     }
 
     /**
-     * The topology every real consumer has: a socket read loop on one thread,
-     * application code subscribing on another.
+     * The topology every real consumer has: a socket read loop on one thread, application code
+     * subscribing on another.
      *
-     * <p>The assertion is on the COUNT, not on the absence of a crash: an
-     * unsynchronised {@code nextId++} hands two threads the same id, the second
-     * {@code put} replaces the first, and the client silently forgets a live
-     * subscription. A resend then emits fewer frames than there are subscribers —
-     * deterministic, unlike waiting for a {@link LinkedHashMap} to corrupt.
+     * <p>The assertion is on the COUNT, not on the absence of a crash: an unsynchronised {@code
+     * nextId++} hands two threads the same id, the second {@code put} replaces the first, and the
+     * client silently forgets a live subscription. A resend then emits fewer frames than there are
+     * subscribers — deterministic, unlike waiting for a {@link LinkedHashMap} to corrupt.
      */
     private static void concurrentSubscribeAndHandleFrame() throws InterruptedException {
         final int threads = 4;
@@ -396,21 +445,29 @@ public final class ConformanceTest {
         List<Thread> workers = new ArrayList<>();
 
         for (int index = 0; index < threads; index++) {
-            Thread worker = new Thread(() -> {
-                for (int call = 0; call < perThread; call++) {
-                    client.subscribe("messages:list", null, value -> {}, null, null);
-                }
-            });
+            Thread worker =
+                    new Thread(
+                            () -> {
+                                for (int call = 0; call < perThread; call++) {
+                                    client.subscribe(
+                                            "messages:list", null, value -> {}, null, null);
+                                }
+                            });
 
             workers.add(worker);
             worker.start();
         }
 
-        Thread reader = new Thread(() -> {
-            for (int call = 0; call < threads * perThread; call++) {
-                client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":" + call + "}");
-            }
-        });
+        Thread reader =
+                new Thread(
+                        () -> {
+                            for (int call = 0; call < threads * perThread; call++) {
+                                client.handleFrame(
+                                        "{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":"
+                                                + call
+                                                + "}");
+                            }
+                        });
 
         reader.start();
 
@@ -426,6 +483,8 @@ public final class ConformanceTest {
         client.attachSocket(frame -> resent.incrementAndGet());
         client.resendSubscriptions();
 
-        check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id");
+        check(
+                resent.get() == threads * perThread,
+                "every concurrent subscribe survived with a distinct id");
     }
 }

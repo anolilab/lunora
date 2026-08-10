@@ -57,3 +57,9 @@ marketing/videos/build/
 
 # deepsec security tool working directory — vendored, scanned, not ours to format
 .deepsec/
+
+# Non-JS SDK build output. Git ignores these, but Prettier does not read
+# .gitignore, so a local `lint:prettier` otherwise reports dozens of warnings for
+# swiftpm and cargo intermediates that no CI checkout even contains.
+sdks/*/.build/
+sdks/**/target/

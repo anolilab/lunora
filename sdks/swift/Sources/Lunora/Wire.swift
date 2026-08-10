@@ -113,9 +113,9 @@ public enum WireFormatError: Error, CustomStringConvertible {
             return "wire-codec: value nesting exceeds the \(Wire.maxDepth)-level limit"
         case .invalidBigInt:
             return "wire-codec: invalid or over-long bigint (max \(Wire.maxBigIntDigits) digits)"
-        case let .unsupported(type):
+        case .unsupported(let type):
             return "wire-codec: cannot encode a \(type) over the Lunora wire — only plain values, arrays, dictionaries, Data, and the Wire* wrappers round-trip"
-        case let .malformed(tag):
+        case .malformed(let tag):
             return "wire-codec: malformed \(tag) tag"
         }
     }

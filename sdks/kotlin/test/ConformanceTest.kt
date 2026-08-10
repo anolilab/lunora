@@ -74,13 +74,12 @@ private fun overLongBigIntRejected() {
     check(Wire.decode(listOf(Wire.TAG, "bigint", "-42")) == WireValue.BigInt(BigInteger("-42")), "-42 should decode")
 }
 
-private fun rejects(value: Any?): Boolean =
-    try {
-        Wire.decode(value)
-        false
-    } catch (error: WireFormatException) {
-        true
-    }
+private fun rejects(value: Any?): Boolean = try {
+    Wire.decode(value)
+    false
+} catch (error: WireFormatException) {
+    true
+}
 
 private fun depthCapEnforced() {
     var nested: Any? = "leaf"

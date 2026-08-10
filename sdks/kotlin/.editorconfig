@@ -1,0 +1,25 @@
+# ktlint reads its configuration from .editorconfig.
+#
+# `intellij_idea` rather than ktlint's own `ktlint_official`: the latter mandates
+# a blank line between every `when` condition and one-parameter-per-line function
+# signatures, which would triple the length of the frame dispatcher and the wire
+# codec — the two places where seeing every branch at once is the point.
+root = true
+
+[*.kt]
+ktlint_code_style = intellij_idea
+max_line_length = 160
+# The frame dispatcher and the wire codec are single `when` statements over the
+# protocol's tag and frame-type sets. A mandatory blank line between conditions
+# spreads one 20-arm table over 60 lines, which is how an arm goes missing
+# unnoticed — the whole value of the table is seeing it at once.
+ktlint_standard_blank-line-between-when-conditions = disabled
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+
+# `generated_check/` is `lunora sdk generate` output committed as a sample; the
+# next regeneration overwrites anything corrected here, so the emitter is what
+# enforces its shape.
+[generated_check/**.kt]
+ktlint = disabled

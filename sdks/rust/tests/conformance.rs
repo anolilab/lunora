@@ -8,8 +8,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use lunora::client::{
-    build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame,
-    parse_rpc_response, Client, ClientError,
+    build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
@@ -70,7 +69,10 @@ fn undefined_is_distinct_from_null() {
     ]))
     .expect("encode");
 
-    assert!(encoded.get("dropped").is_none(), "an undefined object field must be dropped, matching JSON.stringify");
+    assert!(
+        encoded.get("dropped").is_none(),
+        "an undefined object field must be dropped, matching JSON.stringify"
+    );
     assert_eq!(encoded.get("kept"), Some(&Value::Null), "a null object field must be kept");
 
     // In an array position the slot must survive, or every later element shifts.
@@ -188,7 +190,11 @@ fn rpc_responses() {
         let name = case["name"].as_str().unwrap_or("?");
         let value = parse_rpc_response(&case["response"], 200).expect("parse");
 
-        assert_eq!(canonical(&encode_wire(&value).expect("encode")), canonical(&case["response"]["result"]), "{name}");
+        assert_eq!(
+            canonical(&encode_wire(&value).expect("encode")),
+            canonical(&case["response"]["result"]),
+            "{name}"
+        );
     }
 
     for case in document["responseError"].as_array().expect("responseError") {
@@ -227,9 +233,7 @@ fn client_frame_builders() {
         canonical(&frames["subscribe-cold"])
     );
     assert_eq!(
-        canonical(
-            &build_subscribe_frame("sub_1", "messages:list", &args, None, Some(&json!(12)), Some(&json!("e1"))).expect("build")
-        ),
+        canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, Some(&json!(12)), Some(&json!("e1"))).expect("build")),
         canonical(&frames["subscribe-resume"])
     );
     assert_eq!(canonical(&build_unsubscribe_frame("sub_1")), canonical(&frames["unsubscribe"]));

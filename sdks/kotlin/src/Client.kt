@@ -170,8 +170,7 @@ class Client(
             return frame
         }
 
-        fun buildShapeUnsubscribeFrame(id: String): Map<String, Any?> =
-            linkedMapOf("id" to id, "type" to "shape_unsubscribe")
+        fun buildShapeUnsubscribeFrame(id: String): Map<String, Any?> = linkedMapOf("id" to id, "type" to "shape_unsubscribe")
     }
 
     /** Registers the sender used for subscription frames. Call once the socket is open. */
@@ -179,8 +178,7 @@ class Client(
         synchronized(lock) { send = sender }
     }
 
-    fun query(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue =
-        rpc(functionPath, args, shardKey, null)
+    fun query(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue = rpc(functionPath, args, shardKey, null)
 
     fun mutation(functionPath: String, args: WireValue? = null, shardKey: String? = null, mutationId: String? = null): WireValue =
         rpc(functionPath, args, shardKey, mutationId)
@@ -190,16 +188,14 @@ class Client(
      * performs external side effects and is not replayed against the shard, so
      * claiming mutation-style de-duplication for it would be a lie.
      */
-    fun action(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue =
-        rpc(functionPath, args, shardKey, null)
+    fun action(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue = rpc(functionPath, args, shardKey, null)
 
     /** Dispatches on [verb], which is what lets generated code stay uniform. */
-    fun call(verb: Verb, functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue =
-        when (verb) {
-            Verb.QUERY -> query(functionPath, args, shardKey)
-            Verb.ACTION -> action(functionPath, args, shardKey)
-            Verb.MUTATION -> mutation(functionPath, args, shardKey)
-        }
+    fun call(verb: Verb, functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue = when (verb) {
+        Verb.QUERY -> query(functionPath, args, shardKey)
+        Verb.ACTION -> action(functionPath, args, shardKey)
+        Verb.MUTATION -> mutation(functionPath, args, shardKey)
+    }
 
     private fun rpc(functionPath: String, args: WireValue?, shardKey: String?, mutationId: String?): WireValue {
         val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")

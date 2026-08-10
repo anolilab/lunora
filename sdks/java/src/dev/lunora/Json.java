@@ -8,17 +8,15 @@ import java.util.Map;
 /**
  * A minimal JSON reader/writer.
  *
- * <p>Hand-rolled because Java SE ships no JSON at all, and pulling Jackson or
- * Gson in would make the transport's only dependency a parser it barely uses.
- * The risk that usually makes hand-rolling a bad idea does not apply here: the
- * golden fixtures under {@code protocol/fixtures} are themselves a demanding
- * parser suite, so a mistake in this file fails the conformance tests rather
+ * <p>Hand-rolled because Java SE ships no JSON at all, and pulling Jackson or Gson in would make
+ * the transport's only dependency a parser it barely uses. The risk that usually makes hand-rolling
+ * a bad idea does not apply here: the golden fixtures under {@code protocol/fixtures} are
+ * themselves a demanding parser suite, so a mistake in this file fails the conformance tests rather
  * than hiding.
  *
- * <p>Values map to plain Java types, matching every other Lunora port:
- * {@code null}, {@link Boolean}, {@link Double}, {@link String},
- * {@code List<Object>} and {@code LinkedHashMap<String, Object>} (insertion
- * ordered, because object field order must survive a round trip).
+ * <p>Values map to plain Java types, matching every other Lunora port: {@code null}, {@link
+ * Boolean}, {@link Double}, {@link String}, {@code List<Object>} and {@code LinkedHashMap<String,
+ * Object>} (insertion ordered, because object field order must survive a round trip).
  */
 public final class Json {
     private Json() {}
@@ -83,7 +81,8 @@ public final class Json {
 
             out.append('}');
         } else {
-            throw new IllegalArgumentException("json: cannot write a " + value.getClass().getName());
+            throw new IllegalArgumentException(
+                    "json: cannot write a " + value.getClass().getName());
         }
     }
 
@@ -119,7 +118,8 @@ public final class Json {
             // Error, which Client.handleFrame's `catch (RuntimeException)`
             // cannot catch, so it escapes onto the socket reader thread.
             if (depth > Wire.MAX_DEPTH) {
-                throw new IllegalArgumentException("json: nesting exceeds the " + Wire.MAX_DEPTH + "-level limit");
+                throw new IllegalArgumentException(
+                        "json: nesting exceeds the " + Wire.MAX_DEPTH + "-level limit");
             }
 
             char character = text.charAt(offset);
@@ -187,7 +187,8 @@ public final class Json {
                 }
 
                 if (character != ',') {
-                    throw new IllegalArgumentException("json: expected ',' or '}' at offset " + (offset - 1));
+                    throw new IllegalArgumentException(
+                            "json: expected ',' or '}' at offset " + (offset - 1));
                 }
             }
         }
@@ -223,7 +224,8 @@ public final class Json {
                 }
 
                 if (character != ',') {
-                    throw new IllegalArgumentException("json: expected ',' or ']' at offset " + (offset - 1));
+                    throw new IllegalArgumentException(
+                            "json: expected ',' or ']' at offset " + (offset - 1));
                 }
             }
         }
@@ -278,14 +280,18 @@ public final class Json {
                         }
 
                         try {
-                            out.append((char) Integer.parseInt(text.substring(offset, offset + 4), 16));
+                            out.append(
+                                    (char)
+                                            Integer.parseInt(
+                                                    text.substring(offset, offset + 4), 16));
                         } catch (NumberFormatException error) {
                             throw new IllegalArgumentException("json: invalid \\u escape", error);
                         }
 
                         offset += 4;
                     }
-                    default -> throw new IllegalArgumentException("json: invalid escape \\" + escape);
+                    default ->
+                            throw new IllegalArgumentException("json: invalid escape \\" + escape);
                 }
             }
         }
@@ -300,8 +306,12 @@ public final class Json {
             while (!atEnd()) {
                 char character = text.charAt(offset);
 
-                if (Character.isDigit(character) || character == '.' || character == 'e' || character == 'E'
-                        || character == '+' || character == '-') {
+                if (Character.isDigit(character)
+                        || character == '.'
+                        || character == 'e'
+                        || character == 'E'
+                        || character == '+'
+                        || character == '-') {
                     offset++;
                 } else {
                     break;

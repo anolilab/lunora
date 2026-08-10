@@ -8,17 +8,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The tagged value codec for Lunora's client↔server wire, ported from
- * {@code shared/wire-codec.ts}.
+ * The tagged value codec for Lunora's client↔server wire, ported from {@code shared/wire-codec.ts}.
  *
- * <p>The wire is JSON with no reviver; values JSON cannot carry (big integers,
- * bytes, dates, maps/sets, ±Infinity/NaN, {@code undefined} in an array
- * position) become self-delimiting tagged arrays whose first element is
- * {@link #TAG}. Pure-JSON values encode to a structurally identical tree.
+ * <p>The wire is JSON with no reviver; values JSON cannot carry (big integers, bytes, dates,
+ * maps/sets, ±Infinity/NaN, {@code undefined} in an array position) become self-delimiting tagged
+ * arrays whose first element is {@link #TAG}. Pure-JSON values encode to a structurally identical
+ * tree.
  *
- * <p>{@link #decode} returns the wrapper types below so
- * {@code encode(decode(x)) == x} holds for every golden fixture — the
- * conformance contract, asserted in {@code ConformanceTest}.
+ * <p>{@link #decode} returns the wrapper types below so {@code encode(decode(x)) == x} holds for
+ * every golden fixture — the conformance contract, asserted in {@code ConformanceTest}.
  *
  * <p>See {@code protocol/README.md} §2 for the normative grammar.
  */
@@ -32,25 +30,25 @@ public final class Wire {
     public static final int MAX_DEPTH = 64;
 
     /**
-     * Bounds a decoded big integer. Decimal parsing is superlinear, so an
-     * unbounded digit string from an untrusted peer is a denial of service.
-     * Applied only on decode — the untrusted direction.
+     * Bounds a decoded big integer. Decimal parsing is superlinear, so an unbounded digit string
+     * from an untrusted peer is a denial of service. Applied only on decode — the untrusted
+     * direction.
      */
     public static final int MAX_BIGINT_DIGITS = 1024;
 
     /**
      * JavaScript's {@code undefined}, distinct from JSON null.
      *
-     * <p>As an object field it is dropped on encode (matching
-     * {@code JSON.stringify}); in an array position it is preserved, because
-     * dropping it there would silently shift every later element.
+     * <p>As an object field it is dropped on encode (matching {@code JSON.stringify}); in an array
+     * position it is preserved, because dropping it there would silently shift every later element.
      */
-    public static final Object UNDEFINED = new Object() {
-        @Override
-        public String toString() {
-            return "UNDEFINED";
-        }
-    };
+    public static final Object UNDEFINED =
+            new Object() {
+                @Override
+                public String toString() {
+                    return "UNDEFINED";
+                }
+            };
 
     /** A {@code v.bigint()}. {@link BigInteger} is arbitrary-precision, so no range is lost. */
     public record WireBigInt(BigInteger value) {}
@@ -68,9 +66,8 @@ public final class Wire {
     public record WireSet(List<Object> items) {}
 
     /**
-     * A typed-array view that is NOT a plain Uint8Array, carrying its
-     * constructor name so the exact view type survives. Plain Uint8Array bytes
-     * use {@code byte[]} and the 2-element wire form.
+     * A typed-array view that is NOT a plain Uint8Array, carrying its constructor name so the exact
+     * view type survives. Plain Uint8Array bytes use {@code byte[]} and the 2-element wire form.
      */
     public record WireBytes(byte[] data, String ctor) {}
 
@@ -92,7 +89,8 @@ public final class Wire {
 
     private static Object encode(Object value, int depth) {
         if (depth > MAX_DEPTH) {
-            throw new WireFormatException("wire-codec: value nesting exceeds the " + MAX_DEPTH + "-level limit");
+            throw new WireFormatException(
+                    "wire-codec: value nesting exceeds the " + MAX_DEPTH + "-level limit");
         }
 
         if (value == UNDEFINED) {
@@ -127,7 +125,10 @@ public final class Wire {
             List<Object> entries = new ArrayList<>();
 
             for (Map.Entry<Object, Object> entry : map.entries()) {
-                entries.add(listOf(encode(entry.getKey(), depth + 1), encode(entry.getValue(), depth + 1)));
+                entries.add(
+                        listOf(
+                                encode(entry.getKey(), depth + 1),
+                                encode(entry.getValue(), depth + 1)));
             }
 
             return listOf(TAG, "map", entries);
@@ -144,7 +145,8 @@ public final class Wire {
         }
 
         if (value instanceof WireBytes bytes) {
-            return List.of(TAG, "bytes", Base64.getEncoder().encodeToString(bytes.data()), bytes.ctor());
+            return List.of(
+                    TAG, "bytes", Base64.getEncoder().encodeToString(bytes.data()), bytes.ctor());
         }
 
         if (value instanceof byte[] data) {
@@ -191,8 +193,11 @@ public final class Wire {
             return result;
         }
 
-        throw new WireFormatException("wire-codec: cannot encode a " + value.getClass().getName()
-                + " over the Lunora wire — only plain values, List/Map, byte[], and the Wire* wrappers round-trip");
+        throw new WireFormatException(
+                "wire-codec: cannot encode a "
+                        + value.getClass().getName()
+                        + " over the Lunora wire — only plain values, List/Map, byte[], and the"
+                        + " Wire* wrappers round-trip");
     }
 
     private static Object encodeDouble(double value) {
@@ -224,7 +229,8 @@ public final class Wire {
             }
         }
 
-        List<Object> encoded = new ArrayList<>(List.of(TAG, "error", error.name(), error.message(), props));
+        List<Object> encoded =
+                new ArrayList<>(List.of(TAG, "error", error.name(), error.message(), props));
 
         // `cause` rides a positional slot; absent when unset, keeping the
         // 5-element form.
@@ -242,7 +248,8 @@ public final class Wire {
 
     private static Object decode(Object value, int depth) {
         if (depth > MAX_DEPTH) {
-            throw new WireFormatException("wire-codec: value nesting exceeds the " + MAX_DEPTH + "-level limit");
+            throw new WireFormatException(
+                    "wire-codec: value nesting exceeds the " + MAX_DEPTH + "-level limit");
         }
 
         if (value instanceof List<?> items) {
@@ -292,46 +299,54 @@ public final class Wire {
                 return new WireUrl((String) items.get(2));
             case "map":
                 return decodeMap(items, depth);
-            case "set": {
-                List<Object> decoded = new ArrayList<>();
+            case "set":
+                {
+                    List<Object> decoded = new ArrayList<>();
 
-                for (Object item : (List<?>) items.get(2)) {
-                    decoded.add(decode(item, depth + 1));
+                    for (Object item : (List<?>) items.get(2)) {
+                        decoded.add(decode(item, depth + 1));
+                    }
+
+                    return new WireSet(decoded);
                 }
-
-                return new WireSet(decoded);
-            }
             case "error":
                 return decodeError(items, depth);
             case "bytes":
                 return decodeBytes(items);
-            case "arr": {
-                List<Object> decoded = new ArrayList<>();
+            case "arr":
+                {
+                    List<Object> decoded = new ArrayList<>();
 
-                for (Object item : (List<?>) items.get(2)) {
-                    decoded.add(decode(item, depth + 1));
+                    for (Object item : (List<?>) items.get(2)) {
+                        decoded.add(decode(item, depth + 1));
+                    }
+
+                    return decoded;
                 }
+            default:
+                {
+                    // Unknown tag (forward compatibility): an ordinary array.
+                    List<Object> decoded = new ArrayList<>();
 
-                return decoded;
-            }
-            default: {
-                // Unknown tag (forward compatibility): an ordinary array.
-                List<Object> decoded = new ArrayList<>();
+                    for (Object item : items) {
+                        decoded.add(decode(item, depth + 1));
+                    }
 
-                for (Object item : items) {
-                    decoded.add(decode(item, depth + 1));
+                    return decoded;
                 }
-
-                return decoded;
-            }
         }
     }
 
     private static Object decodeBigInt(List<?> items) {
         Object raw = items.size() > 2 ? items.get(2) : null;
 
-        if (!(raw instanceof String digits) || digits.length() > MAX_BIGINT_DIGITS || !isBigIntLiteral(digits)) {
-            throw new WireFormatException("wire-codec: invalid or over-long bigint (max " + MAX_BIGINT_DIGITS + " digits)");
+        if (!(raw instanceof String digits)
+                || digits.length() > MAX_BIGINT_DIGITS
+                || !isBigIntLiteral(digits)) {
+            throw new WireFormatException(
+                    "wire-codec: invalid or over-long bigint (max "
+                            + MAX_BIGINT_DIGITS
+                            + " digits)");
         }
 
         return new WireBigInt(new BigInteger(digits));
@@ -351,9 +366,10 @@ public final class Wire {
 
     @SuppressWarnings("unchecked")
     private static Object decodeError(List<?> items, int depth) {
-        Map<String, Object> props = items.size() > 4
-                ? (Map<String, Object>) decode(items.get(4), depth + 1)
-                : new LinkedHashMap<>();
+        Map<String, Object> props =
+                items.size() > 4
+                        ? (Map<String, Object>) decode(items.get(4), depth + 1)
+                        : new LinkedHashMap<>();
         Object cause = items.size() > 5 ? decode(items.get(5), depth + 1) : UNDEFINED;
 
         return new WireError((String) items.get(2), (String) items.get(3), props, cause);

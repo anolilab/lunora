@@ -1,25 +1,24 @@
 package dev.lunora;
 
 import java.math.BigDecimal;
-import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * The stable subscription key, ported from {@code shared/stable-key.ts}.
  *
- * <p>A key is compared verbatim against one produced by the reference
- * TypeScript client, so every spelling here must match ECMAScript exactly — a
- * mismatch silently splits one subscription into two.
+ * <p>A key is compared verbatim against one produced by the reference TypeScript client, so every
+ * spelling here must match ECMAScript exactly — a mismatch silently splits one subscription into
+ * two.
  */
 public final class Key {
     private Key() {}
 
     /**
-     * Canonical JSON encoding of a pure-JSON tree: object keys sorted at every
-     * depth, arrays keeping their order, null fields kept, {@link Wire#UNDEFINED}
-     * object fields dropped.
+     * Canonical JSON encoding of a pure-JSON tree: object keys sorted at every depth, arrays
+     * keeping their order, null fields kept, {@link Wire#UNDEFINED} object fields dropped.
      *
      * <p>Runs on the OUTPUT of {@link Wire#encode}, so it only ever sees
      * null/Boolean/Double/String/List/Map.
@@ -98,13 +97,13 @@ public final class Key {
     }
 
     /**
-     * Renders a double exactly as {@code String(v)} does in JavaScript, which is
-     * what {@code JSON.stringify} emits for a finite number.
+     * Renders a double exactly as {@code String(v)} does in JavaScript, which is what {@code
+     * JSON.stringify} emits for a finite number.
      *
-     * <p>Java's {@code Double.toString} always keeps a ".0" on integral values
-     * and switches to exponent form outside 1e-3..1e7 spelled "1.0E-5";
-     * ECMAScript drops the decimal, stays positional between 1e-7 and 1e21, and
-     * writes "1e-7". The spellings must match or the key differs.
+     * <p>Java's {@code Double.toString} always keeps a ".0" on integral values and switches to
+     * exponent form outside 1e-3..1e7 spelled "1.0E-5"; ECMAScript drops the decimal, stays
+     * positional between 1e-7 and 1e21, and writes "1e-7". The spellings must match or the key
+     * differs.
      */
     static String formatNumber(double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
@@ -112,7 +111,10 @@ public final class Key {
         }
 
         if (value == Math.rint(value) && Math.abs(value) < 1e21) {
-            return BigDecimal.valueOf(value).setScale(0, java.math.RoundingMode.HALF_UP).toBigInteger().toString();
+            return BigDecimal.valueOf(value)
+                    .setScale(0, java.math.RoundingMode.HALF_UP)
+                    .toBigInteger()
+                    .toString();
         }
 
         double magnitude = Math.abs(value);
@@ -173,8 +175,8 @@ public final class Key {
     }
 
     /**
-     * Quotes a string the way {@code JSON.stringify} does: {@code <}, {@code >},
-     * {@code &}, U+2028 and U+2029 all stay raw.
+     * Quotes a string the way {@code JSON.stringify} does: {@code <}, {@code >}, {@code &}, U+2028
+     * and U+2029 all stay raw.
      */
     static String jsonString(String value) {
         StringBuilder out = new StringBuilder(value.length() + 2);

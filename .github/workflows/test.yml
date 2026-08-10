@@ -486,6 +486,46 @@
               "if": "matrix.sdk.language == 'ruby'"
               "run": "gem install dry-struct dry-types --no-document"
 
+            # Each leg installs its own language's linter. Pinned by version
+            # (or by SHA-256 for the two that ship as a downloaded artifact), so
+            # a new release cannot change the rule set under a green PR.
+            - "name": "Install ruff"
+              "if": "matrix.sdk.language == 'python'"
+              "run": "python -m pip install --disable-pip-version-check ruff==0.16.2"
+
+            - "name": "Install rubocop"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install rubocop -v 1.89.0 --no-document"
+
+            - "name": "Install rustfmt and clippy"
+              "if": "matrix.sdk.language == 'rust'"
+              "run": "rustup component add rustfmt clippy"
+
+            - "name": "Install ktlint"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/ktlint https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
+                  echo 'a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75  /tmp/ktlint' | sha256sum --check --strict
+                  install -m 0755 /tmp/ktlint /usr/local/bin/ktlint
+
+            # Shipped as a jar, so the wrapper is what puts the command on PATH
+            # that `lint-all.sh` (and a developer's shell) both call.
+            - "name": "Install google-java-format"
+              "if": "matrix.sdk.language == 'java'"
+              "run": |
+                  curl -fsSL -o /tmp/google-java-format.jar \
+                    https://repo1.maven.org/maven2/com/google/googlejavaformat/google-java-format/1.36.1/google-java-format-1.36.1-all-deps.jar
+                  echo '25b400f003089d23cc5320cdaf1a16cabee19b8aa3434d0ff021b3d9f42154b4  /tmp/google-java-format.jar' | sha256sum --check --strict
+                  printf '#!/usr/bin/env bash\nexec java -jar /tmp/google-java-format.jar "$@"\n' > /usr/local/bin/google-java-format
+                  chmod +x /usr/local/bin/google-java-format
+
+            # The same script a developer runs. Keeping the command list in the
+            # script rather than in this matrix means the local check and the gate
+            # cannot drift — which is how the conformance coverage drifted before
+            # `protocol/conformance-cases.json` existed.
+            - "name": "Lint and format-check the ${{ matrix.sdk.language }} SDK"
+              "run": "bash sdks/lint-all.sh ${{ matrix.sdk.language }}"
+
             - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
               "working-directory": "${{ matrix.sdk.directory }}"
               "run": "${{ matrix.sdk.run }}"

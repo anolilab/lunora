@@ -54,7 +54,7 @@ module Lunora
 
   # A Map: ordered [key, value] pairs. Not a Ruby Hash, because Map keys may be
   # non-string and a Hash would also be indistinguishable from a plain object.
-  WireMap = Struct.new(:entries)
+  WireMap = Struct.new(:pairs)
 
   # A Set: ordered items.
   WireSet = Struct.new(:items)
@@ -84,7 +84,7 @@ module Lunora
     when WireUrl then [TAG, "url", value.href]
     when WireError then encode_error(value, depth)
     when WireMap
-      [TAG, "map", value.entries.map { |k, v| [encode_wire(k, depth + 1), encode_wire(v, depth + 1)] }]
+      [TAG, "map", value.pairs.map { |k, v| [encode_wire(k, depth + 1), encode_wire(v, depth + 1)] }]
     when WireSet then [TAG, "set", value.items.map { |item| encode_wire(item, depth + 1) }]
     when WireBytes then [TAG, "bytes", Base64.strict_encode64(value.data), value.ctor]
     when ::Integer then value

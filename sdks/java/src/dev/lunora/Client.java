@@ -11,20 +11,21 @@ import java.util.function.Consumer;
 /**
  * A Lunora deployment client.
  *
- * <p>The HTTP poster and the socket frame sender are injected rather than
- * assumed, so the conformance suite runs with no network and a consumer keeps
- * its own HTTP stack, timeouts and WebSocket library instead of inheriting ours.
+ * <p>The HTTP poster and the socket frame sender are injected rather than assumed, so the
+ * conformance suite runs with no network and a consumer keeps its own HTTP stack, timeouts and
+ * WebSocket library instead of inheriting ours.
  */
 public final class Client {
     /** The single endpoint every query/mutation/action posts to. */
     public static final String RPC_PATH = "/_lunora/rpc";
+
     /** The live-subscription endpoint. */
     public static final String WS_PATH = "/_lunora/ws";
 
     /**
-     * Which RPC method a call dispatches to. Generated code emits these
-     * constants rather than raw strings, so a typo in a target template is a
-     * compile error instead of a read silently sent over the write path.
+     * Which RPC method a call dispatches to. Generated code emits these constants rather than raw
+     * strings, so a typo in a target template is a compile error instead of a read silently sent
+     * over the write path.
      */
     public enum Verb {
         QUERY,
@@ -64,22 +65,22 @@ public final class Client {
 
     private final String baseUrl;
     private final HttpPoster poster;
+
     /** Volatile so an app thread can rotate the token while a socket reader is mid-frame. */
     public volatile String authToken;
 
     /**
-     * Guards every field below, and the {@code cursor}/{@code epoch}/row state
-     * hanging off {@link Subscription} and {@link Shape}.
+     * Guards every field below, and the {@code cursor}/{@code epoch}/row state hanging off {@link
+     * Subscription} and {@link Shape}.
      *
-     * <p>Two threads normally drive this client: a socket reader calling
-     * {@link #handleFrame} and the app thread calling {@link #subscribe}. A
-     * {@link LinkedHashMap} resized from both corrupts silently — its Go
-     * equivalent is what made this visible, because Go answers the same race
-     * with an unrecoverable fatal error rather than a wrong answer.
+     * <p>Two threads normally drive this client: a socket reader calling {@link #handleFrame} and
+     * the app thread calling {@link #subscribe}. A {@link LinkedHashMap} resized from both corrupts
+     * silently — its Go equivalent is what made this visible, because Go answers the same race with
+     * an unrecoverable fatal error rather than a wrong answer.
      *
-     * <p>Frames and user callbacks are dispatched OUTSIDE the lock: a sender
-     * writes a socket the consumer owns, and holding the lock across a callback
-     * would let one slow consumer stall the socket reader.
+     * <p>Frames and user callbacks are dispatched OUTSIDE the lock: a sender writes a socket the
+     * consumer owns, and holding the lock across a callback would let one slow consumer stall the
+     * socket reader.
      */
     private final Object lock = new Object();
 
@@ -98,7 +99,11 @@ public final class Client {
         Object cursor;
         Object epoch;
 
-        Subscription(String functionPath, Object args, Consumer<Object> onData, Consumer<SubscriptionError> onError) {
+        Subscription(
+                String functionPath,
+                Object args,
+                Consumer<Object> onData,
+                Consumer<SubscriptionError> onError) {
             this.functionPath = functionPath;
             this.args = args;
             this.onData = onData;
@@ -133,7 +138,8 @@ public final class Client {
     }
 
     /** Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when null. */
-    public static Map<String, Object> buildRpcBody(String functionPath, Object args, String shardKey) {
+    public static Map<String, Object> buildRpcBody(
+            String functionPath, Object args, String shardKey) {
         Map<String, Object> body = new LinkedHashMap<>();
 
         body.put("args", Wire.encode(args == null ? new LinkedHashMap<String, Object>() : args));
@@ -149,11 +155,10 @@ public final class Client {
     /**
      * Returns the decoded result, or throws {@link ApiException}.
      *
-     * <p>{@code status} is required for correctness, not diagnostics:
-     * {@code protocol/README.md} §4.2 says a non-2xx whose body carries no
-     * {@code error} envelope surfaces as an INTERNAL transport error. Without it
-     * a 502 with body {@code {"message":"…"}} returns null and throws nothing —
-     * the caller believes its mutation committed.
+     * <p>{@code status} is required for correctness, not diagnostics: {@code protocol/README.md}
+     * §4.2 says a non-2xx whose body carries no {@code error} envelope surfaces as an INTERNAL
+     * transport error. Without it a 502 with body {@code {"message":"…"}} returns null and throws
+     * nothing — the caller believes its mutation committed.
      */
     @SuppressWarnings("unchecked")
     public static Object parseRpcResponse(Map<String, Object> body, int status) {
@@ -172,7 +177,8 @@ public final class Client {
         }
 
         if (status < 200 || status > 299) {
-            throw new ApiException("INTERNAL", "HTTP " + status + " without an error envelope", null);
+            throw new ApiException(
+                    "INTERNAL", "HTTP " + status + " without an error envelope", null);
         }
 
         return Wire.decode(body.get("result"));
@@ -187,9 +193,9 @@ public final class Client {
     }
 
     /**
-     * Same envelope as a mutation, but never an idempotency key: an action
-     * performs external side effects and is not replayed against the shard, so
-     * claiming mutation-style de-duplication for it would be a lie.
+     * Same envelope as a mutation, but never an idempotency key: an action performs external side
+     * effects and is not replayed against the shard, so claiming mutation-style de-duplication for
+     * it would be a lie.
      */
     public Object action(String functionPath, Object args, String shardKey) {
         return rpc(functionPath, args, shardKey, null);
@@ -223,12 +229,15 @@ public final class Client {
         }
 
         String payload = Json.write(buildRpcBody(functionPath, args, shardKey));
-        Response response = poster.post(join(RPC_PATH), headers, payload.getBytes(StandardCharsets.UTF_8));
+        Response response =
+                poster.post(join(RPC_PATH), headers, payload.getBytes(StandardCharsets.UTF_8));
 
-        return parseRpcResponse((Map<String, Object>) Json.parse(response.body()), response.status());
+        return parseRpcResponse(
+                (Map<String, Object>) Json.parse(response.body()), response.status());
     }
 
-    public static Map<String, Object> buildConnectFrame(String clientId, Map<String, Object> context) {
+    public static Map<String, Object> buildConnectFrame(
+            String clientId, Map<String, Object> context) {
         Map<String, Object> frame = new LinkedHashMap<>();
 
         frame.put("id", "connect");
@@ -246,7 +255,12 @@ public final class Client {
     }
 
     public static Map<String, Object> buildSubscribeFrame(
-            String id, String functionPath, Object args, String table, Object sinceSeq, Object sinceEpoch) {
+            String id,
+            String functionPath,
+            Object args,
+            String table,
+            Object sinceSeq,
+            Object sinceEpoch) {
         Map<String, Object> query = new LinkedHashMap<>();
 
         query.put("args", Wire.encode(args == null ? new LinkedHashMap<String, Object>() : args));
@@ -318,15 +332,17 @@ public final class Client {
     /**
      * Opens a live query.
      *
-     * <p>{@code shardKey} does NOT ride the subscribe frame: the protocol
-     * selects a shard per SOCKET, via the {@code ?shard=} parameter
-     * {@link #wsUrl} builds. It is accepted so the generated surface is
-     * identical across languages, and is otherwise unused — this client holds
-     * one socket, so it must already be the shard that socket was opened
-     * against.
+     * <p>{@code shardKey} does NOT ride the subscribe frame: the protocol selects a shard per
+     * SOCKET, via the {@code ?shard=} parameter {@link #wsUrl} builds. It is accepted so the
+     * generated surface is identical across languages, and is otherwise unused — this client holds
+     * one socket, so it must already be the shard that socket was opened against.
      */
     public Runnable subscribe(
-            String functionPath, Object args, Consumer<Object> onData, Consumer<SubscriptionError> onError, String shardKey) {
+            String functionPath,
+            Object args,
+            Consumer<Object> onData,
+            Consumer<SubscriptionError> onError,
+            String shardKey) {
         String id;
         FrameSender socket;
 
@@ -357,10 +373,14 @@ public final class Client {
     }
 
     /**
-     * Opens a partially-replicated keyed view. {@code onRows} fires once per
-     * applied poke with the view's full contents, in insertion order.
+     * Opens a partially-replicated keyed view. {@code onRows} fires once per applied poke with the
+     * view's full contents, in insertion order.
      */
-    public Runnable subscribeShape(String name, Object args, Consumer<List<Object>> onRows, Consumer<SubscriptionError> onError) {
+    public Runnable subscribeShape(
+            String name,
+            Object args,
+            Consumer<List<Object>> onRows,
+            Consumer<SubscriptionError> onError) {
         String id;
         FrameSender socket;
 
@@ -408,8 +428,14 @@ public final class Client {
             for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
                 Subscription subscription = entry.getValue();
 
-                frames.add(buildSubscribeFrame(
-                        entry.getKey(), subscription.functionPath, subscription.args, null, subscription.cursor, subscription.epoch));
+                frames.add(
+                        buildSubscribeFrame(
+                                entry.getKey(),
+                                subscription.functionPath,
+                                subscription.args,
+                                null,
+                                subscription.cursor,
+                                subscription.epoch));
             }
         }
 
@@ -419,8 +445,8 @@ public final class Client {
     }
 
     /**
-     * Applies one server frame and returns its type. Unknown types are ignored,
-     * per the protocol's forward-compatibility rule.
+     * Applies one server frame and returns its type. Unknown types are ignored, per the protocol's
+     * forward-compatibility rule.
      */
     @SuppressWarnings("unchecked")
     public String handleFrame(String raw) {
@@ -476,12 +502,18 @@ public final class Client {
             }
             case "error" -> {
                 Map<String, Object> envelope =
-                        frame.get("error") instanceof Map<?, ?> map ? (Map<String, Object>) map : new LinkedHashMap<>();
-                String message = frame.get("message") instanceof String text
-                        ? text
-                        : envelope.get("message") instanceof String inner ? inner : "subscription error";
+                        frame.get("error") instanceof Map<?, ?> map
+                                ? (Map<String, Object>) map
+                                : new LinkedHashMap<>();
+                String message =
+                        frame.get("message") instanceof String text
+                                ? text
+                                : envelope.get("message") instanceof String inner
+                                        ? inner
+                                        : "subscription error";
                 SubscriptionError error =
-                        new SubscriptionError(envelope.get("code") instanceof String code ? code : null, message);
+                        new SubscriptionError(
+                                envelope.get("code") instanceof String code ? code : null, message);
                 List<Consumer<SubscriptionError>> handlers = new ArrayList<>();
 
                 synchronized (lock) {
@@ -532,9 +564,9 @@ public final class Client {
     }
 
     /**
-     * Parts buffer until {@code pokeEnd}: a poke is an atomic batch, so applying
-     * them as they arrive would expose a torn view, and a socket dropping
-     * mid-poke would leave it permanently half-applied.
+     * Parts buffer until {@code pokeEnd}: a poke is an atomic batch, so applying them as they
+     * arrive would expose a torn view, and a socket dropping mid-poke would leave it permanently
+     * half-applied.
      */
     @SuppressWarnings("unchecked")
     private void bufferPokePart(Map<String, Object> frame) {
@@ -549,7 +581,8 @@ public final class Client {
         }
 
         synchronized (lock) {
-            Map<String, List<Map<String, Object>>> buffer = pokes.get(String.valueOf(frame.get("pokeId")));
+            Map<String, List<Map<String, Object>>> buffer =
+                    pokes.get(String.valueOf(frame.get("pokeId")));
 
             // A part for an unknown poke is dropped: without its pokeStart there
             // is no batch to join, and guessing would apply a fragment of one.
@@ -557,7 +590,8 @@ public final class Client {
                 return;
             }
 
-            buffer.computeIfAbsent(String.valueOf(frame.get("shapeId")), key -> new ArrayList<>()).addAll(operations);
+            buffer.computeIfAbsent(String.valueOf(frame.get("shapeId")), key -> new ArrayList<>())
+                    .addAll(operations);
         }
     }
 
@@ -571,7 +605,8 @@ public final class Client {
         // with the row snapshot taken while still holding it — so a callback sees
         // one consistent poke even if the next one lands mid-delivery.
         synchronized (lock) {
-            Map<String, List<Map<String, Object>>> buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
+            Map<String, List<Map<String, Object>>> buffer =
+                    pokes.remove(String.valueOf(frame.get("pokeId")));
 
             if (buffer == null) {
                 return;
@@ -636,8 +671,8 @@ public final class Client {
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and
-     * credential query parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and credential query
+     * parameters when present.
      */
     public String wsUrl(String shardKey, String token) {
         String endpoint = join(WS_PATH);
@@ -666,6 +701,7 @@ public final class Client {
     }
 
     private String join(String path) {
-        return (baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl) + path;
+        return (baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl)
+                + path;
     }
 }

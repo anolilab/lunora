@@ -63,7 +63,10 @@ pub enum WireValue {
     Bytes(Vec<u8>),
     /// Any other typed-array view, carrying its constructor name so the exact
     /// view type survives.
-    TypedBytes { data: Vec<u8>, ctor: String },
+    TypedBytes {
+        data: Vec<u8>,
+        ctor: String,
+    },
     Error {
         name: String,
         message: String,
@@ -115,7 +118,11 @@ fn base64_encode(data: &[u8]) -> String {
 
         out.push(ALPHABET[(triple >> 18 & 0x3F) as usize] as char);
         out.push(ALPHABET[(triple >> 12 & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[(triple >> 6 & 0x3F) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(triple >> 6 & 0x3F) as usize] as char
+        } else {
+            '='
+        });
         out.push(if chunk.len() > 2 { ALPHABET[(triple & 0x3F) as usize] as char } else { '=' });
     }
 

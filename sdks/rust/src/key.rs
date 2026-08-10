@@ -50,7 +50,7 @@ fn write_stable(out: &mut String, value: &Value) {
             // after it here.
             let mut keys: Vec<&String> = fields.keys().collect();
 
-            keys.sort_by(|a, b| utf16_units(a).cmp(&utf16_units(b)));
+            keys.sort_by_key(|key| utf16_units(key));
             out.push('{');
 
             for (index, key) in keys.iter().enumerate() {

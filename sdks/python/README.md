@@ -34,11 +34,12 @@ pip install -e ".[live]"    # + websockets for the live WS loop
 import asyncio
 from lunora import LunoraClient, WireBigInt
 
+
 async def main():
     client = LunoraClient(
         url="https://my-app.example.com",
-        auth_token="…",                       # bearer for HTTP RPC (optional)
-        ws_token=lambda: mint_ephemeral(),    # str | callable | async callable
+        auth_token="…",  # bearer for HTTP RPC (optional)
+        ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
         client_id="python-client",
     )
 
@@ -50,6 +51,7 @@ async def main():
     # Live subscription (needs `websockets`)
     client.subscribe("messages:list", {"channel": "general"}, print)
     await client.connect_and_run()
+
 
 asyncio.run(main())
 ```

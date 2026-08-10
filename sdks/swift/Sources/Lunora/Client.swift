@@ -365,7 +365,7 @@ public final class LunoraClient {
     public func handleFrame(_ raw: String) throws -> String? {
         if raw == "lunora-ping" || raw == "lunora-pong" { return nil }
         guard let data = raw.data(using: .utf8),
-              let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else {
             // Non-JSON frames are ignored by the client parser, not fatal.
             return nil
@@ -454,10 +454,10 @@ public final class LunoraClient {
     private func bufferPokePart(_ frame: [String: Any]) {
         withLock {
             guard let pokeID = frame["pokeId"] as? String,
-                  let shapeID = frame["shapeId"] as? String,
-                  // A part for an unknown poke is dropped: without its pokeStart
-                  // there is no batch to join, and guessing applies a fragment.
-                  pokes[pokeID] != nil
+                let shapeID = frame["shapeId"] as? String,
+                // A part for an unknown poke is dropped: without its pokeStart
+                // there is no batch to join, and guessing applies a fragment.
+                pokes[pokeID] != nil
             else { return }
 
             let operations = (frame["rowsPatch"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }

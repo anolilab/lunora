@@ -47,7 +47,11 @@ pub struct SubscriptionError {
 
 #[derive(Debug)]
 pub enum ClientError {
-    Api(ApiError),
+    /// Boxed because `ApiError` carries a decoded `data` payload and is two
+    /// orders of magnitude larger than the other variants — an unboxed one makes
+    /// every `Result<_, ClientError>` in the crate that wide, on the success path
+    /// too (clippy's `result_large_err`).
+    Api(Box<ApiError>),
     Wire(WireError),
     Transport(String),
 }
@@ -78,6 +82,15 @@ pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Resul
 /// crate stays free of a socket dependency.
 pub type FrameSender = Box<dyn Fn(&Value)>;
 
+/// Receives each result a live query produces.
+pub type DataHandler = Option<Box<dyn Fn(&WireValue)>>;
+
+/// Receives a subscription-scoped error the server pushed.
+pub type ErrorHandler = Option<Box<dyn Fn(&SubscriptionError)>>;
+
+/// Receives a shape view's full contents after each applied poke.
+pub type RowsHandler = Option<Box<dyn Fn(&[WireValue])>>;
+
 /// Builds the `POST /_lunora/rpc` body. `shard_key` is omitted when `None`,
 /// which routes to the default shard.
 pub fn build_rpc_body(function_path: &str, args: &WireValue, shard_key: Option<&str>) -> Result<Value, WireError> {
@@ -106,19 +119,19 @@ pub fn parse_rpc_response(body: &Value, status: u16) -> Result<WireValue, Client
             Some(inner) => Some(decode_wire(inner)?),
         };
 
-        return Err(ClientError::Api(ApiError {
+        return Err(ClientError::Api(Box::new(ApiError {
             code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
             data,
             message: envelope.get("message").and_then(Value::as_str).unwrap_or("request failed").to_string(),
-        }));
+        })));
     }
 
     if !(200..=299).contains(&status) {
-        return Err(ClientError::Api(ApiError {
+        return Err(ClientError::Api(Box::new(ApiError {
             code: "INTERNAL".to_string(),
             data: None,
             message: format!("HTTP {status} without an error envelope"),
-        }));
+        })));
     }
 
     Ok(decode_wire(body.get("result").unwrap_or(&Value::Null))?)
@@ -209,8 +222,8 @@ pub fn build_shape_unsubscribe_frame(id: &str) -> Value {
 struct Subscription {
     function_path: String,
     args: WireValue,
-    on_data: Option<Box<dyn Fn(&WireValue)>>,
-    on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
+    on_data: DataHandler,
+    on_error: ErrorHandler,
     cursor: Option<Value>,
     epoch: Option<Value>,
 }
@@ -220,8 +233,8 @@ struct ShapeSubscription {
     order: Vec<String>,
     checkpoint: Option<Value>,
     epoch: Option<Value>,
-    on_rows: Option<Box<dyn Fn(&[WireValue])>>,
-    on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
+    on_rows: RowsHandler,
+    on_error: ErrorHandler,
 }
 
 /// A Lunora deployment client.
@@ -262,13 +275,7 @@ impl Client {
         self.rpc(function_path, args, shard_key, None)
     }
 
-    pub fn mutation(
-        &self,
-        function_path: &str,
-        args: &WireValue,
-        shard_key: Option<&str>,
-        mutation_id: Option<&str>,
-    ) -> Result<WireValue, ClientError> {
+    pub fn mutation(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>, mutation_id: Option<&str>) -> Result<WireValue, ClientError> {
         self.rpc(function_path, args, shard_key, mutation_id)
     }
 
@@ -288,13 +295,7 @@ impl Client {
         }
     }
 
-    fn rpc(
-        &self,
-        function_path: &str,
-        args: &WireValue,
-        shard_key: Option<&str>,
-        mutation_id: Option<&str>,
-    ) -> Result<WireValue, ClientError> {
+    fn rpc(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>, mutation_id: Option<&str>) -> Result<WireValue, ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
         let mut headers = HashMap::new();
@@ -317,13 +318,7 @@ impl Client {
         parse_rpc_response(&parsed, status)
     }
 
-    pub fn subscribe(
-        &mut self,
-        function_path: &str,
-        args: WireValue,
-        on_data: Option<Box<dyn Fn(&WireValue)>>,
-        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
-    ) -> String {
+    pub fn subscribe(&mut self, function_path: &str, args: WireValue, on_data: DataHandler, on_error: ErrorHandler) -> String {
         self.next_id += 1;
 
         let id = format!("sub_{}", self.next_id);
@@ -334,7 +329,14 @@ impl Client {
 
         self.subscriptions.insert(
             id.clone(),
-            Subscription { args, cursor: None, epoch: None, function_path: function_path.to_string(), on_data, on_error },
+            Subscription {
+                args,
+                cursor: None,
+                epoch: None,
+                function_path: function_path.to_string(),
+                on_data,
+                on_error,
+            },
         );
 
         id
@@ -348,14 +350,7 @@ impl Client {
         };
 
         for (id, entry) in &self.subscriptions {
-            let frame = build_subscribe_frame(
-                id,
-                &entry.function_path,
-                &entry.args,
-                None,
-                entry.cursor.as_ref(),
-                entry.epoch.as_ref(),
-            )?;
+            let frame = build_subscribe_frame(id, &entry.function_path, &entry.args, None, entry.cursor.as_ref(), entry.epoch.as_ref())?;
 
             send(&frame);
         }
@@ -373,13 +368,7 @@ impl Client {
 
     /// Opens a partially-replicated keyed view. `on_rows` fires once per applied
     /// poke with the view's full contents, in insertion order.
-    pub fn subscribe_shape(
-        &mut self,
-        name: &str,
-        args: Option<WireValue>,
-        on_rows: Option<Box<dyn Fn(&[WireValue])>>,
-        on_error: Option<Box<dyn Fn(&SubscriptionError)>>,
-    ) -> String {
+    pub fn subscribe_shape(&mut self, name: &str, args: Option<WireValue>, on_rows: RowsHandler, on_error: ErrorHandler) -> String {
         self.next_shape_id += 1;
 
         let id = format!("shape_{}", self.next_shape_id);
@@ -392,7 +381,14 @@ impl Client {
 
         self.shapes.insert(
             id.clone(),
-            ShapeSubscription { checkpoint: None, epoch: None, on_error, on_rows, order: Vec::new(), rows: HashMap::new() },
+            ShapeSubscription {
+                checkpoint: None,
+                epoch: None,
+                on_error,
+                on_rows,
+                order: Vec::new(),
+                rows: HashMap::new(),
+            },
         );
 
         id
@@ -474,10 +470,7 @@ impl Client {
     /// as they arrive would expose a torn view, and a socket dropping mid-poke
     /// would leave it permanently half-applied.
     fn buffer_poke_part(&mut self, frame: &Value) {
-        let (Some(poke_id), Some(shape_id)) = (
-            frame.get("pokeId").and_then(Value::as_str),
-            frame.get("shapeId").and_then(Value::as_str),
-        ) else {
+        let (Some(poke_id), Some(shape_id)) = (frame.get("pokeId").and_then(Value::as_str), frame.get("shapeId").and_then(Value::as_str)) else {
             return;
         };
 
@@ -593,7 +586,6 @@ fn advance(entry: &mut Subscription, frame: &Value) {
     if let Some(epoch) = frame.get("epoch") {
         entry.epoch = Some(epoch.clone());
     }
-
 }
 
 fn percent_encode(value: &str) -> String {

@@ -13,11 +13,12 @@ import json
 import os
 import sys
 import unittest
+from typing import ClassVar
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, LunoraError, parse_rpc_response  # noqa: E402
-from lunora.wire import MAX_BIGINT_DIGITS, MAX_DEPTH, TAG, UNDEFINED, decode_wire, encode_wire, stable_stringify  # noqa: E402
+from lunora.client import LunoraClient, LunoraError, parse_rpc_response
+from lunora.wire import MAX_BIGINT_DIGITS, MAX_DEPTH, TAG, UNDEFINED, decode_wire, encode_wire, stable_stringify
 
 
 class TestDecodeBounds(unittest.TestCase):
@@ -60,10 +61,18 @@ class TestUndefinedSemantics(unittest.TestCase):
 
 class TestEcmaScriptSpellings(unittest.TestCase):
     # Captured from a real JS engine, not derived from the spec.
-    CASES = [
-        (0, "0"), (3, "3"), (1.5, "1.5"), (-2.5, "-2.5"),
-        (1e-5, "0.00001"), (1e-6, "0.000001"), (1e-7, "1e-7"), (1.5e-7, "1.5e-7"),
-        (1e-21, "1e-21"), (1e20, "100000000000000000000"), (1e21, "1e+21"),
+    CASES: ClassVar[list[tuple[float, str]]] = [
+        (0, "0"),
+        (3, "3"),
+        (1.5, "1.5"),
+        (-2.5, "-2.5"),
+        (1e-5, "0.00001"),
+        (1e-6, "0.000001"),
+        (1e-7, "1e-7"),
+        (1.5e-7, "1.5e-7"),
+        (1e-21, "1e-21"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
     ]
 
     def test_format_number_matches_ecmascript(self):
@@ -73,9 +82,9 @@ class TestEcmaScriptSpellings(unittest.TestCase):
     def test_key_order_matches_utf16(self):
         # JavaScript sorts by UTF-16 code unit: an astral character is its high
         # surrogate, so it sorts after U+2028 but before U+FFFD.
-        rendered = stable_stringify({"�": 4, "\U0001F600": 3, " ": 2, "A": 1})
+        rendered = stable_stringify({"�": 4, "\U0001f600": 3, " ": 2, "A": 1})
 
-        self.assertEqual(rendered, '{"A":1," ":2,"\U0001F600":3,"�":4}')
+        self.assertEqual(rendered, '{"A":1," ":2,"\U0001f600":3,"�":4}')
 
     def test_string_escaping_matches_json_stringify(self):
         # JSON.stringify leaves <, > and & raw and does not escape U+2028/9.

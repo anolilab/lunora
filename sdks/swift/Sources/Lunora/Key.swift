@@ -52,7 +52,7 @@ extension Wire {
         var right = b.utf16.makeIterator()
         while true {
             switch (left.next(), right.next()) {
-            case let (l?, r?):
+            case (let l?, let r?):
                 if l != r { return l < r }
             case (nil, .some): return true
             case (.some, nil): return false
