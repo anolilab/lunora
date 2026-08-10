@@ -1,4 +1,3 @@
-/// <reference types="vitest" />
 import { existsSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";

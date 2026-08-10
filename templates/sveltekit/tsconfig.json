@@ -6,8 +6,17 @@
     // (schema, functions, and the generated `_generated/*`).
     "extends": "./.svelte-kit/tsconfig.json",
     "compilerOptions": {
+        // `allowJs` so `src/worker.ts` can import the adapter-emitted
+        // `.svelte-kit/cloudflare/_worker.js`. `checkJs` stays OFF because that
+        // import is the ONLY JavaScript this project has, and it is a generated
+        // bundle: turning it on typechecks `.svelte-kit/output/**` — SvelteKit's
+        // emitted server chunks, reached transitively from that one import — and
+        // buries this app's own diagnostics under ~586 of theirs. `include` cannot
+        // help; TypeScript adds imported files to the program regardless of it.
+        // Nothing under `src/` or `lunora/` is `.js`, so this checks the same set
+        // of files either way. Turn it back on if you add hand-written JS.
         "allowJs": true,
-        "checkJs": true,
+        "checkJs": false,
         "esModuleInterop": true,
         "forceConsistentCasingInFileNames": true,
         "moduleResolution": "bundler",
