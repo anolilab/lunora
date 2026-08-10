@@ -9,14 +9,50 @@ or `.global()`.
 
 ## Durable Objects
 
-| Limit                | Value           | Implication                                          |
-| -------------------- | --------------- | ---------------------------------------------------- |
-| SQLite size / DO     | **10 GB**       | Plan to shard before you cross 1 GB                  |
-| Sustained req/s / DO | **~1 000**      | Hot DO = sharding signal                             |
-| CPU per request      | **30 s**        | Long tasks → action + scheduler, not mutation        |
-| WebSockets / DO      | **~32 000**     | Hibernated, this is generous; pre-hibernate, less so |
-| DOs / account        | **Unlimited**   | Sharding is free of administrative overhead          |
-| Storage tx           | **128 KB / op** | Batch large writes via `ctx.db.insertMany`           |
+| Limit                | Value         | Implication                                          |
+| -------------------- | ------------- | ---------------------------------------------------- |
+| SQLite size / DO     | **10 GB**     | Plan to shard before you cross 1 GB                  |
+| Sustained req/s / DO | **~1 000**    | Hot DO = sharding signal                             |
+| CPU per request      | **30 s**      | Long tasks → action + scheduler, not mutation        |
+| Alarm handler        | **15 min**    | Wall-clock, per invocation                           |
+| WebSockets / DO      | **~32 000**   | Hibernated, this is generous; pre-hibernate, less so |
+| WS message size      | **32 MiB**    | Received messages                                    |
+| Outgoing connections | **6**         | Simultaneous, per request                            |
+| DOs / account        | **Unlimited** | Sharding is free of administrative overhead          |
+
+## Statement limits (Durable Objects **and** D1)
+
+These are the ones that surprise people, because they are set by the Workers
+runtime rather than by SQLite, and they are **far** below SQLite's own defaults.
+D1 runs the same build, so both engines share them. Cross one and the statement
+fails at runtime with `SQLITE_ERROR` — it does not merely run slower.
+
+| Limit                        | Value        | Stock SQLite | What it bounds                                        |
+| ---------------------------- | ------------ | ------------ | ----------------------------------------------------- |
+| Terms in a compound `SELECT` | **5**        | 500          | `UNION` / `UNION ALL` / `INTERSECT` branches          |
+| Bound parameters             | **100**      | 500 000      | `?` placeholders in one statement                     |
+| `LIKE` pattern               | **50 bytes** | 50 000       | The pattern, not the column                           |
+| Columns per table            | **100**      | 2 000        | `.global()` tables take one column per declared field |
+| Row / string / BLOB          | **2 MB**     | 1 GB         | One document, as stored                               |
+| SQL statement text           | **100 KB**   | 1 GB         | The query text itself                                 |
+| Expression depth             | **100**      | 1 000        | Nested `AND`/`OR` chains, long `+` chains             |
+| Attached databases           | **0**        | 10           | `ATTACH` is unavailable                               |
+
+**Lunora handles most of these for you.** Its generated SQL nests compound
+`SELECT`s five at a time, binds a long `in` list as a single JSON parameter,
+chunks multi-row `INSERT`s, and compiles `contains` to a position function
+rather than a `LIKE` pattern — so an id probe, a wide `where … in`, or a
+50-character search term does not hit a wall as your schema grows.
+
+Two are yours to respect, because no rewrite can absorb them:
+
+- **A document over 2 MB cannot be stored.** Keep large payloads in R2
+  (`@lunora/storage`) and put a reference on the row. Note the limit is on the
+  _stored_ bytes, which are UTF-8: multi-byte text (CJK, emoji) costs up to 3×
+  its character count, and `v.bigint()` / `v.bytes()` columns are stored twice
+  on a shard-local table.
+- **A `.global()` table over 100 columns cannot be created.** Split it, or move
+  the extra fields into one object field.
 
 ## D1
 
@@ -44,6 +80,40 @@ or `.global()`.
 | Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
 | Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
 
+## Queues
+
+| Limit               | Value                 | Implication                                            |
+| ------------------- | --------------------- | ------------------------------------------------------ |
+| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                |
+| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count |
+| Consumer batch      | **100 messages**      | Per consumer invocation                                |
+| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                           |
+| Retries             | **100**               | Then the message goes to the DLQ                       |
+| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                 |
+| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                          |
+| `delaySeconds`      | **24 h**              | Longer schedules → `@lunora/scheduler`                 |
+
+## Workers KV
+
+| Limit            | Value            | Implication                                |
+| ---------------- | ---------------- | ------------------------------------------ |
+| Key size         | **512 bytes**    | Measured in UTF-8 bytes, not characters    |
+| Value size       | **25 MiB**       | Large blobs belong in R2                   |
+| Key metadata     | **1 024 bytes**  | Serialized JSON                            |
+| Writes / key     | **1 per second** | KV is eventually consistent; not a counter |
+| Ops / invocation | **1 000**        | A bulk request counts as one               |
+
+## Workflows
+
+| Limit                | Value             | Implication                              |
+| -------------------- | ----------------- | ---------------------------------------- |
+| Steps per workflow   | **10 000** (Paid) | 1 024 on Free; raisable to 25 000        |
+| Step output          | **1 MiB**         | Stream large results to R2               |
+| Event payload        | **1 MiB**         | Pass a reference, not the payload        |
+| Persisted state      | **1 GB** (Paid)   | 100 MB on Free                           |
+| Concurrent instances | **50 000** (Paid) | Instances that are `waiting` don't count |
+| Step sleep           | **365 days**      | Long waits are free                      |
+
 ## Containers
 
 Requires the **Workers Paid** plan. Images must be `linux/amd64`.
@@ -70,6 +140,12 @@ The runtime emits warnings (and the dev overlay shows a banner) when:
 - a fan-out query touches more than **100 shards** in one invocation
 
 These warnings fire well below the hard ceiling, so you have time to react.
+
+The statement limits above are different in kind: there is no warning band,
+because there is no gradual degradation to warn about. A statement either fits
+or it raises `SQLITE_ERROR`. Where Lunora can keep you under one it does so
+silently; where it cannot — the 2 MB document, the 100-column table — it raises
+an error naming the limit and what to do instead.
 
 ## See also
 
