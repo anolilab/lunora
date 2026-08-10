@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BroadcastDelta, DatabaseWriterLike, WriteHook } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { TransactionHeadroomTracker } from "../src/transaction-headroom";
 import messagesSchema from "./_helpers/messages-schema";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -342,6 +343,43 @@ describe("ctx-db batch writes", () => {
 
             expect(ids).toStrictEqual(["p_fixed"]);
             expect(calls[0]?.options).toStrictEqual({ allowExplicitId: true });
+        });
+
+        // A `.global()` write commits in D1, which the DO's transaction cannot
+        // roll back — so the meter has to be charged BEFORE the boundary, and a
+        // breach has to stop the write rather than follow it. `patch` and
+        // `replace` charged nothing at all, so a mutation could rewrite a global
+        // table without ever consuming its ceiling.
+        it("charges the meter before a global patch or replace, and refuses past the ceiling", async () => {
+            expect.assertions(3);
+
+            const written: string[] = [];
+            const globalDb = {
+                patch: async () => {
+                    written.push("patch");
+                },
+                replace: async () => {
+                    written.push("replace");
+                },
+            } as unknown as DatabaseWriterLike;
+
+            const { sql } = createSqliteExec();
+
+            runShardMigrations(sql, messagesSchema);
+
+            // A one-row ceiling: the first global write consumes it, the second
+            // must be refused before it crosses into D1.
+            const headroom = new TransactionHeadroomTracker({ maxWrittenRows: 1 });
+            const writer = createShardContextDatabase({ clock: () => fixedTime, globalDb, headroom, schema: messagesSchema, sql });
+
+            await writer.patch("p_absent", { userId: "u2" });
+
+            expect(written).toStrictEqual(["patch"]);
+
+            await expect(writer.replace("p_absent", { userId: "u3" })).rejects.toThrow(/TRANSACTION_LIMIT_EXCEEDED|limit/u);
+
+            // Refused BEFORE the boundary: D1 never saw the second write.
+            expect(written).toStrictEqual(["patch"]);
         });
     });
 });

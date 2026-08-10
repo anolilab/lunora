@@ -3623,6 +3623,24 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Charge before crossing into D1, for the reason the global
+                    // `insert` branch does: this write commits in a backend the
+                    // DO's transaction cannot roll back, so a ceiling breach has
+                    // to be found while the row is still unwritten. Without any
+                    // charge at all a mutation could patch a `.global()` table
+                    // without ever consuming its ceiling.
+                    //
+                    // The DELTA is charged, not the merged row — the row lives in
+                    // D1 and reading it back to size it would double the
+                    // round-trips on every global patch. So a global patch is
+                    // metered lighter than the shard-local path, which charges
+                    // the whole merged document through `onWrite`. Under-counting
+                    // by the untouched fields is the right side of that trade:
+                    // the delta is what this call actually sends.
+                    if (!meterExempt) {
+                        headroom?.recordWrite(patch);
+                    }
+
                     await global.patch(id, patch);
                     return;
                 }
@@ -4037,6 +4055,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Same reason as the global `patch` branch — and here the
+                    // whole replacement document is in hand, so the charge is
+                    // exact rather than a delta.
+                    if (!meterExempt) {
+                        headroom?.recordWrite(document);
+                    }
+
                     await global.replace(id, document, undefined, replaceOptions);
                     return;
                 }

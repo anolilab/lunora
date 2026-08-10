@@ -101,12 +101,28 @@ const reprojectionTables = (schema: SchemaLike): string[] =>
  * grammar — an unquoted `.` in a field name would still parse as a nested key.
  * Hence {@link jsonPathSegment}. Binding costs nothing here: this is a one-off
  * scan, not an indexed lookup whose expression has to match an index.
+ *
+ * The field list rides in as **one** JSON parameter, walked by `json_each`,
+ * rather than as an `OR` chain with five placeholders per field. Both ways
+ * describe the same set, but the chain grew with the table: Workerd caps a
+ * statement at 100 bound parameters, so a table with 21 `v.bigint()`/`v.bytes()`
+ * columns could not be counted at all — and its 100-term `OR` would have hit the
+ * expression-depth ceiling on the way. This form is four parameters and one
+ * `EXISTS`, whatever the column count.
+ *
+ * `json_each` yields each path already quoted by {@link jsonPathSegment}, so the
+ * `|| '[0]'` concatenation appends an array index to a well-formed path — a
+ * field literally named `a.b` still resolves to itself rather than to a nested
+ * `b`.
  */
 const legacyRowPredicate = (fields: ReadonlyArray<string>): { params: unknown[]; sql: string } => {
-    const clauses = fields.map(() => `(json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) = ? AND json_extract(${quoteIdentifier(DOC_COLUMN)}, ?) IN (?, ?))`);
-    const params = fields.flatMap((field) => [`$.${jsonPathSegment(field)}[0]`, WIRE_TAG, `$.${jsonPathSegment(field)}[1]`, "bigint", "bytes"]);
+    const paths = fields.map((field) => `$.${jsonPathSegment(field)}`);
+    const document = quoteIdentifier(DOC_COLUMN);
 
-    return { params, sql: clauses.join(" OR ") };
+    return {
+        params: [JSON.stringify(paths), WIRE_TAG, "bigint", "bytes"],
+        sql: `EXISTS (SELECT 1 FROM json_each(?) AS __f__ WHERE json_extract(${document}, __f__.value || '[0]') = ? AND json_extract(${document}, __f__.value || '[1]') IN (?, ?))`,
+    };
 };
 
 /**
