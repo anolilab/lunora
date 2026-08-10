@@ -121,11 +121,22 @@ What you get beyond the manual loop:
   on the trace waterfall. A hand-built context without `ctx.trace` embeds untraced.
 
 Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
-capped at 20 by Vectorize, ~10 KiB metadata per vector). For long documents or
-deeper retrieval, supply a `textStore` (`{ put, getMany, remove? }` — a DO table,
-KV, …): text moves out of metadata and the `topK` ceiling lifts to 100. The
-default chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
+capped at 20, 10 KiB of metadata per vector). For long documents or deeper
+retrieval, supply a `textStore` (`{ put, getMany, remove? }` — a DO table, KV,
+…): text moves out of metadata and the `topK` ceiling lifts to 100. The default
+chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
 token/sentence/semantic strategies.
+
+The 10 KiB is Vectorize's, and it covers the **whole** metadata object — chunk
+text, Lunora's bookkeeping keys, and any `metadata` you attach. `defineRag`
+measures each chunk's metadata as it is assembled and refuses one that would not
+fit, rather than letting the upsert fail at Vectorize with nothing naming the
+cause. It also rejects an unworkable `chunkSize` up front, though that earlier
+check can only compare characters against a byte ceiling — multibyte text costs
+up to three bytes each, so the index-time measurement is the one that holds.
+
+The `topK` 20 is **Lunora's** cap, not Vectorize's: Vectorize allows 50 with
+full metadata. Ours is a legacy-V1 holdover.
 
 ### Bring your own embeddings — no `env.AI` binding
 
