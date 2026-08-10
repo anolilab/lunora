@@ -20,6 +20,7 @@
         "lunorash": "^0.0.0"
     },
     "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260611.1",
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "@sveltejs/adapter-cloudflare": "^7.2.8",

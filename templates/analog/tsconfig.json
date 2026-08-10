@@ -11,7 +11,7 @@
         "noEmit": true,
         "experimentalDecorators": false,
         "useDefineForClassFields": false,
-        "types": ["@cloudflare/workers-types"]
+        "types": ["@cloudflare/workers-types", "vite/client"]
     },
     // Angular's AOT compiler options (read by @angular/compiler-cli).
     "angularCompilerOptions": {

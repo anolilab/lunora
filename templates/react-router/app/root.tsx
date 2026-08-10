@@ -1,4 +1,6 @@
 import { LunoraProvider } from "@lunora/react";
+import { LunoraClient } from "lunorash/client";
+import { useState } from "react";
 import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 import type { Route } from "./+types/root";
@@ -28,19 +30,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
     );
 }
 
-// Lunora endpoint. `VITE_LUNORA_URL` (statically replaced by Vite at dev/build)
-// wins so you can point at a deployed Worker; otherwise the browser uses the page
-// origin and SSR loops back to the local worker (same worker, via the composed
-// `virtual:lunora/worker` entry).
-const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (typeof window === "undefined" ? "http://localhost:8787" : window.location.origin);
+// Lunora endpoint. `VITE_LUNORA_URL` wins so you can point at a deployed
+// Worker; `vite.config.ts` otherwise defines it as the dev server's resolved
+// origin, because the composed `virtual:lunora/worker` entry serves Lunora from
+// this same worker. The literal below is only a last resort if that plugin is
+// removed.
+const isServer = typeof globalThis.window === "undefined";
+const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (isServer ? "http://localhost:5173" : globalThis.location.origin);
 
 /**
  * Root route component. Mounts the LunoraProvider so every child route can call
  * `useQuery` / `useMutation` / `useSubscription`.
  */
 export default function App() {
+    // Built per render tree, NOT at module scope: on the server a module-level
+    // client is shared by every concurrent request, so one visitor's cached
+    // results — and eventually their identity — leak into the next render.
+    const [lunoraClient] = useState(() => new LunoraClient({ url: lunoraUrl }));
+
     return (
-        <LunoraProvider url={lunoraUrl}>
+        <LunoraProvider client={lunoraClient}>
             <Outlet />
         </LunoraProvider>
     );
