@@ -186,20 +186,48 @@ const compileField = (field: string, value: unknown, strategy: WhereSqlStrategy)
     return [sql`${reference} = ${strategy.serialize(value)}`];
 };
 
-/** Join compiled clauses with a boolean connector, wrapping each in parens. */
+/**
+ * Join compiled clauses with a boolean connector, wrapping each in parens.
+ *
+ * Balanced rather than flat, because SQLite parses `a AND b AND c` left-deep:
+ * the expression tree is one node deep per clause, and Workerd caps
+ * `SQLITE_LIMIT_EXPR_DEPTH` at 100 where stock SQLite allows 1,000. A `where`
+ * assembled programmatically — a filter builder, an RLS policy merged into a
+ * caller's predicate, an `OR` over a long id list — reaches that in a way no
+ * hand-written predicate would, and fails to parse rather than running slowly.
+ *
+ * Splitting the chain in half recursively makes the tree log₂(n) deep instead:
+ * 200 clauses go from depth 200 to depth 8. `AND` and `OR` are associative
+ * under SQL's three-valued logic, so regrouping cannot change what matches —
+ * `(a AND b) AND c` and `a AND (b AND c)` agree on true, false, and NULL alike.
+ */
 const joinClauses = (clauses: SQL[], connector: "AND" | "OR"): SQL | undefined => {
     if (clauses.length === 0) {
         return undefined;
     }
 
-    if (clauses.length === 1) {
-        return clauses[0];
+    const first = clauses[0];
+
+    if (clauses.length === 1 && first) {
+        return first;
     }
 
-    return sql.join(
-        clauses.map((clause) => sql`(${clause})`),
-        sql` ${sql.raw(connector)} `,
-    );
+    if (clauses.length === 2) {
+        return sql.join(
+            clauses.map((clause) => sql`(${clause})`),
+            sql` ${sql.raw(connector)} `,
+        );
+    }
+
+    const middle = Math.floor(clauses.length / 2);
+    const left = joinClauses(clauses.slice(0, middle), connector);
+    const right = joinClauses(clauses.slice(middle), connector);
+
+    if (!left || !right) {
+        return left ?? right;
+    }
+
+    return sql`(${left}) ${sql.raw(connector)} (${right})`;
 };
 
 const compileGroup = (value: unknown, connector: "AND" | "OR", strategy: WhereSqlStrategy): SQL | undefined => {

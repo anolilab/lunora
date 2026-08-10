@@ -340,6 +340,43 @@ describe("bound-parameter cap", () => {
     });
 });
 
+/** Deepest run of unclosed `(` in `text` — the parse-tree depth SQLite bounds. */
+const deepestNesting = (text: string): number => {
+    let depth = 0;
+    let deepest = 0;
+
+    for (const character of text) {
+        if (character === "(") {
+            depth += 1;
+            deepest = Math.max(deepest, depth);
+        } else if (character === ")") {
+            depth -= 1;
+        }
+    }
+
+    return deepest;
+};
+
+describe("expression-depth cap", () => {
+    // eslint-disable-next-line no-restricted-syntax -- a drizzle identifier chunk, not a string conversion; the rule misfires on the inner TemplateLiteral
+    const depthFieldRef = (field: string): SQL => dsql`${dsql.identifier(field)}`;
+
+    // A flat `a AND b AND c …` parses left-deep — one tree node per clause —
+    // against Workerd's cap of 100. Balanced grouping makes it log2(n) instead.
+    it("nests a long clause chain logarithmically, not linearly", () => {
+        expect.assertions(2);
+
+        const where = Object.fromEntries(Array.from({ length: 200 }, (_unused, index) => [`f${String(index)}`, index]));
+        const compiled = compileWhereSql(where, { fieldRef: depthFieldRef, inList: sqliteInList, serialize: (value: unknown) => value });
+        const { params, sql: text } = renderSql("sqlite", compiled!);
+
+        // log2(200) is about 8; allow room for the one paren wrapping each leaf.
+        expect(deepestNesting(text)).toBeLessThan(20);
+        // Regrouping must not drop or reorder a single clause.
+        expect(params).toStrictEqual(Array.from({ length: 200 }, (_unused, index) => index));
+    });
+});
+
 describe("`LIKE` pattern-length cap", () => {
     it("matches the same rows through a position test as `LIKE` did, and takes a wildcard literally", async () => {
         expect.assertions(2);
