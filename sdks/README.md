@@ -80,7 +80,10 @@ cannot drift.
 
 Every tool is pinned in CI by version or by SHA-256, so a new release cannot
 change the rule set under a green PR. A tool missing locally reports `SKIP`, never
-`PASS` — a check that did not run must not read as one that passed.
+`PASS` — not everyone has seven toolchains, and a check that did not run must not
+read as one that passed. CI sets `SDK_LINT_REQUIRE_TOOLS=1`, which turns that
+`SKIP` into a failure: there the install step just ran, so a missing tool means it
+broke, and a gate that skips everything is green for the worst possible reason.
 
 Two settings are deliberate rather than default: the line width is 160
 everywhere, matching the repo's Prettier `printWidth`, so two ports read the same

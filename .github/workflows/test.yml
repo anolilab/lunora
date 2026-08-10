@@ -524,6 +524,13 @@
             # cannot drift — which is how the conformance coverage drifted before
             # `protocol/conformance-cases.json` existed.
             - "name": "Lint and format-check the ${{ matrix.sdk.language }} SDK"
+              # SDK_LINT_REQUIRE_TOOLS turns "tool not installed" from a SKIP into
+              # a failure. Locally a SKIP is honest — not everyone has seven
+              # toolchains. Here the install steps above just ran, so a missing tool
+              # means one of them broke, and a check that did not run must not
+              # report green.
+              "env":
+                  "SDK_LINT_REQUIRE_TOOLS": "1"
               "run": "bash sdks/lint-all.sh ${{ matrix.sdk.language }}"
 
             - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
