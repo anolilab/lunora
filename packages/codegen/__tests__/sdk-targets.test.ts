@@ -161,7 +161,7 @@ describe.each([
     };
 
     it.each(RENAMED_BY_QUICKTYPE)("carries the wire key %s verbatim into toWire and fromWire", async (wireKey) => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { files, undeclared } = await generateSdk(wideDocument, target);
         const models = Object.entries(files)
@@ -170,9 +170,20 @@ describe.each([
             .join("\n");
 
         // A local identifier may be derived — `2fa` cannot be a Java field — but
-        // the KEY may not be, so it is the quoted literal that is asserted.
+        // the KEY may not be.
         expect(undeclared).toStrictEqual([]);
-        expect(models).toContain(`"${wireKey}"`);
+
+        // Asserted at the ENCODE and DECODE statements, not merely present in the
+        // file. An earlier version of this test checked `models.toContain('"key"')`,
+        // which the doc comment above each field satisfies on its own — so taking
+        // the encode key from the derived identifier instead of the schema left it
+        // green. That is the exact defect this design replaced, so the assertion
+        // has to name the statement.
+        const encode = target.id === "java" ? `wire.put("${wireKey}"` : `add("${wireKey}" to`;
+        const decode = target.id === "java" ? `wire.get("${wireKey}")` : `wireField(value, "${wireKey}")`;
+
+        expect(models).toContain(encode);
+        expect(models).toContain(decode);
     });
 
     it("omits an unset optional rather than sending an explicit null", async () => {
