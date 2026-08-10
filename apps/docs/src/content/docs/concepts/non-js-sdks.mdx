@@ -1,0 +1,112 @@
+---
+title: Non-JS SDKs
+description: Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java or Kotlin — vendored into your project and pinned to your CLI version.
+---
+
+Lunora's own clients are TypeScript, but the [wire protocol](/docs/concepts/wire-protocol)
+is not TypeScript-bound. `lunora sdk generate` emits a client for seven other
+languages, built from your deployment's own function surface.
+
+```bash
+lunora codegen --api-spec openrpc      # writes lunora/_generated/openrpc.json
+lunora sdk generate --lang python      # → ./sdk/python
+```
+
+The generated directory is **self-contained**. It holds the hand-written transport
+(the wire codec, HTTP RPC, subscriptions, the shape/poke protocol) alongside a
+typed surface derived from your schema, so there is no Lunora package to install
+in the consuming project.
+
+| Language | `--lang` | Needs installing                                                     |
+| -------- | -------- | -------------------------------------------------------------------- |
+| Python   | `python` | nothing — standard library only                                      |
+| Go       | `go`     | nothing — standard library only                                      |
+| Java     | `java`   | nothing — JDK only                                                   |
+| Kotlin   | `kotlin` | nothing — JDK + Kotlin stdlib                                        |
+| Swift    | `swift`  | nothing — Foundation only                                            |
+| Rust     | `rust`   | `serde` + `serde_json`, already declared in the emitted `Cargo.toml` |
+| Ruby     | `ruby`   | `dry-struct` + `dry-types`, which the generated models require       |
+
+<Callout type="info">
+    The live WebSocket loop is the one exception on Python: `query`/`mutation`/`action` and the codec are stdlib-only, but `connect_and_run()` needs `pip
+    install websockets`.
+</Callout>
+
+## The output is pinned to your CLI version
+
+A vendored transport has to match the protocol vintage of the surface generated
+beside it. So the transport is fetched from the git tag matching the CLI you ran —
+`@lunora/cli@<version>` — and the copy records what it got:
+
+```json title="sdk/python/lunora-transport.json"
+{
+    "cliVersion": "1.0.0-alpha.159",
+    "ref": "@lunora/cli@1.0.0-alpha.159",
+    "source": "gh:anolilab/lunora/sdks/python",
+    "versionMatched": true
+}
+```
+
+Regenerating with a newer CLI brings a newer transport, which is how you upgrade.
+If the exact tag has no transport for that language, the CLI falls back to the
+release branch, says so loudly, and records `versionMatched: false` — so a copy is
+never silently a different vintage than the surface next to it.
+
+| Flag            | For                                                                 |
+| --------------- | ------------------------------------------------------------------- |
+| `--out <dir>`   | Output directory (default `./sdk/<lang>`)                           |
+| `--spec <path>` | An OpenRPC document other than `lunora/_generated/openrpc.json`     |
+| `--ref <tag>`   | Pin the transport explicitly. Never falls back — a miss is an error |
+| `--from <dir>`  | Copy from a local checkout of `sdks/` instead of fetching           |
+
+## Wiring it into your project
+
+The layout differs per language because each toolchain resolves differently. Point
+your build at the generated directory:
+
+| Language | Wire it up with                                                                                                  |
+| -------- | ---------------------------------------------------------------------------------------------------------------- |
+| Python   | put `sdk/python` on `sys.path`; `import lunora_api`                                                              |
+| Go       | `require`/`replace` the emitted module at `sdk/go`                                                               |
+| Ruby     | `$LOAD_PATH.unshift("sdk/ruby")`; `require "api"`                                                                |
+| Rust     | a path dependency on `sdk/rust` in your `Cargo.toml`                                                             |
+| Swift    | `.package(path: "sdk/swift")`, product `LunoraApi` — SwiftPM identifies a path package by its **directory name** |
+| Java     | `javac -sourcepath sdk/java`                                                                                     |
+| Kotlin   | `kotlinc sdk/kotlin …`                                                                                           |
+
+## What you get, and what you don't
+
+Every language implements the full wire codec, the stable subscription key, RPC,
+live subscriptions, the shape/poke protocol and resume-across-reconnect, and every
+client is safe to share across threads.
+
+Two deliberate gaps:
+
+- **Typed models are not available on the JVM.** quicktype's Java and Kotlin
+  backends rename fields (a wire `channelId` becomes `channelID`) and emit no
+  mapping metadata, so a generated model cannot be projected back onto the wire.
+  Sending the wrong key silently is worse than staying untyped, so both take
+  wire-shaped arguments.
+- **Optimistic updates and the offline queue are JS-only.** The non-JS clients
+  speak the protocol; they do not implement the client-side mutation queue.
+
+HTTP and the socket are injected in every language rather than assumed, so you
+keep your own stack, timeouts, retries and socket library — and the conformance
+suites run with no network.
+
+## Conformance
+
+Every SDK is tested against the same golden frames in
+[`protocol/fixtures/`](https://github.com/anolilab/lunora/tree/alpha/protocol/fixtures)
+as the reference TypeScript client, and
+[`protocol/conformance-cases.json`](https://github.com/anolilab/lunora/tree/alpha/protocol/conformance-cases.json)
+lists the cases every suite must exercise — adding a name there turns all seven
+languages red until each one covers it.
+
+CI also generates each SDK into a scratch directory outside the repository, then
+compiles it and **runs a call** through it. Building alone was not enough: an
+earlier revision emitted a Java surface that compiled perfectly and threw on its
+first invocation.
+
+See [`sdks/README.md`](https://github.com/anolilab/lunora/tree/alpha/sdks) for the
+contributor-side detail.

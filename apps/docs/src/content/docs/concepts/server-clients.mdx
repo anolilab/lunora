@@ -10,13 +10,13 @@ page covers those.
 
 Pick by what the caller is:
 
-| Caller                            | Reach for                    |
-| --------------------------------- | ---------------------------- |
-| An SSR loader / Server Component  | `@lunora/client/ssr`         |
-| A Node or Bun script              | `LunoraClient` over HTTP RPC |
-| A one-off call from your terminal | `lunora run`                 |
-| Python                            | the Python SDK               |
-| Anything else                     | the REST/HTTP API            |
+| Caller                                      | Reach for                         |
+| ------------------------------------------- | --------------------------------- |
+| An SSR loader / Server Component            | `@lunora/client/ssr`              |
+| A Node or Bun script                        | `LunoraClient` over HTTP RPC      |
+| A one-off call from your terminal           | `lunora run`                      |
+| Python, Go, Ruby, Rust, Swift, Java, Kotlin | `lunora sdk generate --lang <id>` |
+| Anything else                               | the REST/HTTP API                 |
 
 ## From an SSR loader
 
@@ -111,8 +111,15 @@ expressed through small wrappers — `WireBigInt`, `WireDate`, `WireMap`,
 `WireSet`, `WireUrl`, `WireBytes`. Plain values map straight to JSON. See
 [Data types](/docs/concepts/data-types) for which types need the codec at all.
 
+Typed bindings are no longer a follow-up: `lunora sdk generate --lang python`
+emits typed argument and result models from your schema, and does the same for six
+other languages. See [Non-JS SDKs](/docs/concepts/non-js-sdks) for the full list,
+what each one needs installed, and how the generated output is versioned against
+your CLI.
+
 <Callout type="info">
-    The Python SDK is a v1 proof that the protocol ports cleanly. Optimistic updates, the offline queue, and generated typed bindings are follow-ups.
+    Optimistic updates and the offline queue remain JS-only — the non-JS clients implement the wire protocol, subscriptions and the shape/poke protocol, but not
+    the client-side mutation queue.
 </Callout>
 
 ## From any language, over HTTP

@@ -62,6 +62,7 @@ pnpm run test:templates           # templates/* scaffold, install, build + typec
 pnpm run e2e                      # Playwright suite in tests/e2e
 bash sdks/run-all.sh              # the 7 non-JS SDK conformance suites, in parallel
 bash sdks/lint-all.sh             # per-language lint + format for the same 7
+bash sdks/generated-check.sh      # generate each SDK into a scratch dir, then build + CALL it
 ```
 
 > **`package.json` key-order gotcha.** Key order is enforced by its own CI job ("Lint (package.json sort)") and by **nothing else** — ESLint, Prettier, `lint:types`, `api:check`, and `dist:check` are all blind to it. So a hand-added block in the wrong position (classically `peerDependencies` placed above `devDependencies` instead of below) goes green locally and red in CI. Canonical order is whatever `vis sort-package-json` emits; run `pnpm run lint:package-json` (= `vis sort-package-json --check`) after editing any manifest.

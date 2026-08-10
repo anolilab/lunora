@@ -99,6 +99,7 @@
         "---Reference---",
         "errors",
         "concepts/wire-protocol",
+        "concepts/non-js-sdks",
         "packages"
     ]
 }
