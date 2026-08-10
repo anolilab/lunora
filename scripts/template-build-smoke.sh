@@ -12,8 +12,11 @@
 #      screens landed and their deps were injected (then re-installs).
 #   5. Runs `pnpm run build` — which is what proves the copied auth screens
 #      actually compile in a real app. A template with no build script instead
-#      runs `pnpm run codegen` + `tsc --noEmit` over everything it ships.
-#   6. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
+#      runs `pnpm run codegen` first, so there is something to check.
+#   6. Typechecks the scaffold with the checker that can read its payload,
+#      failing on ANY diagnostic, then proves the checker actually READ that
+#      payload (the coverage floor — see set_typecheck).
+#   7. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
 #
 # Exit codes:
 #   0  — all results were PASS or XFAIL
@@ -173,6 +176,8 @@ is_skipped() {
 #                     TypeScript's `path(line,col): error TSxxxx`; overridden for the
 #                     checkers with a different format. See the vacuous-pass guard
 #                     below for why this is not the same question as ERROR_RE.
+#   COVERAGE_MODE   — how this checker PROVES it read the payload, `listfiles` or
+#                     `canary`. See the coverage floor below.
 #
 # The checker is injected into the scaffold at smoke time (see
 # inject_typecheck_dep, same idea as inject_peer_deps) rather than added to
@@ -184,6 +189,8 @@ set_typecheck() {
     TYPECHECK_PREP=()
     # TypeScript's own format, shared by `tsc` and `vue-tsc`.
     FILE_RE='\([0-9]+,[0-9]+\): error TS'
+    # `tsc`/`vue-tsc` can just be asked what they read.
+    COVERAGE_MODE="listfiles"
 
     case "$1" in
         astro)
@@ -197,6 +204,9 @@ set_typecheck() {
             AUTHUI_RE='^lunora/auth-ui/.*error ts\('
             ERROR_RE='error ts\('
             FILE_RE='[0-9]+:[0-9]+ - error ts\('
+            # No `--listFiles` equivalent: the language server owns the program and
+            # never publishes its file set.
+            COVERAGE_MODE="canary"
             ;;
         nuxt)
             # `nuxt prepare` writes `.nuxt/tsconfig.json` — the config the
@@ -221,6 +231,10 @@ set_typecheck() {
             # svelte-check's machine format carries the path in every diagnostic,
             # so "is a diagnostic" and "names a file" are the same question here.
             FILE_RE='^[0-9]+ ERROR "'
+            # No `--listFiles` equivalent: the machine format reports a FILES count
+            # but never which files, and a count cannot say whether the payload
+            # was among them.
+            COVERAGE_MODE="canary"
             ;;
         react-router)
             # `react-router typegen` writes `.react-router/types/**` — the route
@@ -742,11 +756,21 @@ for tname in "${TEMPLATES[@]}"; do
     # see set_typecheck.
     if [[ "$AUTHUI_ADDED" == "yes" ]]; then
         typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+        coverage_log="$RESULTS_DIR/${tname}-coverage.log"
         : > "$typecheck_log"
+        : > "$coverage_log"
 
         if [[ ${#TYPECHECK_PREP[@]} -gt 0 ]]; then
             echo "  ==> ${TYPECHECK_PREP[*]} (generating the framework's tsconfig)"
             (cd "$scaffold_dir" && "${TYPECHECK_PREP[@]}" 2>&1) >> "$typecheck_log" || true
+        fi
+
+        # `--listFiles` makes the checker enumerate every file in the program, which
+        # is the coverage floor's evidence for the tsc-family checkers. It costs
+        # nothing — same pass, extra stdout — so it rides along with the real gate
+        # rather than paying for a second compile.
+        if [[ "$COVERAGE_MODE" == "listfiles" ]]; then
+            TYPECHECK_CMD+=(--listFiles)
         fi
 
         echo "  ==> ${TYPECHECK_CMD[*]} (compiling the copied screens)"
@@ -764,6 +788,16 @@ for tname in "${TEMPLATES[@]}"; do
             tail -20 "$typecheck_log" | sed 's/^/    /'
             FAIL+=("$tname(typecheck:never-ran)")
             continue
+        fi
+
+        # Split the interleaved `--listFiles` output off into its own log. Every
+        # listed path is absolute; every tsc diagnostic is relative to the scaffold,
+        # so `^/` separates them cleanly. Worth the two lines: the file list runs to
+        # ~1,800 entries and nobody should scroll past it to reach three errors.
+        if [[ "$COVERAGE_MODE" == "listfiles" ]]; then
+            grep -E '^/' "$typecheck_log" > "$coverage_log" || true
+            grep -vE '^/' "$typecheck_log" > "${typecheck_log}.diagnostics" || true
+            mv "${typecheck_log}.diagnostics" "$typecheck_log"
         fi
 
         ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
@@ -794,6 +828,63 @@ for tname in "${TEMPLATES[@]}"; do
             grep -E "$ERROR_RE" "$typecheck_log" | head -25 | sed 's/^/    /'
             FAIL+=("$tname(typecheck)")
             continue
+        fi
+
+        # -- coverage floor: prove the checker READ the payload ------------------
+        # Everything above is a negative gate: it fires on diagnostics. A checker
+        # that compiled NOTHING produces none, exits 0, and is indistinguishable
+        # from a clean payload — `include` matching an empty set, a prep step that
+        # wrote a tsconfig with the wrong roots, a framework that moved its
+        # generated config. Same class as the config-abort the guard above catches,
+        # one level deeper, and invisible to every counter here.
+        #
+        # So require positive evidence, in whichever form the checker can give it.
+        if [[ "$COVERAGE_MODE" == "listfiles" ]]; then
+            # `tsc`/`vue-tsc`: `--listFiles` already enumerated the program above.
+            # Demand the two payload files the copy-in gate asserted on disk — the
+            # shared core module and this framework's view.
+            for covered in "lunora/auth-ui/core/sign-in.ts" "lunora/auth-ui/$authui_view"; do
+                if ! grep -qF "/$covered" "$coverage_log"; then
+                    echo "  FAIL: $tname typechecked without reading $covered — the gate above proved nothing (see $coverage_log)"
+                    echo "        \`${TYPECHECK_CMD[*]}\` listed $(grep -c '' "$coverage_log" || true) file(s) in its program and that was not one of them."
+                    echo "        Look at the tsconfig 'include'/'files' the checker resolved, and at whether the prep step wrote the config it expects."
+                    FAIL+=("$tname(auth-ui:coverage)")
+                    continue 2
+                fi
+            done
+
+            echo "  ==> coverage OK ($(grep -c '/lunora/auth-ui/' "$coverage_log" || true) auth-ui file(s) in the program)"
+        else
+            # `astro check` / `svelte-check` publish no file list, so the only proof
+            # left is to break the payload and require the complaint. Costs a second
+            # checker pass; only these two templates pay it.
+            #
+            # `core/sign-in.ts` is the target because every framework's payload ships
+            # it as plain TypeScript — appending to a `.svelte`/`.vue` SFC would mean
+            # knowing where its script block ends. That does leave the framework view
+            # itself proven only by the negative gate for these two templates.
+            canary_src="$scaffold_dir/lunora/auth-ui/core/sign-in.ts"
+            # Backup outside the payload tree, not next to it: `allowJs`/`checkJs` are
+            # on in some of these tsconfigs and a stray sibling is a needless risk.
+            canary_backup="$SCRATCH/${tname}-canary-sign-in.ts"
+            cp "$canary_src" "$canary_backup"
+            printf '\n// coverage canary — injected by scripts/template-build-smoke.sh, restored below.\nconst __lunoraCoverageCanary: number = "not a number";\n' >> "$canary_src"
+
+            echo "  ==> ${TYPECHECK_CMD[*]} again, against a deliberately broken core/sign-in.ts"
+            (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
+                | sed -E "s/$(printf '\033')\[[0-9;]*m//g" > "$coverage_log" || true
+
+            mv "$canary_backup" "$canary_src"
+
+            if ! grep -qE "$AUTHUI_RE" "$coverage_log"; then
+                echo "  FAIL: $tname did not report a type error planted in lunora/auth-ui/core/sign-in.ts — the gate above proved nothing (see $coverage_log)"
+                echo "        \`${TYPECHECK_CMD[*]}\` cannot be reading the payload. Look at the tsconfig 'include'/'files' it resolved,"
+                echo "        and at whether the prep step wrote the config it expects."
+                FAIL+=("$tname(auth-ui:coverage)")
+                continue
+            fi
+
+            echo "  ==> coverage OK (planted error in core/sign-in.ts was reported)"
         fi
 
         echo "  ==> typecheck OK"
