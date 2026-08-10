@@ -3,7 +3,7 @@
  * runtime in `sdks/rust` (crate `lunora`).
  *
  * A generated model is a `serde` type, so it reaches the wire via
- * `serde_json::to_value` and `lunora::from_json` — a structural mapping rather
+ * `serde_json::to_value` and `lunora::from_model_json` — a structural mapping rather
  * than a lossy round-trip, which is safe because the generator refuses to emit
  * a typed model for any schema carrying a `v.bigint()` or `v.bytes()` (the only
  * values a plain JSON projection could not represent).
@@ -87,7 +87,7 @@ const renderCall = (method: SdkMethod): string => {
     const payload =
         method.argsType === undefined
             ? "&WireValue::Object(Vec::new())"
-            : "&from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+            : "&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
     const call = `self.client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
 
     // A typed result is deserialised into the model; an untyped one is handed
@@ -120,7 +120,7 @@ const renderSubscribe = (method: SdkMethod): string => {
     const payload =
         method.argsType === undefined
             ? "WireValue::Object(Vec::new())"
-            : "from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+            : "from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
 
     return [
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
@@ -172,7 +172,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         `#![allow(dead_code, unused_imports)]\n`,
         `\n`,
         `use lunora::client::{Client, ClientError, SubscriptionError, Verb};\n`,
-        `use lunora::wire::{encode_wire, from_json, WireValue};\n`,
+        `use lunora::wire::{encode_wire, from_model_json, WireValue};\n`,
         `\n`,
         `use crate::models::*;\n`,
         `\n`,

@@ -86,12 +86,19 @@ than the sum of all seven. Pass language names to narrow it
 | kotlin   | `bash build.sh`                              | kotlinc + JDK   |
 
 CI runs all seven per PR (`sdk-conformance` in `.github/workflows/test.yml`),
-and each leg also generates an SDK from a committed fixture and builds the
-result — the generated surface hardcodes the runtime's call signatures, and
-nothing else pins that coupling.
+and each leg also generates an SDK from a committed fixture, builds the result,
+and then _calls_ it — the generated surface hardcodes the runtime's call
+signatures, and nothing else pins that coupling.
 
-The Java and Ruby legs additionally _run_ a generated call. That is not
-belt-and-braces: both languages shipped a revision whose surface passed its
-compile or parse check and then threw on the first invocation — Java could not
-encode its own argument model, and Ruby called a `to_dynamic` that the models
-were not rendered with.
+Calling is not belt-and-braces. Two languages shipped a revision whose surface
+passed its compile-or-parse check and threw on the first invocation: Java could
+not encode its own argument model, and Ruby called a `to_dynamic` the models were
+not rendered with. A third — Rust — sent `"limit": null` for an unset optional,
+which `v.optional()` rejects; the smoke that calls it is what surfaced that, one
+build after the same bug was fixed in Ruby.
+
+The smoke programs live beside each transport (`generated_smoke.*`,
+`smoke/generated_smoke_test.go`, `generated_check/tests/`,
+`Tests/GeneratedCheckTests/`) and each asserts the same thing: that a generated
+call reaches the wire as `{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}`.
+Run one after generating into that language's `generatedOut` path.

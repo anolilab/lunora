@@ -4,7 +4,7 @@
 #![allow(dead_code, unused_imports)]
 
 use lunora::client::{Client, ClientError, SubscriptionError, Verb};
-use lunora::wire::{encode_wire, from_json, WireValue};
+use lunora::wire::{encode_wire, from_model_json, WireValue};
 
 use crate::models::*;
 
@@ -16,7 +16,7 @@ pub struct MessagesApi<'client> {
 impl<'client> MessagesApi<'client> {
     /// query: messages:list
     pub fn list(&self, args: &MessagesListArgs, shard_key: Option<&str>) -> Result<WireValue, ClientError> {
-        self.client.call(Verb::Query, "messages:list", &from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), shard_key)
+        self.client.call(Verb::Query, "messages:list", &from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), shard_key)
     }
 
     /// live query: messages:list — re-runs on every write to the tables it reads.
@@ -27,12 +27,12 @@ impl<'client> MessagesApi<'client> {
         shard_key: Option<&str>,
     ) -> Result<String, ClientError> {
         let _ = shard_key;
-        Ok(self.client.subscribe("messages:list", from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), on_data, on_error))
+        Ok(self.client.subscribe("messages:list", from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), on_data, on_error))
     }
 
     /// mutation: messages:send
     pub fn send(&self, args: &MessagesSendArgs, shard_key: Option<&str>) -> Result<WireValue, ClientError> {
-        self.client.call(Verb::Mutation, "messages:send", &from_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), shard_key)
+        self.client.call(Verb::Mutation, "messages:send", &from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?), shard_key)
     }
 }
 

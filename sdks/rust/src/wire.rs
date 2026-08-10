@@ -369,6 +369,33 @@ fn is_bigint_literal(raw: &str) -> bool {
     !body.is_empty() && body.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// Project a generated model's serde output onto the wire, dropping null-valued
+/// object fields at every depth.
+///
+/// quicktype's Rust backend renders an optional field as `Option<T>` with no
+/// `skip_serializing_if`, so an unset one serialises as an explicit null — while
+/// `v.optional(x)` parses `undefined`-or-`x` and REJECTS null, failing validation
+/// on the server for every call that leaves an optional unset. The Go backend
+/// emits `omitempty` and Python's `to_dict` omits the key; this makes Rust agree
+/// with both.
+///
+/// The ceiling: a field the caller means to send AS null is dropped too. That is
+/// the same limitation the Python backend has, and nothing in the rendered model
+/// distinguishes the two cases.
+pub fn from_model_json(value: &Value) -> WireValue {
+    match value {
+        Value::Array(items) => WireValue::Array(items.iter().map(from_model_json).collect()),
+        Value::Object(fields) => WireValue::Object(
+            fields
+                .iter()
+                .filter(|(_, item)| !item.is_null())
+                .map(|(key, item)| (key.clone(), from_model_json(item)))
+                .collect(),
+        ),
+        other => from_json(other),
+    }
+}
+
 /// Convert a plain `serde_json::Value` — such as a generated model serialised
 /// through serde — into a [`WireValue`] tree.
 ///

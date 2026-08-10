@@ -15,4 +15,4 @@ pub use client::{
     RPC_PATH, WS_PATH,
 };
 pub use key::{stable_stringify, stable_wire_key};
-pub use wire::{decode_wire, encode_wire, from_json, WireError, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
+pub use wire::{decode_wire, encode_wire, from_json, from_model_json, WireError, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
