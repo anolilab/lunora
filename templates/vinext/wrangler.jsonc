@@ -6,7 +6,7 @@
     // Lunora's `frameworkComposePlugin` (in the `lunora()` Vite plugin). It emits
     // a composed worker that routes the reserved `/_lunora/{rpc,ws,admin}` paths
     // into Lunora (forwarded to the `SHARD` Durable Object) and delegates
-    // everything else — pages, RSC, API routes — to vinext's App-Router SSR
+    // everything else — pages, RSC, API routes — to vinext's router-selected SSR
     // handler. `vinext build` runs the Vite build (resolving the virtual), so the
     // one deployed Worker carries both planes.
     "name": "{{name}}",
@@ -16,6 +16,7 @@
     // vinext serves the client bundle through the ASSETS binding and resizes
     // `next/image` sources programmatically, so expose assets to the Worker.
     "assets": {
+        "directory": "./dist/client",
         "binding": "ASSETS",
         "not_found_handling": "none",
     },

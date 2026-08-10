@@ -464,7 +464,7 @@ describe("lunora init", () => {
             expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain("virtual:lunora/worker");
         });
 
-        it("vinext-pages (Pages Router) template scaffolds the hand-wired worker", async () => {
+        it("vinext-pages (Pages Router) template scaffolds the class-A composed worker", async () => {
             expect.assertions(4);
 
             const result = await runInitCommand({
@@ -479,10 +479,10 @@ describe("lunora init", () => {
 
             const target = join(workdir, "vinext-pages-app");
 
-            // Pages-Router scaffold: pages/ + the hand-wired worker that wraps vinext.
+            // Pages-Router scaffold: pages/ + the composed `virtual:lunora/worker` entry.
             expect(existsSync(join(target, "pages", "index.tsx"))).toBe(true);
-            expect(existsSync(join(target, "worker", "index.ts"))).toBe(true);
-            expect(existsSync(join(target, "worker", "vinext-pages.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain("virtual:lunora/worker");
         });
 
         it("refuses to scaffold into a non-empty target", async () => {

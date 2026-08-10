@@ -11,7 +11,7 @@ by `lunora init`.
 
 Real-time queries flow through Lunora's WebSocket transport while vinext drives
 Next.js routing, RSC, and server-side rendering. The app runs as a single
-Cloudflare Worker: Lunora's Vite plugin composes vinext's App-Router SSR handler
+Cloudflare Worker: Lunora's Vite plugin composes vinext's SSR handler
 with the Lunora `/_lunora/*` RPC layer behind the `virtual:lunora/worker` entry.
 
 ## Develop

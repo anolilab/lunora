@@ -38,10 +38,9 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
     { class: "A", dependency: "@tanstack/react-start", framework: "tanstack-start" },
     { class: "A", dependency: "@tanstack/solid-start", framework: "tanstack-start-solid" },
     { class: "A", dependency: "@react-router/dev", framework: "react-router" },
-    // vinext (Next.js on Vite). The App-Router worker (`vinext/server/app-router-entry`)
-    // is a clean `{ fetch(request, env, ctx) }` handler — class-A auto-compose. The
-    // Pages-Router starter ships its own hand-written worker entry and points
-    // wrangler `main` at it, so it never resolves the dormant `virtual:lunora/worker`.
+    // vinext (Next.js on Vite). Its router-selected worker entry
+    // (`vinext/server/fetch-handler`) is a clean `{ fetch(request, env, ctx) }`
+    // handler for both the App and Pages Router — class-A auto-compose either way.
     { class: "A", dependency: "vinext", framework: "vinext" },
     { class: "A", dependency: "@solidjs/start", framework: "solid-start" },
     { class: "A", dependency: "solid-start", framework: "solid-start" },

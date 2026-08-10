@@ -11,7 +11,7 @@
         "isolatedModules": true,
         "verbatimModuleSyntax": true,
         "noEmit": true,
-        "types": ["@cloudflare/workers-types", "vite/client"],
+        "types": ["@cloudflare/workers-types", "vite/client", "vinext/types"],
         "paths": {
             "~/*": ["./app/*"]
         }

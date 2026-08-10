@@ -17,9 +17,9 @@
         "@lunora/react": "^0.0.0",
         "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
-        "react": "^19.2.7",
-        "react-dom": "^19.2.7",
-        "vinext": "^0.1.0"
+        "react": "^19.2.8",
+        "react-dom": "^19.2.8",
+        "vinext": "^1.0.0-beta.5"
     },
     "devDependencies": {
         "@cloudflare/vite-plugin": "^1.29.0",
@@ -28,7 +28,7 @@
         "@lunora/vite": "^0.0.0",
         "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
-        "@vitejs/plugin-react": "^5.0.0",
+        "@vitejs/plugin-react": "^6.0.5",
         "typescript": "^6.0.2",
         "vite": "^8.0.16",
         "wrangler": "^4.100.0"

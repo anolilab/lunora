@@ -2,19 +2,21 @@
     "$schema": "node_modules/wrangler/config-schema.json",
     // SINGLE worker for Next.js Pages Router (vinext) + Lunora realtime.
     //
-    // `main` points at `worker/index.ts` — a hand-wired entry that folds vinext's
-    // generated Pages worker (`worker/vinext-pages.ts`) in as the framework host
-    // via the generated `defineApp().buildFrameworkWorker()`. The reserved
-    // `/_lunora/{rpc,ws,admin}` paths route into Lunora (forwarded to the `SHARD`
-    // Durable Object) and everything else delegates to vinext's Pages pipeline.
-    // `vinext build` resolves vinext's build-time virtual modules and bundles this
-    // entry; `lunora deploy` ships the one Worker.
+    // `main` points at `virtual:lunora/worker` — a virtual entry resolved by
+    // Lunora's `frameworkComposePlugin` (in the `lunora()` Vite plugin). It emits
+    // a composed worker that routes the reserved `/_lunora/{rpc,ws,admin}` paths
+    // into Lunora (forwarded to the `SHARD` Durable Object) and delegates
+    // everything else — pages, API routes, middleware — to vinext's router-selected
+    // handler (`vinext/server/fetch-handler`, which resolves to the Pages Router
+    // pipeline here). `vinext build` runs the Vite build (resolving both virtuals),
+    // so the one deployed Worker carries both planes.
     "name": "{{name}}",
-    "main": "worker/index.ts",
+    "main": "virtual:lunora/worker",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     // vinext serves the client bundle through the ASSETS binding.
     "assets": {
+        "directory": "./dist/client",
         "binding": "ASSETS",
         "not_found_handling": "none",
     },

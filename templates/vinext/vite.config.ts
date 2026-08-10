@@ -16,8 +16,8 @@ import { defineConfig } from "vite";
  *
  * The `virtual:lunora/worker` entry (set in wrangler.jsonc `main`) is resolved by
  * Lunora's frameworkComposePlugin: it emits a composed worker that routes
- * `/_lunora/*` to Lunora and delegates everything else to vinext's App-Router SSR
- * handler (`vinext/server/app-router-entry`, a `{ fetch(request, env, ctx) }`
+ * `/_lunora/*` to Lunora and delegates everything else to vinext's router-selected SSR
+ * handler (`vinext/server/fetch-handler`, a `{ fetch(request, env, ctx) }`
  * worker). One worker, one deploy, one `ShardDO` namespace.
  */
 export default defineConfig({
