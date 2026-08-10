@@ -512,8 +512,15 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
+            # vis, not `pnpm --filter '@lunora/cli...' run build`: the CLI's
+            # dependency closure includes @lunora/studio, whose standalone bundle
+            # imports `@lunora/bindings/analytics`, and under the pnpm filter that
+            # bundle ran before bindings' dist existed. vis orders the closure from
+            # `dependsOn: ["^build"]`, which is why the `Test` legs above already
+            # build studio this way.
             - "name": "Build the generator"
-              "run": "pnpm --filter '@lunora/cli...' run build"
+              "run": |
+                  pnpm exec vis run build --query "project=cli"
 
             - "name": "Generate an SDK from the committed fixture"
               "run": |
