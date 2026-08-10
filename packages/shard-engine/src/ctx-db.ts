@@ -1990,10 +1990,25 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * mutation can bypass the meter. A delete carries no document: it still
      * costs a row, just no bytes.
      */
-    const onWrite: WriteHook = async (event) => {
+
+    /**
+     * Charge one written document against the transaction meter, unless this
+     * writer is running unmetered (see `meterExempt`).
+     *
+     * Named rather than inlined because the `.global()` branches cannot reach
+     * `onWrite` — they return before it — so each one has to charge itself, and
+     * "did this branch remember?" is invisible when the answer is a three-line
+     * ritual repeated six times across 700 lines. One call is an obvious
+     * absence.
+     */
+    const meterWrite = (row: unknown): void => {
         if (!meterExempt) {
-            headroom?.recordWrite(event.doc);
+            headroom?.recordWrite(row);
         }
+    };
+
+    const onWrite: WriteHook = async (event) => {
+        meterWrite(event.doc);
 
         await reportWrite(event);
     };
@@ -2090,6 +2105,77 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         return globalDb;
+    };
+
+    /**
+     * The `.global()` half of `insert`: put the row on the meter, forward it to
+     * the global (D1) writer, then refresh this DO's subscribers.
+     *
+     * Charge BEFORE the write, not after. The global branch returns before
+     * `onWrite`, which is where the meter normally charges, so it has to charge
+     * itself or a transaction could write unbounded rows to a `.global()` table
+     * without consuming its ceiling. The order matters because this write lands
+     * in ANOTHER backend: a mutation runs inside the DO's `storage.transaction`,
+     * which rolls back the DO's SQLite and nothing else. Charging after meant a
+     * ceiling breach threw with the D1 row already committed and no way to undo
+     * it.
+     *
+     * The trade is a charge for a row that was never written when the throw is
+     * caught — `insertMany`'s `skipDuplicates` swallows the D1 unique violation,
+     * so a re-run over mostly-duplicate rows now consumes ceiling for the skips.
+     * Failing closed is the right side of that: over-counting costs a retry,
+     * under-counting costs an isolate.
+     *
+     * What is charged is the caller's document, not the row D1 ends up storing —
+     * the global writer applies its own defaults, `_creationTime` and id on the
+     * far side, and reproducing that here would duplicate the far-side default
+     * pipeline for an estimate. So `writtenBytes` runs light by whatever those
+     * add, a bounded per-row amount; `writtenRows`, which is the ceiling that
+     * actually protects the isolate, is charged exactly.
+     * `charge` is `false` when the caller already charged this row — today
+     * `insertMany`, which pre-charges the whole batch so a mid-loop breach
+     * cannot leave earlier rows committed in a backend the DO transaction
+     * cannot roll back. A parameter rather than `runUnmetered`, deliberately:
+     * `meterExempt` is writer-wide for the duration of its await, so a routine
+     * `Promise.all([ctx.db.insertMany("<global>", rows), ctx.db.insert(…)])`
+     * would silently exempt the sibling write too. `deleteAll` accepts that
+     * trade for an unusual pattern; a global `insertMany` is ordinary.
+     */
+    const insertGlobal = async (
+        global: DatabaseWriterLike,
+        tableName: string,
+        document: Record<string, unknown>,
+        insertOptions: Parameters<DatabaseWriterLike["insert"]>[2],
+        charge: boolean,
+    ): Promise<string> => {
+        if (charge) {
+            meterWrite(document);
+        }
+
+        const id = await global.insert(tableName, document, insertOptions);
+
+        // A `.global()` (D1) write lands in another backend, but live
+        // subscriptions on this DO that read the table still need to be
+        // refreshed — so notify them via the same `broadcast` channel the
+        // local path uses (the DO maps it to `recordChangedTable`). Without
+        // this, `ctx.db.insert("<global>", …)` would never push a delta to
+        // subscribers of that global table's query.
+        //
+        // Deliberately NO `indexKeys`: the global writer applied its own
+        // defaults and `_creationTime` on the far side, so the image here
+        // is not the row that was stored. An index covering a defaulted
+        // field would encode a position the row does not occupy, which
+        // could prove a write outside a slice that actually contains it —
+        // suppressing an invalidation. Omitting them falls back to
+        // whole-table, which is always sound.
+        broadcast({
+            key: id,
+            op: "insert",
+            row: { ...document, _id: id },
+            table: tableName,
+        });
+
+        return id;
     };
 
     // For *id-addressed* ops (`get`/`patch`/`replace`/`delete`): a bare id
@@ -2700,6 +2786,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // A delete carries no document, so it costs a row and no
+                    // bytes — exactly what `onWrite` charges for the local paths
+                    // (see its docblock). Charged here because this branch
+                    // returns before that hook, and before the boundary because
+                    // D1 does not roll back with the DO's transaction. Without
+                    // it, `deleteWhere` over a `.global()` table — which routes
+                    // through `deleteMany` to here — was free of the meter
+                    // entirely, however many rows it removed.
+                    meterWrite(undefined);
+
                     await global.delete(id, undefined, deleteOptions);
                 }
 
@@ -3345,38 +3441,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "insert");
 
             if (global) {
-                const id = await global.insert(tableName, document, insertOptions);
-
-                // The global branch returns before `onWrite`, which is where the
-                // meter normally charges — so charge here, or a transaction could
-                // write unbounded rows to a `.global()` table without ever
-                // consuming its ceiling.
-                if (!meterExempt) {
-                    headroom?.recordWrite(document);
-                }
-
-                // A `.global()` (D1) write lands in another backend, but live
-                // subscriptions on this DO that read the table still need to be
-                // refreshed — so notify them via the same `broadcast` channel the
-                // local path uses (the DO maps it to `recordChangedTable`). Without
-                // this, `ctx.db.insert("<global>", …)` would never push a delta to
-                // subscribers of that global table's query.
-                //
-                // Deliberately NO `indexKeys`: the global writer applied its own
-                // defaults and `_creationTime` on the far side, so the image here
-                // is not the row that was stored. An index covering a defaulted
-                // field would encode a position the row does not occupy, which
-                // could prove a write outside a slice that actually contains it —
-                // suppressing an invalidation. Omitting them falls back to
-                // whole-table, which is always sound.
-                broadcast({
-                    key: id,
-                    op: "insert",
-                    row: { ...document, _id: id },
-                    table: tableName,
-                });
-
-                return id;
+                return insertGlobal(global, tableName, document, insertOptions, true);
             }
 
             const definition = schema.tables[tableName];
@@ -3459,6 +3524,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // per-row global writer (the throughput win is shard-local only).
                 const globalIds: string[] = [];
 
+                // Charge the WHOLE batch before writing any of it, the way the
+                // shard-local branch below does. These rows land in D1, which the
+                // DO's `storage.transaction` cannot roll back, so a breach found
+                // mid-loop would leave every earlier row committed with no way to
+                // undo them. Metering up front means the batch is refused while
+                // that is still true of none of them.
+                for (const document of documents) {
+                    meterWrite(document);
+                }
+
                 for (const document of documents) {
                     // Forward `allowExplicitId` so a trusted import preserves the
                     // supplied `_id` across the D1 boundary too — mirrors the single
@@ -3466,12 +3541,6 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     // re-key every row (thermos HIGH).
                     // eslint-disable-next-line no-await-in-loop -- the D1 global writer has no batch primitive; sequential per row
                     const globalId = await global.insert(tableName, document, { allowExplicitId: batchOptions?.allowExplicitId });
-
-                    // Same reason as the single-insert global branch: this loop
-                    // never reaches `onWrite`, so it must charge the meter itself.
-                    if (!meterExempt) {
-                        headroom?.recordWrite(document);
-                    }
 
                     broadcast({
                         key: globalId,
@@ -3515,10 +3584,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // only after the multi-row INSERT has already landed, so metering
             // there would let one oversized batch materialize in full — which
             // is exactly the isolate exhaustion the meter exists to prevent.
-            if (!meterExempt) {
-                for (const row of rows) {
-                    headroom?.recordWrite(row.document);
-                }
+            for (const row of rows) {
+                meterWrite(row.document);
             }
 
             // Multi-row INSERTs — the throughput win over `insertMany`'s N
@@ -3568,11 +3635,35 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // preserved so an FK reference to an earlier row in the same batch resolves.
             const skipDuplicates = batchOptions?.skipDuplicates === true;
             const ids: (string | null)[] = [];
+            // On a `.global()` table the per-row `insert` charges its own row
+            // immediately before pushing it to D1, so a breach part-way down this
+            // loop leaves every earlier row committed in a backend the DO's
+            // transaction cannot roll back. Charging the whole batch up front —
+            // as `insertManyUnsafe`'s global branch does — refuses it while none
+            // of it has crossed.
+            //
+            // The loop then forwards each row through `insertGlobal` with the
+            // charge suppressed, or every row would be charged twice: once here
+            // and once on its way out. Suppressing it per call rather than with
+            // the writer-wide `runUnmetered` keeps a concurrent write on this
+            // same writer metered (see `insertGlobal`'s `charge` parameter).
+            // Shard-local batches keep the per-row charge untouched, since the DO
+            // transaction rewinds them and there is nothing to pre-empt.
+            const global = globalWriterFor(tableName, "insert");
+
+            if (global) {
+                for (const document of documents) {
+                    meterWrite(document);
+                }
+            }
+
+            const insertOne = async (document: Record<string, unknown>): Promise<string> =>
+                global ? insertGlobal(global, tableName, document, undefined, false) : writer.insert(tableName, document);
 
             for (const document of documents) {
                 try {
                     // eslint-disable-next-line no-await-in-loop -- sequential by design: preserves insert order + the single-threaded SQLite transaction
-                    ids.push(await writer.insert(tableName, document));
+                    ids.push(await insertOne(document));
                 } catch (error) {
                     if (skipDuplicates && error instanceof ConflictError && error.kind === "unique") {
                         // Preserve the input-order slot with null so callers can
@@ -3605,6 +3696,16 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Same reason as the global `insert` branch. The DELTA is
+                    // charged, not the merged row: the row lives in D1, and
+                    // reading it back to size it would double the round-trips on
+                    // every global patch. That meters a global patch lighter than
+                    // the shard-local path, which charges the whole merged
+                    // document — under-counting by the untouched fields is the
+                    // right side of that trade, since the delta is what this call
+                    // actually sends.
+                    meterWrite(patch);
+
                     await global.patch(id, patch);
                     return;
                 }
@@ -4019,6 +4120,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const global = expectedTable === undefined ? globalDb : undefined;
 
                 if (global) {
+                    // Same reason as the global `patch` branch — and here the
+                    // whole replacement document is in hand, so the charge is
+                    // exact rather than a delta.
+                    meterWrite(document);
+
                     await global.replace(id, document, undefined, replaceOptions);
                     return;
                 }

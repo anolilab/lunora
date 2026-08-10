@@ -73,12 +73,13 @@ Two are yours to respect, because no rewrite can absorb them:
 
 ## Workers
 
-| Limit           | Value                           | Implication                                         |
-| --------------- | ------------------------------- | --------------------------------------------------- |
-| Bundle size     | **10 MB**                       | Lazy-load big deps; avoid bundling unused providers |
-| CPU per request | **30 s**                        | Same envelope as DO                                 |
-| Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
-| Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
+| Limit                 | Value                                                    | Implication                                                           |
+| --------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
+| Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                   |
+| CPU per request       | **30 s**                                                 | Same envelope as DO                                                   |
+| Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                             |
+| Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1 — a cross-shard read spends one per shard |
+| Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                    |
 
 ## Queues
 
@@ -92,6 +93,46 @@ Two are yours to respect, because no rewrite can absorb them:
 | Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                 |
 | Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                          |
 | `delaySeconds`      | **24 h**              | Longer schedules → `@lunora/scheduler`                 |
+
+## Pipelines
+
+| Limit                 | Value      | Implication                                                        |
+| --------------------- | ---------- | ------------------------------------------------------------------ |
+| Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call — chunk a large batch |
+| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                            |
+| Streams / account     | **20**     | Open-beta ceiling, raisable by request                             |
+| Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                             |
+| Sinks / account       | **20**     | Open-beta ceiling, raisable by request                             |
+
+`send` accepts one record or an array and forwards the array as a single
+ingestion call, so the 5 MB ceiling is a property of what you pass it. Nothing
+measures it locally — the byte count would mean serializing every record twice
+on an egress path — so a batch past the limit is rejected by Cloudflare rather
+than by Lunora. Split large batches across calls.
+
+## Workers AI + Vectorize
+
+| Limit                     | Value      | Implication                                                        |
+| ------------------------- | ---------- | ------------------------------------------------------------------ |
+| Vector metadata           | **10 KiB** | The whole object per vector, not just the chunk text               |
+| `topK` with full metadata | **50**     | Cloudflare's ceiling; `defineRag` caps at 20, a legacy-V1 holdover |
+| `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata         |
+
+The ceiling covers the **whole** metadata object — chunk text, Lunora's
+bookkeeping keys, and any `metadata` you attach — so `defineRag` checks it in
+two places.
+
+At index time it measures the serialized metadata of each chunk and refuses one
+that would not fit, naming what pushed it over. This is the check that holds:
+`chunkSize` counts characters while the ceiling counts bytes, so multibyte text
+costs up to three bytes each, and your own `metadata` is not known until a
+document is indexed.
+
+When the RAG is defined it also rejects a `chunkSize` that could not fit
+whatever the ceiling allows, so an unworkable config fails at startup rather
+than on every upsert. That earlier check applies only where Lunora stores chunk
+text in the vector's metadata: a `textStore` keeps the text out entirely, and a
+custom `chunk` splitter makes `chunkSize` inert, so neither is checked.
 
 ## Workers KV
 
@@ -133,13 +174,18 @@ unlike R2, which is free. See the
 
 ## When Lunora warns you
 
-The runtime emits warnings (and the dev overlay shows a banner) when:
+The Studio's **Advisors** pages carry the limit warnings, alongside the rest of
+the schema and performance lints:
 
-- the `__root__` DO crosses **1 GB** of SQLite
-- a single DO is sustaining **>700 req/s**
-- a fan-out query touches more than **100 shards** in one invocation
+| Lint                             | Fires when                                                                                                                             |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100                                                                           |
+| `fan_out_breadth`                | A shard group reaches **500** active shards — wide enough that a cross-shard read over it would strain the internal-subrequest ceiling |
+| `hot_shard`                      | One shard takes a dominant share of its group's traffic (a distribution, not a ceiling)                                                |
 
-These warnings fire well below the hard ceiling, so you have time to react.
+Each fires with runway, because the remediation is a design change — split a
+table, narrow a read, re-key a shard — and that is not something you can act on
+in the request that fails.
 
 The statement limits above are different in kind: there is no warning band,
 because there is no gradual degradation to warn about. A statement either fits

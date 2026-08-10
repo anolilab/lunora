@@ -122,6 +122,86 @@ describe("reprojection backfill", () => {
         });
     });
 
+    describe("statement width", () => {
+        // The predicate walks the document's own members, so these are the
+        // shapes it must survive rather than the paths it used to build.
+        it.each([
+            ["a scalar member, whose raw text json_extract would choke on", { amount: "plain" }, 0],
+            ["a member array too short to carry a kind", { amount: ["$lunora.wire$"] }, 0],
+            ["a JSON null member", { amount: null }, 0],
+            ["a tagged Date under v.any(), which the CURRENT projection writes", { amount: ["$lunora.wire$", "date", "2020"] }, 0],
+            ["a tagged value under a field that is not reprojectable", { other: ["$lunora.wire$", "bigint", "1"] }, 0],
+            ["a genuine legacy value", { amount: ["$lunora.wire$", "bigint", "10"] }, 1],
+        ])("counts %s correctly", (_label, document, expected) => {
+            expect.assertions(1);
+
+            const single = {
+                tables: { one: { indexes: [], shape: { amount: { kind: "bigint" } } } },
+            } as unknown as SchemaLike;
+
+            runShardMigrations(harness.sql, single);
+            harness.raw(
+                `INSERT INTO "one" (id, _creationTime, "__doc__") VALUES (?, ?, ?)`,
+                "r1",
+                1,
+                JSON.stringify({ _creationTime: 1, _id: "r1", ...document }),
+            );
+
+            expect(countLegacyRows(harness.sql, "one", reprojectableFields(single.tables["one"]!))).toBe(expected);
+        });
+
+        // Field names are compared as `json_each` keys now, so the JSON-path
+        // grammar cannot mangle them — this is the case the old path-building
+        // form needed `jsonPathSegment` to survive.
+        it("counts a field whose name would not survive an unquoted json path", () => {
+            expect.assertions(1);
+
+            const awkward = {
+                tables: { one: { indexes: [], shape: { "a.b": { kind: "bytes" } } } },
+            } as unknown as SchemaLike;
+
+            runShardMigrations(harness.sql, awkward);
+            harness.raw(
+                `INSERT INTO "one" (id, _creationTime, "__doc__") VALUES (?, ?, ?)`,
+                "r1",
+                1,
+                JSON.stringify({ "a.b": ["$lunora.wire$", "bytes", "AAA="], _creationTime: 1, _id: "r1" }),
+            );
+
+            expect(countLegacyRows(harness.sql, "one", reprojectableFields(awkward.tables["one"]!))).toBe(1);
+        });
+
+        // Executed against real SQLite rather than asserted on the emitted text:
+        // `json_each` behaviour is exactly what cannot be reasoned about from the
+        // source. See `legacyRowPredicate` for why the width matters.
+        it("counts a table far wider than the parameter ceiling would allow", () => {
+            expect.assertions(1);
+
+            const columns = 40;
+            const wide = {
+                tables: {
+                    wide: {
+                        indexes: [],
+                        shape: Object.fromEntries(Array.from({ length: columns }, (_unused, index) => [`f${String(index)}`, { kind: "bigint" }])),
+                    },
+                },
+            } as unknown as SchemaLike;
+
+            runShardMigrations(harness.sql, wide);
+            // Raw `JSON.stringify`, like `seedLegacy`: `encodeDocJson` would
+            // re-encode into the CURRENT projection, which is the one shape this
+            // predicate must not match.
+            harness.raw(
+                `INSERT INTO "wide" (id, _creationTime, "__doc__") VALUES (?, ?, ?)`,
+                "legacy-1",
+                1,
+                JSON.stringify({ _creationTime: 1, _id: "legacy-1", f0: taggedBigint("10") }),
+            );
+
+            expect(countLegacyRows(harness.sql, "wide", reprojectableFields(wide.tables["wide"]!))).toBe(1);
+        });
+    });
+
     describe("json path segments", () => {
         it("emits the bare form for an identifier-safe field", () => {
             expect.assertions(2);

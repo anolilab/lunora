@@ -42,6 +42,8 @@ const WORKERD_SQLITE_LIMITS = {
     compoundSelect: 5,
     /** `SQLITE_LIMIT_LIKE_PATTERN_LENGTH` — bytes in a `LIKE`/`GLOB` pattern. Stock SQLite allows 50,000. */
     likePattern: 50,
+    /** `SQLITE_LIMIT_SQL_LENGTH` — BYTES of statement text, not characters. Stock SQLite allows 1 GB. */
+    sqlTextLength: 100_000,
 } as const;
 
 /**

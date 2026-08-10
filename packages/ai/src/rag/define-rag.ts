@@ -21,6 +21,7 @@ import type {
 } from "./types";
 
 const DEFAULT_CHUNK_SIZE = 1000;
+
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
 
@@ -28,6 +29,26 @@ const DEFAULT_TOP_K = 5;
 const MAX_TOP_K_FULL_METADATA = 20;
 /** Vectorize `topK` ceiling otherwise (text-store mode). */
 const MAX_TOP_K = 100;
+
+/**
+ * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
+ * metadata object, not the chunk text alone; a `textStore` moves the text out
+ * and lifts the constraint entirely.
+ */
+const VECTORIZE_METADATA_BYTES = 10 * 1024;
+
+/**
+ * Room held back from {@link VECTORIZE_METADATA_BYTES} for everything in the
+ * metadata object that is not chunk text: the source id, the chunk index,
+ * chunk #0's hash / count / model tag, and whatever `metadata` the caller
+ * attaches per source.
+ *
+ * A guess, and deliberately a generous one — the caller's `metadata` is not
+ * known when the RAG is defined, so no exact figure exists to check against.
+ * The point is only that spending the entire ceiling on text is provably wrong:
+ * the bookkeeping is never zero bytes.
+ */
+const METADATA_OVERHEAD_RESERVE = 2 * 1024;
 
 /** Metadata key holding each chunk's index within its source. */
 const CHUNK_INDEX_KEY = "__ragChunk";
@@ -45,6 +66,40 @@ const IMPORTANCE_KEY = "__ragImportance";
 const MODEL_KEY = "__ragModel";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
+
+/**
+ * Refuse a metadata object over Vectorize's ceiling, naming what breached it.
+ *
+ * The config-time `chunkSize` check is a fast fail on the one input known when
+ * the RAG is defined; this is the one that actually holds. Two things get past
+ * the former by construction: `chunkSize` counts CHARACTERS while the ceiling
+ * counts BYTES, so ~3.4k characters of CJK already exceed 10 KiB at a
+ * `chunkSize` the config check waves through — and the caller's `metadata` is
+ * not known until index time, so {@link METADATA_OVERHEAD_RESERVE} can only
+ * guess at it.
+ *
+ * Measured on the serialized form because that is what Vectorize stores and
+ * counts. Without this the upsert fails at the far side with nothing naming the
+ * cause, which is the failure this whole check exists to replace.
+ */
+const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string): void => {
+    const bytes = new TextEncoder().encode(JSON.stringify(metadata)).length;
+
+    if (bytes <= VECTORIZE_METADATA_BYTES) {
+        return;
+    }
+
+    const textBytes = typeof metadata[TEXT_KEY] === "string" ? new TextEncoder().encode(metadata[TEXT_KEY]).length : 0;
+    const remedy =
+        textBytes * 2 > bytes
+            ? "lower `chunkSize` (it counts characters, not bytes — multibyte text costs up to 3 bytes each), or supply `textStore` to move chunk text out of metadata entirely"
+            : "attach less per-source `metadata`";
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte per-vector ceiling — ${remedy}`,
+    );
+};
 
 /** Allowed shape of {@link RagConfig.embeddingModelVersion} — safe in a Vectorize namespace + chunk-id prefix. */
 const MODEL_VERSION_PATTERN = /^[\w.-]{1,40}$/;
@@ -241,6 +296,25 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
     if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `chunkOverlap` must be a non-negative integer smaller than `chunkSize`");
+    }
+
+    // Characters against a byte ceiling on purpose: one character is at least one
+    // byte, so this rejects only sizes that cannot fit even in pure ASCII, never
+    // a config that works. Gated on BOTH options because `chunkSize` reaches only
+    // the built-in splitter — a custom `chunk` ignores it, so rejecting on it
+    // would refuse a value that has no effect.
+    //
+    // Still a floor, not a guarantee: the ceiling is bytes and covers the whole
+    // metadata object, so multi-byte text or heavy per-source `metadata` can
+    // exceed it under this bound. What it rules out is the config that could
+    // never work.
+    const chunkTextBudget = VECTORIZE_METADATA_BYTES - METADATA_OVERHEAD_RESERVE;
+
+    if (!config.chunk && !config.textStore && chunkSize > chunkTextBudget) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} leaves no room under Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit, which also carries this chunk's bookkeeping and any \`metadata\` you attach — keep it under ${String(chunkTextBudget)}, or supply \`textStore\` to move chunk text out of metadata entirely`,
+        );
     }
 
     const defaultTopK = config.topK ?? DEFAULT_TOP_K;
@@ -449,6 +523,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         metadata[MODEL_KEY] = modelTag;
                     }
                 }
+
+                assertMetadataFits(metadata, chunkIndex, input.id);
 
                 // Vector upsert
                 await context.vectors.upsert(config.index, {

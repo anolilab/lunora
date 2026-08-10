@@ -44,6 +44,7 @@ const render = (where: Record<string, unknown>, engine: SqlEngine, strategy: Whe
     return renderSql(engine, compiled);
 };
 
+// Clause chains render BALANCED, not flat — see `joinClauses` for why.
 describe("compileWhereSql — per-engine rendering", () => {
     it("renders equality shorthand with the engine's identifier quoting + placeholder style", () => {
         expect.assertions(3);
@@ -80,7 +81,7 @@ describe("compileWhereSql — per-engine rendering", () => {
 
         expect(render({ a: { eq: null }, b: 2, c: null }, "postgres")).toEqual({
             params: [2],
-            sql: `("a" IS NULL) AND ("b" = $1) AND ("c" IS NULL)`,
+            sql: `("a" IS NULL) AND (("b" = $1) AND ("c" IS NULL))`,
         });
     });
 
@@ -95,7 +96,7 @@ describe("compileWhereSql — per-engine rendering", () => {
 
         expect(render(where, "postgres")).toEqual({
             params: [1, "high", "open", "blocked", "p1"],
-            sql: `(NOT ("archived" = $1)) AND (("priority" = $2) OR ("status" IN ($3, $4))) AND ("projectId" = $5)`,
+            sql: `(NOT ("archived" = $1)) AND ((("priority" = $2) OR ("status" IN ($3, $4))) AND ("projectId" = $5))`,
         });
     });
 

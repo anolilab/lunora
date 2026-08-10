@@ -113,8 +113,9 @@ describe("buildSeekWhere", () => {
         );
         const compiled = compile(where);
 
+        // Balanced grouping (see `joinClauses`); same terms, same param order.
         expect(compiled.sql).toBe(
-            `(${json("a")} > ?) OR ((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND (${json("b")} = ?) AND (id > ?))`,
+            `(${json("a")} > ?) OR (((${json("a")} = ?) AND (${json("b")} < ?)) OR ((${json("a")} = ?) AND ((${json("b")} = ?) AND (id > ?))))`,
         );
         expect(compiled.params).toEqual(["av", "av", "bv", "av", "bv", "row_1"]);
     });

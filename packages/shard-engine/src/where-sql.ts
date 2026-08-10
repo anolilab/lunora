@@ -186,20 +186,37 @@ const compileField = (field: string, value: unknown, strategy: WhereSqlStrategy)
     return [sql`${reference} = ${strategy.serialize(value)}`];
 };
 
-/** Join compiled clauses with a boolean connector, wrapping each in parens. */
+/**
+ * Join compiled clauses with a boolean connector, wrapping each in parens.
+ *
+ * Split in half rather than chained flat, because SQLite parses `a AND b AND c`
+ * left-deep: one expression-tree node per clause, against Workerd's
+ * `SQLITE_LIMIT_EXPR_DEPTH` of 100 where stock SQLite allows 1,000. A `where`
+ * assembled programmatically — a filter builder, an RLS policy merged into a
+ * caller's predicate, an `OR` over a long id list — reaches that in a way no
+ * hand-written predicate would, and fails to parse rather than running slowly.
+ * Halving makes the tree log2(n) deep: 200 clauses go from 200 to 8.
+ *
+ * `AND` and `OR` are associative under SQL's three-valued logic, so regrouping
+ * cannot change what matches — `(a AND b) AND c` and `a AND (b AND c)` agree on
+ * true, false and NULL alike — and the left half always comes first, so bound
+ * parameters number exactly as they did flat. SQLite's own `whereSplit` recurses
+ * into both children of an `AND` node, so the planner decomposes a balanced tree
+ * into the same term set it got from a chain: index selection is unaffected.
+ *
+ * Solves the same shape of problem as `unionAll` in `./drizzle`, which nests the
+ * compound-`SELECT` chain against its own ceiling.
+ */
 const joinClauses = (clauses: SQL[], connector: "AND" | "OR"): SQL | undefined => {
-    if (clauses.length === 0) {
-        return undefined;
-    }
-
-    if (clauses.length === 1) {
+    // Both halves of a split are non-empty and strictly smaller, so the
+    // recursion always reaches this case.
+    if (clauses.length <= 1) {
         return clauses[0];
     }
 
-    return sql.join(
-        clauses.map((clause) => sql`(${clause})`),
-        sql` ${sql.raw(connector)} `,
-    );
+    const middle = Math.floor(clauses.length / 2);
+
+    return sql`(${joinClauses(clauses.slice(0, middle), connector)}) ${sql.raw(connector)} (${joinClauses(clauses.slice(middle), connector)})`;
 };
 
 const compileGroup = (value: unknown, connector: "AND" | "OR", strategy: WhereSqlStrategy): SQL | undefined => {

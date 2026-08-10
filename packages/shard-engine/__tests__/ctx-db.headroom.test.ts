@@ -212,3 +212,130 @@ describe("ctx-db transaction headroom", () => {
         await expect(writer.insert("notes", { body: "c", bucket: "a" })).resolves.toBeDefined();
     });
 });
+
+describe("the .global() branches", () => {
+    // These return before `onWrite`, so each charges the meter itself. They also
+    // write into D1, which the DO's transaction cannot roll back — so the charge
+    // has to land BEFORE the boundary or a breach commits the row it refused.
+    const globalSchema: SchemaLike = {
+        tables: {
+            profiles: {
+                indexes: [],
+                shape: { name: { kind: "string" } },
+                shardMode: { kind: "global" },
+            },
+        },
+    } as never;
+
+    /** A D1 double that records which writes actually crossed the boundary. */
+    const globalDouble = (crossed: string[], gate?: Promise<void>): DatabaseWriterLike =>
+        ({
+            delete: async () => {
+                crossed.push("delete");
+            },
+            insert: async (_table: string, document: Record<string, unknown>) => {
+                // Optionally hold the write open, so a test can interleave another
+                // operation on the same writer while this one is mid-await.
+                await gate;
+                crossed.push(`insert:${String(document["name"])}`);
+
+                return `p_${String(crossed.length)}`;
+            },
+            patch: async () => {
+                crossed.push("patch");
+            },
+            replace: async () => {
+                crossed.push("replace");
+            },
+        }) as unknown as DatabaseWriterLike;
+
+    const writerWithCeiling = (crossed: string[], maxWrittenRows: number): DatabaseWriterLike => {
+        const sql = makeSql();
+
+        runShardMigrations(sql, globalSchema);
+
+        return createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            globalDb: globalDouble(crossed),
+            headroom: new TransactionHeadroomTracker({ maxWrittenRows }),
+            schema: globalSchema,
+            sql,
+        });
+    };
+
+    it.each(["patch", "replace", "delete"] as const)("charges %s and refuses past the ceiling before D1 sees it", async (operation) => {
+        expect.assertions(3);
+
+        const crossed: string[] = [];
+        // A one-row ceiling: the first write spends it, the second must be refused.
+        const writer = writerWithCeiling(crossed, 1);
+        const call = async (): Promise<unknown> => (operation === "delete" ? writer.delete("p_absent") : writer[operation]("p_absent", { name: "n" }));
+
+        await call();
+
+        expect(crossed).toStrictEqual([operation]);
+        await expect(codeOf(call)).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        // Refused before the boundary: D1 never saw the second write.
+        expect(crossed).toStrictEqual([operation]);
+    });
+
+    it("charges a global insertMany once per row, up front, before any row crosses", async () => {
+        expect.assertions(3);
+
+        const crossed: string[] = [];
+        // Room for two rows; the batch asks for three.
+        const writer = writerWithCeiling(crossed, 2);
+        const rows = [{ name: "a" }, { name: "b" }, { name: "c" }];
+
+        await expect(codeOf(async () => writer.insertMany!("profiles", rows))).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        // The whole batch is charged before the loop, so nothing reached D1 —
+        // which the DO's storage transaction could not have rolled back.
+        expect(crossed).toStrictEqual([]);
+
+        // And a batch that fits is charged exactly once per row, not twice: two
+        // rows against a two-row ceiling must pass.
+        const fits: string[] = [];
+
+        await expect(writerWithCeiling(fits, 2).insertMany!("profiles", [{ name: "a" }, { name: "b" }])).resolves.toHaveLength(2);
+    });
+
+    it("keeps a concurrent write metered while a global insert is in flight", async () => {
+        expect.assertions(2);
+
+        // The batch pre-charges its rows and suppresses the per-row charge on the
+        // way out. Done with a writer-wide flag, that suppression would also
+        // exempt anything interleaved into the await — so a sibling write on the
+        // same writer would slip past the ceiling entirely.
+        let release = (): void => undefined;
+        const gate = new Promise<void>((resolve) => {
+            release = () => {
+                resolve();
+            };
+        });
+        const crossed: string[] = [];
+        const sql = makeSql();
+
+        runShardMigrations(sql, globalSchema);
+
+        const writer = createShardContextDatabase({
+            clock: () => 1_700_000_000_000,
+            globalDb: globalDouble(crossed, gate),
+            // One row of room: the batch's single row spends it, so the sibling
+            // write racing alongside it must be refused.
+            headroom: new TransactionHeadroomTracker({ maxWrittenRows: 1 }),
+            schema: globalSchema,
+            sql,
+        });
+
+        const batch = writer.insertMany!("profiles", [{ name: "a" }]);
+        const sibling = codeOf(async () => writer.insert("profiles", { name: "sibling" }));
+
+        release();
+
+        await batch;
+
+        await expect(sibling).resolves.toBe("TRANSACTION_LIMIT_EXCEEDED");
+        // The refused sibling never crossed; only the batch's row did.
+        expect(crossed).toStrictEqual(["insert:a"]);
+    });
+});
