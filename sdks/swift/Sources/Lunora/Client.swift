@@ -50,14 +50,41 @@ public typealias LunoraUnsubscribe = () -> Void
 public final class LunoraClient {
     private let baseURL: String
     private let post: LunoraHTTPPoster?
-    public var authToken: String?
 
+    /// The bearer token sent on every RPC. Behind the lock like everything else,
+    /// so an app thread can rotate it while a socket reader is mid-frame.
+    public var authToken: String? {
+        get { withLock { storedAuthToken } }
+        set { withLock { storedAuthToken = newValue } }
+    }
+
+    private var storedAuthToken: String?
     private var send: LunoraFrameSender?
     private var subscriptions: [String: Subscription] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
     private var pokes: [String: [String: [[String: Any]]]] = [:]
     private var nextID = 0
     private var nextShapeID = 0
+
+    /// Serialises every mutable field above, and the `cursor`/`epoch`/row state
+    /// hanging off `Subscription` and `ShapeSubscription`.
+    ///
+    /// Two threads normally drive this client: a socket reader calling
+    /// ``handleFrame(_:)`` and the app thread calling ``subscribe(_:args:onData:onError:shardKey:)``.
+    /// A Swift `Dictionary` is not atomic — a concurrent insert during a resize
+    /// is a memory error, not a lost write.
+    ///
+    /// Frames and user callbacks are invoked OUTSIDE the lock. `send` writes a
+    /// socket the consumer owns, and `NSLock` is not recursive, so a callback
+    /// that subscribes would deadlock if it ran under the lock.
+    private let lock = NSLock()
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return try body()
+    }
 
     private final class Subscription {
         let functionPath: String
@@ -98,7 +125,7 @@ public final class LunoraClient {
     }
 
     /// Registers the sender used for subscription frames. Call once the socket is open.
-    public func attachSocket(_ sender: @escaping LunoraFrameSender) { send = sender }
+    public func attachSocket(_ sender: @escaping LunoraFrameSender) { withLock { send = sender } }
 
     // MARK: - RPC
 
@@ -239,18 +266,28 @@ public final class LunoraClient {
         onError: ((LunoraSubscriptionError) -> Void)? = nil,
         shardKey: String? = nil
     ) -> LunoraUnsubscribe {
-        nextID += 1
-        let id = "sub_\(nextID)"
-        subscriptions[id] = Subscription(functionPath: functionPath, args: args, onData: onData, onError: onError)
+        let (id, sender) = withLock { () -> (String, LunoraFrameSender?) in
+            nextID += 1
+            let id = "sub_\(nextID)"
+            subscriptions[id] = Subscription(functionPath: functionPath, args: args, onData: onData, onError: onError)
 
-        if let send, let frame = try? LunoraClient.buildSubscribeFrame(id: id, functionPath: functionPath, args: args) {
-            send(frame)
+            return (id, send)
+        }
+
+        if let sender, let frame = try? LunoraClient.buildSubscribeFrame(id: id, functionPath: functionPath, args: args) {
+            sender(frame)
         }
 
         return { [weak self] in
             guard let self else { return }
-            self.subscriptions.removeValue(forKey: id)
-            self.send?(LunoraClient.buildUnsubscribeFrame(id: id))
+
+            let sender = self.withLock { () -> LunoraFrameSender? in
+                self.subscriptions.removeValue(forKey: id)
+
+                return self.send
+            }
+
+            sender?(LunoraClient.buildUnsubscribeFrame(id: id))
         }
     }
 
@@ -263,18 +300,28 @@ public final class LunoraClient {
         onRows: (([Any]) -> Void)?,
         onError: ((LunoraSubscriptionError) -> Void)? = nil
     ) -> LunoraUnsubscribe {
-        nextShapeID += 1
-        let id = "shape_\(nextShapeID)"
-        shapes[id] = ShapeSubscription(name: name, onRows: onRows, onError: onError)
+        let (id, sender) = withLock { () -> (String, LunoraFrameSender?) in
+            nextShapeID += 1
+            let id = "shape_\(nextShapeID)"
+            shapes[id] = ShapeSubscription(name: name, onRows: onRows, onError: onError)
 
-        if let send, let frame = try? LunoraClient.buildShapeSubscribeFrame(id: id, name: name, args: args) {
-            send(frame)
+            return (id, send)
+        }
+
+        if let sender, let frame = try? LunoraClient.buildShapeSubscribeFrame(id: id, name: name, args: args) {
+            sender(frame)
         }
 
         return { [weak self] in
             guard let self else { return }
-            self.shapes.removeValue(forKey: id)
-            self.send?(LunoraClient.buildShapeUnsubscribeFrame(id: id))
+
+            let sender = self.withLock { () -> LunoraFrameSender? in
+                self.shapes.removeValue(forKey: id)
+
+                return self.send
+            }
+
+            sender?(LunoraClient.buildShapeUnsubscribeFrame(id: id))
         }
     }
 
@@ -284,18 +331,29 @@ public final class LunoraClient {
     /// Without this the `cursor`/`epoch` tracked on every `data` frame would be
     /// write-only state and a reconnect would silently re-seed from scratch.
     public func resendSubscriptions() {
-        guard let send else { return }
+        // The frames are BUILT under the lock, not just the map iteration: each
+        // one reads `cursor`/`epoch`, which the frame handler writes. Snapshotting
+        // the entries and reading their cursors afterwards resends a torn one.
+        let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
+            guard send != nil else { return (nil, []) }
 
-        for (id, entry) in subscriptions {
-            if let frame = try? LunoraClient.buildSubscribeFrame(
-                id: id,
-                functionPath: entry.functionPath,
-                args: entry.args,
-                sinceSeq: entry.cursor,
-                sinceEpoch: entry.epoch
-            ) {
-                send(frame)
+            let frames = subscriptions.compactMap { id, entry in
+                try? LunoraClient.buildSubscribeFrame(
+                    id: id,
+                    functionPath: entry.functionPath,
+                    args: entry.args,
+                    sinceSeq: entry.cursor,
+                    sinceEpoch: entry.epoch
+                )
             }
+
+            return (send, frames)
+        }
+
+        guard let sender else { return }
+
+        for frame in frames {
+            sender(frame)
         }
     }
 
@@ -319,20 +377,32 @@ public final class LunoraClient {
     private func dispatch(_ frame: [String: Any]) throws -> String? {
         let kind = frame["type"] as? String
         let id = frame["id"] as? String
-        let entry = id.flatMap { subscriptions[$0] }
 
+        // Every case below looks the subscription up UNDER the lock and hands the
+        // callback back out, rather than resolving `entry` once up here: the app
+        // thread can unsubscribe between the lookup and the call, and `advance`
+        // writes state the lock exists to protect.
         switch kind {
         case "ack": return kind
         case "data", "delta":
             let payload = (frame["data"] is NSNull ? nil : frame["data"]) ?? frame["delta"]
             let value = try Wire.decode(payload)
-            if let entry {
+            let onData = withLock { () -> ((Any) -> Void)? in
+                guard let id, let entry = subscriptions[id] else { return nil }
+
                 advance(entry, frame)
-                entry.onData?(value)
+
+                return entry.onData
             }
+
+            onData?(value)
+
             return kind
         case "resume", "settled":
-            if let entry { advance(entry, frame) }
+            withLock {
+                if let id, let entry = subscriptions[id] { advance(entry, frame) }
+            }
+
             return kind
         case "error":
             let envelope = frame["error"] as? [String: Any] ?? [:]
@@ -340,14 +410,28 @@ public final class LunoraClient {
                 code: envelope["code"] as? String,
                 message: frame["message"] as? String ?? envelope["message"] as? String ?? "subscription error"
             )
-            entry?.onError?(error)
-            if let id { shapes[id]?.onError?(error) }
+            let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
+                guard let id else { return [] }
+
+                return [subscriptions[id]?.onError, shapes[id]?.onError].compactMap { $0 }
+            }
+
+            for handler in handlers {
+                handler(error)
+            }
+
             return kind
         case "complete":
-            if let id { subscriptions.removeValue(forKey: id) }
+            withLock {
+                if let id { subscriptions.removeValue(forKey: id) }
+            }
+
             return kind
         case "pokeStart":
-            if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = [:] }
+            withLock {
+                if let pokeID = frame["pokeId"] as? String { pokes[pokeID] = [:] }
+            }
+
             return kind
         case "pokePart":
             bufferPokePart(frame)
@@ -368,44 +452,62 @@ public final class LunoraClient {
     /// as they arrive would expose a torn view, and a socket dropping mid-poke
     /// would leave it permanently half-applied.
     private func bufferPokePart(_ frame: [String: Any]) {
-        guard let pokeID = frame["pokeId"] as? String,
-              let shapeID = frame["shapeId"] as? String,
-              // A part for an unknown poke is dropped: without its pokeStart
-              // there is no batch to join, and guessing applies a fragment.
-              pokes[pokeID] != nil
-        else { return }
+        withLock {
+            guard let pokeID = frame["pokeId"] as? String,
+                  let shapeID = frame["shapeId"] as? String,
+                  // A part for an unknown poke is dropped: without its pokeStart
+                  // there is no batch to join, and guessing applies a fragment.
+                  pokes[pokeID] != nil
+            else { return }
 
-        let operations = (frame["rowsPatch"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
-        pokes[pokeID]?[shapeID, default: []].append(contentsOf: operations)
+            let operations = (frame["rowsPatch"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+            pokes[pokeID]?[shapeID, default: []].append(contentsOf: operations)
+        }
     }
 
     private func applyPoke(_ frame: [String: Any]) throws {
-        guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return }
+        // The view is mutated under the lock; `onRows` fires after it is released,
+        // with the row snapshot taken while still holding it — so a callback sees
+        // one consistent poke even if the next one lands mid-delivery.
+        let deliveries = try withLock { () -> [(([Any]) -> Void, [Any])] in
+            guard let pokeID = frame["pokeId"] as? String, let buffer = pokes.removeValue(forKey: pokeID) else { return [] }
 
-        for (shapeID, operations) in buffer {
-            guard let shape = shapes[shapeID] else { continue }
+            var deliveries: [(([Any]) -> Void, [Any])] = []
 
-            for operation in operations {
-                guard let key = operation["key"] as? String else { continue }
+            for (shapeID, operations) in buffer {
+                guard let shape = shapes[shapeID] else { continue }
 
-                if operation["op"] as? String == "delete" {
-                    if shape.rows.removeValue(forKey: key) != nil {
-                        shape.order.removeAll { $0 == key }
+                for operation in operations {
+                    guard let key = operation["key"] as? String else { continue }
+
+                    if operation["op"] as? String == "delete" {
+                        if shape.rows.removeValue(forKey: key) != nil {
+                            shape.order.removeAll { $0 == key }
+                        }
+                        continue
                     }
-                    continue
+
+                    // A value-less upsert is membership-only; it must not blank an
+                    // existing row.
+                    guard let value = operation["value"], !(value is NSNull) else { continue }
+
+                    if shape.rows[key] == nil { shape.order.append(key) }
+                    shape.rows[key] = try Wire.decode(value)
                 }
 
-                // A value-less upsert is membership-only; it must not blank an
-                // existing row.
-                guard let value = operation["value"], !(value is NSNull) else { continue }
+                if let checkpoint = frame["checkpoint"] { shape.checkpoint = checkpoint }
+                if let epoch = frame["epoch"] { shape.epoch = epoch }
 
-                if shape.rows[key] == nil { shape.order.append(key) }
-                shape.rows[key] = try Wire.decode(value)
+                if let onRows = shape.onRows {
+                    deliveries.append((onRows, shape.order.compactMap { shape.rows[$0] }))
+                }
             }
 
-            if let checkpoint = frame["checkpoint"] { shape.checkpoint = checkpoint }
-            if let epoch = frame["epoch"] { shape.epoch = epoch }
-            shape.onRows?(shape.order.compactMap { shape.rows[$0] })
+            return deliveries
+        }
+
+        for (onRows, rows) in deliveries {
+            onRows(rows)
         }
     }
 

@@ -38,7 +38,7 @@ change that adds or removes a capability.
 | Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
-| Concurrency-safe client       | ✅     | ✅  | ❌   | ❌   | ❌    | ❌   | ❌     |
+| Concurrency-safe client       | ✅     | ✅  | ❌   | ❌   | ✅    | ✅   | ✅     |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
 
 **Typed models, JVM.** quicktype's Java and Kotlin backends rename fields (a
@@ -47,11 +47,15 @@ wire `channelId` becomes `channelID`) and emit no mapping metadata under
 Sending the wrong key silently is worse than staying untyped, so both take
 wire-shaped arguments. `targets/java.ts` records what would unlock this.
 
-**Concurrency.** Only Go's client is safe to share across threads (it holds a
-mutex — Go answers a concurrent map read/write with an unrecoverable fatal
-error, so this is not optional there). Python's is safe by virtue of the GIL for
-the operations it performs. The rest assume single-threaded use, matching how
-their ecosystems drive a socket loop; wrap them if you share one.
+**Concurrency.** Go, Java, Kotlin and Swift hold a lock over the subscription
+registry, the shape views and the id counters, and dispatch frames and user
+callbacks after releasing it. Every one of those four has a test that starts a
+socket reader and four subscriber threads and asserts on the resulting
+subscription count — a lost `nextId++` silently forgets a live subscription, and
+that is deterministic where waiting for a hash map to corrupt is not. The Swift
+leg additionally runs under `--sanitize=thread`. Python's client is safe by
+virtue of the GIL for the operations it performs. Ruby and Rust assume
+single-threaded use; wrap them if you share one.
 
 **HTTP and sockets are injected in every language, deliberately.** The
 conformance suites run with no network, and a consumer keeps its own transport,
@@ -86,6 +90,8 @@ and each leg also generates an SDK from a committed fixture and builds the
 result — the generated surface hardcodes the runtime's call signatures, and
 nothing else pins that coupling.
 
-The Java leg additionally _runs_ a generated call. That is not belt-and-braces:
-an earlier revision emitted a surface that compiled perfectly and threw on the
-first invocation, with the compile-only gate green throughout.
+The Java and Ruby legs additionally _run_ a generated call. That is not
+belt-and-braces: both languages shipped a revision whose surface passed its
+compile or parse check and then threw on the first invocation — Java could not
+encode its own argument model, and Ruby called a `to_dynamic` that the models
+were not rendered with.

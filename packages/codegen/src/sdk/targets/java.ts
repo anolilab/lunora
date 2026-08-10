@@ -26,7 +26,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { generatedHeaderLines, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("java")
@@ -109,9 +109,9 @@ const verbConstant = (verb: string): string => `Client.Verb.${verb.toUpperCase()
  */
 const renderCall = (method: SdkMethod): string =>
     [
-        `    /** ${method.summary} */`,
+        `    /** ${commentText(method.summary)} */`,
         `    public Object ${memberName(method.functionName)}(java.util.Map<String, Object> args, String shardKey) {`,
-        `        return client.call(${verbConstant(method.verb)}, "${method.functionPath}", args, shardKey);`,
+        `        return client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", args, shardKey);`,
         `    }`,
     ].join("\n");
 
@@ -121,13 +121,13 @@ const renderCall = (method: SdkMethod): string =>
  */
 const renderSubscribe = (method: SdkMethod): string =>
     [
-        `    /** live ${method.summary} — re-runs on every write to the tables it reads. */`,
+        `    /** live ${commentText(method.summary)} — re-runs on every write to the tables it reads. */`,
         `    public Runnable subscribe${toPascalCase(method.functionName)}(`,
         `            java.util.Map<String, Object> args,`,
         `            java.util.function.Consumer<Object> onData,`,
         `            java.util.function.Consumer<Client.SubscriptionError> onError,`,
         `            String shardKey) {`,
-        `        return client.subscribe("${method.functionPath}", args, onData, onError, shardKey);`,
+        `        return client.subscribe("${stringLiteral(method.functionPath)}", args, onData, onError, shardKey);`,
         `    }`,
     ].join("\n");
 
@@ -139,7 +139,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
         .join("\n\n");
 
     return [
-        `    /** Functions declared in \`${namespace.name}\`. */`,
+        `    /** Functions declared in \`${commentText(namespace.name)}\`. */`,
         `    public static final class ${typeName} {`,
         `        private final Client client;`,
         ``,
@@ -184,6 +184,4 @@ const javaTarget: SdkTarget = {
     runtimePackage: ["dev.lunora:lunora (Maven Central)"],
 };
 
-export default javaTarget;
-
-export { memberName };
+export { javaTarget, memberName };

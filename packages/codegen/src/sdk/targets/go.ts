@@ -8,7 +8,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { generatedHeaderLines, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("go")
@@ -36,10 +36,10 @@ const renderCall = (namespaceType: string, method: SdkMethod): string => {
     // The verb crosses into the runtime as a typed constant, not a string: a
     // typo here would otherwise compile and route a read over the write path.
     const verb = `lunora.Verb${method.verb.charAt(0).toUpperCase()}${method.verb.slice(1)}`;
-    const call = `lunora.Call[${returns}](a.client, ${verb}, "${method.functionPath}", ${payload}, shardKey)`;
+    const call = `lunora.Call[${returns}](a.client, ${verb}, "${stringLiteral(method.functionPath)}", ${payload}, shardKey)`;
 
     return [
-        `// ${memberName(method.functionName)} invokes ${method.summary}.`,
+        `// ${memberName(method.functionName)} invokes ${commentText(method.summary)}.`,
         `func (a *${namespaceType}) ${memberName(method.functionName)}(${argument}shardKey string) (${returns}, error) {`,
         `\treturn ${call}`,
         `}`,
@@ -56,9 +56,9 @@ const renderSubscribe = (namespaceType: string, method: SdkMethod): string => {
     const name = `Subscribe${memberName(method.functionName)}`;
 
     return [
-        `// ${name} opens a live ${method.functionPath}; it re-runs on every write to the tables it reads.`,
+        `// ${name} opens a live ${commentText(method.functionPath)}; it re-runs on every write to the tables it reads.`,
         `func (a *${namespaceType}) ${name}(${argument}onData lunora.DataHandler, onError lunora.ErrorHandler, shardKey string) lunora.Unsubscribe {`,
-        `\treturn a.client.Subscribe("${method.functionPath}", ${payload}, onData, onError, shardKey)`,
+        `\treturn a.client.Subscribe("${stringLiteral(method.functionPath)}", ${payload}, onData, onError, shardKey)`,
         `}`,
     ].join("\n");
 };
@@ -72,9 +72,12 @@ const renderNamespace = (namespace: SdkNamespace): string => {
         )
         .join("\n\n");
 
-    return [`// ${namespaceType} groups the functions declared in ${namespace.name}.`, `type ${namespaceType} struct{ client *lunora.Client }`, ``, body].join(
-        "\n",
-    );
+    return [
+        `// ${namespaceType} groups the functions declared in ${commentText(namespace.name)}.`,
+        `type ${namespaceType} struct{ client *lunora.Client }`,
+        ``,
+        body,
+    ].join("\n");
 };
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {

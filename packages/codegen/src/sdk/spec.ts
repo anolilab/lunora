@@ -166,6 +166,33 @@ const hasUnrepresentableWireType = (schema: unknown, depth = 0): boolean => {
     return ["additionalProperties", "allOf", "anyOf", "items", "oneOf"].some((key) => hasUnrepresentableWireType(node[key], depth + 1));
 };
 
+/**
+ * Neutralise document text that is about to be interpolated into a comment.
+ *
+ * `summary`, `functionPath` and `namespace` come from a document that is
+ * normally generated but can be hand-supplied via `--spec`, and every target
+ * interpolates them into comments. A newline ends a line comment and drops
+ * whatever follows into executable position; a block-comment terminator does the
+ * same for Java/Kotlin, and `\u0022\u0022\u0022` for a Python docstring.
+ * Collapsing to one line and pulling those terminators apart covers all seven
+ * languages at once. U+2028/U+2029 are included because they terminate a line in
+ * some tooling even where the language proper does not treat them as one.
+ */
+const commentText = (value: string): string =>
+    value
+        .replaceAll(/[\n\r\u2028\u2029]+/gu, " ")
+        .replaceAll("*/", "* /")
+        .replaceAll("\u0022\u0022\u0022", "\u0022 \u0022\u0022");
+
+/**
+ * Escape a value for a double-quoted string literal in a C-family language.
+ *
+ * Kotlin interpolates `$` and Ruby interpolates `#{`; those two targets layer
+ * their own escape on top of this one.
+ */
+const stringLiteral = (value: string): string =>
+    value.replaceAll("\u005C", "\u005C\u005C").replaceAll('"', '\u005C"').replaceAll("\n", "\u005Cn").replaceAll("\r", "\u005Cr");
+
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
 const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     const [namespace = "", functionName = ""] = method.name.split(":");
@@ -255,6 +282,38 @@ const isValidIdentifier = (candidate: string): boolean => VALID_IDENTIFIER.test(
  * Throwing beats emitting: a caller renames the file, where the ambiguity
  * actually lives, instead of debugging generated source.
  */
+const assertMethodsGeneratable = (namespace: SdkNamespace): void => {
+    // Both a method and its subscription land in this one map: a namespace with a
+    // query `list` and a sibling `subscribeList` otherwise passes validation and
+    // then emits `SubscribeList` twice — a compile error in Go, a silent shadow
+    // in Python.
+    const seenMethod = new Map<string, string>();
+
+    for (const method of namespace.methods) {
+        const memberBase = toPascalCase(method.functionName);
+
+        if (!isValidIdentifier(memberBase)) {
+            throw new Error(
+                `sdk: function "${method.functionPath}" produces the invalid identifier "${memberBase}" — rename the export so it starts with a letter.`,
+            );
+        }
+
+        const names = method.verb === "query" ? [memberBase, `Subscribe${memberBase}`] : [memberBase];
+
+        for (const name of names) {
+            const clash = seenMethod.get(name);
+
+            if (clash !== undefined) {
+                throw new Error(
+                    `sdk: functions "${clash}" and "${method.functionPath}" both generate "${name}" — rename one so the generated methods stay distinct.`,
+                );
+            }
+
+            seenMethod.set(name, method.functionPath);
+        }
+    }
+};
+
 const assertGeneratable = (namespaces: ReadonlyArray<SdkNamespace>): void => {
     const seenNamespace = new Map<string, string>();
 
@@ -275,27 +334,7 @@ const assertGeneratable = (namespaces: ReadonlyArray<SdkNamespace>): void => {
 
         seenNamespace.set(typeName, namespace.name);
 
-        const seenMethod = new Map<string, string>();
-
-        for (const method of namespace.methods) {
-            const memberBase = toPascalCase(method.functionName);
-
-            if (!isValidIdentifier(memberBase)) {
-                throw new Error(
-                    `sdk: function "${method.functionPath}" produces the invalid identifier "${memberBase}" — rename the export so it starts with a letter.`,
-                );
-            }
-
-            const memberClash = seenMethod.get(memberBase);
-
-            if (memberClash !== undefined) {
-                throw new Error(
-                    `sdk: functions "${memberClash}" and "${method.functionPath}" both generate "${memberBase}" — rename one so the generated methods stay distinct.`,
-                );
-            }
-
-            seenMethod.set(memberBase, method.functionPath);
-        }
+        assertMethodsGeneratable(namespace);
     }
 };
 
@@ -390,6 +429,7 @@ const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArra
 export {
     allMethods,
     assertGeneratable,
+    commentText,
     generatedHeaderLines,
     hasUnrepresentableWireType,
     isTypedSchema,
@@ -397,6 +437,7 @@ export {
     parseMethod,
     parseSpec,
     referencedModels,
+    stringLiteral,
     toPascalCase,
     toSnakeCase,
     undeclaredModels,

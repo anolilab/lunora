@@ -25,13 +25,23 @@ const readOpenRpcDocument = (specPath: string): OpenRpcDocument => {
         );
     }
 
-    const parsed = JSON.parse(readFileSync(specPath, "utf8")) as OpenRpcDocument;
+    let parsed: unknown;
 
-    if (!Array.isArray(parsed.methods)) {
+    try {
+        parsed = JSON.parse(readFileSync(specPath, "utf8"));
+    } catch (error) {
+        // A raw SyntaxError escapes the CLI's error rendering; a coded error
+        // reaches the user as a diagnostic instead of a stack trace.
+        throw new LunoraError("BAD_REQUEST", `${specPath} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    // A `null` root parses fine and then throws on property access, so the
+    // object check has to come before reading `methods`.
+    if (parsed === null || typeof parsed !== "object" || !Array.isArray((parsed as OpenRpcDocument).methods)) {
         throw new LunoraError("BAD_REQUEST", `${specPath} is not an OpenRPC document (no \`methods\` array)`);
     }
 
-    return parsed;
+    return parsed as OpenRpcDocument;
 };
 
 const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ argument, cwd, logger, options }) => {
@@ -54,9 +64,11 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     const document = readOpenRpcDocument(specPath);
 
     if (document.methods.length === 0) {
-        logger.warn(`${specPath} declares no methods — nothing to generate.`);
-
-        return { code: 0 };
+        // Warn but keep going. Returning here would leave the PREVIOUS
+        // generation's files on disk, so removing every RPC function would ship
+        // a stale surface that still compiles and still calls functions the
+        // deployment no longer has.
+        logger.warn(`${specPath} declares no methods — writing an empty SDK.`);
     }
 
     const { files, undeclared, unrepresentable } = await generateSdk(document, target);

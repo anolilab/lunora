@@ -252,6 +252,38 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         expect(Object.entries(files).filter(([, contents]) => contents.trim().length === 0)).toStrictEqual([]);
     });
 
+    // A `summary` and a `functionPath` reach every target as raw document text.
+    // Both are normally generated, but `lunora sdk generate --spec` accepts a
+    // hand-written document, and a target that interpolates them unescaped emits
+    // whatever they contain into executable position.
+    it("does not let a summary or function path escape the syntax it is emitted into", async () => {
+        expect.assertions(3);
+
+        const hostile: OpenRpcDocument = {
+            methods: [
+                {
+                    name: String.raw`messages:co"unt`,
+                    params: [{ name: "args", schema: { properties: { channelId: { type: "string" } }, type: "object" } }],
+                    result: { name: "result", schema: RESULT_SHAPES.object },
+                    // A comment terminator for every comment syntax in play, plus
+                    // the line breaks that end a line comment.
+                    summary: 'query\n*/ raise("pwned")\n""" #{sabotage} \\ $sabotage',
+                    "x-lunora-function-kind": "query",
+                },
+            ],
+        };
+
+        const { files } = await generateSdk(hostile, target);
+        const sources = Object.values(files).join("\n");
+
+        // The summary's line breaks must not have produced a line whose first
+        // token is the injected call.
+        expect(sources.split("\n").some((line) => line.trimStart().startsWith(`raise("pwned")`))).toBe(false);
+        expect(sources).not.toContain("*/ raise");
+        // The unescaped quote in the function path would close its string literal.
+        expect(sources).not.toContain(String.raw`"messages:co"unt"`);
+    });
+
     it("reports the result types its backend could not name", async () => {
         expect.assertions(1);
 

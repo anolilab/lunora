@@ -294,6 +294,45 @@ private fun pokePartsDoNotApplyBeforePokeEnd() {
     check(fired == 0, "the view would be torn if parts applied before pokeEnd")
 }
 
+/**
+ * The topology every real consumer has: a socket read loop on one thread,
+ * application code subscribing on another.
+ *
+ * The assertion is on the COUNT, not on the absence of a crash: an
+ * unsynchronised `nextId++` hands two threads the same id, the second put
+ * replaces the first, and the client silently forgets a live subscription. A
+ * resend then emits fewer frames than there are subscribers — deterministic,
+ * unlike waiting for a LinkedHashMap to corrupt.
+ */
+private fun concurrentSubscribeAndHandleFrame() {
+    val threads = 4
+    val perThread = 250
+    val client = Client("https://app.example")
+
+    val workers = (0 until threads).map {
+        Thread { repeat(perThread) { client.subscribe("messages:list", null, {}) } }
+    }
+
+    val reader = Thread {
+        repeat(threads * perThread) { call ->
+            client.handleFrame("""{"type":"data","id":"sub_1","data":1,"cursor":$call}""")
+        }
+    }
+
+    workers.forEach { it.start() }
+    reader.start()
+    workers.forEach { it.join() }
+    reader.join()
+
+    // Attached only now, so the count below sees resend frames alone.
+    val resent = java.util.concurrent.atomic.AtomicInteger()
+
+    client.attachSocket { resent.incrementAndGet() }
+    client.resendSubscriptions()
+
+    check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id")
+}
+
 fun main() {
     wireCodecRoundTrip()
     undefinedIsDistinctFromNull()
@@ -311,6 +350,7 @@ fun main() {
     shapeSubscribeFrame()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
+    concurrentSubscribeAndHandleFrame()
 
     println("OK — $checks assertions")
 }

@@ -38,9 +38,21 @@ const renderModels = async (document: OpenRpcDocument, target: SdkTarget): Promi
     // multi-megabyte dependency that exists solely for `lunora sdk generate` —
     // a command most projects never run. A static import would put it on the
     // dev-server boot path for everyone.
-    const { FetchingJSONSchemaStore, InputData, JSONSchemaInput, quicktype } = await import("quicktype-core");
+    const { InputData, JSONSchemaInput, JSONSchemaStore, quicktype } = await import("quicktype-core");
 
-    const schemaInput = new JSONSchemaInput(new FetchingJSONSchemaStore());
+    // NOT `FetchingJSONSchemaStore`, which resolves `$ref` over the NETWORK
+    // during codegen. `openrpc.ts` never emits a ref, so the capability buys
+    // nothing — and `--spec` accepts a hand-written document, so it would let one
+    // point codegen at an arbitrary URL. `JSONSchemaStore` is abstract; resolving
+    // to `undefined` fails the ref closed instead.
+    class NoRemoteRefStore extends JSONSchemaStore {
+        // eslint-disable-next-line class-methods-use-this -- the abstract base declares an instance method.
+        public fetch(): Promise<undefined> {
+            return Promise.resolve(undefined);
+        }
+    }
+
+    const schemaInput = new JSONSchemaInput(new NoRemoteRefStore());
 
     for (const source of sources) {
         // eslint-disable-next-line no-await-in-loop -- addSource mutates shared input state; concurrent adds interleave type names.

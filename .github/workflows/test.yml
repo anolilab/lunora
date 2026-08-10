@@ -392,7 +392,10 @@
                       "directory": "sdks/ruby"
                       "run": 'ruby -Ilib -e ''Dir["test/test_*.rb"].each { |f| require File.expand_path(f) }'''
                       "generatedOut": "sdks/ruby/generated_check"
-                      "buildGenerated": "ruby -Ilib -c generated_check/api.rb && ruby -Ilib -c generated_check/models.rb"
+                      # RUNS a generated call, like the java leg: `ruby -c` parses a
+                      # surface whose every method raised NoMethodError, because the
+                      # models it calls into were rendered without `to_dynamic`.
+                      "buildGenerated": "ruby -Ilib generated_smoke.rb"
                     - "language": "rust"
                       "runner": "ubuntu-latest"
                       "directory": "sdks/rust"
@@ -416,7 +419,10 @@
                       # third-party setup action.
                       "runner": "macos-latest"
                       "directory": "sdks/swift"
-                      "run": "swift test"
+                      # Thread sanitizer, because the suite's concurrency case
+                      # asserts a COUNT and a lock could be dropped from a path it
+                      # does not drive; TSan reports the unsynchronised access itself.
+                      "run": "swift test --sanitize=thread"
                       "generatedOut": "sdks/swift/Sources/GeneratedCheck"
                       "buildGenerated": "swift build"
         "steps":

@@ -35,8 +35,24 @@ data class HttpResponse(val status: Int, val body: String)
 class Client(
     private val baseUrl: String,
     private val post: ((String, Map<String, String>, ByteArray) -> HttpResponse)? = null,
-    var authToken: String? = null,
+    @Volatile var authToken: String? = null,
 ) {
+    /**
+     * Guards every field below, and the `cursor`/`epoch`/row state hanging off
+     * [Subscription] and [Shape].
+     *
+     * Two threads normally drive this client: a socket reader calling
+     * [handleFrame] and the app thread calling [subscribe]. A [LinkedHashMap]
+     * resized from both corrupts silently — its Go equivalent is what made this
+     * visible, because Go answers the same race with an unrecoverable fatal error
+     * rather than a wrong answer.
+     *
+     * Frames and user callbacks are dispatched OUTSIDE the lock: a sender writes a
+     * socket the consumer owns, and holding the lock across a callback would let
+     * one slow consumer stall the socket reader.
+     */
+    private val lock = Any()
+
     private var send: ((Map<String, Any?>) -> Unit)? = null
     private val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
@@ -160,7 +176,7 @@ class Client(
 
     /** Registers the sender used for subscription frames. Call once the socket is open. */
     fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
-        send = sender
+        synchronized(lock) { send = sender }
     }
 
     fun query(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue =
@@ -215,16 +231,25 @@ class Client(
         onError: ((SubscriptionError) -> Unit)? = null,
         shardKey: String? = null,
     ): () -> Unit {
-        nextId++
+        val (id, socket) = synchronized(lock) {
+            nextId++
 
-        val id = "sub_$nextId"
+            val id = "sub_$nextId"
 
-        subscriptions[id] = Subscription(functionPath, args ?: WireValue.Obj(emptyList()), onData, onError)
-        send?.invoke(buildSubscribeFrame(id, functionPath, args))
+            subscriptions[id] = Subscription(functionPath, args ?: WireValue.Obj(emptyList()), onData, onError)
+
+            id to send
+        }
+
+        socket?.invoke(buildSubscribeFrame(id, functionPath, args))
 
         return {
-            subscriptions.remove(id)
-            send?.invoke(buildUnsubscribeFrame(id))
+            val current = synchronized(lock) {
+                subscriptions.remove(id)
+                send
+            }
+
+            current?.invoke(buildUnsubscribeFrame(id))
         }
     }
 
@@ -238,26 +263,50 @@ class Client(
         onRows: ((List<WireValue>) -> Unit)?,
         onError: ((SubscriptionError) -> Unit)? = null,
     ): () -> Unit {
-        nextShapeId++
+        val (id, socket) = synchronized(lock) {
+            nextShapeId++
 
-        val id = "shape_$nextShapeId"
+            val id = "shape_$nextShapeId"
 
-        shapes[id] = Shape(onRows, onError)
-        send?.invoke(buildShapeSubscribeFrame(id, name, args))
+            shapes[id] = Shape(onRows, onError)
+
+            id to send
+        }
+
+        socket?.invoke(buildShapeSubscribeFrame(id, name, args))
 
         return {
-            shapes.remove(id)
-            send?.invoke(buildShapeUnsubscribeFrame(id))
+            val current = synchronized(lock) {
+                shapes.remove(id)
+                send
+            }
+
+            current?.invoke(buildShapeUnsubscribeFrame(id))
         }
     }
 
     /** Re-subscribes everything after a reconnect, carrying each resume cursor. */
     fun resendSubscriptions() {
-        val sender = send ?: return
+        // The frames are BUILT under the lock, not just the iteration: each one
+        // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
+        // entries and reading their cursors afterwards resends a torn one.
+        val (sender, frames) = synchronized(lock) {
+            val sender = send
+            val frames =
+                if (sender == null) {
+                    emptyList()
+                } else {
+                    subscriptions.map { (id, entry) ->
+                        buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
+                    }
+                }
 
-        for ((id, entry) in subscriptions) {
-            sender(buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch))
+            sender to frames
         }
+
+        if (sender == null) return
+
+        for (frame in frames) sender(frame)
     }
 
     /**
@@ -276,31 +325,37 @@ class Client(
 
         val kind = frame["type"] as? String ?: ""
         val id = frame["id"] as? String ?: ""
-        val entry = subscriptions[id]
 
+        // Each branch resolves the subscription UNDER the lock and hands the
+        // callback back out, rather than looking `entry` up once up here: the app
+        // thread can unsubscribe in between, and `advance` writes the very state
+        // the lock exists to protect.
         when (kind) {
             "data", "delta" -> {
                 val payload = frame["data"] ?: frame["delta"]
                 val value = Wire.decode(payload)
-
-                entry?.let {
-                    advance(it, frame)
-                    it.onData?.invoke(value)
+                val onData = synchronized(lock) {
+                    subscriptions[id]?.let {
+                        advance(it, frame)
+                        it.onData
+                    }
                 }
+
+                onData?.invoke(value)
             }
-            "resume", "settled" -> entry?.let { advance(it, frame) }
+            "resume", "settled" -> synchronized(lock) { subscriptions[id]?.let { advance(it, frame) } }
             "error" -> {
                 val envelope = frame["error"] as? Map<*, *> ?: emptyMap<String, Any?>()
                 val error = SubscriptionError(
                     envelope["code"] as? String,
                     frame["message"] as? String ?: envelope["message"] as? String ?: "subscription error",
                 )
+                val handlers = synchronized(lock) { listOfNotNull(subscriptions[id]?.onError, shapes[id]?.onError) }
 
-                entry?.onError?.invoke(error)
-                shapes[id]?.onError?.invoke(error)
+                for (handler in handlers) handler(error)
             }
-            "complete" -> subscriptions.remove(id)
-            "pokeStart" -> pokes[frame["pokeId"].toString()] = LinkedHashMap()
+            "complete" -> synchronized(lock) { subscriptions.remove(id) }
+            "pokeStart" -> synchronized(lock) { pokes[frame["pokeId"].toString()] = LinkedHashMap() }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
         }
@@ -319,43 +374,56 @@ class Client(
      * would leave it permanently half-applied.
      */
     private fun bufferPokePart(frame: Map<*, *>) {
-        // A part for an unknown poke is dropped: without its pokeStart there is
-        // no batch to join, and guessing would apply a fragment of one.
-        val buffer = pokes[frame["pokeId"].toString()] ?: return
         val operations = (frame["rowsPatch"] as? List<*>)?.filterIsInstance<Map<String, Any?>>() ?: emptyList()
 
-        buffer.getOrPut(frame["shapeId"].toString()) { mutableListOf() }.addAll(operations)
+        synchronized(lock) {
+            // A part for an unknown poke is dropped: without its pokeStart there
+            // is no batch to join, and guessing would apply a fragment of one.
+            val buffer = pokes[frame["pokeId"].toString()] ?: return
+
+            buffer.getOrPut(frame["shapeId"].toString()) { mutableListOf() }.addAll(operations)
+        }
     }
 
     private fun applyPoke(frame: Map<*, *>) {
-        val buffer = pokes.remove(frame["pokeId"].toString()) ?: return
+        // The view is mutated under the lock; `onRows` fires after it is released,
+        // with the row snapshot taken while still holding it — so a callback sees
+        // one consistent poke even if the next one lands mid-delivery.
+        val deliveries = synchronized(lock) {
+            val buffer = pokes.remove(frame["pokeId"].toString()) ?: return
+            val pending = mutableListOf<Pair<(List<WireValue>) -> Unit, List<WireValue>>>()
 
-        for ((shapeId, operations) in buffer) {
-            val shape = shapes[shapeId] ?: continue
+            for ((shapeId, operations) in buffer) {
+                val shape = shapes[shapeId] ?: continue
 
-            for (operation in operations) {
-                val key = operation["key"]?.toString() ?: continue
+                for (operation in operations) {
+                    val key = operation["key"]?.toString() ?: continue
 
-                if (operation["op"] == "delete") {
-                    if (shape.rows.remove(key) != null) shape.order.remove(key)
+                    if (operation["op"] == "delete") {
+                        if (shape.rows.remove(key) != null) shape.order.remove(key)
 
-                    continue
+                        continue
+                    }
+
+                    // A value-less upsert is membership-only; it must not blank an
+                    // existing row.
+                    val value = operation["value"] ?: continue
+
+                    if (!shape.rows.containsKey(key)) shape.order.add(key)
+
+                    shape.rows[key] = Wire.decode(value)
                 }
 
-                // A value-less upsert is membership-only; it must not blank an
-                // existing row.
-                val value = operation["value"] ?: continue
+                if (frame.containsKey("checkpoint")) shape.checkpoint = frame["checkpoint"]
+                if (frame.containsKey("epoch")) shape.epoch = frame["epoch"]
 
-                if (!shape.rows.containsKey(key)) shape.order.add(key)
-
-                shape.rows[key] = Wire.decode(value)
+                shape.onRows?.let { onRows -> pending.add(onRows to shape.order.mapNotNull { key -> shape.rows[key] }) }
             }
 
-            if (frame.containsKey("checkpoint")) shape.checkpoint = frame["checkpoint"]
-            if (frame.containsKey("epoch")) shape.epoch = frame["epoch"]
-
-            shape.onRows?.invoke(shape.order.mapNotNull { shape.rows[it] })
+            pending
         }
+
+        for ((onRows, rows) in deliveries) onRows(rows)
     }
 
     /**

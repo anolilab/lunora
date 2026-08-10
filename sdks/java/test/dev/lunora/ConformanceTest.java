@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Protocol-conformance tests: drive the Java SDK against the shared golden
@@ -19,7 +20,7 @@ import java.util.Map;
 public final class ConformanceTest {
     private static int checks;
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) throws IOException, InterruptedException {
         if (!ConformanceTest.class.desiredAssertionStatus()) {
             throw new IllegalStateException("run with -ea, or every assertion silently passes");
         }
@@ -40,6 +41,7 @@ public final class ConformanceTest {
         shapeSubscribeFrame();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
+        concurrentSubscribeAndHandleFrame();
 
         System.out.println("OK — " + checks + " assertions");
     }
@@ -374,5 +376,56 @@ public final class ConformanceTest {
         }
 
         check(fired[0] == 0, "the view would be torn if parts applied before pokeEnd");
+    }
+
+    /**
+     * The topology every real consumer has: a socket read loop on one thread,
+     * application code subscribing on another.
+     *
+     * <p>The assertion is on the COUNT, not on the absence of a crash: an
+     * unsynchronised {@code nextId++} hands two threads the same id, the second
+     * {@code put} replaces the first, and the client silently forgets a live
+     * subscription. A resend then emits fewer frames than there are subscribers —
+     * deterministic, unlike waiting for a {@link LinkedHashMap} to corrupt.
+     */
+    private static void concurrentSubscribeAndHandleFrame() throws InterruptedException {
+        final int threads = 4;
+        final int perThread = 250;
+
+        Client client = new Client("https://app.example", null);
+        List<Thread> workers = new ArrayList<>();
+
+        for (int index = 0; index < threads; index++) {
+            Thread worker = new Thread(() -> {
+                for (int call = 0; call < perThread; call++) {
+                    client.subscribe("messages:list", null, value -> {}, null, null);
+                }
+            });
+
+            workers.add(worker);
+            worker.start();
+        }
+
+        Thread reader = new Thread(() -> {
+            for (int call = 0; call < threads * perThread; call++) {
+                client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":" + call + "}");
+            }
+        });
+
+        reader.start();
+
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        reader.join();
+
+        // Attached only now, so the count below sees resend frames alone.
+        AtomicInteger resent = new AtomicInteger();
+
+        client.attachSocket(frame -> resent.incrementAndGet());
+        client.resendSubscriptions();
+
+        check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id");
     }
 }

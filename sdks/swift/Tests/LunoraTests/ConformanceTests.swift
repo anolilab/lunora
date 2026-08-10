@@ -258,4 +258,56 @@ final class ConformanceTests: XCTestCase {
 
         XCTAssertEqual(fired, 0, "the view would be torn if parts applied before pokeEnd")
     }
+
+    // MARK: - Concurrency
+
+    /// The topology every real consumer has: a socket read loop on one thread,
+    /// application code subscribing on another.
+    ///
+    /// The assertion is on the COUNT, not on the absence of a crash: an
+    /// unsynchronised `nextID += 1` hands two threads the same id, the second
+    /// insert replaces the first, and the client silently forgets a live
+    /// subscription. A resend then emits fewer frames than there are subscribers —
+    /// deterministic, unlike waiting for a `Dictionary` to corrupt. Run the suite
+    /// with `--sanitize=thread` to also catch the unsynchronised access itself.
+    func testConcurrentSubscribeAndHandleFrame() {
+        let threads = 4
+        let perThread = 250
+        let client = LunoraClient(url: "https://app.example")
+        let group = DispatchGroup()
+
+        for _ in 0..<threads {
+            DispatchQueue.global().async(group: group) {
+                for _ in 0..<perThread {
+                    client.subscribe("messages:list", args: nil, onData: { _ in })
+                }
+            }
+        }
+
+        DispatchQueue.global().async(group: group) {
+            for call in 0..<(threads * perThread) {
+                try? client.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":1,\"cursor\":\(call)}")
+            }
+        }
+
+        group.wait()
+
+        // Attached only now, so the count below sees resend frames alone.
+        let resent = ResentCounter()
+
+        client.attachSocket { _ in resent.increment() }
+        client.resendSubscriptions()
+
+        XCTAssertEqual(resent.value, threads * perThread, "every concurrent subscribe survived with a distinct id")
+    }
+}
+
+/// Counts frames from the resend, which runs on this thread — a plain `var`
+/// captured by an `@escaping` closure would not compile under strict concurrency.
+private final class ResentCounter {
+    private var count = 0
+
+    var value: Int { count }
+
+    func increment() { count += 1 }
 }

@@ -4,7 +4,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { allMethods, generatedHeaderLines, referencedModels, toPascalCase, toSnakeCase } from "../spec";
+import { allMethods, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 /** Python reserved words a function name could collide with. */
@@ -60,11 +60,11 @@ const renderCall = (method: SdkMethod): string => {
     const returns = method.resultType ?? "Any";
     const parameters = method.argsType === undefined ? "self" : `self, args: ${method.argsType}`;
     const payload = method.argsType === undefined ? "{}" : "args.to_dict()";
-    const call = `await self._client.${method.verb}("${method.functionPath}", ${payload}, shard_key)`;
+    const call = `await self._client.${method.verb}("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
 
     return [
         `    async def ${memberName(method.functionName)}(${parameters}, *, shard_key: Optional[str] = None) -> ${returns}:`,
-        `        """${method.summary}"""`,
+        `        """${commentText(method.summary)}"""`,
         `        ${method.resultType === undefined ? `return ${call}` : `return ${method.resultType}.from_dict(${call})`}`,
     ].join("\n");
 };
@@ -90,8 +90,8 @@ const renderSubscribe = (method: SdkMethod): string => {
         `    def subscribe_${memberName(method.functionName)}(`,
         ...parameters.map((parameter) => `        ${parameter},`),
         `    ) -> Unsubscribe:`,
-        `        """live ${method.summary} — re-runs on every write to the tables it reads."""`,
-        `        return self._client.subscribe("${method.functionPath}", ${payload}, on_data, on_error, shard_key)`,
+        `        """live ${commentText(method.summary)} — re-runs on every write to the tables it reads."""`,
+        `        return self._client.subscribe("${stringLiteral(method.functionPath)}", ${payload}, on_data, on_error, shard_key)`,
     ].join("\n");
 };
 
@@ -102,7 +102,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
 
     return [
         `class ${toPascalCase(namespace.name)}Api:`,
-        `    """Functions declared in \`${namespace.name}\`."""`,
+        `    """Functions declared in \`${commentText(namespace.name)}\`."""`,
         ``,
         `    def __init__(self, client: LunoraClient) -> None:`,
         `        self._client = client`,
@@ -120,11 +120,16 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
     const hasSubscriptions = allMethods(namespaces).some((method) => method.verb === "query");
     const runtimeImports = hasSubscriptions ? "Callback, ErrorCallback, LunoraClient, Unsubscribe" : "LunoraClient";
 
+    // `Any` is only referenced by an untyped return, so importing it
+    // unconditionally leaves an unused import (ruff F401) in a deployment where
+    // every function declares `.output()`. Gated like the subscription aliases.
+    const needsAny = allMethods(namespaces).some((method) => method.resultType === undefined);
+
     const rootAttributes = namespaces.map((namespace) => `        self.${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api(client)`).join("\n");
 
     const api = [
         GENERATED_HEADER,
-        `from typing import Any, Optional\n`,
+        `from typing import ${needsAny ? "Any, Optional" : "Optional"}\n`,
         `\n`,
         `from lunora.client import ${runtimeImports}\n`,
         modelImport,
@@ -159,8 +164,7 @@ const pythonTarget: SdkTarget = {
     runtimePackage: ["lunora (PyPI)"],
 };
 
-export default pythonTarget;
-
-// Exported for its own unit test: the keyword escaping is a Python concern,
-// tested at the Python module rather than through the shared contract.
-export { memberName };
+// `memberName` is exported for its own unit test: the keyword escaping is a
+// Python concern, tested at the Python module rather than through the shared
+// contract.
+export { memberName, pythonTarget };

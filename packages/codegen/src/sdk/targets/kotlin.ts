@@ -18,7 +18,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { generatedHeaderLines, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("kotlin")
@@ -76,31 +76,22 @@ const verbConstant = (verb: string): string => `Verb.${verb.toUpperCase()}`;
  *
  * Kotlin interpolates `$`, and `$` is a legal JavaScript identifier character,
  * so an export named `$client` produced `"billing:$client"` — which compiles,
- * runs, and posts the client object's `toString()` as the wire path. Ruby and
- * Swift are safe by accident (`#` and `\` are not identifier characters);
- * Kotlin is not.
+ * runs, and posts the client object's `toString()` as the wire path. Ruby needs
+ * the same treatment for `#{`; see `rubyLiteral`.
  */
-// Built from escapes rather than written literally: a bare backslash or `${`
-// in this file trips the repo's own lint rules, and `String.raw` cannot end in
-// a backslash.
-const BACKSLASH = "\u005C";
 // The Kotlin escape for a literal dollar, assembled from parts so the sequence
 // never appears as a template-looking literal in this file.
 const DOLLAR_ESCAPE = ["\u0024", "{", "'", "\u0024", "'", "}"].join("");
 
-const kotlinLiteral = (value: string): string =>
-    value
-        .split(BACKSLASH)
-        .join(BACKSLASH + BACKSLASH)
-        .split('"')
-        .join(`${BACKSLASH}"`)
-        .split("\u0024")
-        .join(DOLLAR_ESCAPE);
+// Layered ON TOP of `stringLiteral` rather than repeating its rules: escaping
+// backslashes in both would emit a literal that decodes to two of them. The
+// dollar pass runs last, so the escape it inserts is not itself re-escaped.
+const kotlinLiteral = (value: string): string => stringLiteral(value).split("\u0024").join(DOLLAR_ESCAPE);
 
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string =>
     [
-        `    /** ${method.summary} */`,
+        `    /** ${commentText(method.summary)} */`,
         `    fun ${memberName(method.functionName)}(args: WireValue? = null, shardKey: String? = null): WireValue =`,
         `        client.call(${verbConstant(method.verb)}, "${kotlinLiteral(method.functionPath)}", args, shardKey)`,
     ].join("\n");
@@ -111,7 +102,7 @@ const renderCall = (method: SdkMethod): string =>
  */
 const renderSubscribe = (method: SdkMethod): string =>
     [
-        `    /** live ${method.summary} — re-runs on every write to the tables it reads. */`,
+        `    /** live ${commentText(method.summary)} — re-runs on every write to the tables it reads. */`,
         `    fun subscribe${toPascalCase(method.functionName)}(`,
         `        args: WireValue? = null,`,
         `        onData: ((WireValue) -> Unit)?,`,
@@ -127,7 +118,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
         .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
         .join("\n\n");
 
-    return [`/** Functions declared in \`${namespace.name}\`. */`, `class ${typeName}(private val client: Client) {`, body, `}`].join("\n");
+    return [`/** Functions declared in \`${commentText(namespace.name)}\`. */`, `class ${typeName}(private val client: Client) {`, body, `}`].join("\n");
 };
 
 const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
@@ -161,6 +152,4 @@ const kotlinTarget: SdkTarget = {
     runtimePackage: ["dev.lunora:lunora (Maven Central)"],
 };
 
-export default kotlinTarget;
-
-export { memberName };
+export { kotlinTarget, memberName };

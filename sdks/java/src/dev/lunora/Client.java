@@ -64,7 +64,24 @@ public final class Client {
 
     private final String baseUrl;
     private final HttpPoster poster;
-    public String authToken;
+    /** Volatile so an app thread can rotate the token while a socket reader is mid-frame. */
+    public volatile String authToken;
+
+    /**
+     * Guards every field below, and the {@code cursor}/{@code epoch}/row state
+     * hanging off {@link Subscription} and {@link Shape}.
+     *
+     * <p>Two threads normally drive this client: a socket reader calling
+     * {@link #handleFrame} and the app thread calling {@link #subscribe}. A
+     * {@link LinkedHashMap} resized from both corrupts silently — its Go
+     * equivalent is what made this visible, because Go answers the same race
+     * with an unrecoverable fatal error rather than a wrong answer.
+     *
+     * <p>Frames and user callbacks are dispatched OUTSIDE the lock: a sender
+     * writes a socket the consumer owns, and holding the lock across a callback
+     * would let one slow consumer stall the socket reader.
+     */
+    private final Object lock = new Object();
 
     private FrameSender sender;
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
@@ -110,7 +127,9 @@ public final class Client {
 
     /** Registers the sender used for subscription frames. Call once the socket is open. */
     public void attachSocket(FrameSender sender) {
-        this.sender = sender;
+        synchronized (lock) {
+            this.sender = sender;
+        }
     }
 
     /** Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when null. */
@@ -308,21 +327,31 @@ public final class Client {
      */
     public Runnable subscribe(
             String functionPath, Object args, Consumer<Object> onData, Consumer<SubscriptionError> onError, String shardKey) {
-        nextId++;
+        String id;
+        FrameSender socket;
 
-        String id = "sub_" + nextId;
+        synchronized (lock) {
+            nextId++;
+            id = "sub_" + nextId;
 
-        subscriptions.put(id, new Subscription(functionPath, args, onData, onError));
+            subscriptions.put(id, new Subscription(functionPath, args, onData, onError));
+            socket = sender;
+        }
 
-        if (sender != null) {
-            sender.send(buildSubscribeFrame(id, functionPath, args, null, null, null));
+        if (socket != null) {
+            socket.send(buildSubscribeFrame(id, functionPath, args, null, null, null));
         }
 
         return () -> {
-            subscriptions.remove(id);
+            FrameSender current;
 
-            if (sender != null) {
-                sender.send(buildUnsubscribeFrame(id));
+            synchronized (lock) {
+                subscriptions.remove(id);
+                current = sender;
+            }
+
+            if (current != null) {
+                current.send(buildUnsubscribeFrame(id));
             }
         };
     }
@@ -332,36 +361,60 @@ public final class Client {
      * applied poke with the view's full contents, in insertion order.
      */
     public Runnable subscribeShape(String name, Object args, Consumer<List<Object>> onRows, Consumer<SubscriptionError> onError) {
-        nextShapeId++;
+        String id;
+        FrameSender socket;
 
-        String id = "shape_" + nextShapeId;
+        synchronized (lock) {
+            nextShapeId++;
+            id = "shape_" + nextShapeId;
 
-        shapes.put(id, new Shape(onRows, onError));
+            shapes.put(id, new Shape(onRows, onError));
+            socket = sender;
+        }
 
-        if (sender != null) {
-            sender.send(buildShapeSubscribeFrame(id, name, args, null, null));
+        if (socket != null) {
+            socket.send(buildShapeSubscribeFrame(id, name, args, null, null));
         }
 
         return () -> {
-            shapes.remove(id);
+            FrameSender current;
 
-            if (sender != null) {
-                sender.send(buildShapeUnsubscribeFrame(id));
+            synchronized (lock) {
+                shapes.remove(id);
+                current = sender;
+            }
+
+            if (current != null) {
+                current.send(buildShapeUnsubscribeFrame(id));
             }
         };
     }
 
     /** Re-subscribes everything after a reconnect, carrying each resume cursor. */
     public void resendSubscriptions() {
-        if (sender == null) {
-            return;
+        FrameSender socket;
+        List<Map<String, Object>> frames = new ArrayList<>();
+
+        // The frames are BUILT under the lock, not just the iteration: each one
+        // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
+        // entries and reading their cursors afterwards resends a torn one.
+        synchronized (lock) {
+            socket = sender;
+
+            if (socket == null) {
+                return;
+            }
+
+            for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
+                Subscription subscription = entry.getValue();
+
+                frames.add(buildSubscribeFrame(
+                        entry.getKey(), subscription.functionPath, subscription.args, null, subscription.cursor, subscription.epoch));
+            }
         }
 
-        for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
-            Subscription subscription = entry.getValue();
-
-            sender.send(buildSubscribeFrame(
-                    entry.getKey(), subscription.functionPath, subscription.args, null, subscription.cursor, subscription.epoch));
+        for (Map<String, Object> frame : frames) {
+            socket.send(frame);
         }
     }
 
@@ -386,24 +439,39 @@ public final class Client {
 
         String kind = frame.get("type") instanceof String text ? text : "";
         String id = frame.get("id") instanceof String text ? text : "";
-        Subscription entry = subscriptions.get(id);
 
+        // Each case resolves the subscription UNDER the lock and hands the
+        // callback back out, rather than looking `entry` up once up here: the app
+        // thread can unsubscribe in between, and `advance` writes the very state
+        // the lock exists to protect.
         switch (kind) {
             case "data", "delta" -> {
                 Object payload = frame.get("data") != null ? frame.get("data") : frame.get("delta");
                 Object value = Wire.decode(payload);
+                Consumer<Object> onData;
 
-                if (entry != null) {
-                    advance(entry, frame);
+                synchronized (lock) {
+                    Subscription entry = subscriptions.get(id);
 
-                    if (entry.onData != null) {
-                        entry.onData.accept(value);
+                    if (entry == null) {
+                        return kind;
                     }
+
+                    advance(entry, frame);
+                    onData = entry.onData;
+                }
+
+                if (onData != null) {
+                    onData.accept(value);
                 }
             }
             case "resume", "settled" -> {
-                if (entry != null) {
-                    advance(entry, frame);
+                synchronized (lock) {
+                    Subscription entry = subscriptions.get(id);
+
+                    if (entry != null) {
+                        advance(entry, frame);
+                    }
                 }
             }
             case "error" -> {
@@ -414,19 +482,35 @@ public final class Client {
                         : envelope.get("message") instanceof String inner ? inner : "subscription error";
                 SubscriptionError error =
                         new SubscriptionError(envelope.get("code") instanceof String code ? code : null, message);
+                List<Consumer<SubscriptionError>> handlers = new ArrayList<>();
 
-                if (entry != null && entry.onError != null) {
-                    entry.onError.accept(error);
+                synchronized (lock) {
+                    Subscription entry = subscriptions.get(id);
+                    Shape shape = shapes.get(id);
+
+                    if (entry != null && entry.onError != null) {
+                        handlers.add(entry.onError);
+                    }
+
+                    if (shape != null && shape.onError != null) {
+                        handlers.add(shape.onError);
+                    }
                 }
 
-                Shape shape = shapes.get(id);
-
-                if (shape != null && shape.onError != null) {
-                    shape.onError.accept(error);
+                for (Consumer<SubscriptionError> handler : handlers) {
+                    handler.accept(error);
                 }
             }
-            case "complete" -> subscriptions.remove(id);
-            case "pokeStart" -> pokes.put(String.valueOf(frame.get("pokeId")), new LinkedHashMap<>());
+            case "complete" -> {
+                synchronized (lock) {
+                    subscriptions.remove(id);
+                }
+            }
+            case "pokeStart" -> {
+                synchronized (lock) {
+                    pokes.put(String.valueOf(frame.get("pokeId")), new LinkedHashMap<>());
+                }
+            }
             case "pokePart" -> bufferPokePart(frame);
             case "pokeEnd" -> applyPoke(frame);
             default -> {
@@ -454,14 +538,6 @@ public final class Client {
      */
     @SuppressWarnings("unchecked")
     private void bufferPokePart(Map<String, Object> frame) {
-        Map<String, List<Map<String, Object>>> buffer = pokes.get(String.valueOf(frame.get("pokeId")));
-
-        // A part for an unknown poke is dropped: without its pokeStart there is
-        // no batch to join, and guessing would apply a fragment of one.
-        if (buffer == null) {
-            return;
-        }
-
         List<Map<String, Object>> operations = new ArrayList<>();
 
         if (frame.get("rowsPatch") instanceof List<?> rows) {
@@ -472,66 +548,90 @@ public final class Client {
             }
         }
 
-        buffer.computeIfAbsent(String.valueOf(frame.get("shapeId")), key -> new ArrayList<>()).addAll(operations);
+        synchronized (lock) {
+            Map<String, List<Map<String, Object>>> buffer = pokes.get(String.valueOf(frame.get("pokeId")));
+
+            // A part for an unknown poke is dropped: without its pokeStart there
+            // is no batch to join, and guessing would apply a fragment of one.
+            if (buffer == null) {
+                return;
+            }
+
+            buffer.computeIfAbsent(String.valueOf(frame.get("shapeId")), key -> new ArrayList<>()).addAll(operations);
+        }
     }
 
+    /** One `onRows` callback plus the rows it is to be handed, snapshotted. */
+    private record Delivery(Consumer<List<Object>> onRows, List<Object> rows) {}
+
     private void applyPoke(Map<String, Object> frame) {
-        Map<String, List<Map<String, Object>>> buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
+        List<Delivery> deliveries = new ArrayList<>();
 
-        if (buffer == null) {
-            return;
-        }
+        // The view is mutated under the lock; `onRows` fires after it is released,
+        // with the row snapshot taken while still holding it — so a callback sees
+        // one consistent poke even if the next one lands mid-delivery.
+        synchronized (lock) {
+            Map<String, List<Map<String, Object>>> buffer = pokes.remove(String.valueOf(frame.get("pokeId")));
 
-        for (Map.Entry<String, List<Map<String, Object>>> entry : buffer.entrySet()) {
-            Shape shape = shapes.get(entry.getKey());
-
-            if (shape == null) {
-                continue;
+            if (buffer == null) {
+                return;
             }
 
-            for (Map<String, Object> operation : entry.getValue()) {
-                String key = String.valueOf(operation.get("key"));
+            for (Map.Entry<String, List<Map<String, Object>>> entry : buffer.entrySet()) {
+                Shape shape = shapes.get(entry.getKey());
 
-                if ("delete".equals(operation.get("op"))) {
-                    if (shape.rows.remove(key) != null) {
-                        shape.order.remove(key);
+                if (shape == null) {
+                    continue;
+                }
+
+                for (Map<String, Object> operation : entry.getValue()) {
+                    String key = String.valueOf(operation.get("key"));
+
+                    if ("delete".equals(operation.get("op"))) {
+                        if (shape.rows.remove(key) != null) {
+                            shape.order.remove(key);
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    Object value = operation.get("value");
+
+                    // A value-less upsert is membership-only; it must not blank an
+                    // existing row.
+                    if (value == null) {
+                        continue;
+                    }
+
+                    if (!shape.rows.containsKey(key)) {
+                        shape.order.add(key);
+                    }
+
+                    shape.rows.put(key, Wire.decode(value));
                 }
 
-                Object value = operation.get("value");
-
-                // A value-less upsert is membership-only; it must not blank an
-                // existing row.
-                if (value == null) {
-                    continue;
+                if (frame.containsKey("checkpoint")) {
+                    shape.checkpoint = frame.get("checkpoint");
                 }
 
-                if (!shape.rows.containsKey(key)) {
-                    shape.order.add(key);
+                if (frame.containsKey("epoch")) {
+                    shape.epoch = frame.get("epoch");
                 }
 
-                shape.rows.put(key, Wire.decode(value));
-            }
+                if (shape.onRows != null) {
+                    List<Object> rows = new ArrayList<>();
 
-            if (frame.containsKey("checkpoint")) {
-                shape.checkpoint = frame.get("checkpoint");
-            }
+                    for (String key : shape.order) {
+                        rows.add(shape.rows.get(key));
+                    }
 
-            if (frame.containsKey("epoch")) {
-                shape.epoch = frame.get("epoch");
-            }
-
-            if (shape.onRows != null) {
-                List<Object> rows = new ArrayList<>();
-
-                for (String key : shape.order) {
-                    rows.add(shape.rows.get(key));
+                    deliveries.add(new Delivery(shape.onRows, rows));
                 }
-
-                shape.onRows.accept(rows);
             }
+        }
+
+        for (Delivery delivery : deliveries) {
+            delivery.onRows().accept(delivery.rows());
         }
     }
 

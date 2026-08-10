@@ -9,7 +9,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { generatedHeaderLines, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("swift")
@@ -20,10 +20,12 @@ const GENERATED_HEADER = `${generatedHeaderLines("swift")
 const SWIFT_KEYWORDS = new Set([
     "as",
     "associatedtype",
+    "borrowing",
     "break",
     "case",
     "catch",
     "class",
+    "consuming",
     "continue",
     "default",
     "defer",
@@ -47,7 +49,10 @@ const SWIFT_KEYWORDS = new Set([
     "is",
     "let",
     "nil",
+    "nonisolated",
+    "open",
     "operator",
+    "precedencegroup",
     "private",
     "protocol",
     "public",
@@ -83,19 +88,22 @@ const renderCall = (method: SdkMethod): string => {
     const parameters = method.argsType === undefined ? "shardKey: String? = nil" : `_ args: ${method.argsType}, shardKey: String? = nil`;
     const payload = method.argsType === undefined ? "nil" : "try LunoraClient.wireValue(args)";
     const returns = method.resultType ?? "Any";
-    const call = `try client.${method.verb}("${method.functionPath}", args: ${payload}, shardKey: shardKey)`;
+    const call = `try client.${method.verb}("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`;
     // A typed result is re-decoded into the model; an untyped one is handed back.
     const body =
         method.resultType === undefined
             ? `return ${call}`
             : [
                   `let raw = ${call}`,
-                  `        let data = try JSONSerialization.data(withJSONObject: raw)`,
+                  // `.fragmentsAllowed`, because a result schema of `v.string()`
+                  // renders as a typealias to a scalar — and without the option
+                  // `data(withJSONObject:)` throws on any top-level non-container.
+                  `        let data = try JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed])`,
                   `        return try JSONDecoder().decode(${method.resultType}.self, from: data)`,
               ].join("\n");
 
     return [
-        `    /// ${method.summary}`,
+        `    /// ${commentText(method.summary)}`,
         `    public func ${memberName(method.functionName)}(${parameters}) throws -> ${returns} {`,
         `        ${body}`,
         `    }`,
@@ -111,14 +119,14 @@ const renderSubscribe = (method: SdkMethod): string => {
     const payload = method.argsType === undefined ? "nil" : "try LunoraClient.wireValue(args)";
 
     return [
-        `    /// live ${method.summary} — re-runs on every write to the tables it reads.`,
+        `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
         `    @discardableResult`,
         `    public func subscribe${toPascalCase(method.functionName)}(`,
         `        ${argument}onData: ((Any) -> Void)?,`,
         `        onError: ((LunoraSubscriptionError) -> Void)? = nil,`,
         `        shardKey: String? = nil`,
         `    ) throws -> LunoraUnsubscribe {`,
-        `        client.subscribe("${method.functionPath}", args: ${payload}, onData: onData, onError: onError, shardKey: shardKey)`,
+        `        client.subscribe("${stringLiteral(method.functionPath)}", args: ${payload}, onData: onData, onError: onError, shardKey: shardKey)`,
         `    }`,
     ].join("\n");
 };
@@ -130,7 +138,9 @@ const renderNamespaceStruct = (namespace: SdkNamespace): string => {
         .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
         .join("\n\n");
 
-    return [`/// Functions declared in \`${namespace.name}\`.`, `public struct ${typeName} {`, `    let client: LunoraClient`, ``, body, `}`].join("\n");
+    return [`/// Functions declared in \`${commentText(namespace.name)}\`.`, `public struct ${typeName} {`, `    let client: LunoraClient`, ``, body, `}`].join(
+        "\n",
+    );
 };
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
@@ -173,6 +183,4 @@ const swiftTarget: SdkTarget = {
     runtimePackage: ["Lunora (SwiftPM)"],
 };
 
-export default swiftTarget;
-
-export { memberName };
+export { memberName, swiftTarget };

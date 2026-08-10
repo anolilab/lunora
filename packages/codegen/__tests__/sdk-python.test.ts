@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { OpenRpcDocument } from "../src/sdk";
 import { generateSdk, isTypedSchema } from "../src/sdk";
-import pythonTarget, { memberName } from "../src/sdk/targets/python";
+import { memberName, pythonTarget } from "../src/sdk/targets/python";
 
 const fixture = (): OpenRpcDocument =>
     JSON.parse(readFileSync(join(__dirname, "fixtures", "simple", "expected", "_generated", "openrpc.json"), "utf8")) as OpenRpcDocument;

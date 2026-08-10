@@ -10,7 +10,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { generatedHeaderLines, toPascalCase, toSnakeCase } from "../spec";
+import { allMethods, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("ruby")
@@ -57,6 +57,12 @@ const RUBY_KEYWORDS = new Set([
     "yield",
 ]);
 
+/**
+ * Ruby interpolates `#{...}` inside a double-quoted string, so a function path
+ * containing one would evaluate at load time rather than reach the wire.
+ */
+const rubyLiteral = (value: string): string => stringLiteral(value).replaceAll("#", "\u005C#");
+
 /** `listMessages` → `list_messages`; a trailing `_` escapes a keyword. */
 const memberName = (raw: string): string => {
     const snake = toSnakeCase(raw);
@@ -64,16 +70,43 @@ const memberName = (raw: string): string => {
     return RUBY_KEYWORDS.has(snake) ? `${snake}_` : snake;
 };
 
+/**
+ * Projects a model onto the wire, dropping nil-valued fields at every depth.
+ *
+ * quicktype's Ruby backend writes an UNSET optional as an explicit null, while
+ * `v.optional(x)` parses `undefined`-or-`x` and rejects null — so passing
+ * `to_dynamic` straight through fails validation on the server for every call
+ * that leaves an optional field unset. The Python backend omits the key itself;
+ * this makes Ruby agree with it.
+ *
+ * The ceiling: a field the caller means to send AS null is dropped too. That is
+ * the same limitation Python's `to_dict` has, and there is nothing in the
+ * rendered model to tell the two apart.
+ */
+const WIRE_ARGS_HELPER = `  def self.wire_args(model)
+    drop_nils(model.to_dynamic)
+  end
+
+  def self.drop_nils(value)
+    case value
+    when ::Hash then value.each_with_object({}) { |(key, item), out| out[key] = drop_nils(item) unless item.nil? }
+    when ::Array then value.map { |item| drop_nils(item) }
+    else value
+    end
+  end
+
+`;
+
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
     const parameters = method.argsType === undefined ? "shard_key: nil" : "args, shard_key: nil";
-    const payload = method.argsType === undefined ? "{}" : "args.to_dynamic";
-    const call = `@client.${method.verb}("${method.functionPath}", ${payload}, shard_key)`;
+    const payload = method.argsType === undefined ? "{}" : "LunoraApi.wire_args(args)";
+    const call = `@client.${method.verb}("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`;
     // A typed result routes the decoded payload through the model's own
     // constructor; an untyped one is handed back as-is.
     const body = method.resultType === undefined ? call : `${method.resultType}.from_dynamic!(${call})`;
 
-    return [`    # ${method.summary}`, `    def ${memberName(method.functionName)}(${parameters})`, `      ${body}`, `    end`].join("\n");
+    return [`    # ${commentText(method.summary)}`, `    def ${memberName(method.functionName)}(${parameters})`, `      ${body}`, `    end`].join("\n");
 };
 
 /**
@@ -82,12 +115,12 @@ const renderCall = (method: SdkMethod): string => {
  */
 const renderSubscribe = (method: SdkMethod): string => {
     const parameters = method.argsType === undefined ? "on_data, on_error = nil, shard_key: nil" : "args, on_data, on_error = nil, shard_key: nil";
-    const payload = method.argsType === undefined ? "{}" : "args.to_dynamic";
+    const payload = method.argsType === undefined ? "{}" : "LunoraApi.wire_args(args)";
 
     return [
-        `    # live ${method.summary} — re-runs on every write to the tables it reads.`,
+        `    # live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
         `    def subscribe_${memberName(method.functionName)}(${parameters})`,
-        `      @client.subscribe("${method.functionPath}", ${payload}, on_data, on_error, shard_key)`,
+        `      @client.subscribe("${rubyLiteral(method.functionPath)}", ${payload}, on_data, on_error, shard_key)`,
         `    end`,
     ].join("\n");
 };
@@ -98,7 +131,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
         .join("\n\n");
 
     return [
-        `  # Functions declared in \`${namespace.name}\`.`,
+        `  # Functions declared in \`${commentText(namespace.name)}\`.`,
         `  class ${toPascalCase(namespace.name)}Api`,
         `    def initialize(client)`,
         `      @client = client`,
@@ -119,6 +152,9 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         `require_relative "models"\n`,
         `\n`,
         `module LunoraApi\n`,
+        // Only when something calls it: a deployment whose every function takes no
+        // typed args would otherwise carry two unreferenced methods.
+        allMethods(namespaces).some((method) => method.argsType !== undefined) ? WIRE_ARGS_HELPER : ``,
         namespaces.map((namespace) => renderNamespaceClass(namespace)).join("\n\n"),
         `\n\n`,
         `  # Typed entry point: \`Api.new(client).<namespace>.<function>(args)\`.\n`,
@@ -142,11 +178,12 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
 
 const rubyTarget: SdkTarget = {
     id: "ruby",
-    quicktype: { lang: "ruby", rendererOptions: { "just-types": "true" } },
+    // NOT `just-types`: that mode omits `to_dynamic`/`from_dynamic!`, which every
+    // generated call site uses to reach the wire — so each one raised
+    // NoMethodError. The default mode emits both.
+    quicktype: { lang: "ruby", rendererOptions: {} },
     render,
     runtimePackage: ["lunora (RubyGems)", "dry-struct + dry-types (required by the generated models)"],
 };
 
-export default rubyTarget;
-
-export { memberName };
+export { memberName, rubyTarget };
