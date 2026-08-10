@@ -10,7 +10,10 @@ import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { signCanonical } from "../../../shared/hmac-url";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import { otlpRandomHex } from "../../../shared/otlp";
-import { relayName } from "../../../shared/relay-name";
+import type { RegionHint } from "../../../shared/region-hint";
+import { regionHintFromRequest } from "../../../shared/region-hint";
+import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
+import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { isEnvFlagEnabled, mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -1093,6 +1096,27 @@ interface WorkerOptions {
      */
     queue?: QueueConsumerHandler;
 
+    /**
+     * Serve one-shot **queries** from a read replica placed in the caller's
+     * region instead of from the shard owner. Off by default.
+     *
+     * What it buys: a query answered near the reader rather than across an
+     * ocean. What it costs: a query that names no bookmark may be up to
+     * `LUNORA_REPLICA_MAX_STALENESS_MS` (default 1000) behind the owner, and
+     * every replica is a second Durable Object holding a copy of the shard.
+     *
+     * Read-your-writes is preserved for callers that pass the `commitCursor`
+     * their last write returned back as `x-lunora-min-seq`: the replica catches
+     * up to at least that cursor or the read falls back to the owner. Mutations,
+     * actions, streams, subscriptions, and fan-outs are never replica-routed.
+     *
+     * Requires CDC to be enabled on the schema — the changelog IS the
+     * replication feed. Without it a replica has nothing to follow, reports
+     * itself unavailable, and every read falls back to the owner (correct, and
+     * one wasted hop per read).
+     */
+    replicaReads?: boolean;
+
     /* eslint-disable no-secrets/no-secrets -- the env-var NAME below is a config key, not a credential */
 
     /**
@@ -1200,6 +1224,24 @@ interface WorkerOptions {
 
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
+
+    /**
+     * Where a shard should be created, by shard key — a per-tenant placement
+     * policy (`(key) => "weur"` for a European tenant, say).
+     *
+     * The platform already creates a shard near whichever request first touches
+     * it, so this exists for the cases where that request is the wrong signal:
+     * a shard first materialized by a cron fire, a migration fan-out, a seeding
+     * run, or the Studio lands wherever that ran, and stays there for life. A
+     * key whose region is not known yet returns `undefined`, which restores the
+     * default (place near the first request).
+     *
+     * Advisory in both directions: the hint is honoured only by the resolution
+     * that CREATES the object — changing this callback later does not move a
+     * shard that already exists — and even then the platform places near the
+     * hinted region rather than exactly in it.
+     */
+    shardRegion?: (shardKey: string) => RegionHint | undefined;
 
     /**
      * Resolve the app-facing storage capability from the worker `env` — the same
@@ -1939,12 +1981,6 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     };
 };
 
-const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, request: Request): Promise<Response> => {
-    const stub = resolveShard(namespace, shardKey);
-
-    return stub.fetch(request);
-};
-
 /** Per-isolate cache of a shard's relay count (the promotion probe), TTL-bounded so a promoted shard doesn't add a round-trip to every WS upgrade. */
 interface RelayProbeEntry {
     expiresMs: number;
@@ -2241,6 +2277,58 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const shardDO = applyJurisdiction(options.shardDO, options.jurisdiction);
     const schedulerDO = options.schedulerDO === undefined ? undefined : applyJurisdiction(options.schedulerDO, options.jurisdiction);
 
+    /**
+     * Every worker→shard hop, with the app's placement policy applied in one
+     * place. A shard that already exists ignores the hint, so this is safe to
+     * call on the hot path; a shard being created for the first time lands
+     * where `options.shardRegion` says instead of wherever the creating request
+     * happened to run.
+     */
+    /** One log line per isolate when a residency pin makes the placement hints inert. */
+    let warnedPlacementUnderResidency = false;
+
+    /**
+     * Drop a region hint when the deployment is pinned to a jurisdiction.
+     *
+     * A jurisdiction is a hard residency constraint; a region is an advisory
+     * hint. Composing them would mean asking the platform to honour both, and
+     * that pairing is not something any runtime available here can answer:
+     * workerd rejects `.jurisdiction()` outright ("Jurisdiction restrictions are
+     * not implemented in workerd" — see `placement.workerd.test.ts`), so the
+     * combination is unreachable in dev, in CI, and in every test, and would
+     * first execute in production on exactly the deployments that chose
+     * residency because correctness matters most to them.
+     *
+     * Shipping the untested pairing risks failing every dispatch to buy a
+     * placement refinement; dropping the hint costs only the refinement, and the
+     * jurisdiction already constrains placement to the region that matters. So
+     * residency wins, and the operator is told once rather than left to wonder
+     * why `shardRegion` reads as ignored.
+     */
+    const placementUnderResidency = (locationHint: RegionHint | undefined): RegionHint | undefined => {
+        if (locationHint === undefined || options.jurisdiction === undefined) {
+            return locationHint;
+        }
+
+        if (!warnedPlacementUnderResidency) {
+            warnedPlacementUnderResidency = true;
+
+            // eslint-disable-next-line no-console -- a silently ignored placement policy is worse than a log line
+            console.warn(
+                `[lunora] jurisdiction "${options.jurisdiction}" pins placement, so region hints (\`shardRegion\`, replica and relay placement) are not sent. Residency wins.`,
+            );
+        }
+
+        return undefined;
+    };
+
+    const forwardToShard = async (
+        namespace: ShardNamespaceLike,
+        shardKey: string,
+        request: Request,
+        locationHint: RegionHint | undefined = options.shardRegion?.(shardKey),
+    ): Promise<Response> => resolveShard(namespace, shardKey, placementUnderResidency(locationHint)).fetch(request);
+
     // Effective admin bearer for the request-time `/_lunora/admin/*` gates: the
     // explicit `options.adminToken`, or — when unset (the `composeWorker` default,
     // since the generated worker entry doesn't thread it) — `env.LUNORA_ADMIN_TOKEN`.
@@ -2261,8 +2349,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // master-token-in-URL behaviour.
     let envRequireEphemeralWsToken: boolean | undefined;
     const effectiveRequireEphemeralWsToken = (): boolean => options.requireEphemeralWsToken ?? envRequireEphemeralWsToken ?? true;
-    const resolveAdminTokenFromEnv = (env: unknown): void => {
+    // The env binding name holding the shard namespace, resolved once per isolate
+    // from the first request's env (same env-is-constant reasoning as the admin
+    // token). A replica needs it to address its owner — it is the only way a DO
+    // learns how to reach a sibling — so a replica-routed read carries it the way
+    // the WS-upgrade path already does for the relay tier.
+    let shardBindingName: string | undefined;
+
+    /**
+     * Capture everything the worker derives from `env` once per isolate, on the
+     * first request (env is constant within an isolate): the admin bearer, the
+     * ephemeral-WS-token knob, and the shard namespace binding name.
+     */
+    const captureEnvDerivedConfig = (env: unknown): void => {
         const record = (env ?? {}) as Record<string, unknown>;
+
+        shardBindingName ??= resolveShardBindingName(env, options.shardDO);
 
         if (envRequireEphemeralWsToken === undefined && options.requireEphemeralWsToken === undefined) {
             const raw = record["LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN"];
@@ -2331,6 +2433,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // posture was warn-once-then-allow, which meant a production misconfig was
     // silent after the first request per isolate.
     let warnedUnauthenticatedShardAccess = false;
+
+    /** One log line per isolate for a `replicaReads` that cannot take effect (see {@link replicaTargetFor}). */
+    let warnedReplicaReadsWithoutRegistry = false;
+    const warnReplicaReadsWithoutRegistry = (): void => {
+        if (warnedReplicaReadsWithoutRegistry) {
+            return;
+        }
+
+        warnedReplicaReadsWithoutRegistry = true;
+
+        // eslint-disable-next-line no-console -- a silently inert feature flag is worse than a log line
+        console.warn("[lunora] `replicaReads: true` has no effect without `functions` — read eligibility is decided from the function registry.");
+    };
 
     const guardUnauthenticatedShardAccess = (kind: "fan-out" | "shard"): void => {
         if (!options.allowUnauthenticatedShardAccess) {
@@ -3297,10 +3412,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const relayCount = await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
+                // Spread connections across the relay set at random, and hint
+                // the client's region so a relay is CREATED near real traffic.
+                //
+                // The spread is load-levelling and stays random on purpose: the
+                // relay tier exists because per-flush fan-out on one DO becomes
+                // the bottleneck at ~8k sockets, so routing a whole region to
+                // `hash(region) % relayCount` would pile a single-region app —
+                // the common case — back onto one relay and re-create the exact
+                // wall promotion was meant to escape. Locality rides on the hint
+                // instead: each relay lands in the region of whichever client
+                // first drew it, so a single-region app gets every relay in its
+                // own region, and a multi-region one spreads them across the
+                // regions actually generating load.
                 // eslint-disable-next-line sonarjs/pseudo-random -- load distribution across relays, not a security-sensitive value
                 const target = relayName(shardKey, Math.floor(Math.random() * relayCount));
 
-                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }));
+                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHintFromRequest(request));
             }
         }
 
@@ -3490,6 +3618,92 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * The region-local replica that should answer this read, or `undefined` when
+     * the read belongs on the owner.
+     *
+     * Deliberately narrow. Only a **query** is eligible: a mutation or action
+     * has to run where the single writer is, and a `stream` is a long-lived
+     * dispatch a follower has no business serving. Only a request Cloudflare
+     * could geolocate is eligible, because the replica's whole point is being
+     * near *this* caller. And a shard key that already carries a reserved role
+     * infix is never re-targeted — that would build a replica of a replay of a
+     * relay, addressing a DO nobody follows.
+     */
+    const replicaTargetFor = (request: Request, functionPath: string, shardKey: string): undefined | { name: string; region: RegionHint } => {
+        if (options.replicaReads !== true) {
+            return undefined;
+        }
+
+        // Eligibility is decided from the function registry, so a worker that
+        // enables the feature without threading `functions` would get it
+        // silently disabled — every read quietly owner-served, indistinguishable
+        // from a replica tier that is simply cold. Say so once.
+        if (options.functions === undefined) {
+            warnReplicaReadsWithoutRegistry();
+
+            return undefined;
+        }
+
+        if (options.functions[functionPath]?.kind !== "query") {
+            return undefined;
+        }
+
+        if (shardKey.includes(REPLICA_NAME_INFIX) || shardKey.includes(RELAY_NAME_INFIX)) {
+            return undefined;
+        }
+
+        const region = regionHintFromRequest(request);
+
+        return region === undefined ? undefined : { name: replicaName(shardKey, region), region };
+    };
+
+    /**
+     * Send one RPC to the shard that should serve it: a region-local replica for
+     * an eligible read, the owner for everything else.
+     *
+     * A replica answers `421` when it cannot serve the read at the required
+     * freshness (behind the caller's bookmark, or unable to follow its owner at
+     * all). That is a routing answer, not a failure: the read is retried once
+     * against the owner, which always can. There is exactly one retry — the
+     * owner is the terminal target, so a second hop could only loop.
+     */
+    const forwardRpcToShard = async (
+        request: Request,
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey: string,
+        outgoingHeaders: Record<string, string>,
+    ): Promise<Response> => {
+        const replica = replicaTargetFor(request, functionPath, shardKey);
+
+        if (replica !== undefined) {
+            const replicaHeaders: Record<string, string> = {
+                ...outgoingHeaders,
+                "x-lunora-replica-read": "1",
+                ...(shardBindingName === undefined ? {} : { "x-lunora-shard-binding": shardBindingName }),
+            };
+
+            // The caller's read-your-writes bookmark: the `commitCursor` its last
+            // write returned. Client-supplied, and safe to trust because it can
+            // only ever make this read STRICTER — an inflated value costs the
+            // caller a fallback to the owner, it never surfaces older data.
+            const minSeq = parseMinSeq(request.headers.get("x-lunora-min-seq"));
+
+            if (minSeq !== undefined) {
+                replicaHeaders["x-lunora-min-seq"] = String(minSeq);
+            }
+
+            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders), replica.region);
+
+            if (fromReplica.status !== 421) {
+                return fromReplica;
+            }
+        }
+
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders));
+    };
+
+    /**
      * Dispatch a single-shard RPC envelope to its owning shard and return the
      * shard's `Response` (with the `x-d1-bookmark` propagated). Extracted from
      * {@link handleRpc} so the in-process `serverQuery` fast-path (PLAN4 §2.2 /
@@ -3535,11 +3749,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         injectTraceContext(trace, outgoingHeaders);
 
-        // Re-emit the RPC body to the shard at its `/rpc` route.
-        const forwarded = shardRpcRequest(functionPath, args, outgoingHeaders);
-
         try {
-            const response = await forwardToShard(shardDO, shardKey, forwarded);
+            // Re-emit the RPC body at the shard's `/rpc` route — on a region-local
+            // replica when this read is eligible for one, else on the owner.
+            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders);
 
             // A non-2xx from the shard is reported as ok=false even though no
             // exception was thrown — the user-visible result is still an error
@@ -3568,11 +3781,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             );
 
             // The DO's `x-d1-bookmark` header (which lets the client pin reads
-            // after a write) is already on the shard `response`, so returning it
-            // verbatim propagates the bookmark. No rebuild is needed — copying the
-            // headers only to re-set that same header would be a pure allocation
-            // (and would drop `statusText`).
-            return response;
+            // after a write) is already on the shard `response`. The one thing
+            // the shard cannot know is which key the WORKER resolved it under:
+            // a caller that omits `shardKey` and one that spells out the
+            // configured default reach the same shard, and only this side knows
+            // they are the same. Stamping it lets the client file its
+            // read-your-writes cursor under one canonical key instead of two —
+            // which is the difference between a bookmark that constrains the
+            // next read and one that quietly does not.
+            //
+            // `response.headers` is immutable on a `fetch` result, so this is
+            // the one place a rebuild is warranted; `statusText` is carried over
+            // explicitly because a bare `Response(body, { status })` drops it.
+            const stamped = new Response(response.body, { headers: response.headers, status: response.status, statusText: response.statusText });
+
+            stamped.headers.set("x-lunora-shard-key", shardKey);
+
+            return stamped;
         } catch (error) {
             emitRpcEvent(
                 observability,
@@ -4103,7 +4328,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
         // per-shard export fan-out with `effectiveAdminToken()`.
-        resolveAdminTokenFromEnv(env);
+        captureEnvDerivedConfig(env);
 
         const errors: Error[] = [];
         const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
@@ -4469,7 +4694,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Pick up `env.LUNORA_ADMIN_TOKEN` for the admin gates (see top of
             // createWorker), so the Studio's admin calls authenticate when the
             // token lives only in env (the composed-worker default).
-            resolveAdminTokenFromEnv(env);
+            captureEnvDerivedConfig(env);
 
             // CORS preflight is answered up front for allowlisted origins; its
             // own response already carries the `Access-Control-Allow-*` headers,

@@ -101,8 +101,8 @@ interface D1SessionLike {
 
 ```ts
 interface DirectShardDirectory {
-    get?: (id: unknown) => ShardStub;
-    getByName: (name: string) => ShardStub;
+    get?: (id: unknown, locationHint?: ShardRegionHint) => ShardStub;
+    getByName: (name: string, locationHint?: ShardRegionHint) => ShardStub;
     idForName?: (name: string) => unknown;
     jurisdiction?: (jurisdiction: ShardJurisdiction) => ShardDirectory;
 }
@@ -267,6 +267,8 @@ interface PlatformCapabilities {
         secrets?: Capability;
         shardAlarms?: Capability;
         shardedState?: Capability;
+        shardPlacement?: Capability;
+        shardReadReplicas?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
         workflows?: Capability;
@@ -565,6 +567,12 @@ interface ShardKvStore {
 }
 ```
 
+### `ShardRegionHint` (type)
+
+```ts
+type ShardRegionHint = RegionHint;
+```
+
 ### `ShardSqlCursor` (interface)
 
 ```ts
@@ -626,7 +634,7 @@ type SqlRow = Record<string, unknown>;
 
 ```ts
 interface TwoStepShardDirectory {
-    get: (id: unknown) => ShardStub;
+    get: (id: unknown, locationHint?: ShardRegionHint) => ShardStub;
     getByName?: undefined;
     idForName: (name: string) => unknown;
     jurisdiction?: (jurisdiction: ShardJurisdiction) => ShardDirectory;
@@ -747,7 +755,7 @@ interface VectorizeVector {
 ### `resolveShard` (const)
 
 ```ts
-const resolveShard: (directory: ShardDirectory, name: string) => ShardStub;
+const resolveShard: (directory: ShardDirectory, name: string, locationHint?: ShardRegionHint) => ShardStub;
 ```
 
 ## `@lunora/platform/conformance`

@@ -71,6 +71,10 @@ export interface PlatformCapabilities {
         shardAlarms?: Capability;
         /** Durable Object-style sharded state. */
         shardedState?: Capability;
+        /** Geographic placement of a shard (`ShardPlacement.locationHint`). */
+        shardPlacement?: Capability;
+        /** Region-local read replicas of a shard, for one-shot queries. */
+        shardReadReplicas?: Capability;
         /** Vector database (Vectorize / pgvector / Pinecone). */
         vectorStore?: Capability;
         /** Hibernated WebSocket subscriptions. */
@@ -102,6 +106,14 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
+        shardPlacement: {
+            level: "native",
+            note: "DurableObjectNamespace.get/getByName locationHint — best-effort, and honoured only by the resolution that creates the object",
+        },
+        shardReadReplicas: {
+            level: "emulated",
+            note: "Lunora follows the shard's CDC changelog into a replica DO placed in the reader's region; the platform replicates for durability, not for reads, so the follow loop is ours",
+        },
         crossShardFanout: { level: "emulated", note: "Lunora query coordinator + relay tier over Durable Objects" },
         queues: { level: "native", note: "Cloudflare Queues" },
         workflows: { level: "native", note: "Cloudflare Workflows" },
@@ -187,6 +199,11 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         shardAlarms: {
             level: "emulated",
             note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never",
+        },
+        shardPlacement: { level: "unsupported", note: "One process — every shard lives where the process does, so a location hint has nowhere to place it" },
+        shardReadReplicas: {
+            level: "unsupported",
+            note: "One process and one region: a replica here would be a second copy of a database already on the same disk",
         },
         crossShardFanout: {
             level: "emulated",

@@ -25,7 +25,8 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 | ------------------ | --------------------------------------------------------------------------------------- |
 | Reactive reads     | `ctx-db*`, `dependency-tracker`, `reactive-cache`, `query-args`                         |
 | Change propagation | `ctx-db-cdc` (the `__cdc_log` op-log), `subscription-delivery`, `shape-*`               |
-| Fan-out            | `relay`, `relay-hub`, `socket-pool`                                                     |
+| Fan-out            | `relay`, `relay-hub`, `socket-pool`, `sibling-channel`                                  |
+| Read replicas      | `replica` (follows `__cdc_log` into a region-local copy)                                |
 | Indexes            | `aggregates`, `rank`, `geo`, search (via the bundled `@lunora/search-core`)             |
 | Access control     | `rls-guard`, relation predicates                                                        |
 | Admin & ops        | `admin-export-import`, `data-migration`, `pitr`, `sql-console`, `settings`, `ttl-sweep` |

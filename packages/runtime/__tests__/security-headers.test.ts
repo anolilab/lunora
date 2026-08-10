@@ -290,6 +290,27 @@ describe("handleCorsPreflight", () => {
         expect(allowHeaders.toLowerCase()).not.toContain("x-evil");
     });
 
+    it("exposes the response headers the SDK reads back", () => {
+        expect.hasAssertions();
+
+        // A browser hides every non-safelisted response header unless it is
+        // named here, and `headers.get(...)` then returns `null` with no error
+        // anywhere. So a header the client consumes but that is unexposed does
+        // not fail loudly — it silently drops the guarantee it carries:
+        // `x-d1-bookmark` is D1 read-your-writes, `x-lunora-shard-key` is what
+        // keys the replica bookmark.
+        const out = decorateResponse(
+            Response.json({ ok: true }),
+            httpsRequest({ headers: { origin: "https://app.example.com" } }),
+            resolveSecurity({ cors: { allowedOrigins: ["https://app.example.com"] } }),
+        );
+
+        const exposed = (out.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+
+        expect(exposed).toContain("x-d1-bookmark");
+        expect(exposed).toContain("x-lunora-shard-key");
+    });
+
     it("ignores non-preflight OPTIONS and disabled CORS", () => {
         expect.hasAssertions();
 

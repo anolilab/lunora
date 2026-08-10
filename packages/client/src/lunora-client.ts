@@ -748,6 +748,26 @@ class LunoraClient {
     private readonly clientId: string;
 
     /**
+     * Highest CDC cursor this client has seen a write commit at, per shard key
+     * (`""` for the default shard) — the read-your-writes bookmark sent as
+     * `x-lunora-min-seq`.
+     *
+     * In memory only, and deliberately: it exists to keep THIS session's reads
+     * behind THIS session's writes. Persisting it across reloads would pin a
+     * fresh page to a cursor it has no reason to require and force needless
+     * fallbacks to the owner.
+     */
+    private readonly shardCursors = new Map<string, number>();
+
+    /**
+     * The server's own name for the default shard (`defaultShardKey`), learned
+     * from the first response to a call that named no shard. `undefined` until
+     * then, which is why `cursorKeyFor` falls back to a placeholder entry that
+     * `learnDefaultShardKey` folds in once the name arrives.
+     */
+    private defaultShardKey: string | undefined;
+
+    /**
      * `true` when the constructor's hydration microtask has finished loading the
      * durable read cache (Pillar 2) into `hydratedQueryCache`. Signals that
      * the cache is ready for synchronous `peekHydratedQuery` reads.
@@ -1882,6 +1902,24 @@ class LunoraClient {
             }
 
             throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
+        }
+
+        // Each entry is dispatched as an independent single call server-side, so
+        // each carries its own commit cursor — recorded under its OWN shard, or a
+        // batched write would leave no read-your-writes requirement behind at
+        // all. Read off the raw envelopes because `demuxBatchResults` keeps only
+        // the result value.
+        //
+        // No outbound `x-lunora-min-seq` per entry: the batch route forwards
+        // straight to the owner shard and is never replica-served, so a
+        // per-entry freshness requirement would constrain nothing. What these
+        // cursors constrain is the SINGLE reads that follow.
+        for (const entry of body.results ?? []) {
+            const commitCursor = (entry.body as { commitCursor?: unknown } | undefined)?.commitCursor;
+
+            if (typeof entry.id === "number" && typeof commitCursor === "number") {
+                this.recordShardCursor(calls[entry.id]?.shardKey, commitCursor);
+            }
         }
 
         return demuxBatchResults(body.results ?? [], calls.length);
@@ -4165,8 +4203,23 @@ class LunoraClient {
      * so a mutation the server already committed returns its cached result
      * instead of running twice.
      */
-    private rpcRequestHeaders(flags: { attachBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string }): Record<string, string> {
+    private rpcRequestHeaders(
+        flags: { attachBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string },
+        shardKey?: string,
+    ): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
+
+        // Read-your-writes across region-local read replicas: the cursor this
+        // client's last write to this shard committed at. A worker with
+        // `replicaReads` on will only answer from a replica that has caught up
+        // to it; everywhere else the header is inert. Sent on every call rather
+        // than only on reads — a write is routed to the owner regardless, so
+        // there is no branch here that could get the two out of step.
+        const shardCursor = this.shardCursors.get(this.cursorKeyFor(shardKey));
+
+        if (shardCursor !== undefined) {
+            headers["x-lunora-min-seq"] = shardCursor.toString();
+        }
 
         if (this.authToken) {
             headers["authorization"] = `Bearer ${this.authToken}`;
@@ -4224,7 +4277,7 @@ class LunoraClient {
             throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
         }
 
-        const headers = this.rpcRequestHeaders(flags);
+        const headers = this.rpcRequestHeaders(flags, shardKey);
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
             // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
@@ -4270,6 +4323,12 @@ class LunoraClient {
 
         flags.onMutationAck?.(body.lastMutationId);
         flags.onCommitCursor?.(body.commitCursor);
+
+        // Remember how far this shard had committed, so a later read can demand
+        // at least this much from a replica — filed under the one key both an
+        // implicit call and an explicit default-shard call resolve to.
+        this.learnDefaultShardKey(response, shardKey);
+        this.recordShardCursor(shardKey, body.commitCursor);
 
         return decodeWire(body.result);
     }
@@ -5779,9 +5838,74 @@ class LunoraClient {
     /** Settle a write that replayed successfully: confirm its optimistic layer against the echoed commit cursor BEFORE resolving, so the gapless drop is in place when the awaiter (and any confirming frame) observes the settle. */
     private settleReplaySuccess(item: QueuedMutation, value: unknown, commitCursor: number | undefined): void {
         this.unpersist(item.id);
+        // A replayed write commits like any other, so it advances this shard's
+        // read-your-writes bookmark too. Recorded HERE rather than only in
+        // `rpc()` because the batched replay never goes through it — and a
+        // client flushing its queue after a reconnect, then reading, is exactly
+        // the case the bookmark exists for.
+        this.recordShardCursor(item.shardKey, commitCursor);
         item.onCommit?.(commitCursor);
         item.resolve(value);
         this.emitItemSettled(item, "committed");
+    }
+
+    /**
+     * The entry a shard's cursor lives under.
+     *
+     * Only the server knows that an omitted `shardKey` and an explicit one
+     * spelling out its configured default name are the same shard — the default
+     * is server-side configuration the client never sees. Keying on what was
+     * SENT would split one shard's cursor across two entries, so a write under
+     * one spelling would stop constraining a read under the other. Resolving
+     * `undefined` through the learned name is what keeps both spellings on one
+     * entry.
+     */
+    private cursorKeyFor(shardKey: string | undefined): string {
+        return shardKey ?? this.defaultShardKey ?? "";
+    }
+
+    /**
+     * Learn the server's own name for the default shard from a response to a
+     * call that named no shard.
+     *
+     * Any cursor recorded before the name was known sits under the placeholder
+     * entry, so it is folded in rather than stranded — otherwise the requirement
+     * from a client's first write would be lost exactly once, which is the kind
+     * of gap that only shows up as a stale read under load.
+     */
+    private learnDefaultShardKey(response: { headers: { get: (name: string) => null | string } }, shardKey: string | undefined): void {
+        const canonical = response.headers.get("x-lunora-shard-key");
+
+        if (canonical === null || shardKey !== undefined || this.defaultShardKey === canonical) {
+            return;
+        }
+
+        this.defaultShardKey = canonical;
+
+        const pending = this.shardCursors.get("");
+
+        if (pending !== undefined) {
+            this.shardCursors.set(canonical, Math.max(this.shardCursors.get(canonical) ?? 0, pending));
+            this.shardCursors.delete("");
+        }
+    }
+
+    /**
+     * Record the cursor a write committed at as this shard's read-your-writes
+     * requirement.
+     *
+     * Monotonic: responses can land out of order, and moving the requirement
+     * BACKWARDS would let a later read be answered from a replica copy that
+     * predates a write this client already saw.
+     */
+    private recordShardCursor(shardKey: string | undefined, commitCursor: number | undefined): void {
+        if (typeof commitCursor !== "number") {
+            return;
+        }
+
+        const key = this.cursorKeyFor(shardKey);
+
+        this.shardCursors.set(key, Math.max(this.shardCursors.get(key) ?? 0, commitCursor));
     }
 
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
@@ -5884,6 +6008,11 @@ class LunoraClient {
                         };
                     }),
                 }),
+                // No shard key: a batch's entries may target several shards, and
+                // one outbound `x-lunora-min-seq` cannot state a requirement for
+                // all of them. Writes go to the owner regardless, so omitting it
+                // costs nothing — the per-entry cursors are recorded on the way
+                // back out (`settleReplaySuccess`).
                 headers: this.rpcRequestHeaders({ attachBookmark: true }),
                 method: "POST",
             });

@@ -300,6 +300,15 @@ export const ERROR_CATALOG = {
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     RATE_LIMITED: { status: 429, title: "Rate limited" },
+
+    /**
+     * A read replica could not answer at the freshness the caller required. `421`
+     * rather than an error class: it is a ROUTING verdict the runtime turns into
+     * one retry against the owner, and a caller never sees it.
+     */
+    REPLICA_NOT_READY: { status: 421, title: "Replica not caught up" },
+    /** A write reached a read replica. Same `421` routing verdict — writes belong to the owner. */
+    REPLICA_READ_ONLY: { status: 421, title: "Replica is read-only" },
     /** Thrown by `@lunora/auth` (Turnstile) and `@lunora/ratelimit` — an upstream dependency didn't respond. Fixed, safe message. */
     SERVICE_UNAVAILABLE: { status: 503, title: "Service unavailable" },
     SHAPE_CROSS_SHARD_JOIN: { status: 400, title: "Shape cross-shard join is unsupported" },

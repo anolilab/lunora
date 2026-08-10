@@ -97,6 +97,7 @@ import type {
     ReadFootprint,
     RelayHost,
     RelayMember,
+    ReplicaOwnerHost,
     ResolvedShape,
     RlsPoliciesResult,
     RpcRequest,
@@ -105,6 +106,7 @@ import type {
     ShapeRowOp,
     ShapeSubscriptionQuery,
     ShardRankPageResult,
+    ShardSiblingHost,
     ShardSocketLike,
     SocketAttachment,
     SqlExec,
@@ -139,6 +141,7 @@ import {
     createFanoutCounters,
     createReadFootprint,
     createRelayLink,
+    createReplicaLink,
     DATA_MIGRATION_STATE_TABLE,
     DEFAULT_MAX_RELAYS,
     deleteGlobalShapeSnapshot,
@@ -148,6 +151,8 @@ import {
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
+    gateReplicaDispatch,
+    handleReplicaControl,
     isDevEnvironment,
     isLossyBody,
     listTables,
@@ -1301,6 +1306,20 @@ abstract class ShardDO {
     private readonly relay: OwnerRelay | RelayMember | undefined;
 
     /**
+     * The read-replica collaborator — set only on a DO whose name marks it as a
+     * replica of another shard, `undefined` on an owner (and on an unnamed
+     * single-DO shard, where there is nothing to replicate from).
+     */
+    private readonly replica: ReturnType<typeof createReplicaLink>;
+
+    /**
+     * The owner half of the replica seam — what answers `/_lunora/replica` for
+     * the replicas following this shard. Present on every DO, because a DO
+     * cannot know whether anything follows it until something asks.
+     */
+    private readonly replicaOwnerHost: ReplicaOwnerHost;
+
+    /**
      * Declared indexes (`table:index`) a query has exercised since this instance
      * woke, stamped by `getCtxDbIndexUseHook`. In-memory and reset on
      * hibernation/restart — drives the `unused_index` runtime advisory.
@@ -1466,15 +1485,24 @@ abstract class ShardDO {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
 
+        // What every internal tier needs from this DO: its own name (the role
+        // signal), the env, the namespace binding, and SQLite. Built once and
+        // spread into each tier's host so the four can never drift apart.
+        const sibling: ShardSiblingHost = {
+            doName: () => this.runner.shardKey,
+            env: () => this.env,
+            shardBinding: () => this.shardBinding,
+            sql: () => this.sql as SqlExec,
+        };
+
         // The relay tier reaches this DO back through a narrow adapter; the role-typed
         // collaborator (owner vs relay) is fixed once from the DO name (plan 075).
         const host: RelayHost = {
+            ...sibling,
             buildShapeDiff: (resolved, fromCursor, toCursor) => this.buildShapeDiff(this.sql as SqlExec, resolved, fromCursor, toCursor),
             computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
             currentCdcEpoch: () => this.currentCdcEpoch(),
             deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
-            doName: () => this.runner.shardKey,
-            env: () => this.env,
             getWebSockets: () => this.runner.sockets(),
             maskMetadata: () => this.maskMetadata(),
             nextPokeId: () => {
@@ -1488,11 +1516,44 @@ abstract class ShardDO {
             },
             resolveShape: (name, args, identity) => this.resolveShape(name, args, identity),
             rlsMetadata: () => this.rlsMetadata(),
-            shardBinding: () => this.shardBinding,
-            sql: () => this.sql as SqlExec,
         };
 
         this.relay = createRelayLink(host);
+
+        // Region-local read replicas. Same rule as the relay tier: the role is
+        // fixed once from the DO name. The owner half is what SERVES
+        // `/_lunora/replica`; `this.replica` is set only on a DO that follows one.
+        //
+        // The three CDC readers pass `undefined` straight through — it means
+        // "this shard has no changelog", and the replica tier refuses to
+        // replicate a shard that cannot be followed rather than inventing a
+        // timeline out of a sentinel.
+        this.replicaOwnerHost = {
+            ...sibling,
+            exportRows: async () => this.runShardExport({}),
+            ownerCursor: () => this.currentCdcCursor(),
+            ownerEpoch: () => this.currentCdcEpoch(),
+            ownerFloor: () => (this.cdcEnabled() ? minCdcSeq(this.sql as SqlExec) : undefined),
+            readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
+            // `COUNT(*)` per user table — cheap next to building the snapshot,
+            // which is the whole point: the bootstrap cap has to be decided
+            // before the rows are materialized, not after.
+            rowCount: () => listTables(this.sql as SqlExec).reduce((total, table) => total + table.rowCount, 0),
+        };
+        this.replica = createReplicaLink({
+            ...sibling,
+            applyChanges: async (changes) => {
+                const { applied } = await this.runShardApplyCdc({ changes });
+
+                // Same post-replay step the `applyCdc` admin RPC takes: replayed
+                // rows are real writes, so any live subscriber on this DO has to
+                // see them.
+                await this.flushChangedTables();
+
+                return applied;
+            },
+            importRows: async (rows) => this.runShardImport({ rows }),
+        });
 
         this.armWebSocketKeepalive();
     }
@@ -4333,6 +4394,16 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
         }
 
+        // A replica serves ONLY the reads the runtime explicitly routed to it,
+        // and only once it has caught up far enough to answer them.
+        if (this.replica !== undefined) {
+            const refusal = await gateReplicaDispatch(this.replica, request, payload.functionPath);
+
+            if (refusal !== undefined) {
+                return refusal;
+            }
+        }
+
         // Reserved admin-introspection RPCs are intercepted before user
         // dispatch — they read raw SQLite directly rather than running a
         // registered function, and carry their own bearer-token gate.
@@ -4680,6 +4751,17 @@ abstract class ShardDO {
      * as the host-specific handler while the engine is progressively extracted.
      */
     protected async handleAlarmCloudflare(): Promise<void> {
+        // A replica runs the owner's class, so every background tier the schema
+        // arms — external-source polling, TTL sweeps, global-shape polls — would
+        // otherwise fire here too, against a COPY. The damage is not theoretical:
+        // an external source resolves its tenant from `currentShardKey()`, which
+        // on a replica is the replica's own name, so a full pull would match
+        // nothing and diff every replicated row into a delete. Background work
+        // belongs to the single writer; a follower only ever replays.
+        if (this.replica !== undefined) {
+            return;
+        }
+
         // Captured before the first `await`, then passed by value everywhere below:
         // this handler is the alarm's own scope, so nothing has interleaved yet.
         // `undefined` when the alarm ran outside `withTriggerTrace` (a direct call
@@ -9031,6 +9113,14 @@ abstract class ShardDO {
             return this.relay ? await this.relay.handleControl(request) : new Response("relay tier inactive", { status: 404 });
         }
 
+        // The replica follow channel: a replica pulls its owner's changelog (or
+        // takes a bootstrap snapshot) here. Authenticated by the same
+        // `LUNORA_RELAY_SECRET` HMAC as the relay channel, and refused by a DO
+        // that is itself a replica.
+        if (url.pathname === "/_lunora/replica" && request.method === "POST") {
+            return handleReplicaControl(this.replicaOwnerHost, request);
+        }
+
         // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
         // relays to spread new connections across before a WS upgrade. Internal —
         // reachable only via the runtime's worker-side forward, returns just a count.
@@ -9053,6 +9143,15 @@ abstract class ShardDO {
     }
 
     private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+        // A replica has no live pipeline: its rows advance only when a READ
+        // happens to trigger a catch-up, so a subscription served from here
+        // would be a live query that mostly is not. Nothing routes an upgrade to
+        // a replica name — only a hand-written `?shard=` can reach this — and it
+        // is refused for the same reason the dispatch gate refuses writes.
+        if (this.replica !== undefined) {
+            return new Response("replica does not serve subscriptions", { status: 421 });
+        }
+
         if (!(await this.isUpgradeAllowed(request))) {
             return new Response("Forbidden", { status: 403 });
         }

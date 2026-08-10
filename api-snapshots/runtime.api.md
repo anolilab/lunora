@@ -1913,10 +1913,10 @@ type ShardNamespaceInput = ShardDirectory | ShardNamespaceLike;
 
 ```ts
 interface ShardNamespaceLike {
-    get: (id: unknown) => {
+    get: (id: unknown, options?: ShardGetOptions) => {
         fetch: (request: Request) => Promise<Response>;
     };
-    getByName?: (name: string) => {
+    getByName?: (name: string, options?: ShardGetOptions) => {
         fetch: (request: Request) => Promise<Response>;
     };
     idFromName: (name: string) => unknown;
@@ -2180,6 +2180,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    replicaReads?: boolean;
     requireEphemeralWsToken?: boolean;
     resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
@@ -2190,6 +2191,7 @@ interface WorkerOptions {
     schedulerInstanceName?: string;
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
+    shardRegion?: (shardKey: string) => RegionHint | undefined;
     storage?: (env: unknown) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
@@ -2522,7 +2524,7 @@ const resolveSecurity: (security: SecurityOptions | undefined, env?: Record<stri
 ### `resolveShard` (const)
 
 ```ts
-const resolveShard: (namespace: ShardNamespaceInput, shardKey: string) => ResolvedShard;
+const resolveShard: (namespace: ShardNamespaceInput, shardKey: string, locationHint?: RegionHint) => ResolvedShard;
 ```
 
 ### `restCacheHeaders` (const)

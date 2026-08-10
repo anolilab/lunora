@@ -164,7 +164,25 @@ const htmlCspFor = (frameOptions: string | undefined): string => {
 const DEFAULT_PERMISSIONS_POLICY =
     "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
-const DEFAULT_CORS_HEADERS = ["Authorization", "Content-Type", "X-D1-Bookmark", "X-Lunora-Mutation-Id"];
+/**
+ * Request headers a cross-origin caller may send by default.
+ *
+ * This is the allowlist the preflight intersects against, with no wildcard, so
+ * every header `@lunora/client` attaches on its own has to be here — a browser
+ * blocks the whole request over one unlisted name. That makes the list part of
+ * the client's wire contract, not a security knob to trim: each entry is a
+ * header the SDK sends unprompted, and omitting one breaks exactly the apps
+ * that configure `security.cors` (i.e. those on a separate frontend domain).
+ */
+const DEFAULT_CORS_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "X-D1-Bookmark",
+    "X-Lunora-Client-Id",
+    "X-Lunora-Client-Seq",
+    "X-Lunora-Min-Seq",
+    "X-Lunora-Mutation-Id",
+];
 
 const DEFAULT_CORS_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"];
 
@@ -530,11 +548,28 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
     return forbiddenOriginResponse("cross-origin websocket upgrade", source, selfOrigin);
 };
 
+/**
+ * Response headers a cross-origin caller may READ.
+ *
+ * A browser hides every response header except the CORS-safelisted ones unless
+ * it is named here, and `response.headers.get(...)` then returns `null` with no
+ * error anywhere. That failure is silent by construction, so this list is not a
+ * policy knob: it is exactly the set of headers `@lunora/client` reads back,
+ * and a header the SDK consumes but that is missing here does not break loudly
+ * — it degrades the guarantee the header exists to provide.
+ *
+ * `x-d1-bookmark` carries D1 read-your-writes; `x-lunora-shard-key` is the
+ * canonical shard a dispatch resolved to, which the client keys its replica
+ * bookmark by.
+ */
+const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Shard-Key"];
+
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {
     const headers = new Headers();
 
     headers.set("access-control-allow-origin", origin);
+    headers.set("access-control-expose-headers", DEFAULT_CORS_EXPOSED_HEADERS.join(", "));
     headers.append("vary", "Origin");
 
     if (cors.allowCredentials) {

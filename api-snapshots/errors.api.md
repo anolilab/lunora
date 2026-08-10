@@ -468,6 +468,14 @@ const ERROR_CATALOG: {
         readonly status: 429;
         readonly title: "Rate limited";
     };
+    readonly REPLICA_NOT_READY: {
+        readonly status: 421;
+        readonly title: "Replica not caught up";
+    };
+    readonly REPLICA_READ_ONLY: {
+        readonly status: 421;
+        readonly title: "Replica is read-only";
+    };
     readonly SERVICE_UNAVAILABLE: {
         readonly status: 503;
         readonly title: "Service unavailable";

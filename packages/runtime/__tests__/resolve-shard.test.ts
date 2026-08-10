@@ -93,7 +93,7 @@ describe("resolveShard", () => {
 
         resolveShard(namespace, "room-7");
 
-        expect(getByName).toHaveBeenCalledWith("room-7");
+        expect(getByName).toHaveBeenCalledWith("room-7", undefined);
         expect(idFromName).not.toHaveBeenCalled();
     });
 
@@ -150,7 +150,32 @@ describe("resolveShard", () => {
         resolveShard(namespace, "room-7");
 
         expect(idFromName).toHaveBeenCalledWith("room-7");
-        expect(get).toHaveBeenCalledWith(id);
+        // No placement asked for → no options bag, so the call is
+        // indistinguishable from the pre-placement `get(id)`.
+        expect(get).toHaveBeenCalledWith(id, undefined);
+    });
+
+    it("passes a location hint to the direct branch", () => {
+        expect.assertions(1);
+
+        const getByName = vi.fn<() => typeof fakeStub>(() => fakeStub);
+        const namespace: ShardNamespaceLike = { get: () => fakeStub, getByName, idFromName: (name) => name };
+
+        resolveShard(namespace, "room-7", "weur");
+
+        expect(getByName).toHaveBeenCalledWith("room-7", { locationHint: "weur" });
+    });
+
+    it("passes a location hint to the two-step branch", () => {
+        expect.assertions(1);
+
+        const id = { __id: 1 };
+        const get = vi.fn<() => typeof fakeStub>(() => fakeStub);
+        const namespace: ShardNamespaceLike = { get, idFromName: () => id };
+
+        resolveShard(namespace, "room-7", "apac");
+
+        expect(get).toHaveBeenCalledWith(id, { locationHint: "apac" });
     });
 
     it("resolves against a jurisdiction-pinned subnamespace", () => {
