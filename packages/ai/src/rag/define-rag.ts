@@ -31,12 +31,24 @@ const MAX_TOP_K_FULL_METADATA = 20;
 const MAX_TOP_K = 100;
 
 /**
- * Vectorize's per-vector metadata ceiling, in bytes. In the default (metadata)
- * mode each chunk's text is stored as vector metadata alongside its bookkeeping
- * keys, so the chunk has to fit inside this; a `textStore` moves the text out
+ * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
+ * metadata object, not the chunk text alone; a `textStore` moves the text out
  * and lifts the constraint entirely.
  */
 const VECTORIZE_METADATA_BYTES = 10 * 1024;
+
+/**
+ * Room held back from {@link VECTORIZE_METADATA_BYTES} for everything in the
+ * metadata object that is not chunk text: the source id, the chunk index,
+ * chunk #0's hash / count / model tag, and whatever `metadata` the caller
+ * attaches per source.
+ *
+ * A guess, and deliberately a generous one — the caller's `metadata` is not
+ * known when the RAG is defined, so no exact figure exists to check against.
+ * The point is only that spending the entire ceiling on text is provably wrong:
+ * the bookkeeping is never zero bytes.
+ */
+const METADATA_OVERHEAD_RESERVE = 2 * 1024;
 
 /** Metadata key holding each chunk's index within its source. */
 const CHUNK_INDEX_KEY = "__ragChunk";
@@ -257,10 +269,17 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     // a config that works. Gated on BOTH options because `chunkSize` reaches only
     // the built-in splitter — a custom `chunk` ignores it, so rejecting on it
     // would refuse a value that has no effect.
-    if (!config.chunk && !config.textStore && chunkSize > VECTORIZE_METADATA_BYTES) {
+    //
+    // Still a floor, not a guarantee: the ceiling is bytes and covers the whole
+    // metadata object, so multi-byte text or heavy per-source `metadata` can
+    // exceed it under this bound. What it rules out is the config that could
+    // never work.
+    const chunkTextBudget = VECTORIZE_METADATA_BYTES - METADATA_OVERHEAD_RESERVE;
+
+    if (!config.chunk && !config.textStore && chunkSize > chunkTextBudget) {
         throw new LunoraError(
             "BAD_REQUEST",
-            `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} cannot fit Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit — lower it, or supply \`textStore\` to keep chunk text out of metadata`,
+            `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} leaves no room under Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit, which also carries this chunk's bookkeeping and any \`metadata\` you attach — keep it under ${String(chunkTextBudget)}, or supply \`textStore\` to move chunk text out of metadata entirely`,
         );
     }
 

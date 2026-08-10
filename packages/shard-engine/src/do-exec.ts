@@ -26,16 +26,23 @@ export const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: strin
     // or a caller hand-wrote SQL. Both are worth a message that names the limit
     // instead of a bare `SQLITE_ERROR` from prepare.
     //
-    // Both checks are O(1) on values already in hand, so this costs nothing on
-    // the hot path. `length` counts UTF-16 units rather than the UTF-8 bytes
-    // SQLite measures; statement text is identifiers and placeholders (values
-    // are bound, not inlined), so the two agree in practice, and where they
-    // diverge this under-reports — it can miss a violation, never invent one.
-    if (query.length > WORKERD_SQLITE_LIMITS.sqlTextLength) {
-        throw new LunoraError(
-            "INTERNAL",
-            `SQL statement is ${String(query.length)} characters, over this runtime's ${String(WORKERD_SQLITE_LIMITS.sqlTextLength)}-character limit`,
-        );
+    // The parameter check is O(1) on a value already in hand; the length check
+    // is O(1) too on every statement this package emits (see below).
+    // `SQLITE_LIMIT_SQL_LENGTH` counts BYTES, and `String.length` counts UTF-16
+    // code units, so a non-ASCII statement can pass the cheap check and still be
+    // refused by SQLite. One UTF-16 unit is at most three UTF-8 bytes, so a
+    // statement under a third of the limit cannot possibly breach it — that is
+    // the common case and it costs one comparison. Only the remainder pays for
+    // an encode, which is exactly when accuracy is worth its price.
+    if (query.length * 3 > WORKERD_SQLITE_LIMITS.sqlTextLength) {
+        const bytes = new TextEncoder().encode(query).length;
+
+        if (bytes > WORKERD_SQLITE_LIMITS.sqlTextLength) {
+            throw new LunoraError(
+                "INTERNAL",
+                `SQL statement is ${String(bytes)} bytes, over this runtime's ${String(WORKERD_SQLITE_LIMITS.sqlTextLength)}-byte limit`,
+            );
+        }
     }
 
     if (params.length > WORKERD_SQLITE_LIMITS.boundParams) {

@@ -402,7 +402,20 @@ describe("the statement backstop", () => {
     it("rejects statement text past the length ceiling", () => {
         expect.assertions(1);
 
-        expect(() => runSql(neverRuns, `SELECT ${"x".repeat(100_001)}`)).toThrow(/character limit/u);
+        expect(() => runSql(neverRuns, `SELECT ${"x".repeat(100_001)}`)).toThrow(/byte limit/u);
+    });
+
+    // The ceiling is bytes; `String.length` is UTF-16 units. A statement of
+    // multi-byte text can sit under the character count and still breach.
+    it("measures the ceiling in bytes, not characters", () => {
+        expect.assertions(2);
+
+        // 40,000 three-byte characters = 120,000 bytes, well over the limit,
+        // while `length` reads 40,000 — a third of it.
+        const multiByte = `SELECT '${"→".repeat(40_000)}'`;
+
+        expect(multiByte.length).toBeLessThan(100_000);
+        expect(() => runSql(neverRuns, multiByte)).toThrow(/byte limit/u);
     });
 });
 

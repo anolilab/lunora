@@ -3605,11 +3605,32 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // preserved so an FK reference to an earlier row in the same batch resolves.
             const skipDuplicates = batchOptions?.skipDuplicates === true;
             const ids: (string | null)[] = [];
+            // On a `.global()` table the per-row `insert` charges its own row
+            // immediately before pushing it to D1, so a breach part-way down this
+            // loop leaves every earlier row committed in a backend the DO's
+            // transaction cannot roll back. Charging the whole batch up front —
+            // as `insertManyUnsafe`'s global branch does — refuses it while none
+            // of it has crossed.
+            //
+            // The loop then runs unmetered, or every row would be charged twice:
+            // once here and once by its own `insert`. Shard-local batches keep
+            // the per-row charge untouched, since the DO transaction rewinds them
+            // and there is nothing to pre-empt.
+            const precharged = globalWriterFor(tableName, "insert") !== undefined;
+
+            if (precharged) {
+                for (const document of documents) {
+                    meterWrite(document);
+                }
+            }
+
+            const insertOne = async (document: Record<string, unknown>): Promise<string> =>
+                precharged ? runUnmetered(async () => writer.insert(tableName, document)) : writer.insert(tableName, document);
 
             for (const document of documents) {
                 try {
                     // eslint-disable-next-line no-await-in-loop -- sequential by design: preserves insert order + the single-threaded SQLite transaction
-                    ids.push(await writer.insert(tableName, document));
+                    ids.push(await insertOne(document));
                 } catch (error) {
                     if (skipDuplicates && error instanceof ConflictError && error.kind === "unique") {
                         // Preserve the input-order slot with null so callers can

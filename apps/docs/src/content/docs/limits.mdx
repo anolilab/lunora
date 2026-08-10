@@ -77,7 +77,7 @@ Two are yours to respect, because no rewrite can absorb them:
 | --------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                   |
 | CPU per request       | **30 s**                                                 | Same envelope as DO                                                   |
-| Subrequests, external | **50** (Free) / **10 000** (Paid)                        | `fetch()` to the internet                                             |
+| Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                             |
 | Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1 — a cross-shard read spends one per shard |
 | Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                    |
 
@@ -114,12 +114,19 @@ than by Lunora. Split large batches across calls.
 
 | Limit                     | Value      | Implication                                                        |
 | ------------------------- | ---------- | ------------------------------------------------------------------ |
-| Vector metadata           | **10 KiB** | `defineRag` stores chunk text here unless you supply a `textStore` |
-| `topK` with full metadata | **20**     | Rises to **100** once a `textStore` moves text out                 |
+| Vector metadata           | **10 KiB** | The whole object per vector, not just the chunk text               |
+| `topK` with full metadata | **50**     | Cloudflare's ceiling; `defineRag` caps at 20, a legacy-V1 holdover |
+| `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata         |
 
-A `chunkSize` that could not fit the metadata ceiling is rejected when the RAG
-is defined, rather than on every failed upsert. Supplying a `textStore` keeps
-chunk text out of the vector entirely and lifts both limits.
+`defineRag` rejects a `chunkSize` that could not fit the metadata ceiling when
+the RAG is defined, rather than on every failed upsert. That check applies only
+where Lunora stores chunk text in the vector's metadata: a `textStore` keeps the
+text out entirely, and a custom `chunk` splitter makes `chunkSize` inert, so
+neither is checked.
+
+The ceiling covers the **whole** metadata object — chunk text, Lunora's
+bookkeeping keys, and any `metadata` you attach — so the check reserves room for
+the rest rather than spending all 10 KiB on text.
 
 ## Workers KV
 
