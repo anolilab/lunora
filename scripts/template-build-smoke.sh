@@ -10,9 +10,10 @@
 #   3. Runs `pnpm install`.
 #   4. For React templates, runs `lunora add auth-ui` and asserts the copy-in
 #      screens landed and their deps were injected (then re-installs).
-#   5. Runs `pnpm run build` (skipped with a notice if no build script) — which
-#      is what proves the copied auth screens actually compile in a real app.
-#   5. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
+#   5. Runs `pnpm run build` — which is what proves the copied auth screens
+#      actually compile in a real app. A template with no build script instead
+#      runs `pnpm run codegen` + `tsc --noEmit` over everything it ships.
+#   6. Records PASS / XFAIL(expected failure) / XPASS(unexpected pass) / FAIL.
 #
 # Exit codes:
 #   0  — all results were PASS or XFAIL
@@ -43,7 +44,10 @@
 # What this does NOT cover:
 #   - The remote giget fetch path (needs network + a published template ref).
 #   - Starting the Vite+workerd dev server (long-running, needs a real CF account).
-#   - Running codegen on the scaffolded project (covered by clean-machine-smoke.sh).
+#   - Running codegen on the *buildable* templates' scaffolds — their bundler
+#     runs it via the Vite plugin / astro integration. Only the no-build path
+#     invokes `lunora codegen` directly here; clean-machine-smoke.sh covers it
+#     against a tarball-installed CLI.
 
 set -euo pipefail
 
@@ -167,6 +171,51 @@ typecheck_skip_reason() {
 }
 
 TYPECHECK_UNSUPPORTED=("astro" "nuxt" "sveltekit")
+
+# ---------------------------------------------------------------------------
+# Typecheck a scaffold, preferring the template's OWN `typecheck` script.
+#
+# A bare `tsc --noEmit` is wrong for frameworks that emit route types from a
+# separate generator: react-router ships
+# `lunora codegen && react-router typegen && tsc`, and without the typegen step
+# every `./+types/<route>` import fails to resolve. The template already knows
+# the right incantation — run it rather than second-guessing it here.
+# ---------------------------------------------------------------------------
+run_typecheck() {
+    local scaffold_dir="$1"
+    local log="$2"
+    local has_script
+
+    has_script="$(node -e "
+        try {
+            const p = require('$scaffold_dir/package.json');
+            process.stdout.write(p.scripts && p.scripts.typecheck ? 'yes' : 'no');
+        } catch { process.stdout.write('no'); }
+    " 2>/dev/null)"
+
+    # Returns the checker's exit status — callers need it. A `|| true` here would
+    # make "the checker refused to run" (missing binary, a failed `lunora codegen`
+    # inside a template's own `typecheck` script) indistinguishable from a clean
+    # pass, because neither produces an `error TS` line to grep for.
+    if [[ "$has_script" == "yes" ]]; then
+        (cd "$scaffold_dir" && pnpm run typecheck 2>&1) > "$log"
+    else
+        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$log"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# A nonzero typecheck exit is only interesting when NOTHING was reported: `tsc`
+# exits 1 whenever it finds type errors, and those are gated (and printed) by the
+# caller. An exit with no diagnostic at all means the checker never got as far as
+# reading source, so a green result would prove nothing.
+# ---------------------------------------------------------------------------
+typecheck_never_ran() {
+    local status="$1"
+    local log="$2"
+
+    [[ "$status" -ne 0 ]] && ! grep -q 'error TS' "$log"
+}
 
 is_typecheck_unsupported() {
     local name="$1"
@@ -431,8 +480,47 @@ for tname in "${TEMPLATES[@]}"; do
     " 2>/dev/null)"
 
     if [[ "$build_script" != "yes" ]]; then
-        echo "  ==> NOTICE: no build script in $tname — skipping build"
+        # A template with no bundler had nothing compiled at all: scaffold +
+        # install was the whole gate, so any type error it ships — including one
+        # introduced by a breaking change in `@lunora/*` — passed silently.
+        # Run its own `codegen` script (every source file imports
+        # `#lunora/_generated/*`, which only exists afterwards), then typecheck.
+        #
+        # Unlike the auth-ui gate below this fails on ANY diagnostic rather than
+        # only ones under `lunora/auth-ui/`. That is affordable exactly because
+        # there is no build: no framework-generated route types to trip over, and
+        # the tsconfig `include` covers precisely the files the template ships.
+        echo "  ==> NOTICE: no build script in $tname — codegen + tsc --noEmit instead"
         SKIP_BUILD+=("$tname")
+
+        codegen_log="$RESULTS_DIR/${tname}-codegen.log"
+        if ! (cd "$scaffold_dir" && pnpm run codegen 2>&1) > "$codegen_log"; then
+            echo "  FAIL: codegen failed for $tname (see $codegen_log)"
+            tail -20 "$codegen_log" | sed 's/^/    /'
+            FAIL+=("$tname(codegen)")
+            continue
+        fi
+
+        typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+        typecheck_status=0
+        run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
+
+        if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
+            echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+            tail -20 "$typecheck_log" | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:never-ran)")
+            continue
+        fi
+
+        ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+        if [[ "$ts_errors" -gt 0 ]]; then
+            echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+            grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck)")
+            continue
+        fi
+
+        echo "  ==> codegen + typecheck OK"
         PASS+=("$tname")
         continue
     fi
@@ -454,37 +542,39 @@ for tname in "${TEMPLATES[@]}"; do
     # the framework's own route types, and without those `tsc` drowns in
     # `Cannot find module '#lunora/_generated/server.js'`.
     #
-    # Only diagnostics whose path is under `lunora/auth-ui/` fail the run. The
-    # templates carry unrelated type errors of their own (a `fontFamily` in the
-    # Solid template's `__root.tsx`, route types that need a build that failed) and
-    # this gate is not the place to litigate them — it answers one question: does
-    # the payload compile under this meta-framework's tsconfig? Unrelated errors
-    # are counted and printed so they stay visible.
+    # EVERY diagnostic fails the run, not just ones under `lunora/auth-ui/`. This
+    # used to gate the payload only and merely count the templates' own errors,
+    # on the reasoning that they were somebody else's problem — which let nine of
+    # them accumulate, two of which were real defects (a `LunoraProvider url=`
+    # prop that does not exist, so the provider mounted without a client). They
+    # are all fixed now, so the cheapest way to keep them fixed is to stop
+    # distinguishing.
     if [[ "$AUTHUI_ADDED" == "yes" ]]; then
         if is_typecheck_unsupported "$tname"; then
             echo "  ==> NOTICE: no in-scaffold typecheck for $tname ($(typecheck_skip_reason "$tname"))"
             TYPECHECK_SKIPPED+=("$tname")
         else
-            echo "  ==> tsc --noEmit (compiling the copied screens)"
+            echo "  ==> typecheck (compiling the copied screens)"
             typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-            (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$typecheck_log" || true
+            typecheck_status=0
+            run_typecheck "$scaffold_dir" "$typecheck_log" || typecheck_status=$?
 
-            authui_errors="$(grep -c '^lunora/auth-ui/' "$typecheck_log" || true)"
-            other_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
-            other_errors=$((other_errors - authui_errors))
-
-            if [[ "$authui_errors" -gt 0 ]]; then
-                echo "  FAIL: $authui_errors type error(s) in the copied auth-ui screens in $tname (see $typecheck_log)"
-                grep '^lunora/auth-ui/' "$typecheck_log" | head -25 | sed 's/^/    /'
-                FAIL+=("$tname(auth-ui:typecheck)")
+            if typecheck_never_ran "$typecheck_status" "$typecheck_log"; then
+                echo "  FAIL: the typecheck command in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+                tail -20 "$typecheck_log" | sed 's/^/    /'
+                FAIL+=("$tname(typecheck:never-ran)")
                 continue
             fi
 
-            if [[ "$other_errors" -gt 0 ]]; then
-                echo "  ==> typecheck OK for lunora/auth-ui/** ($other_errors pre-existing error(s) elsewhere in $tname, not gated here)"
-            else
-                echo "  ==> typecheck OK"
+            ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+            if [[ "$ts_errors" -gt 0 ]]; then
+                echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+                grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
+                FAIL+=("$tname(typecheck)")
+                continue
             fi
+
+            echo "  ==> typecheck OK"
         fi
     fi
 
@@ -523,9 +613,15 @@ for t in "${TEMPLATES[@]}"; do
     fi
     result="unknown"
     for p in "${PASS[@]+"${PASS[@]}"}"; do [[ "$p" == "$t" ]] && result="PASS" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(install)" ]] && result="FAIL(install)" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "${t}(auth-ui:typecheck)" ]] && result="FAIL(typecheck)" && break; done
-    for f in "${FAIL[@]+"${FAIL[@]}"}"; do [[ "$f" == "$t" ]] && result="FAIL(build)" && break; done
+    # A bare template name means the build step failed; anything else is recorded
+    # as `<template>(<stage>)` and renders as `FAIL(<stage>)` — so a new stage
+    # cannot show up in the table as "unknown".
+    for f in "${FAIL[@]+"${FAIL[@]}"}"; do
+        case "$f" in
+            "$t") result="FAIL(build)" && break ;;
+            "$t("*) result="FAIL${f#"$t"}" && break ;;
+        esac
+    done
     for x in "${XFAIL[@]+"${XFAIL[@]}"}"; do [[ "$x" == "$t" ]] && result="XFAIL(expected)" && break; done
     for x in "${XPASS[@]+"${XPASS[@]}"}"; do [[ "$x" == "$t" ]] && result="XPASS(unexpected)" && break; done
     printf "%-20s  %s\n" "$t" "$result"
