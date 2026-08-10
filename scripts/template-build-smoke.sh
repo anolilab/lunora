@@ -120,10 +120,11 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# (react-router + solid-start templates were removed: their build tools
-# (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Lunora
-# is standardized on Vite 8 — see the official CF react-router starter which
-# pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
+# (This used to record react-router and solid-start as removed for supporting only
+# Vite <=7. Both are back: `templates/react-router` and
+# `templates/tanstack-start-solid` exist, pin `vite ^8.0.16`, and pass the matrix.
+# The note is kept as history because the removal is in the git log and a reader
+# finding no trace of it is worse than a dated sentence.)
 #
 # Currently empty: every template builds. It stays as a mechanism because the
 # XPASS branch makes it self-cleaning — an entry that starts passing fails the
