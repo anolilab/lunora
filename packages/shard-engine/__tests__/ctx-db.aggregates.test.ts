@@ -328,6 +328,32 @@ describe("ctx-db aggregates", () => {
             expect(tally).toEqual({ p1: 4, p2: 1 });
         });
 
+        it("does not answer a PARTIALLY-pinned groupBy from the companion", async () => {
+            expect.assertions(2);
+
+            // An index keyed on the full `by` tuple, with the request pinning
+            // only part of it. The companion cannot serve this: the single-row
+            // lookup needs the whole tuple, and the full walk reads every
+            // companion row — so the unpinned groups came back too and the
+            // `where` was silently ignored. It now falls to the scan, which
+            // compiles the predicate.
+            const countByProjectSeq: AggregateIndexDefinitionLike = {
+                by: ["projectId", "seq"],
+                name: "countByProjectSeq",
+                on: "todos",
+                op: "count",
+            };
+            const writer = setupWriter(makeSchema(countByProjectSeq));
+
+            await seed(writer);
+
+            const groups = await writer.groupBy("todos", { by: ["projectId", "seq"], where: { projectId: "p1" } });
+
+            // p2's row (seq 4) must not appear; p1 has four rows, all distinct seq.
+            expect(groups.every((group) => group.key["projectId"] === "p1")).toBe(true);
+            expect(groups.map((group) => group.key["seq"]).toSorted((a, b) => Number(a) - Number(b))).toStrictEqual([0, 1, 2, 3]);
+        });
+
         it("groupBy(by, agg=sum) reduces per group with a where", async () => {
             expect.assertions(1);
 

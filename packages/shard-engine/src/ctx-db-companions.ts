@@ -40,8 +40,10 @@ import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
 import { param } from "./drizzle";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
+import { isLiveForCompanion } from "./query-args";
 import { encodePartitionKey, matchesRankStaticWhere, rankTableName, sortColumnName } from "./rank";
 import type { AggregateIndexDefinitionLike, RankIndexDefinitionLike } from "./schema-types";
+import { mayHoldProjectedValue } from "./sql-projection";
 import type { MutationDelta } from "./types";
 
 /**
@@ -186,6 +188,14 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     // Tracks which (table, aggregateIndex) pairs this ctx-db has already rebuilt
     // so the lazy backfill runs exactly once per index per ctx-db instance.
     const backfilled = new Set<string>();
+
+    /**
+     * The table's soft-delete marker column, or `undefined` when it has none.
+     * Aggregate companions tally LIVE rows only — see {@link isLiveForCompanion}
+     * — so a soft delete removes the row from its group and a restore adds it
+     * back, and the readers can trust the companion instead of always scanning.
+     */
+    const softDeleteFieldFor = (tableName: string): string | undefined => schema.tables[tableName]?.softDeleteMode?.field;
     // Same bookkeeping for rank companions.
     const rankBackfilled = new Set<string>();
 
@@ -200,6 +210,13 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      *
      * Must run **before** the triggering row write — otherwise the rebuild
      * would double-count the row that's about to be stepped.
+     *
+     * **The memo is per ctx-db INSTANCE, and codegen builds one per dispatch** —
+     * so this full scan runs on the first companion touch of every request, and
+     * the incremental deltas it maintains are discarded and recomputed each
+     * time. That cost is why `ctx-db.ts`'s readers gate the companion behind
+     * `scanRefusesAny` on a soft-delete table rather than always preferring it.
+     * Making this marker durable (plan 315) is what retires that gate.
      */
     const ensureBackfilledIndex = (tableName: string, index: AggregateIndexDefinitionLike): void => {
         const cacheKey = `${tableName}::${index.name}`;
@@ -210,13 +227,14 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
 
         const aggTable = aggregateTableName(tableName, index.name);
         const by = index.by ?? [];
+        const softField = softDeleteFieldFor(tableName);
         const tallies = new Map<string, AggregateTally>();
         const rows = runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`).toArray();
 
         for (const row of rows) {
             const record = rowToDocument(row);
 
-            if (!record) {
+            if (!record || !isLiveForCompanion(record, softField)) {
                 continue;
             }
 
@@ -255,10 +273,34 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
      * over the group answers it. Runs AFTER the physical row write, so it sees
      * the post-write source. Returns the extreme (`null` when no numeric row
      * survives); the caller pins `__count__` from its own tracked tally.
+     *
+     * A `bigint` / bytes value is stored as an order-preserving KEY, and
+     * `MIN`/`MAX(json_extract(...))` coerces that padded text to a REAL —
+     * `1e+39` for a group whose real extreme is `9`. The reader refuses that
+     * coercion on its own scan (`assertReducibleBySql`), but this is the write
+     * path: refusing here would break `delete`. So a column that may hold one is
+     * reduced in JS off the decoded documents instead — through
+     * {@link foldAggregateTally}, the same fold both backfills seed a group with,
+     * so the recompute cannot disagree with a rebuild. Same `coerceAggregateNumber` bound as every other
+     * contribution, so a value that could never have been inserted cannot be
+     * recomputed either.
+     *
+     * Not `ORDER BY json_extract(...) LIMIT 1`, which would read one row rather
+     * than the group: the key is order-preserving only against other keys, and
+     * SQLite orders every TEXT after every numeric — so on a mixed `v.any()`
+     * column the extreme would be decided by storage class, not magnitude.
+     *
+     * The test is `mayHoldProjectedValue`, not `isProjectedKind`: the projection
+     * runs on the RUNTIME value type (`sqlComparableProjection` branches on
+     * `typeof value === "bigint"`), so a `v.any()` / `v.union()` / `v.from()`
+     * column holding a bigint is stored as a padded key exactly like a declared
+     * one. Gating on the declared kind sent those columns down the SQL branch and
+     * wrote ~1e39 into the companion — the same silent wrong number, one
+     * declaration away. Over-including is safe here because this branch only
+     * reads documents; the reader's guard must stay narrow because it REFUSES.
      */
     const recomputeExtreme = (tableName: string, index: AggregateIndexDefinitionLike, record: Record<string, unknown>): { value: null | number } => {
         const by = index.by ?? [];
-        const sqlFunction = aggregateSqlFunction(index.op);
         const field = index.field ?? "";
         const conditions: SQL[] = [];
 
@@ -277,11 +319,48 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
             pushEq(key, record[key] ?? null);
         }
 
+        const softField = softDeleteFieldFor(tableName);
+
+        if (softField !== undefined) {
+            // The companion tallies live rows only, so the extreme must be
+            // recomputed over live rows only — otherwise a soft-deleted row
+            // becomes the group's min/max the moment the real one leaves.
+            // eslint-disable-next-line unicorn/no-null -- live means the marker column IS NULL; pushEq's null branch emits exactly that
+            pushEq(softField, null);
+        }
+
         for (const [key, expected] of Object.entries(index.where ?? {})) {
             pushEq(key, expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected);
         }
 
         const whereSql = conditions.length > 0 ? dsql` WHERE ${dsql.join(conditions, dsql` AND `)}` : dsql``;
+        const validator = schema.tables[tableName]?.shape[field];
+
+        if (validator && mayHoldProjectedValue(validator)) {
+            const rows = runDrizzle(
+                sql,
+                dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${whereSql}`,
+            ).toArray();
+            // The canonical reducer, not a second copy of it: this is the same
+            // fold the two backfills seed a group with, so a recomputed extreme
+            // cannot disagree with a rebuilt one. Single-group, so the key is
+            // the empty string and only `value` is read — the caller pins
+            // `__count__` from its own tracked tally.
+            const tallies = new Map<string, AggregateTally>();
+
+            for (const row of rows) {
+                const document = rowToDocument(row);
+
+                if (document) {
+                    foldAggregateTally(tallies, "", index, document);
+                }
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- empty min/max group stores NULL value
+            return { value: tallies.get("")?.value ?? null };
+        }
+
+        const sqlFunction = aggregateSqlFunction(index.op);
         const ref = jsonPathSql(field);
         const row = runDrizzle<{ value: null | number }>(
             sql,
@@ -325,8 +404,30 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
             runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(aggTable)} WHERE ${AGG_KEY} = ${encodedKey} AND ${AGG_COUNT} <= 0`);
         };
 
-        const removes = previous && (!index.where || matchesStaticWhere(previous, index.where)) ? previous : undefined;
-        const adds = next && (!index.where || matchesStaticWhere(next, index.where)) ? next : undefined;
+        // A soft delete is a patch that stamps the marker column, so it arrives
+        // here as an ordinary previous/next pair. Gating both sides on liveness
+        // decomposes it into "remove the live row, add nothing" — and a restore
+        // into its mirror — which is what keeps the companion live-only without
+        // a second code path.
+        const softField = softDeleteFieldFor(tableName);
+        const matchesWhere = (record: Record<string, unknown>): boolean => !index.where || matchesStaticWhere(record, index.where);
+        const qualifies = (record: Record<string, unknown>): boolean => isLiveForCompanion(record, softField) && matchesWhere(record);
+
+        // The companion's magnitude bound belongs to the TABLE, not to today's
+        // tally. Gating the contribution on liveness (above) would otherwise let
+        // a row that is dead on arrival — or patched while dead — carry a value
+        // the REAL `__value__` column cannot hold, because nothing coerces it on
+        // the way in. The throw then lands on `restore()` instead, on a write the
+        // caller cannot fix: the row is accepted and can never be brought back.
+        // So validate the post-image whenever it matches the index's static
+        // `where`, which is exactly the set the bound applied to before
+        // companions became live-only.
+        if (next !== undefined && op !== "count" && matchesWhere(next)) {
+            coerceAggregateNumber(next[field]);
+        }
+
+        const removes = previous && qualifies(previous) ? previous : undefined;
+        const adds = next && qualifies(next) ? next : undefined;
 
         if (!removes && !adds) {
             return;

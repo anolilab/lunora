@@ -947,6 +947,47 @@ const runPlainFetch = (
 const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize: serializeSqlValue };
 
 /**
+ * Whether `field` is stored as an order-preserving sort key rather than as its
+ * value — the condition SQL cannot reduce or group.
+ * @returns `true` when the column is projected (a `v.bigint()` / `v.bytes()` kind)
+ */
+const isProjectedField = (definition: TableDefinitionLike, field: string | undefined): boolean => {
+    const validator = field === undefined ? undefined : definition.shape[field];
+
+    return validator !== undefined && isProjectedKind(validator);
+};
+
+/**
+ * Whether the SQL scan would REFUSE this read — i.e. whether any field it hands
+ * to SQL is stored as a projected key ({@link assertReducibleBySql}). Callers
+ * pass exactly the fields they will assert on, so the gate and the assertion
+ * cannot drift apart.
+ *
+ * **This is what decides whether a `.softDelete()` table uses the companion.**
+ * The companion tallies live rows only (`isLiveForCompanion`), so it is now
+ * correct on such a table — but correct is not the same as cheaper. Reaching it
+ * calls `ensureBackfilled`, and `ensureBackfilledIndex` is an unconditional
+ * TRUNCATE + full rebuild memoised per ctx-db INSTANCE — i.e. per dispatch, and
+ * again per subscription re-run, since codegen's `buildCtx` constructs one each
+ * time. The scan it replaces is a single SQL `COUNT` / `SUM` over
+ * `json_extract`. Routing every soft-delete aggregate through the companion
+ * would trade one C-speed scan for a full JS decode of the table plus a
+ * companion rewrite, on a read, per request.
+ *
+ * So the trade is only worth making when the scan cannot answer at all — which
+ * is exactly the gap this closed: a projected column could not be aggregated on
+ * a soft-delete table at any magnitude. `count()` hands SQL no field, so this
+ * returns `false` for it and it keeps the scan unconditionally.
+ *
+ * The gate is a workaround for the rebuild being per-instance rather than
+ * durable; make that marker durable (plan 315) and every caller of this can go
+ * back to taking the companion unconditionally.
+ * @returns `true` when at least one of `fields` is a projected column
+ */
+const scanRefusesAny = (definition: TableDefinitionLike, fields: ReadonlyArray<string | undefined>): boolean =>
+    fields.some((field) => isProjectedField(definition, field));
+
+/**
  * Refuse a SQL-side reduce or group over a column stored as a projected sort
  * key. `json_extract` hands SQL the key, not the value: `SUM` over a
  * zero-padded bigint key coerces to nonsense (2e+39 for a couple of small
@@ -960,9 +1001,7 @@ const doWhereSqlStrategy: WhereSqlStrategy = { fieldRef: jsonPathSql, serialize:
  * @throws LunoraError `BAD_REQUEST` when `field` is stored as a projected key
  */
 const assertReducibleBySql = (definition: TableDefinitionLike, field: string, label: string): void => {
-    const validator = definition.shape[field];
-
-    if (validator && isProjectedKind(validator)) {
+    if (isProjectedField(definition, field)) {
         throw new LunoraError(
             "BAD_REQUEST",
             `${label}: "${field}" is stored as an order-preserving key, which SQL cannot reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it`,
@@ -2472,8 +2511,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, SCAN_DEP);
 
-            // Soft delete: aggregate over LIVE rows only; AND the scope in and
-            // force the scan (the indexed companion includes deleted rows).
+            // Soft delete: aggregate over LIVE rows only. The scope is ANDed in
+            // for the scan below; the companion needs no help — it tallies live
+            // rows only (`isLiveForCompanion`), so its answer already excludes
+            // soft-deleted rows — which does NOT mean a soft-delete table always
+            // takes it; see `scanRefusesAny`.
             const aggScope = softDeleteScope(definition.softDeleteMode, undefined);
             const effective = mergeWhere(mergeWhere(aggOptions.baseWhere, aggOptions.where), aggScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
@@ -2490,7 +2532,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // sum/avg/min/max in one row lookup. We only attempt it when no
             // baseWhere is set — the RLS predicate isn't a pure equality
             // conjunction, so it falls through to the SQL scan below.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation && !aggScope) {
+            //
+            // A soft-delete table reaches it only when the scan would refuse —
+            // see `scanRefusesAny`.
+            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation && (!aggScope || scanRefusesAny(definition, [aggOptions.field]))) {
                 const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
 
                 if (planned) {
@@ -2577,8 +2622,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             onRead(tableName, SCAN_DEP);
 
             // Soft delete: a `count()` reflects LIVE rows. AND the scope in and
-            // force the scan path (the `__agg_` companion counts deleted rows too,
-            // so the indexed fast-path can't be trusted here).
+            // force the scan path. This is `scanRefusesAny(definition, [])` —
+            // `count()` hands SQL no field, so the scan can always answer it and
+            // is the cheaper of the two; the empty field list is why the
+            // condition degenerates to `!countScope` rather than being spelled
+            // out like its siblings.
             const countScope = softDeleteScope(definition.softDeleteMode, undefined);
             const effective = mergeWhere(mergeWhere(countOptions.baseWhere, countOptions.where), countScope);
             // Rewrite a relation-crossing predicate to a flat semijoin clause
@@ -2701,8 +2749,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // broadcasts as `update` — live LIST queries re-run and drop the
                 // row (they now filter the marker), per-id subscribers see the
                 // stamp. The OCC guard CAS's on the read-time snapshot, same as
-                // patch/replace. Read scoping (not companion removal) is what hides
-                // the row, so search/aggregate stay correct via the read filter.
+                // patch/replace. Read scoping is what hides the row from search
+                // (its companion carries no marker column but the read filters on
+                // it); the aggregate companion instead drops the row below, since
+                // `syncAggregates` gates both sides on liveness.
                 const merged: Record<string, unknown> = { ...existing, [softField]: clock(), _id: id };
 
                 runGuardedWrite(
@@ -2716,7 +2766,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // marker filter — the companion row carries no marker column and a
                 // Vectorize query can't be scoped — so a soft delete REMOVES the row
                 // from them (passing `undefined`/`op: "delete"`), exactly like a
-                // physical delete. `restore()` re-adds both via the patch path.
+                // physical delete. `restore()` re-adds both via the patch path. The
+                // aggregate companion is the exception: it takes both images and the
+                // liveness gate drops the row, per the comment above.
                 syncSearch(tableName, id, merged, existing);
                 // Like rank, the geo companion has no read-time marker filter, so a
                 // soft delete removes the row from it (restore re-adds via patch).
@@ -3120,8 +3172,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
-            // Soft delete: group over LIVE rows only; AND the scope in and force
-            // the scan (the indexed companion includes deleted rows).
+            // Soft delete: group over LIVE rows only. The scope is ANDed in for
+            // the scan; the companion tallies live rows only and prunes a group
+            // once its live count hits 0, so the indexed walk omits the same
+            // empty groups SQL `GROUP BY` does — but it is only taken for a
+            // projected field, per the note on `isProjectedField`.
             const groupScope = softDeleteScope(definition.softDeleteMode, undefined);
             const effective = mergeWhere(mergeWhere(groupOptions.baseWhere, groupOptions.where), groupScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
@@ -3139,10 +3194,28 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // One SELECT, no SQL `GROUP BY`. baseWhere falls through to scan so
             // RLS composes uniformly. Covers every op (count/sum/avg/min/max)
             // now that the companion is op-aware.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation && !groupScope) {
+            // Every field this reader hands to SQL: the `by` keys and the
+            // reducer field. One list, used for both the companion gate and the
+            // refusal assertions below, so a future third SQL-reducing field
+            // cannot be added to one and forgotten in the other.
+            const groupSqlFields = [...groupOptions.by, agg.field];
+
+            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation && (!groupScope || scanRefusesAny(definition, groupSqlFields))) {
                 const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
-                if (planned) {
+                // A request that pins SOME of the index's `by` tuple but not all
+                // of it cannot be served from the companion: the full-walk below
+                // reads every companion row, so `by: ["a", "b"]` with
+                // `where: { a: 1 }` would return the `a !== 1` groups too. The
+                // single-row lookup needs the whole tuple, and there is no
+                // companion-side filter for the rest — so hand a partial pin to
+                // the scan, which compiles the predicate properly. Checked
+                // before `ensureBackfilled` so a request that cannot use the
+                // companion does not pay for rebuilding it.
+                const plannedPartialKeys = planned === undefined ? 0 : Object.keys(planned.partial).length;
+                const plannedByLength = planned?.index.by?.length ?? 0;
+
+                if (planned && (plannedPartialKeys === 0 || plannedPartialKeys === plannedByLength)) {
                     ensureBackfilled(tableName, planned.index);
 
                     const aggTable = aggregateTableName(tableName, planned.index.name);
@@ -3167,9 +3240,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                         return indexedResult;
                     }
 
-                    // Unfiltered (or partially-filtered, future work) → walk
-                    // the whole companion. Each row's __key__ is the
-                    // canonical-JSON encoding written by encodeAggregateKey.
+                    // Unfiltered → walk the whole companion. A partial pin never
+                    // reaches here (it was routed to the scan above), so every
+                    // companion row belongs in the answer. Each row's __key__ is
+                    // the canonical-JSON encoding written by encodeAggregateKey.
                     const rowsIndexed = runDrizzle<{ count: number; key: string; value: null | number }>(
                         sql,
                         dsql`SELECT ${AGG_KEY} AS key, ${AGG_VALUE} AS value, ${AGG_COUNT} AS count FROM ${dsql.identifier(aggTable)}`,
@@ -3188,12 +3262,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            for (const field of groupOptions.by) {
-                assertReducibleBySql(definition, field, `groupBy(${tableName}, { by: [..."${field}"] })`);
-            }
+            // Same `groupSqlFields` the companion gate read: whatever qualified
+            // the companion above is exactly what the scan refuses here.
+            for (const field of groupSqlFields) {
+                if (field === undefined) {
+                    continue;
+                }
 
-            if (agg.field !== undefined) {
-                assertReducibleBySql(definition, agg.field, `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${agg.field}" } })`);
+                const label =
+                    field === agg.field
+                        ? `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${field}" } })`
+                        : `groupBy(${tableName}, { by: [..."${field}"] })`;
+
+                assertReducibleBySql(definition, field, label);
             }
 
             const whereCondition = compileWhereSql(resolved, doWhereSqlStrategy);
@@ -3888,9 +3969,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // rank sync skips re-adding it (the sort fields are unchanged, so its
             // fast path assumes the entry is already present). Force the re-insert
             // here with `previous=undefined` — a pure INSERT, safe because the
-            // entry was definitively dropped on soft delete. Search/aggregates were
-            // kept (read-filtered), so they need nothing extra; the vector re-upsert
-            // rode `patch`'s `onWrite("update")`.
+            // entry was definitively dropped on soft delete. Search was kept
+            // (read-filtered) and the aggregate companion re-added the row on
+            // `patch`'s own `-prev + next` step (the marker going null is what
+            // makes `next` qualify), so neither needs anything extra here; the
+            // vector re-upsert rode `patch`'s `onWrite("update")`.
             if (wasDeleted) {
                 syncRanks(located.tableName, id, undefined, located.row);
             }
