@@ -492,6 +492,13 @@
             # Each leg installs its own language's linter. Pinned by version
             # (or by SHA-256 for the two that ship as a downloaded artifact), so
             # a new release cannot change the rule set under a green PR.
+            #
+            # Six of the seven. swift-format ships no binary on any release and
+            # has no versioned package, so the swift leg has nothing to install:
+            # it uses the toolchain's own copy, prints the version it ran, and
+            # asserts it against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh`. A
+            # runner image whose Swift moves fails that leg by name instead of
+            # quietly linting against a rule set nobody chose.
             - "name": "Install ruff"
               "if": "matrix.sdk.language == 'python'"
               "run": "python -m pip install --disable-pip-version-check ruff==0.16.2"

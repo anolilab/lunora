@@ -17,12 +17,22 @@
 # A missing tool is reported as SKIP, not PASS — a local run should say which
 # check it did not actually perform.
 #
-# In CI, set SDK_LINT_REQUIRE_TOOLS=1 to turn SKIP into a failure. CI installs
+# In CI, set SDK_LINT_REQUIRE_TOOLS=1 to turn SKIP into a failure. CI provides
 # every tool deliberately, so a missing one there means the install broke, and a
 # skipped check that exits 0 is a gate that reads green without having run.
 set -uo pipefail
 
 REQUIRE_TOOLS="${SDK_LINT_REQUIRE_TOOLS:-0}"
+
+# The swift-format minor these Swift sources are formatted against. Six of the
+# seven linters are pinned by the workflow's install step; swift-format ships no
+# installable artifact, so its pin lives here — see the `swift)` leg.
+#
+# Overridable because the same release reports two different versions: the copy
+# in a Swift toolchain prints `6.3.0`, a standalone build of the equivalent tag
+# prints `603.0.0`. Whoever supplies a binary via SWIFT_FORMAT supplies the
+# version to expect from it.
+SWIFT_FORMAT_VERSION="${SWIFT_FORMAT_VERSION:-6.3}"
 
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
@@ -98,15 +108,64 @@ lint_suite() {
             cargo fmt --check && cargo clippy --all-targets -- -D warnings
             ;;
         swift)
-            # `swift format` is a toolchain subcommand from Swift 6.0 on; before
-            # that it is a separate `swift-format` install. Probing the subcommand
-            # keeps an older toolchain a SKIP rather than a bogus lint failure.
-            swift format --version >/dev/null 2>&1 || {
-                missing "swift format"
+            # The one linter here with no install step, because there is nothing
+            # to install: swiftlang/swift-format publishes no binary on any
+            # release, and Homebrew carries a single unversioned formula. So the
+            # tool is the Swift toolchain's own copy — `swift format`, a
+            # subcommand from Swift 6.0 on — and the pin is the assertion below
+            # instead of a version in the workflow.
+            #
+            # `swift format` resolves inside the toolchain and ignores a
+            # `swift-format` on PATH, so SWIFT_FORMAT is the only way to point
+            # this leg at another binary (a build from a pinned tag, say).
+            local swift_format
+            if [ -n "${SWIFT_FORMAT:-}" ]; then
+                swift_format=("$SWIFT_FORMAT")
+            else
+                swift_format=(swift format)
+            fi
+
+            # A Swift 5.x toolchain has no `format` subcommand and fails here.
+            # That is the same "not run" as a missing tool: a SKIP locally, and
+            # under SDK_LINT_REQUIRE_TOOLS=1 a failure naming what was wanted.
+            local swift_format_version
+            swift_format_version="$("${swift_format[@]}" --version 2>/dev/null)" || {
+                missing "${swift_format[*]} (this repo pins swift-format ${SWIFT_FORMAT_VERSION}.x, which ships with a Swift ${SWIFT_FORMAT_VERSION} toolchain)"
                 return 3
             }
+
+            # A different minor is a different rule set, which is exactly what
+            # the other six pins prevent. The runner image's default Xcode moves
+            # on GitHub's schedule, so this drift is real and must be loud.
+            local swift_format_drifted=0
+            local swift_format_note="swift-format $swift_format_version"
+
+            if [ "${swift_format_version%.*}" != "$SWIFT_FORMAT_VERSION" ]; then
+                swift_format_drifted=1
+                swift_format_note="$swift_format_note, NOT the pinned $SWIFT_FORMAT_VERSION.x"
+            fi
+
+            # Reported, not merely checked: the sibling legs' versions are in
+            # their install step's log, and this leg has no install step to read.
+            # The note reaches the summary line, which a green run prints too.
+            printf '%s\n' "$swift_format_note" >"$WORK/swift.tool"
+
+            if [ "$swift_format_drifted" = 1 ]; then
+                printf '%s\n' \
+                    "swift-format $swift_format_version, but these sources are formatted against ${SWIFT_FORMAT_VERSION}.x — a different minor is a different rule set." \
+                    "Verify the new rule set, then bump SWIFT_FORMAT_VERSION in sdks/lint-all.sh — or run SWIFT_FORMAT=<binary> SWIFT_FORMAT_VERSION=<its minor> to lint with a pinned build."
+
+                # Enforced only where the pin is the point. In CI that is the
+                # gate. Locally the summary line says which version ran and the
+                # lint proceeds — an unpinned rule set still catches the mistake
+                # the run was for, and not every contributor has this Xcode.
+                if [ "$REQUIRE_TOOLS" = "1" ]; then
+                    return 1
+                fi
+            fi
+
             cd "$ROOT/sdks/swift" || return 1
-            swift format lint --recursive --strict Sources/Lunora Tests
+            "${swift_format[@]}" lint --recursive --strict Sources/Lunora Tests
             ;;
         java)
             command -v google-java-format >/dev/null || {
@@ -172,8 +231,15 @@ failed=0
 for lang in "${LANGS[@]}"; do
     status="$(cat "$WORK/$lang.status" 2>/dev/null || echo 1)"
 
+    # A leg whose tool version is not fixed by an install step writes it to
+    # `$lang.tool`, so even a green log records which rule set ran.
+    tool=""
+    if [ -s "$WORK/$lang.tool" ]; then
+        tool=" [$(cat "$WORK/$lang.tool")]"
+    fi
+
     case "$status" in
-        0) printf 'PASS  %s\n' "$lang" ;;
+        0) printf 'PASS  %s%s\n' "$lang" "$tool" ;;
         3)
             if [ "$REQUIRE_TOOLS" = "1" ]; then
                 printf 'FAIL  %s (%s, and SDK_LINT_REQUIRE_TOOLS=1)\n' "$lang" "$(head -1 "$WORK/$lang.log")"
@@ -183,7 +249,7 @@ for lang in "${LANGS[@]}"; do
             fi
             ;;
         *)
-            printf 'FAIL  %s (exit %s)\n' "$lang" "$status"
+            printf 'FAIL  %s%s (exit %s)\n' "$lang" "$tool" "$status"
             failed=1
             ;;
     esac

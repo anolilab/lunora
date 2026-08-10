@@ -95,8 +95,21 @@ cannot drift.
 | java     | `google-java-format --aosp --dry-run` | `javac -Xlint:all -Werror` | — (`--aosp` = 4sp) |
 | kotlin   | `ktlint`                              | `ktlint`                   | `.editorconfig`    |
 
-Every tool is pinned in CI by version or by SHA-256, so a new release cannot
-change the rule set under a green PR. A tool missing locally reports `SKIP`, never
+Six of the seven tools are pinned in CI by version or by SHA-256, so a new
+release cannot change the rule set under a green PR. swift-format is the
+exception, and not by choice: it ships no binary on any release and no versioned
+package, so the swift leg uses the Swift toolchain's own copy. Its pin is
+therefore an assertion — `SWIFT_FORMAT_VERSION` in `lint-all.sh`, checked against
+the version the tool reports, which the summary line prints either way
+(`PASS swift [swift-format 6.3.0]`). A different minor is a note locally and,
+under `SDK_LINT_REQUIRE_TOOLS=1`, a failure naming both versions, so a runner
+image whose Swift moves cannot change the rule set quietly. To lint with a build
+of your own, pass it and the version to expect from it —
+`SWIFT_FORMAT=<path> SWIFT_FORMAT_VERSION=603.0`, since a standalone build of the
+release a toolchain calls `6.3.0` reports `603.0.0`, and `swift format` ignores a
+`swift-format` on `PATH`.
+
+A tool missing locally reports `SKIP`, never
 `PASS` — not everyone has seven toolchains, and a check that did not run must not
 read as one that passed. CI sets `SDK_LINT_REQUIRE_TOOLS=1`, which turns that
 `SKIP` into a failure: there the install step just ran, so a missing tool means it
