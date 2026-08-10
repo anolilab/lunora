@@ -380,8 +380,10 @@ describe("global search provisioning", () => {
 
             expect(both.map((document) => document["_id"])).toStrictEqual(["a"]);
 
-            // And the prefix term alone still matches both of its documents, so
-            // the range half is doing work rather than silently matching nothing.
+            // And the prefix term alone still matches the document holding both
+            // of its tokens ("wonderful", "world"), so the range half is doing
+            // work rather than silently matching nothing. "wandering" is outside
+            // the `wo` range, so document "c" must not come back.
             const prefixOnly = await runSqlSearch(
                 exec,
                 dialect,
@@ -391,7 +393,7 @@ describe("global search provisioning", () => {
                 10,
             );
 
-            expect(prefixOnly.map((document) => document["_id"]).sort()).toStrictEqual(["a"]);
+            expect(prefixOnly.map((document) => document["_id"])).toStrictEqual(["a"]);
         });
 
         it("prefix-matches a final token ending in an astral (surrogate-pair) character (plan 272)", async () => {
