@@ -257,7 +257,7 @@ Three constraints are deliberate:
   publish. Keep the list to indexed columns; `@lunora/advisor`'s
   `filter-without-index` lint flags the static cases. This bounds _which_ columns
   are reachable, not the cost of every operator: `contains` compiles to a
-  leading-wildcard `LIKE`, and `ne` / `notIn` / `isNull: false` are non-sargable
+  substring position test, and `ne` / `notIn` / `isNull: false` are non-sargable
   too, so all of them scan regardless of the index.
 - **No `AND` / `OR` / `NOT` trees.** A flat field⇒predicate map keeps every
   filter routable to an index. Compose richer logic inside the procedure.
@@ -265,8 +265,9 @@ Three constraints are deliberate:
 `limit` is clamped into `[1, maxLimit]` rather than rejected, and `orderBy`
 fields outside the allow-list are refused by the validator and re-checked in
 `toQueryArgs`. `in` / `notIn` arrays are capped at `maxInValues` (default 100)
-because each element becomes a bound parameter, and `orderBy` at `maxOrderBy`
-(default 8).
+to bound request size and the scan the predicate costs — not to stay under the
+statement's parameter ceiling, which the `where` compiler handles by binding a
+long list as one JSON parameter. `orderBy` is capped at `maxOrderBy` (default 8).
 
 `lunora introspect` emits `list` procedures built on this helper — see the
 [CLI docs](/docs/packages/cli#lunora-introspect).
