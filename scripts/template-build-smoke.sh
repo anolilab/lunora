@@ -172,6 +172,34 @@ typecheck_skip_reason() {
 
 TYPECHECK_UNSUPPORTED=("astro" "nuxt" "sveltekit")
 
+# ---------------------------------------------------------------------------
+# Typecheck a scaffold, preferring the template's OWN `typecheck` script.
+#
+# A bare `tsc --noEmit` is wrong for frameworks that emit route types from a
+# separate generator: react-router ships
+# `lunora codegen && react-router typegen && tsc`, and without the typegen step
+# every `./+types/<route>` import fails to resolve. The template already knows
+# the right incantation — run it rather than second-guessing it here.
+# ---------------------------------------------------------------------------
+run_typecheck() {
+    local scaffold_dir="$1"
+    local log="$2"
+    local has_script
+
+    has_script="$(node -e "
+        try {
+            const p = require('$scaffold_dir/package.json');
+            process.stdout.write(p.scripts && p.scripts.typecheck ? 'yes' : 'no');
+        } catch { process.stdout.write('no'); }
+    " 2>/dev/null)"
+
+    if [[ "$has_script" == "yes" ]]; then
+        (cd "$scaffold_dir" && pnpm run typecheck 2>&1) > "$log" || true
+    else
+        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$log" || true
+    fi
+}
+
 is_typecheck_unsupported() {
     local name="$1"
     for s in "${TYPECHECK_UNSUPPORTED[@]+"${TYPECHECK_UNSUPPORTED[@]}"}"; do
@@ -457,7 +485,7 @@ for tname in "${TEMPLATES[@]}"; do
         fi
 
         typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-        (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$typecheck_log" || true
+        run_typecheck "$scaffold_dir" "$typecheck_log"
 
         ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
         if [[ "$ts_errors" -gt 0 ]]; then
@@ -489,37 +517,31 @@ for tname in "${TEMPLATES[@]}"; do
     # the framework's own route types, and without those `tsc` drowns in
     # `Cannot find module '#lunora/_generated/server.js'`.
     #
-    # Only diagnostics whose path is under `lunora/auth-ui/` fail the run. The
-    # templates carry unrelated type errors of their own (a `fontFamily` in the
-    # Solid template's `__root.tsx`, route types that need a build that failed) and
-    # this gate is not the place to litigate them — it answers one question: does
-    # the payload compile under this meta-framework's tsconfig? Unrelated errors
-    # are counted and printed so they stay visible.
+    # EVERY diagnostic fails the run, not just ones under `lunora/auth-ui/`. This
+    # used to gate the payload only and merely count the templates' own errors,
+    # on the reasoning that they were somebody else's problem — which let nine of
+    # them accumulate, two of which were real defects (a `LunoraProvider url=`
+    # prop that does not exist, so the provider mounted without a client). They
+    # are all fixed now, so the cheapest way to keep them fixed is to stop
+    # distinguishing.
     if [[ "$AUTHUI_ADDED" == "yes" ]]; then
         if is_typecheck_unsupported "$tname"; then
             echo "  ==> NOTICE: no in-scaffold typecheck for $tname ($(typecheck_skip_reason "$tname"))"
             TYPECHECK_SKIPPED+=("$tname")
         else
-            echo "  ==> tsc --noEmit (compiling the copied screens)"
+            echo "  ==> typecheck (compiling the copied screens)"
             typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
-            (cd "$scaffold_dir" && pnpm exec tsc --noEmit 2>&1) > "$typecheck_log" || true
+            run_typecheck "$scaffold_dir" "$typecheck_log"
 
-            authui_errors="$(grep -c '^lunora/auth-ui/' "$typecheck_log" || true)"
-            other_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
-            other_errors=$((other_errors - authui_errors))
-
-            if [[ "$authui_errors" -gt 0 ]]; then
-                echo "  FAIL: $authui_errors type error(s) in the copied auth-ui screens in $tname (see $typecheck_log)"
-                grep '^lunora/auth-ui/' "$typecheck_log" | head -25 | sed 's/^/    /'
-                FAIL+=("$tname(auth-ui:typecheck)")
+            ts_errors="$(grep -c 'error TS' "$typecheck_log" || true)"
+            if [[ "$ts_errors" -gt 0 ]]; then
+                echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+                grep 'error TS' "$typecheck_log" | head -25 | sed 's/^/    /'
+                FAIL+=("$tname(typecheck)")
                 continue
             fi
 
-            if [[ "$other_errors" -gt 0 ]]; then
-                echo "  ==> typecheck OK for lunora/auth-ui/** ($other_errors pre-existing error(s) elsewhere in $tname, not gated here)"
-            else
-                echo "  ==> typecheck OK"
-            fi
+            echo "  ==> typecheck OK"
         fi
     fi
 
