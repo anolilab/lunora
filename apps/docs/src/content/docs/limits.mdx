@@ -93,6 +93,33 @@ Two are yours to respect, because no rewrite can absorb them:
 | Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                          |
 | `delaySeconds`      | **24 h**              | Longer schedules → `@lunora/scheduler`                 |
 
+## Pipelines
+
+| Limit                 | Value      | Implication                                                        |
+| --------------------- | ---------- | ------------------------------------------------------------------ |
+| Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call — chunk a large batch |
+| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                            |
+| Streams / account     | **20**     | Open-beta ceiling, raisable by request                             |
+| Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                             |
+| Sinks / account       | **20**     | Open-beta ceiling, raisable by request                             |
+
+`send` accepts one record or an array and forwards the array as a single
+ingestion call, so the 5 MB ceiling is a property of what you pass it. Nothing
+measures it locally — the byte count would mean serializing every record twice
+on an egress path — so a batch past the limit is rejected by Cloudflare rather
+than by Lunora. Split large batches across calls.
+
+## Workers AI + Vectorize
+
+| Limit                     | Value      | Implication                                                        |
+| ------------------------- | ---------- | ------------------------------------------------------------------ |
+| Vector metadata           | **10 KiB** | `defineRag` stores chunk text here unless you supply a `textStore` |
+| `topK` with full metadata | **20**     | Rises to **100** once a `textStore` moves text out                 |
+
+A `chunkSize` that could not fit the metadata ceiling is rejected when the RAG
+is defined, rather than on every failed upsert. Supplying a `textStore` keeps
+chunk text out of the vector entirely and lifts both limits.
+
 ## Workers KV
 
 | Limit            | Value            | Implication                                |

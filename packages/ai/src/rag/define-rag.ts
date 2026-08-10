@@ -21,6 +21,15 @@ import type {
 } from "./types";
 
 const DEFAULT_CHUNK_SIZE = 1000;
+
+/**
+ * Vectorize's per-vector metadata ceiling, in bytes.
+ *
+ * In the default (metadata) mode each chunk's text is stored as vector metadata
+ * alongside its bookkeeping keys, so the chunk has to fit inside this. Supplying
+ * a `textStore` moves the text out and lifts the constraint entirely.
+ */
+const VECTORIZE_METADATA_BYTES = 10 * 1024;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
 
@@ -241,6 +250,20 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
     if (!Number.isInteger(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `chunkOverlap` must be a non-negative integer smaller than `chunkSize`");
+    }
+
+    // Without a `textStore` the chunk text rides in vector metadata, which
+    // Vectorize caps at 10 KiB — so a chunk larger than that can never be
+    // upserted, and every write would fail at the far side with no hint that
+    // `chunkSize` is the cause. Compared in characters against a byte ceiling on
+    // purpose: one character is at least one byte, so this rejects only sizes
+    // that cannot fit even in pure ASCII. A multi-byte corpus can still exceed
+    // the cap under this bound, and that is the case `textStore` exists for.
+    if (config.textStore === undefined && chunkSize > VECTORIZE_METADATA_BYTES) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} cannot fit Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit — lower it, or supply \`textStore\` to keep chunk text out of metadata`,
+        );
     }
 
     const defaultTopK = config.topK ?? DEFAULT_TOP_K;
