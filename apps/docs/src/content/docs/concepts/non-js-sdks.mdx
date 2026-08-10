@@ -78,17 +78,23 @@ your build at the generated directory:
 
 Every language implements the full wire codec, the stable subscription key, RPC,
 live subscriptions, the shape/poke protocol and resume-across-reconnect, and every
-client is safe to share across threads.
+client is safe to share across threads. All seven get typed argument and result
+models generated from your schema.
 
-Two deliberate gaps:
+One deliberate gap:
 
-- **Typed models are not available on the JVM.** quicktype's Java and Kotlin
-  backends rename fields (a wire `channelId` becomes `channelID`) and emit no
-  mapping metadata, so a generated model cannot be projected back onto the wire.
-  Sending the wrong key silently is worse than staying untyped, so both take
-  wire-shaped arguments.
 - **Optimistic updates and the offline queue are JS-only.** The non-JS clients
   speak the protocol; they do not implement the client-side mutation queue.
+
+Two things are worth knowing about the models everywhere:
+
+- **An argument or result carrying a `v.bigint()` or `v.bytes()` stays untyped.**
+  JSON Schema describes both as a plain integer and a plain string, but the wire
+  needs a tagged value no generated field can produce — so no model is emitted and
+  the call takes wire values directly. `lunora sdk generate` names the functions.
+- **A result is only typed if you declare `.output()`.** Without one the return
+  type is inferred by TypeScript and absent from the schema, so the SDK hands back
+  its language's `any` rather than guessing a shape.
 
 HTTP and the socket are injected in every language rather than assumed, so you
 keep your own stack, timeouts, retries and socket library — and the conformance

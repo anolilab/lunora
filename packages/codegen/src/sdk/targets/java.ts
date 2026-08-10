@@ -1,14 +1,15 @@
 /**
- * Java SDK target. Emits `lunoraapi/Api.java` — and no model files — beside a
- * vendored copy of the `sdks/java` transport. The section after the layout is why
- * there are no models, and holds the shared JVM reasoning that
- * `targets/kotlin.ts` points at.
+ * Java SDK target. Emits `lunoraapi/Api.java` plus one model file per class under
+ * `lunoraapi/models/`, beside a vendored copy of the `sdks/java` transport. The
+ * section after the layout is why those models are emitted here rather than by
+ * quicktype, and holds the shared JVM reasoning that `targets/kotlin.ts` points at.
  *
  * ## Layout
  *
  * ```
- * <out>/dev/lunora/*.java   the vendored transport, package dev.lunora
- * <out>/lunoraapi/Api.java  the generated surface, package lunoraapi
+ * <out>/dev/lunora/*.java         the vendored transport, package dev.lunora
+ * <out>/lunoraapi/Api.java        the generated surface, package lunoraapi
+ * <out>/lunoraapi/models/*.java   the generated models, package lunoraapi.models
  * ```
  *
  * Package-per-directory under one root, because that is what `javac` searches:
@@ -20,28 +21,32 @@
  * ```
  *
  * No build file is emitted. Java has no single one to emit — Maven and Gradle
- * would each need their own, and neither is required: the transport has no
- * dependencies (Java SE ships no JSON, so `Json.java` is hand-rolled) and the
- * generated surface takes wire-shaped maps, so a plain source root is complete.
- * Consumers on a build tool add `<out>` as an extra source directory.
+ * would each need their own, and neither is required: nothing here has a
+ * dependency (Java SE ships no JSON, so `Json.java` is hand-rolled, and the models
+ * are plain classes), so a source root is complete. Consumers on a build tool add
+ * `<out>` as an extra source directory.
  *
- * ## Why the JVM targets emit no typed models
+ * ## Why the JVM models are emitted from the schema, not by quicktype
  *
- * quicktype's JVM backends RENAME properties — a wire `channelId` becomes a
- * field `channelID` — and under `just-types` they emit no mapping metadata at
- * all. So a generated model cannot be projected back onto the wire: reflection
- * over its accessors yields `channelID`, which the server rejects, and
- * recovering the real name would mean replicating quicktype's renaming rules,
- * exactly the re-derivation this design forbids everywhere else. A typed model
- * that silently sends wrong keys is worse than none, so both surfaces take
- * wire-shaped arguments and no model file is written.
+ * quicktype's JVM backends RENAME properties — a wire `channelId` becomes a field
+ * `channelID` — and under `just-types` they emit no mapping metadata at all. So a
+ * model they render cannot be projected back onto the wire: reflection over its
+ * accessors yields `channelID`, which the server rejects, and recovering the real
+ * name would mean replicating quicktype's renaming rules, exactly the
+ * re-derivation this design forbids everywhere else.
  *
- * The compile check does not catch this class of bug — the generated code type
- * checks perfectly and throws at the first call — which is why it was found by
- * running an encode, not by building. `generated_check/GeneratedSmoke.java`
+ * So neither JVM target sets `quicktype`. Both implement `renderModels` instead and
+ * emit from the JSON Schema, whose property names ARE the wire names — see
+ * {@link file://../jvm-models.ts} for the mapping. There is no renamer to fight
+ * there: `toWire()`/`fromWire()` write the schema's own key as a string literal,
+ * and the derived field identifier never reaches the wire.
+ *
+ * The compile check does not catch the class of bug this replaced — the generated
+ * code type checks perfectly and throws at the first call — which is why it was
+ * found by running an encode, not by building. `sdks/smoke/java/GeneratedSmoke.java`
  * exists for that, and asserts the wire key `channelId` specifically.
  *
- * ## What was measured, so nobody re-runs the investigation
+ * ## What was measured about quicktype, so nobody re-runs the investigation
  *
  * Against quicktype-core 26.0.0 (`dist/language/{Java,Kotlin}/language.d.ts`
  * is the exhaustive option list — the CLI's `--help` is not).
@@ -90,31 +95,28 @@
  * `toValue()`/`forValue()` and does not have this problem. Only a `framework`
  * (a dependency) restores the mapping for Kotlin.
  *
- * **Java has a third problem, and it is the one with a fix.** The Java
- * backend's output through `quicktype()` is not compilable Java at all: it
- * concatenates one virtual file per class, so a single `Models.java` carries
- * repeated `package` and `import` clauses and multiple public classes (`javac`:
- * "class, interface, enum or record expected"). `quicktypeMultiFile`, which
- * quicktype-core exports, returns them keyed by filename and each file is
- * clean. That is worth knowing before anyone starts, but it is not the blocker.
+ * **A third Java problem, now avoided rather than solved.** The Java backend's
+ * output through `quicktype()` is not compilable Java at all: it concatenates one
+ * virtual file per class, so a single `Models.java` carries repeated `package` and
+ * `import` clauses and multiple public classes (`javac`: "class, interface, enum or
+ * record expected"). `jvm-models.ts` emits one file per class, so the shape that
+ * fails never arises.
  *
- * ## What would actually unlock this
+ * ## What was done instead
  *
- * Not a renderer option — there isn't one. Either subclass the exported
- * `JavaRenderer`/`KotlinRenderer` so they emit a dependency-free `toWire()`
- * (their `annotationsForAccessor` hook already receives the `jsonName`, and
- * `ConvenienceRenderer.forEachClassProperty` yields name/`jsonName` pairs, so
- * the mapping would be quicktype's own rather than re-derived), or stop using
- * quicktype for the JVM models and emit them from the schema here. Both mean
- * writing a marshalling emitter for two languages against quicktype's
- * protected API or none of it — precisely the work the other five targets get
- * for free, and a large exception to `target.ts`'s contract that a target
- * contributes a backend name and renderer options. Worth doing when someone
- * needs typed JVM models; not before.
+ * Emit the models from the JSON Schema (`jvm-models.ts`), which is the second of
+ * the two options this comment used to leave open. The first — subclassing the
+ * exported `JavaRenderer`/`KotlinRenderer` so they emit a dependency-free
+ * `toWire()` — was not taken: it buys quicktype's own `jsonName` mapping at the
+ * cost of building against its protected API for two languages, and the schema
+ * already carries the wire names outright. `renderModels` on {@link SdkTarget} is
+ * the seam, so this stays a two-target exception rather than a change to how the
+ * other five are rendered.
  */
 
+import { javaModelFiles, MODEL_PACKAGE } from "../jvm-models";
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("java")
@@ -190,34 +192,52 @@ const memberName = (raw: string): string => {
 const verbConstant = (verb: string): string => `Client.Verb.${verb.toUpperCase()}`;
 
 /**
- * One function as a method posting the RPC envelope.
+ * The `args` parameter's type, and the expression that puts it on the wire.
  *
- * Arguments are a wire-shaped `Map` rather than a generated model — see the
- * file header for why the JVM backends cannot supply one that round-trips.
+ * A declared model is taken by value and projected through its own `toWire()`. A
+ * schema with no model — no declared shape, or a `v.bigint()`/`v.bytes()` that no
+ * generated field can carry — keeps the wire-shaped `Map`, which is the untyped
+ * escape hatch the CLI's `unrepresentable` warning tells the caller to use.
  */
-const renderCall = (method: SdkMethod): string =>
-    [
+const argsParameter = (method: SdkMethod): { payload: string; type: string } =>
+    method.argsType === undefined
+        ? { payload: "args", type: "java.util.Map<String, Object>" }
+        : { payload: "args == null ? null : args.toWire()", type: method.argsType };
+
+/** One function as a method posting the RPC envelope. */
+const renderCall = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+    const call = `client.call(\n                ${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", ${args.payload}, shardKey)`;
+
+    return [
         `    /** ${commentText(method.summary)} */`,
-        `    public Object ${memberName(method.functionName)}(java.util.Map<String, Object> args, String shardKey) {`,
-        `        return client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", args, shardKey);`,
+        `    public ${method.resultType ?? "Object"} ${memberName(method.functionName)}(${args.type} args, String shardKey) {`,
+        // A typed result is re-read through the model's own reader; an untyped one
+        // is handed back as the decoded wire value.
+        `        return ${method.resultType === undefined ? call : `${method.resultType}.fromWire(${call})`};`,
         `    }`,
     ].join("\n");
+};
 
 /**
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod): string =>
-    [
+const renderSubscribe = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+
+    return [
         `    /** live ${commentText(method.summary)} — re-runs on every write to the tables it reads. */`,
         `    public Runnable subscribe${toPascalCase(method.functionName)}(`,
-        `            java.util.Map<String, Object> args,`,
+        `            ${args.type} args,`,
         `            java.util.function.Consumer<Object> onData,`,
         `            java.util.function.Consumer<Client.SubscriptionError> onError,`,
         `            String shardKey) {`,
-        `        return client.subscribe("${stringLiteral(method.functionPath)}", args, onData, onError, shardKey);`,
+        `        return client.subscribe(`,
+        `                "${stringLiteral(method.functionPath)}", ${args.payload}, onData, onError, shardKey);`,
         `    }`,
     ].join("\n");
+};
 
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
@@ -246,11 +266,17 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
         .map((namespace) => `        this.${memberName(namespace.name)} = new ${toPascalCase(namespace.name)}Api(client);`)
         .join("\n");
 
+    // Only the models the surface actually references. `withDeclaredModels` has
+    // already cleared any name the emitter did not declare, so every import here
+    // resolves — an unused or dangling one would fail `javac -Xlint:all`.
+    const modelImports = referencedModels(namespaces).map((name) => `import ${MODEL_PACKAGE}.${name};\n`);
+
     const api = [
         GENERATED_HEADER,
         `package ${PACKAGE_NAME};\n`,
         `\n`,
         `import dev.lunora.Client;\n`,
+        ...modelImports,
         `\n`,
         `/** Typed entry point: \`new Api(client).<namespace>.<function>(args, shardKey)\`. */\n`,
         `public final class Api {\n`,
@@ -269,8 +295,9 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
 const javaTarget: SdkTarget = {
     id: "java",
     render,
+    renderModels: javaModelFiles,
     // Nothing: the transport is `java.util`, `java.net` and `java.math`, and the
-    // generated surface takes `Map<String, Object>` rather than a model.
+    // models are plain classes with a hand-written `toWire()`.
     requires: [],
     // `test/` is not copied: it asserts against `protocol/fixtures/`, which is not
     // part of the output, so it could not run in a consumer's tree.

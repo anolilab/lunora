@@ -1,11 +1,18 @@
 /**
- * The model layer: JSON Schema → data classes, via `quicktype-core`.
+ * The model layer for the five targets quicktype can serve: JSON Schema → data
+ * classes, via `quicktype-core`.
  *
- * This is the part that does NOT get re-written per language. quicktype already
+ * This is the part those five do not re-write per language. quicktype already
  * knows how each of its backends spells a field, maps a wire `camelCase` key
  * onto the local convention, renders an `anyOf`-of-consts as an enum, and makes
  * an absent-from-`required` property optional. A target contributes a backend
  * name and renderer options; everything else is shared.
+ *
+ * The two JVM targets are the exception, and they set no `quicktype` at all —
+ * their backends rename properties and emit no mapping metadata, so a model they
+ * render cannot be projected back onto the wire. They implement
+ * `SdkTarget.renderModels` and emit from the schema instead; see
+ * {@link file://./jvm-models.ts}, and `targets/java.ts` for the measurements.
  */
 
 import type { OpenRpcDocument } from "./spec";

@@ -797,6 +797,7 @@ interface SdkTarget {
         rendererOptions?: Record<string, string>;
     };
     render: (input: SdkRenderInput) => Record<string, string>;
+    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
     requires: ReadonlyArray<string>;
     vendor: ReadonlyArray<SdkVendorEntry>;
 }

@@ -3,7 +3,8 @@
  *
  * Everything language-neutral (parsing, model naming, kind→verb, grouping) is
  * already done by {@link file://./spec.ts} before a target is called. A target
- * supplies which quicktype backend renders its models, how it spells a member
+ * supplies which quicktype backend renders its models (or, for the two JVM
+ * targets, a {@link SdkTarget.renderModels} of its own), how it spells a member
  * name, the file text itself, and — since the transport is COPIED into the
  * output rather than installed from a registry — where that transport lands.
  *
@@ -47,11 +48,17 @@
 
 import type { LanguageName } from "quicktype-core";
 
-import type { SdkNamespace } from "./spec";
+import type { OpenRpcDocument, SdkNamespace } from "./spec";
 
 /** What a target renders from. */
 interface SdkRenderInput {
-    /** Rendered model source from quicktype, to be written as the target's model file. */
+    /**
+     * The rendered model source, to be written as the target's model file.
+     *
+     * Empty for a target that emits its own model FILES via
+     * {@link SdkTarget.renderModels} — those are already written, and this string
+     * exists only so the declared-model reconciliation reads one shape.
+     */
     models: string;
     /** Namespaces and their functions, already sorted. */
     namespaces: ReadonlyArray<SdkNamespace>;
@@ -86,15 +93,11 @@ interface SdkTarget {
 
     /**
      * The quicktype backend + renderer options that produce this target's
-     * models, or absent when the target emits none.
+     * models, or absent when the target emits its own (see
+     * {@link SdkTarget.renderModels}) or none at all.
      *
      * `LanguageName` is quicktype's own union, so a target naming a backend
      * quicktype does not ship fails to compile rather than at run time.
-     *
-     * Optional because the JVM targets genuinely have no model layer — see
-     * their headers. Declaring a backend they discard cost a full render pass
-     * per invocation and made every predicted name look declared, so the CLI
-     * reported nothing while the surface referenced nothing.
      */
     quicktype?: { lang: LanguageName; rendererOptions?: Record<string, string> };
 
@@ -109,6 +112,25 @@ interface SdkTarget {
      * directory (Python, Ruby, Java, Kotlin) emit no manifest.
      */
     render: (input: SdkRenderInput) => Record<string, string>;
+
+    /**
+     * Emit this target's models from the schema directly, INSTEAD of quicktype,
+     * as file contents keyed by path relative to the output directory.
+     *
+     * Present only for the two JVM targets, and the exception is earned rather
+     * than a preference: quicktype's Java and Kotlin backends rename properties
+     * and, under `just-types`, emit no mapping metadata, so a model they render
+     * cannot be projected back onto the wire — and the only complete mapping
+     * they offer requires a Jackson / Klaxon / kotlinx dependency, which is the
+     * one thing these JDK-only transports are defined not to have.
+     * `targets/java.ts` records every option that was measured.
+     *
+     * A MAP rather than the single string quicktype returns, because Java takes
+     * one file per class: its single-file render is not compilable Java at all.
+     * The values are still joined for {@link SdkRenderInput.models}, so the
+     * declared-model reconciliation is the same code for every target.
+     */
+    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
 
     /**
      * THIRD-PARTY packages a consuming project must still install, reported by

@@ -1,12 +1,13 @@
 /**
- * Kotlin SDK target. Emits `lunoraapi/Api.kt` beside a vendored copy of the
- * `sdks/kotlin` transport.
+ * Kotlin SDK target. Emits `lunoraapi/Api.kt` and `lunoraapi/models/Models.kt`
+ * beside a vendored copy of the `sdks/kotlin` transport.
  *
  * ## Layout
  *
  * ```
- * <out>/dev/lunora/*.kt   the vendored transport, package dev.lunora
- * <out>/lunoraapi/Api.kt  the generated surface, package lunoraapi
+ * <out>/dev/lunora/*.kt            the vendored transport, package dev.lunora
+ * <out>/lunoraapi/Api.kt           the generated surface, package lunoraapi
+ * <out>/lunoraapi/models/Models.kt the generated models, package lunoraapi.models
  * ```
  *
  * Kotlin resolves by package declaration, not by directory, so `kotlinc <out>`
@@ -23,29 +24,32 @@
  * and none is needed — the transport hand-rolls `Json.kt` precisely so the JVM's
  * missing JSON costs no dependency.
  *
- * ## Why this target emits no typed models
+ * ## Why the models come from the schema and not from quicktype
  *
  * The same reason as the Java target, which carries the measurements for both:
  * quicktype's JVM backends RENAME properties — a wire `channelId` becomes
- * `channelID` — and under `just-types` they emit no mapping metadata, so a
- * generated model cannot be projected back onto the wire. A typed model that
- * silently sends wrong keys is worse than none, so the surface takes
- * wire-shaped arguments.
+ * `channelID` — and under `just-types` they emit no mapping metadata, so a model
+ * they render cannot be projected back onto the wire. So this target sets no
+ * `quicktype` backend and implements `renderModels` instead; the JSON Schema's
+ * property names ARE the wire names, which is what makes that sound. See
+ * {@link file://../jvm-models.ts}.
  *
- * Kotlin is the harder of the two, and the extra reason is worth stating here
- * rather than only in `targets/java.ts`: under `just-types` this backend also
+ * Kotlin was the harder of the two, and the extra reason is worth keeping here
+ * rather than only in `targets/java.ts`: under `just-types` that backend also
  * erases enum wire values. A `v.union(v.literal("text"), v.literal("image"))`
  * renders as `enum class Kind { Image, Text }` with the strings `"text"` and
- * `"image"` nowhere in the output, so even a perfect property-name projection
- * could not encode the committed fixture's own `kind` argument. Java's
- * `just-types` enum keeps `toValue()`/`forValue()`. Restoring the mapping means
+ * `"image"` nowhere in the output, so even a perfect property-name projection could
+ * not have encoded the committed fixture's own `kind` argument. Java's `just-types`
+ * enum keeps `toValue()`/`forValue()`; restoring the mapping for Kotlin meant
  * picking a `framework` (`jackson`, `klaxon`, `kotlinx`), each of which drags a
- * third-party library into a transport that hand-rolls `Json.kt` precisely to
- * avoid one.
+ * third-party library into a transport that hand-rolls `Json.kt` precisely to avoid
+ * one. The emitted enum carries the value itself — `enum class Kind(val wireValue:
+ * String)` — so nothing is lost and nothing is installed.
  */
 
+import { kotlinModelFiles, MODEL_PACKAGE } from "../jvm-models";
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
+import { commentText, generatedHeaderLines, kotlinLiteral, referencedModels, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("kotlin")
@@ -99,44 +103,50 @@ const memberName = (raw: string): string => {
 const verbConstant = (verb: string): string => `Verb.${verb.toUpperCase()}`;
 
 /**
- * Escape a value for a Kotlin `"…"` literal.
+ * The `args` parameter, and the expression that puts it on the wire.
  *
- * Kotlin interpolates `$`, and `$` is a legal JavaScript identifier character,
- * so an export named `$client` produced `"billing:$client"` — which compiles,
- * runs, and posts the client object's `toString()` as the wire path. Ruby needs
- * the same treatment for `#{`; see `rubyLiteral`.
+ * A declared model is taken by value and projected through its own `toWire()`. A
+ * schema with no model — no declared shape, or a `v.bigint()`/`v.bytes()` that no
+ * generated field can carry — keeps the transport's own `WireValue`, which is the
+ * untyped escape hatch the CLI's `unrepresentable` warning tells the caller to use.
  */
-// The Kotlin escape for a literal dollar, assembled from parts so the sequence
-// never appears as a template-looking literal in this file.
-const DOLLAR_ESCAPE = ["\u0024", "{", "'", "\u0024", "'", "}"].join("");
-
-// Layered ON TOP of `stringLiteral` rather than repeating its rules: escaping
-// backslashes in both would emit a literal that decodes to two of them. The
-// dollar pass runs last, so the escape it inserts is not itself re-escaped.
-const kotlinLiteral = (value: string): string => stringLiteral(value).split("\u0024").join(DOLLAR_ESCAPE);
+const argsParameter = (method: SdkMethod): { declaration: string; payload: string } =>
+    method.argsType === undefined
+        ? { declaration: "args: WireValue? = null", payload: "args" }
+        : { declaration: `args: ${method.argsType}`, payload: "args.toWire()" };
 
 /** One function as a method posting the RPC envelope. */
-const renderCall = (method: SdkMethod): string =>
-    [
+const renderCall = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+    const call = `client.call(${verbConstant(method.verb)}, "${kotlinLiteral(method.functionPath)}", ${args.payload}, shardKey)`;
+
+    return [
         `    /** ${commentText(method.summary)} */`,
-        `    fun ${memberName(method.functionName)}(args: WireValue? = null, shardKey: String? = null): WireValue =`,
-        `        client.call(${verbConstant(method.verb)}, "${kotlinLiteral(method.functionPath)}", args, shardKey)`,
+        `    fun ${memberName(method.functionName)}(${args.declaration}, shardKey: String? = null): ${method.resultType ?? "WireValue"} =`,
+        // A typed result is re-read through the model's own reader; an untyped one
+        // is handed back as the decoded wire value.
+        `        ${method.resultType === undefined ? call : `${method.resultType}.fromWire(${call})`}`,
     ].join("\n");
+};
 
 /**
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod): string =>
-    [
+const renderSubscribe = (method: SdkMethod): string => {
+    const args = argsParameter(method);
+
+    return [
         `    /** live ${commentText(method.summary)} — re-runs on every write to the tables it reads. */`,
         `    fun subscribe${toPascalCase(method.functionName)}(`,
-        `        args: WireValue? = null,`,
+        `        ${args.declaration},`,
         `        onData: ((WireValue) -> Unit)?,`,
         `        onError: ((SubscriptionError) -> Unit)? = null,`,
         `        shardKey: String? = null,`,
-        `    ): () -> Unit = client.subscribe("${kotlinLiteral(method.functionPath)}", args, onData, onError, shardKey)`,
+        `    ): () -> Unit =`,
+        `        client.subscribe("${kotlinLiteral(method.functionPath)}", ${args.payload}, onData, onError, shardKey)`,
     ].join("\n");
+};
 
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
@@ -153,14 +163,26 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
         .map((namespace) => `    val ${memberName(namespace.name)}: ${toPascalCase(namespace.name)}Api = ${toPascalCase(namespace.name)}Api(client)`)
         .join("\n");
 
+    const methods = namespaces.flatMap((namespace) => namespace.methods);
+
+    // Conditional so the file carries no unused import, which is a ktlint offence
+    // and a compiler warning: `SubscriptionError` appears only where a query does,
+    // and `WireValue` only where a method's args or result went untyped.
+    const imports = [
+        `import dev.lunora.Client\n`,
+        ...(methods.some((method) => method.verb === "query") ? [`import dev.lunora.SubscriptionError\n`] : []),
+        `import dev.lunora.Verb\n`,
+        ...(methods.some((method) => method.argsType === undefined || method.resultType === undefined) ? [`import dev.lunora.WireValue\n`] : []),
+        // Only the models the surface references. `withDeclaredModels` has already
+        // cleared any name the emitter did not declare, so every import resolves.
+        ...referencedModels(namespaces).map((name) => `import ${MODEL_PACKAGE}.${name}\n`),
+    ];
+
     const api = [
         GENERATED_HEADER,
         `package ${PACKAGE_NAME}\n`,
         `\n`,
-        `import dev.lunora.Client\n`,
-        `import dev.lunora.SubscriptionError\n`,
-        `import dev.lunora.Verb\n`,
-        `import dev.lunora.WireValue\n`,
+        ...imports,
         `\n`,
         namespaces.map((namespace) => renderNamespaceClass(namespace)).join("\n\n"),
         `\n\n`,
@@ -176,8 +198,9 @@ const render = ({ namespaces }: SdkRenderInput): Record<string, string> => {
 const kotlinTarget: SdkTarget = {
     id: "kotlin",
     render,
-    // Nothing: the transport is JDK-only and the generated surface passes the
-    // transport's own `WireValue` rather than a model.
+    renderModels: kotlinModelFiles,
+    // Nothing: the transport is JDK-only and the models are plain classes with a
+    // hand-written `toWire()`.
     requires: [],
     vendor: [{ from: "src", to: "dev/lunora" }],
 };

@@ -3,9 +3,11 @@
  * generated source out.
  *
  * The split is the point. `spec.ts` parses once, language-neutrally; `models.ts`
- * delegates the data classes to quicktype; a target under `targets/` contributes
- * only naming and templates. Adding a language is a new file in `targets/` plus
- * a hand-written transport under `sdks/<lang>/` — never a fork of the parsing.
+ * delegates the data classes to quicktype (or `jvm-models.ts` emits them, for the
+ * two backends quicktype cannot map back onto the wire); a target under `targets/`
+ * contributes only naming and templates. Adding a language is a new file in
+ * `targets/` plus a hand-written transport under `sdks/<lang>/` — never a fork of
+ * the parsing.
  *
  * This module emits SOURCE ONLY. The transport that source imports is copied into
  * the same output directory by the CLI (`commands/sdk/vendor.ts`), which is where
@@ -81,11 +83,15 @@ const generateSdk = async (document: OpenRpcDocument, target: SdkTarget): Promis
     // source that does not compile, and the cause is far clearer here.
     assertGeneratable(parsed);
 
-    const models = await renderModels(document, target);
+    // A target that emits its own models does so as FILES, because Java takes one
+    // per class. Either way the reconciliation below reads a single string: a name
+    // the models do not declare must not be referenced by the surface.
+    const modelFiles = target.renderModels?.(document);
+    const models = modelFiles === undefined ? await renderModels(document, target) : Object.values(modelFiles).join("\n");
     const namespaces = withDeclaredModels(parsed, models);
 
     return {
-        files: target.render({ models, namespaces }),
+        files: { ...modelFiles, ...target.render({ models, namespaces }) },
         undeclared: undeclaredModels(parsed, models),
         unrepresentable: unrepresentableFunctions(document),
     };

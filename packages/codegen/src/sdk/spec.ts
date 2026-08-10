@@ -193,6 +193,29 @@ const commentText = (value: string): string =>
 const stringLiteral = (value: string): string =>
     value.replaceAll("\u005C", "\u005C\u005C").replaceAll('"', '\u005C"').replaceAll("\n", "\u005Cn").replaceAll("\r", "\u005Cr");
 
+/**
+ * The Kotlin escape for a literal dollar, assembled from parts so the sequence
+ * never appears as a template-looking literal in this file.
+ */
+const DOLLAR_ESCAPE = ["$", "{", "'", "$", "'", "}"].join("");
+
+/**
+ * Escape a value for a Kotlin `"…"` literal.
+ *
+ * Kotlin interpolates `$`, and `$` is a legal JavaScript identifier character, so
+ * an export named `$client` produced `"billing:$client"` — which compiles, runs,
+ * and posts the client object's `toString()` as the wire path. A wire KEY carries
+ * one just as easily, since it comes from a user's own `v.object({ … })`.
+ *
+ * Layered ON TOP of {@link stringLiteral} rather than repeating its rules:
+ * escaping backslashes in both would emit a literal that decodes to two of them.
+ * The dollar pass runs last, so the escape it inserts is not itself re-escaped.
+ *
+ * Lives here rather than in `targets/kotlin.ts` because the Kotlin MODEL emitter
+ * needs it too and may not import from a target — the targets import the models.
+ */
+const kotlinLiteral = (value: string): string => stringLiteral(value).split("$").join(DOLLAR_ESCAPE);
+
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
 const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     const [namespace = "", functionName = ""] = method.name.split(":");
@@ -433,6 +456,7 @@ export {
     generatedHeaderLines,
     hasUnrepresentableWireType,
     isTypedSchema,
+    kotlinLiteral,
     modelSources,
     parseMethod,
     parseSpec,

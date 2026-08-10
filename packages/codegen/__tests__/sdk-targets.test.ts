@@ -126,6 +126,84 @@ describe("wire types no model can carry", () => {
     });
 });
 
+// The JVM targets emit their own models (`sdk/jvm-models.ts`) rather than using
+// quicktype, because quicktype's Java and Kotlin backends rename properties. These
+// assert the property that makes emitting them here worthwhile, and they do it
+// WITHOUT a JVM: the wire key must survive verbatim.
+//
+// The five keys below are the ones measured to still rename under quicktype's most
+// permissive `acronym-style: original` — the reason no renderer option was enough.
+// `sdks/generated-check.sh java|kotlin` covers the same property end to end for
+// `channelId` by running a call; this covers the shapes a fixture does not reach.
+describe.each([
+    ["java", SDK_TARGETS["java"]!],
+    ["kotlin", SDK_TARGETS["kotlin"]!],
+])("jvm models: %s", (_id, target) => {
+    const RENAMED_BY_QUICKTYPE = ["2fa", "ID", "URLs", "some-key", "user_name"];
+
+    const wideDocument: OpenRpcDocument = {
+        methods: [
+            {
+                name: "wide:save",
+                params: [
+                    {
+                        name: "args",
+                        schema: {
+                            properties: Object.fromEntries([...RENAMED_BY_QUICKTYPE, "channelId"].map((key) => [key, { type: "string" }])),
+                            required: [...RENAMED_BY_QUICKTYPE, "channelId"],
+                            type: "object",
+                        },
+                    },
+                ],
+                "x-lunora-function-kind": "mutation",
+            },
+        ],
+    };
+
+    it.each(RENAMED_BY_QUICKTYPE)("carries the wire key %s verbatim into toWire and fromWire", async (wireKey) => {
+        expect.assertions(2);
+
+        const { files, undeclared } = await generateSdk(wideDocument, target);
+        const models = Object.entries(files)
+            .filter(([path]) => path.toLowerCase().includes("models"))
+            .map(([, contents]) => contents)
+            .join("\n");
+
+        // A local identifier may be derived — `2fa` cannot be a Java field — but
+        // the KEY may not be, so it is the quoted literal that is asserted.
+        expect(undeclared).toStrictEqual([]);
+        expect(models).toContain(`"${wireKey}"`);
+    });
+
+    it("omits an unset optional rather than sending an explicit null", async () => {
+        expect.assertions(2);
+
+        // `v.optional(x)` parses `undefined` or `x` and REJECTS null, so a model
+        // that writes null for an unset optional fails every call that leaves one
+        // unset. Ruby and Rust both shipped exactly that.
+        const withOptional: OpenRpcDocument = {
+            methods: [
+                {
+                    name: "wide:save",
+                    params: [{ name: "args", schema: { properties: { limit: { type: "number" } }, required: [], type: "object" } }],
+                    "x-lunora-function-kind": "mutation",
+                },
+            ],
+        };
+
+        const { files } = await generateSdk(withOptional, target);
+        const models = Object.entries(files)
+            .filter(([path]) => path.toLowerCase().includes("models"))
+            .map(([, contents]) => contents)
+            .join("\n");
+
+        // Guarded, and by the FIELD rather than by a null literal: both languages
+        // spell the guard differently, but neither may write the key unconditionally.
+        expect(models).toContain(`"limit"`);
+        expect(/if \(this\.limit != null\) \{|limit\?\.let \{/u.test(models)).toBe(true);
+    });
+});
+
 describe.each(targets.map((target) => [target.id, target] as const))("target: %s", (_id, target) => {
     it.each(Object.entries(RESULT_SHAPES))("never references a model the backend did not declare (%s result)", async (_shape, resultSchema) => {
         expect.assertions(1);

@@ -108,20 +108,32 @@ change that adds or removes a capability.
 | Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
-| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ❌   | ❌     |
+| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
+| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
 
-**Typed models, JVM.** quicktype's Java and Kotlin backends rename properties (a
-wire `channelId` becomes `channelID`) and emit no mapping metadata under
-`just-types`, so a generated model cannot be projected back onto the wire.
-Sending the wrong key silently is worse than staying untyped, so both take
-wire-shaped arguments. The backends do emit the wire name the moment `just-types`
-is dropped — as a Jackson, Klaxon or kotlinx annotation, every one of which needs
-a library on the classpath, which is the one thing these transports do not have.
-`targets/java.ts` records every renderer option that was measured, and what a
-real fix would cost.
+**Typed models, JVM.** The two JVM targets are the only ones whose models are NOT
+rendered by quicktype, and the exception is measured rather than stylistic:
+quicktype's Java and Kotlin backends rename properties (a wire `channelId` becomes
+`channelID`) and emit no mapping metadata under `just-types`, so a model they render
+cannot be projected back onto the wire. `acronym-style: original` fixes `channelId`
+and still renames 5 of 14 realistic wire keys (`2fa`, `ID`, `URLs`, `some-key`,
+`user_name`); Kotlin's `just-types` additionally erases enum wire values outright.
+The backends do emit the exact wire name the moment `just-types` is dropped — as a
+Jackson, Klaxon or kotlinx annotation, every one of which needs a library on the
+classpath, which is the one thing these JDK-only transports do not have.
+
+So `packages/codegen/src/sdk/jvm-models.ts` emits them from the JSON Schema
+instead, whose property names ARE the wire names — there is no renamer to fight,
+and `toWire()`/`fromWire()` write the schema's own key as a string literal. A local
+field identifier is still derived (`2fa` cannot be a Java field, and becomes
+`value2fa`), but it is cosmetic and never reaches the wire. Enums keep their value
+(`enum class Kind(val wireValue: String)`, and `toValue()`/`forValue()` in Java),
+an unset optional is OMITTED rather than sent as null, and Java gets one file per
+class because its single-file form is not compilable Java. `targets/java.ts` records
+every renderer option that was measured and why the alternative — subclassing
+quicktype's `JavaRenderer`/`KotlinRenderer` — was not taken.
 
 **Concurrency.** Go, Ruby, Java, Kotlin, Swift and Python hold a lock over the
 subscription registry, the shape views and the id counters, and dispatch frames
