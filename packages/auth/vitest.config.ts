@@ -43,7 +43,7 @@ const coverage = {
 const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 // Mirrors `tools/get-vitest-config`: CI runs coverage-instrumented and contended, so
-// the 5s default times out spuriously; the seed keeps order-dependence from hiding.
+// the 5s default times out spuriously.
 const CI_TIMEOUTS = {
     hookTimeout: process.env["CI"] ? 30_000 : 10_000,
     testTimeout: process.env["CI"] ? 30_000 : 10_000,
@@ -59,7 +59,6 @@ const nodeProject = {
         exclude: ["__tests__/workerd/**"],
         include: ["src/**/*.test.ts", "__tests__/**/*.test.ts"],
         name: "node",
-        sequence: { seed: 1 },
     },
 };
 
