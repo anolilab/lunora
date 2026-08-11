@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { SchemaExtension } from "@lunora/server";
+import type { DatabaseWriter, SchemaExtension } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -186,12 +186,12 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
 const { mutation, query } = initLunora.dataModel().create();
 
 /**
- * The minimal writer surface the queue helpers need. `agentEnsureThread` and
- * `agentCompleteRun` are ordinary mutations, so this is just `ctx.db` — named
- * so the helpers can be lifted out of the closures without dragging the whole
- * generated data-model type along.
+ * The writer the queue helpers take. Named from `@lunora/server`'s exported
+ * `DatabaseWriter` rather than derived through three levels of `Parameters`
+ * indexing off the builder — the derivation was correct and told the next
+ * reader nothing about what the type actually is.
  */
-type QueueDatabase = Parameters<Parameters<typeof mutation.mutation>[0]>[0]["ctx"]["db"];
+type QueueDatabase = DatabaseWriter;
 
 /**
  * Park a run behind the one currently in flight (`onConcurrentRun: "queue"`).
@@ -241,7 +241,7 @@ const enqueueRun = async (
         );
     }
 
-    const position = queued.length === 0 ? 0 : Math.max(...queued.map((row) => row["position"] as number)) + 1;
+    const position = ((queued.at(-1)?.["position"] as number | undefined) ?? -1) + 1;
 
     await database.insert(RUN_QUEUE_TABLE, { agent: args.agent, enqueuedAt: now, instanceId, position, threadKey: args.key });
 

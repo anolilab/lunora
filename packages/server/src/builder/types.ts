@@ -16,6 +16,14 @@ import type {
     X402ProcedureConfig,
 } from "../types";
 
+/**
+ * Options for the `.stream()` terminal. `durable: true` is shorthand for
+ * `durable: {}` — the runtime only ever sees the object form.
+ */
+export interface StreamOptions {
+    durable?: boolean | DurableStreamOptions;
+}
+
 /** Builder discriminator. Codegen reads this kind. */
 export type TerminalKind = FunctionKind;
 
@@ -95,7 +103,7 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      */
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-        options?: { durable?: boolean | DurableStreamOptions },
+        options?: StreamOptions,
     ) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 
@@ -213,7 +221,7 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     /** See {@link QueryBuilder.stream}; the internal variant routes the registration into `internal` instead of `api`. */
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
-        options?: { durable?: boolean | DurableStreamOptions },
+        options?: StreamOptions,
     ) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }

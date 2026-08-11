@@ -822,9 +822,7 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: {
-        durable?: boolean | DurableStreamOptions;
-    }) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -1431,9 +1429,7 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: {
-        durable?: boolean | DurableStreamOptions;
-    }) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }

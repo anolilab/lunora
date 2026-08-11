@@ -689,6 +689,12 @@ interface RegisteredStream<A extends ArgsValidator, R> {
  * Sharing applies to a run still in flight. Once a run finishes, a later caller
  * asking the same question gets a fresh one — a transcript is the record of one
  * execution, not a cached response.
+ *
+ * **What an attach does not do:** it replays a transcript, it does not re-run the
+ * handler — so the procedure's middleware chain (`.use(rls(...))`, rate limits,
+ * any custom guard) runs once, for the caller that started the run. That is why
+ * the run key is identity-scoped: a guard that has already passed for one user
+ * must never be skipped for another.
  */
 interface DurableStreamOptions {
     /**
