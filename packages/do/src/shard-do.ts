@@ -8306,7 +8306,13 @@ abstract class ShardDO {
      * throw (a stub `sql` handle, a membership probe failure); the caller converts
      * it to a structured `shape_subscribe` error.
      */
-    private async seedOpLogShape(ws: ShardSocketLike, connectionId: string, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+    private async seedOpLogShape(
+        ws: ShardSocketLike,
+        connectionId: string,
+        subId: string,
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): Promise<"ok"> {
         const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
