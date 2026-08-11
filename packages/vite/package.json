@@ -64,7 +64,6 @@
         "@lunora/config": "1.0.0-alpha.133",
         "@lunora/errors": "1.0.0-alpha.20",
         "@visulima/vite-overlay": "catalog:vite",
-        "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
@@ -73,6 +72,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "jsonc-parser": "catalog:vite",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test"
