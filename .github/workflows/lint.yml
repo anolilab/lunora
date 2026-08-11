@@ -25,6 +25,7 @@
         "outputs":
             "api_surface": "${{ steps.changes.outputs.api_surface }}"
             "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
+            "node_capabilities_docs": "${{ steps.changes.outputs.node_capabilities_docs }}"
             "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
             "registry_sync": "${{ steps.changes.outputs.registry_sync }}"
             "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
@@ -383,6 +384,39 @@
             - "name": "Lint (auth-ui registry sync)"
               "run": "pnpm run lint:registry:sync"
 
+    # packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES
+    # (packages/platform/src/capabilities.ts) drift guard. No build needed — the
+    # checker imports capabilities.ts directly via Node's built-in TS type
+    # stripping. Had a script (`lint:node-capabilities-docs`) but no CI job
+    # until now, so drift between the two went uncaught.
+    "node-capabilities-docs":
+        "name": "Lint (node capabilities docs)"
+        "if": "needs.files-changed.outputs.node_capabilities_docs == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Check node capabilities docs match NODE_CAPABILITIES"
+              "run": "pnpm run lint:node-capabilities-docs"
+
     "yaml-lint":
         "name": "Lint (yaml)"
         "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
@@ -420,6 +454,7 @@
                 "package-json-sort",
                 "secrets",
                 "registry-sync",
+                "node-capabilities-docs",
                 "yaml-lint",
             ]
         "if": "always()"

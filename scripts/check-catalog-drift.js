@@ -18,11 +18,11 @@
  * dependency's release — that is a different, already-guarded mechanism, not
  * catalog drift.
  *
- * NOT wired into `postinstall` yet: one pre-existing violation ("stripe",
+ * NOT wired into CI/`postinstall` yet: one pre-existing violation ("stripe",
  * hand-pinned differently in `packages/payment` and `examples/payment-demo`)
- * means it does not pass clean — see plan 327 §9. Run it manually
- * (`node scripts/check-catalog-drift.js`) and wire it into `postinstall` once
- * that's resolved.
+ * means it does not pass clean — see plan 327 §9. Has a script entry
+ * (`pnpm run lint:catalog-drift`) so it's runnable by hand; wire it into a
+ * gate once that violation is resolved.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -69,7 +69,11 @@ for (const { dir, manifest } of manifests) {
 
             const bySpecifier = seen.get(name) ?? new Map();
 
-            (bySpecifier.get(specifier) ?? bySpecifier.set(specifier, []).get(specifier)).push(dir);
+            if (!bySpecifier.has(specifier)) {
+                bySpecifier.set(specifier, []);
+            }
+
+            bySpecifier.get(specifier).push(dir);
             seen.set(name, bySpecifier);
         }
     }
@@ -86,7 +90,9 @@ for (const [name, bySpecifier] of seen) {
 
     violations += 1;
 
-    console.error(`❌ "${name}" is hand-pinned (not catalog:) in ${dirs.length} manifests: ${dirs.join(", ")}`);
+    const bySpecifierDetail = [...bySpecifier.entries()].map(([specifier, specifierDirs]) => `${specifier} (${specifierDirs.join(", ")})`).join("; ");
+
+    console.error(`❌ "${name}" is hand-pinned (not catalog:) in ${dirs.length} manifests: ${bySpecifierDetail}`);
 }
 
 if (violations > 0) {
