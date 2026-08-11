@@ -67,7 +67,9 @@ describe("eval score extraction", () => {
                     kind: "gauge",
                     name: "gen_ai.evaluation.tone.score",
                     points: [
-                        { bucketMs: 0, count: 1, last: 0.2, max: 0.2, min: 0.2, sum: 0.2 },
+                        // Two scores in one bucket: `last` alone would report a
+                        // minimum of 0.4 and a mean of 0.4, flattering both.
+                        { bucketMs: 0, count: 2, last: 0.4, max: 0.4, min: 0, sum: 0.4 },
                         { bucketMs: 60_000, count: 1, last: 1, max: 1, min: 1, sum: 1 },
                     ],
                 },
@@ -77,7 +79,8 @@ describe("eval score extraction", () => {
         const [withTrend] = buildEvalCards(runs, extractEvalTrends(history));
 
         // Durable half wins the summary: the ring's single 0.5 is not the history.
-        expect(withTrend).toMatchObject({ latest: 1, max: 1, min: 0.2, name: "tone" });
+        // mean = (0.4 + 1) / (2 + 1) samples, min from the bucket's own `min`.
+        expect(withTrend).toMatchObject({ latest: 1, max: 1, mean: 1.4 / 3, min: 0, name: "tone" });
         expect(withTrend?.points).toHaveLength(2);
         // Its live runs still ride along — that is what makes a score clickable.
         expect(withTrend?.runs).toHaveLength(1);

@@ -728,6 +728,26 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 
 /**
+ * The run-key component for a caller with no verified identity.
+ *
+ * Anonymous callers must not share a transcript with each other — collapsing
+ * them onto a constant hands the second caller the first one's answer without
+ * ever running the handler. But they should still resume their OWN run across a
+ * reload, which is the whole point of a durable stream, so the key has to be
+ * something stable across sockets.
+ *
+ * The client's own `clientId` (the stable id it sends on `connect`, already
+ * trusted for the mutation watermark) is that. It is client-supplied, so it
+ * separates honest callers rather than defending against a hostile one — which
+ * is the right bar here: `userId` takes precedence whenever the socket has an
+ * identity to check, so this path only ever governs anonymous traffic sharing
+ * its own answers. A client that sent none falls back to its connection, which
+ * isolates correctly and simply cannot resume.
+ */
+const anonymousStreamCaller = (attachment: SocketAttachment, streamId: string): string =>
+    attachment.clientId === undefined ? `conn:${attachment.connectionId ?? streamId}` : `client:${attachment.clientId}`;
+
+/**
  * The stream wire vocabulary, bound to one socket + stream id.
  *
  * Both stream paths — the ephemeral per-socket iterator and the durable
@@ -7661,8 +7681,17 @@ abstract class ShardDO {
         registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
         sinceChunk: number,
     ): Promise<void> {
-        const owner = this.readAttachment(ws).userId ?? "";
-        const runKey = `${owner}\u0000${functionPath}:${stableWireKey(args)}`;
+        const attachment = this.readAttachment(ws);
+        // An ANONYMOUS caller shares nothing. Falling back to a constant here
+        // collapsed every anonymous caller onto one key, so the second caller
+        // read the first one's transcript and the handler never ran for them —
+        // the same cross-caller leak the identity scope closes for signed-in
+        // users, on the path where there is no identity to check. The socket's
+        // connection id keeps each one to its own run; the cost is that an
+        // anonymous reload starts over, which is the honest answer when nothing
+        // durable identifies the caller.
+        const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
+        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
         const cancellers = socketMap(this.streamCancellers, ws);
         const controller = new AbortController();
         const frames = streamFrames(ws, id);

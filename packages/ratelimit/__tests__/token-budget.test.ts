@@ -48,6 +48,19 @@ describe("tokenBudget", () => {
         await expect(budget.check("user-x")).resolves.toMatchObject({ ok: false });
     });
 
+    it("clamps to the per-shard capacity a sharded limit actually enforces", async () => {
+        expect.assertions(2);
+
+        // 4 shards → each bucket enforces 1000/4 = 250. Clamping to the raw 1000
+        // would exceed the enforced capacity and throw, leaving the call
+        // uncharged — the exact escape this clamp exists to prevent.
+        const sharded = new RateLimiter({ config: { tokens: { capacity: 1000, kind: "token bucket", period: 60_000, rate: 1000, shards: 4 } } });
+        const budget = tokenBudget(sharded, "tokens");
+
+        await expect(budget.record("user-s", 5000)).resolves.toMatchObject({ ok: true });
+        await expect(budget.check("user-s")).resolves.toMatchObject({ ok: false });
+    });
+
     it("keeps budgets separate per key", async () => {
         expect.assertions(1);
 

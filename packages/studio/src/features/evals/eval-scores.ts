@@ -10,6 +10,12 @@
  */
 import type { MetricHistoryPoint, MetricHistoryResult, TraceSummary } from "../../lib/admin";
 
+/** Min/mean/max over raw scores — the live-ring fallback when no durable buckets exist. */
+const summarise = (values: ReadonlyArray<number>): undefined | { max: number; mean: number; min: number } =>
+    values.length === 0
+        ? undefined
+        : { max: Math.max(...values), mean: values.reduce((total, value) => total + value, 0) / values.length, min: Math.min(...values) };
+
 /** `gen_ai.evaluation.<name>.score` — the name is the capture group. */
 const SCORE_KEY = /^gen_ai\.evaluation\.(.+)\.score$/u;
 
@@ -109,18 +115,23 @@ export const buildEvalCards = (runs: ReadonlyArray<EvalRun>, trends: ReadonlyArr
     for (const name of names) {
         const ownRuns = runs.filter((run) => run.name === name);
         const points = trends.find((trend) => trend.name === name)?.points ?? [];
-        const values = points.length > 0 ? points.map((point) => point.last) : ownRuns.map((run) => run.score);
         const latest = points.at(-1)?.last ?? ownRuns[0]?.score;
+        // A bucket is an aggregate, not a sample: `last` is only its final score.
+        // Summarising a bucket holding 0 and 1 by its `last` reports a minimum of
+        // 1 and a mean of 1 — both wrong, and wrong in the flattering direction.
+        // The bucket carries `min`/`max`/`sum`/`count` precisely for this.
+        const summary =
+            points.length > 0
+                ? {
+                      max: Math.max(...points.map((point) => point.max)),
+                      mean: points.reduce((total, point) => total + point.sum, 0) / points.reduce((total, point) => total + point.count, 0),
+                      min: Math.min(...points.map((point) => point.min)),
+                  }
+                : summarise(ownRuns.map((run) => run.score));
 
         cards.push({
             ...(latest === undefined ? {} : { latest }),
-            ...(values.length === 0
-                ? {}
-                : {
-                      max: Math.max(...values),
-                      mean: values.reduce((total, value) => total + value, 0) / values.length,
-                      min: Math.min(...values),
-                  }),
+            ...summary,
             name,
             points,
             runs: ownRuns,

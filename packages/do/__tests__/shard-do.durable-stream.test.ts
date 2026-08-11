@@ -138,7 +138,7 @@ describe("shardDO durable streams", () => {
 
         const first = createFakeWebSocket();
 
-        shard.registerSocket(first, { subs: {} });
+        shard.registerSocket(first, { clientId: "client-a", subs: {} });
         await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(first);
 
@@ -152,7 +152,7 @@ describe("shardDO durable streams", () => {
         // A reload: same args, same run, resuming after the first chunk.
         const resumed = createFakeWebSocket();
 
-        shard.registerSocket(resumed, { subs: {} });
+        shard.registerSocket(resumed, { clientId: "client-a", subs: {} });
         await shard.driveMessage(resumed, { id: "stream_9", query: { functionPath: "chat:answer" }, sinceChunk: 1, type: "stream" });
         await waitForTerminator(resumed);
 
@@ -181,8 +181,8 @@ describe("shardDO durable streams", () => {
         const a = createFakeWebSocket();
         const b = createFakeWebSocket();
 
-        shard.registerSocket(a, { subs: {} });
-        shard.registerSocket(b, { subs: {} });
+        shard.registerSocket(a, { clientId: "client-a", subs: {} });
+        shard.registerSocket(b, { clientId: "client-a", subs: {} });
 
         await shard.driveMessage(a, { id: "stream_a", query: { functionPath: "chat:answer" }, type: "stream" });
         // Let the producer emit its first chunk before the second client attaches.
@@ -223,7 +223,7 @@ describe("shardDO durable streams", () => {
 
         const first = createFakeWebSocket();
 
-        shard.registerSocket(first, { subs: {} });
+        shard.registerSocket(first, { clientId: "client-a", subs: {} });
         await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
         await new Promise<void>((resolve) => {
             setTimeout(resolve, 5);
@@ -239,7 +239,7 @@ describe("shardDO durable streams", () => {
         // tail would have to be re-generated, which duplicates.
         const resumed = createFakeWebSocket();
 
-        revived.registerSocket(resumed, { subs: {} });
+        revived.registerSocket(resumed, { clientId: "client-a", subs: {} });
         await revived.driveMessage(resumed, { id: "stream_2", query: { functionPath: "chat:answer" }, sinceChunk: 1, type: "stream" });
         await waitForTerminator(resumed);
 
@@ -254,7 +254,7 @@ describe("shardDO durable streams", () => {
 
         const fresh = createFakeWebSocket();
 
-        revived.registerSocket(fresh, { subs: {} });
+        revived.registerSocket(fresh, { clientId: "client-a", subs: {} });
         await revived.driveMessage(fresh, { id: "stream_3", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(fresh);
 
@@ -280,7 +280,7 @@ describe("shardDO durable streams", () => {
 
         const first = createFakeWebSocket();
 
-        shard.registerSocket(first, { subs: {} });
+        shard.registerSocket(first, { clientId: "client-a", subs: {} });
         await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(first);
 
@@ -289,7 +289,7 @@ describe("shardDO durable streams", () => {
         // response cache with a 24-hour TTL, including for a failed run.
         const later = createFakeWebSocket();
 
-        shard.registerSocket(later, { subs: {} });
+        shard.registerSocket(later, { clientId: "client-a", subs: {} });
         await shard.driveMessage(later, { id: "stream_2", query: { functionPath: "chat:answer" }, type: "stream" });
         await waitForTerminator(later);
 
@@ -299,6 +299,39 @@ describe("shardDO durable streams", () => {
                 .map((frame) => frame.data),
         ).toStrictEqual(["answer-2"]);
         expect(shard.starts).toBe(2);
+    });
+
+    it("never shares a run between two anonymous callers", async () => {
+        expect.assertions(2);
+
+        const shard = new DurableStreamShard(state, {});
+        let answers = 0;
+
+        shard.registered.set("chat:answer", async function* answer() {
+            answers += 1;
+            yield `answer-${String(answers)}`;
+        });
+
+        const first = createFakeWebSocket();
+        const second = createFakeWebSocket();
+
+        // No `userId` on either socket. Collapsing both onto one key would hand
+        // the second caller the first one's transcript without ever running the
+        // handler — the same leak the identity scope closes for signed-in users.
+        shard.registerSocket(first, { clientId: "client-1", subs: {} });
+        shard.registerSocket(second, { clientId: "client-2", subs: {} });
+
+        await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(first);
+        await shard.driveMessage(second, { id: "stream_2", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(second);
+
+        expect(shard.starts).toBe(2);
+        expect(
+            parseFrames(second)
+                .filter((frame) => frame.type === "chunk")
+                .map((frame) => frame.data),
+        ).toStrictEqual(["answer-2"]);
     });
 
     it("never shares a run across identities", async () => {

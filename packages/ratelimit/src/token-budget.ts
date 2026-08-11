@@ -82,15 +82,27 @@ const tokenBudget = <Names extends string>(limiter: RateLimiter<Names>, name: Na
                 return limiter.check(name, { key });
             }
 
-            // Clamp to the bucket's capacity. The limiter refuses a count larger
-            // than capacity outright, and for a token budget that is exactly
-            // backwards: a single long-context call over a per-window budget is
-            // the ordinary case, and throwing would charge it NOTHING — the one
-            // call the budget exists to catch would escape it entirely. Charging
-            // the whole bucket is the strongest true statement available.
+            // Clamp to the capacity the limiter will actually enforce. It refuses
+            // a count larger than capacity outright, and for a token budget that
+            // is exactly backwards: a single long-context call over a per-window
+            // budget is the ordinary case, and throwing would charge it NOTHING —
+            // the one call the budget exists to catch would escape it entirely.
+            // Charging the whole bucket is the strongest true statement available.
+            //
+            // `getValue` reports the RAW config, while a sharded limit enforces
+            // `capacity / shards` on the one bucket this key routes to. Clamping
+            // to the raw value would still throw on a sharded budget, so the cap
+            // is derived per shard, floored to the positive integer `limit`
+            // requires.
             const { config } = await limiter.getValue(name, { key });
+            // `limit` only accepts a positive integer, so the floor cannot go
+            // below 1. A limit whose per-shard capacity is under one token is
+            // unusable by ANY caller — `check` throws on it too — so that is a
+            // configuration error to fix at the limit, not something a charge
+            // made after the fact can absorb.
+            const capacity = Math.max(1, Math.floor((config.capacity ?? config.rate) / (config.shards ?? 1)));
 
-            return limiter.limit(name, { count: Math.min(Math.ceil(tokens), config.capacity ?? config.rate), key, reserve: true });
+            return limiter.limit(name, { count: Math.min(Math.ceil(tokens), capacity), key, reserve: true });
         },
     };
 };

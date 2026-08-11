@@ -133,16 +133,25 @@ const ragSyncTriggers = <Document extends Record<string, unknown> = Record<strin
             await schedule(context, { id: sourceId(event.doc, event.id), text });
         },
         afterUpdate: async (context, event) => {
-            const text = textOf(event.doc);
-            const before = textOf(event.previous);
-
-            // An edit that didn't touch the indexed text costs nothing: no action
-            // dispatch, no embedding call, no vector write.
-            if (text === before || event.doc === undefined) {
+            if (event.doc === undefined) {
                 return;
             }
 
+            const text = textOf(event.doc);
+            const before = textOf(event.previous);
             const id = sourceId(event.doc, event.id);
+            // `options.id` may derive from a mutable column (a slug, a version).
+            // When it moves, the chunks under the OLD id are orphaned — indexed
+            // forever, and retrievable — unless they are removed explicitly.
+            const previousId = event.previous === undefined ? id : sourceId(event.previous, event.id);
+
+            if (previousId !== id) {
+                await schedule(context, { deleted: true, id: previousId });
+            } else if (text === before) {
+                // Same id, same text: an edit that touched neither costs nothing —
+                // no action dispatch, no embedding call, no vector write.
+                return;
+            }
 
             // The text went away (cleared, or the row no longer qualifies): the
             // old chunks must go too, or retrieval keeps serving deleted content.

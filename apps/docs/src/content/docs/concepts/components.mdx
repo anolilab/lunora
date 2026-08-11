@@ -41,7 +41,8 @@ export const voting = defineComponent("voting", {
     },
 
     // Optional: everything after `.use(voting.middleware)` sees `ctx.voting`.
-    middleware: ({ ctx, next }) => next({ ctx: { ...ctx, voting: makeVotingApi(ctx) } }),
+    // Anything you put here shows up as `ctx.voting` for procedures that opt in.
+    middleware: ({ ctx, next }) => next({ ctx: { ...ctx, voting: { subject: (id: string) => `voting:${id}` } } }),
 });
 ```
 
@@ -56,12 +57,15 @@ Three parts, all optional except the name:
 ## Installing one
 
 ```ts title="lunora/schema.ts"
+import { defineSchema, defineTable, v } from "@lunora/server";
 import { voting } from "my-component";
 
 export const schema = defineSchema({ posts: defineTable({ title: v.string() }) }).extend(voting.extension);
 ```
 
 ```ts title="lunora/voting.ts"
+import { voting } from "my-component";
+
 // One line: re-exporting is what puts the component's functions in your API.
 export const { castVote, tally } = voting.functions;
 ```

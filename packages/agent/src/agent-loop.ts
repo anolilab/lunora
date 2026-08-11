@@ -1034,17 +1034,17 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         await run(patchThread, { key: params.threadKey, ...patch });
     };
 
+    /** The user turn that opens the run. Runs after any queue wait, so a parked run appends only once it owns the thread. */
+    const persistUserTurn = async (): Promise<void> => {
+        await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
+    };
+
     /**
      * End the run: write the terminal status and, in the same mutation, hand the
      * thread to the next queued run. Only then is the dequeued run woken — it
      * already owns the thread by that point, so there is no window in which two
      * runs believe they may append.
      */
-    /** The user turn that opens the run. Runs after any queue wait, so a parked run appends only once it owns the thread. */
-    const persistUserTurn = async (): Promise<void> => {
-        await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
-    };
-
     const finishRun = async (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }): Promise<void> => {
         const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
 
@@ -1087,8 +1087,6 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     if (bootstrap?.outcome === "replaced") {
         await terminatePriorInstance(env, exportName, bootstrap.priorInstanceId);
     }
-
-    await persistUserTurn();
 
     // Memory step: dispatch the configured retrieval action once per run and
     // inject the assembled context into every turn's prompt.

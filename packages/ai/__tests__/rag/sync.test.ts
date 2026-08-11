@@ -60,6 +60,24 @@ describe("ragSyncTriggers", () => {
         expect(scheduled[1]?.args).toStrictEqual({ deleted: true, id: "doc-2" });
     });
 
+    it("removes the old chunks when a derived source id moves", async () => {
+        expect.assertions(2);
+
+        const { context, scheduled } = fakeContext();
+        const sync = ragSyncTriggers({
+            action: ACTION,
+            id: (document) => `slug:${String(document["slug"])}`,
+            text: (document) => document["body"] as string,
+        });
+
+        // The slug changed, so the chunks under the old id would otherwise stay
+        // indexed and retrievable forever.
+        await sync.afterUpdate(context, { doc: { body: "same", slug: "new" }, id: "row-1", previous: { body: "same", slug: "old" } });
+
+        expect(scheduled[0]?.args).toStrictEqual({ deleted: true, id: "slug:old" });
+        expect(scheduled[1]?.args).toStrictEqual({ id: "slug:new", text: "same" });
+    });
+
     it("honours a custom source id and delay", async () => {
         expect.assertions(1);
 

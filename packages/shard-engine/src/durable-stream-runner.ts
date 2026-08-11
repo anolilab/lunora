@@ -31,6 +31,16 @@ import { appendStreamChunk, claimStreamRun, deleteStreamRun, finishStreamRun, re
  */
 const MAX_DURABLE_STREAM_CHUNKS = 50_000;
 
+/**
+ * Hard ceiling on the BYTES one run may persist.
+ *
+ * The chunk count alone bounds nothing that matters: 50,000 chunks of 1 MiB is
+ * ~50 GiB against a per-DO ceiling of 10 GiB, and this store shares the shard's
+ * SQLite with application data. 64 MiB is far past any token stream and far
+ * under the point where one run threatens the shard.
+ */
+const MAX_DURABLE_STREAM_BYTES = 64 * 1024 * 1024;
+
 /** Default retention for a finished transcript: long enough to survive a reload and a commute. */
 const DEFAULT_TTL_MS = 86_400_000;
 
@@ -122,6 +132,37 @@ class DurableStreamRunner {
      * neither replayed nor delivered live.
      */
     public async attach(request: DurableStreamAttach): Promise<void> {
+        try {
+            await this.attachOrThrow(request);
+        } catch (error: unknown) {
+            // The host has already acked by the time this runs, so a throw that
+            // escapes leaves the consumer waiting on a stream that can never
+            // settle — the store read is the likely source (a pre-migration
+            // shard, a stub handle). Fail the sink instead: it is the only path
+            // that releases the consumer AND its host-side slot.
+            const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "internal error" });
+
+            if (redacted) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled attach error
+                console.error("[@lunora/shard-engine] durable stream attach failed:", error);
+            }
+
+            request.sink.fail({ code: body.code, message: body.message });
+        }
+    }
+
+    /** Detach a consumer without disturbing the producer — cancelling a durable stream leaves the run going. */
+    public detach(runKey: string, sink: DurableStreamSink): void {
+        this.runs.get(runKey)?.sinks.delete(sink);
+    }
+
+    /** Whether a run is currently producing on this instance. */
+    public isLive(runKey: string): boolean {
+        return this.runs.has(runKey);
+    }
+
+    /** The attach state machine proper — see {@link DurableStreamRunner.attach}, which owns its failure path. */
+    private async attachOrThrow(request: DurableStreamAttach): Promise<void> {
         const sql = this.sql();
         const { runKey, sinceChunk, sink } = request;
         const run = readStreamRun(sql, runKey);
@@ -189,16 +230,6 @@ class DurableStreamRunner {
         await producing;
     }
 
-    /** Detach a consumer without disturbing the producer — cancelling a durable stream leaves the run going. */
-    public detach(runKey: string, sink: DurableStreamSink): void {
-        this.runs.get(runKey)?.sinks.delete(sink);
-    }
-
-    /** Whether a run is currently producing on this instance. */
-    public isLive(runKey: string): boolean {
-        return this.runs.has(runKey);
-    }
-
     /**
      * Drive one run: persist each chunk under the next `seq`, then fan it out to
      * whichever consumers are attached right now — possibly none, since a run
@@ -211,22 +242,28 @@ class DurableStreamRunner {
         // run. The controller exists to satisfy the handler's signature.
         const controller = new AbortController();
         let seq = 0;
+        let bytes = 0;
 
         try {
             for await (const chunk of iterator(controller.signal)) {
                 const data = encodeWire(chunk);
+                const encoded = JSON.stringify(data);
 
                 seq += 1;
+                bytes += encoded.length;
 
-                if (seq > MAX_DURABLE_STREAM_CHUNKS) {
+                // Whichever ceiling trips first. The count catches a chatty
+                // generator, the byte total catches a few enormous chunks — and
+                // only the second one actually bounds what lands in SQLite.
+                if (seq > MAX_DURABLE_STREAM_CHUNKS || bytes > MAX_DURABLE_STREAM_BYTES) {
                     throw new LunoraError(
                         "STREAM_TOO_LONG",
-                        `durable stream exceeded ${String(MAX_DURABLE_STREAM_CHUNKS)} chunks; yield larger chunks or drop \`durable\``,
+                        `durable stream exceeded its ceiling (${String(MAX_DURABLE_STREAM_CHUNKS)} chunks / ${String(MAX_DURABLE_STREAM_BYTES)} bytes); yield less, or drop \`durable\``,
                         { status: 507 },
                     );
                 }
 
-                appendStreamChunk(sql, runKey, seq, JSON.stringify(data));
+                appendStreamChunk(sql, runKey, seq, encoded);
 
                 for (const sink of state.sinks) {
                     // A consumer that refused the frame is gone: drop it rather
@@ -284,4 +321,4 @@ class DurableStreamRunner {
 }
 
 export type { DurableAttachDecision, DurableStreamAttach, DurableStreamSink };
-export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_CHUNKS };
+export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_BYTES, MAX_DURABLE_STREAM_CHUNKS };

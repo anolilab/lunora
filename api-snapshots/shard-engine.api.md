@@ -1187,6 +1187,12 @@ const MAIL_RETENTION = 500;
 const MAIL_TABLE = "__lunora_mail";
 ```
 
+### `MAX_DURABLE_STREAM_BYTES` (const)
+
+```ts
+const MAX_DURABLE_STREAM_BYTES: number;
+```
+
 ### `MAX_DURABLE_STREAM_CHUNKS` (const)
 
 ```ts
