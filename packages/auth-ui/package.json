@@ -47,11 +47,11 @@
         "better-auth": "catalog:auth"
     },
     "devDependencies": {
-        "@angular/common": "^22.0.7",
-        "@angular/compiler": "^22.0.7",
-        "@angular/compiler-cli": "^22.0.7",
-        "@angular/core": "^22.0.7",
-        "@angular/platform-browser": "^22.0.7",
+        "@angular/common": "catalog:angular",
+        "@angular/compiler": "catalog:angular",
+        "@angular/compiler-cli": "catalog:angular",
+        "@angular/core": "catalog:angular",
+        "@angular/platform-browser": "catalog:angular",
         "@solidjs/testing-library": "catalog:frontend",
         "@sveltejs/vite-plugin-svelte": "catalog:frontend",
         "@tanstack/react-query": "catalog:frontend",
@@ -71,7 +71,7 @@
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
-        "rxjs": "^7.8.2",
+        "rxjs": "catalog:angular",
         "solid-js": "catalog:frontend",
         "svelte": "catalog:frontend",
         "svelte-check": "catalog:frontend",
@@ -82,7 +82,7 @@
         "vue": "catalog:frontend",
         "vue-eslint-parser": "catalog:lint",
         "vue-tsc": "catalog:frontend",
-        "zone.js": "^0.16.2"
+        "zone.js": "catalog:angular"
     },
     "peerDependencies": {
         "react": "^19.2.7"
