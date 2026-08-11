@@ -74,9 +74,14 @@ describe("subscriptionFrames — change ratio", () => {
 describe("subscriptionFrames — snapshot fallbacks", () => {
     const { nextResult, previousJson } = buildCase(LIST_LENGTH, 0);
     const reordered = nextResult.toReversed();
+    // Precomputed, like every other case: the production caller builds the
+    // snapshot payload once before calling in (see `pushSubscriptionData`), so
+    // encoding it inside the bench body would fold a full 200-row encode plus
+    // stringify into the number and overstate what the early-out costs.
+    const reorderedSnapshotJson = JSON.stringify(encodeWire(reordered));
 
     bench(`${String(LIST_LENGTH)} rows, survivors reordered → rejected`, () => {
-        subscriptionFrames({ ...envelope, nextResult: reordered, previousJson, snapshotJson: JSON.stringify(encodeWire(reordered)) });
+        subscriptionFrames({ ...envelope, nextResult: reordered, previousJson, snapshotJson: reorderedSnapshotJson });
     });
 
     // The shape `.paginate()` returns, and therefore what every `usePaginatedQuery`

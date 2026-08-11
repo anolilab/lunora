@@ -342,9 +342,28 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
         return [snapshot];
     }
 
-    const deltas = framed.map(({ frame }) => `{"type":"delta","id":${idJson},"delta":${frame}${suffix}}`);
+    const deltas: string[] = [];
+    let total = 0;
 
-    return deltas.reduce((total, frame) => total + frame.length, 0) < snapshot.length ? deltas : [snapshot];
+    for (const { frame } of framed) {
+        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${suffix}}`;
+
+        total += delta.length;
+
+        // The running total only grows, so once it reaches the snapshot the
+        // snapshot has already won and the remaining envelopes would be built
+        // only to be thrown away. Bailing here is not a different rule — it is
+        // the same comparison, decided as early as it can be — and it matters
+        // most in exactly the case this function exists to catch: a near-total
+        // change, where otherwise every row allocates a frame that loses.
+        if (total >= snapshot.length) {
+            return [snapshot];
+        }
+
+        deltas.push(delta);
+    }
+
+    return deltas;
 };
 
 /**
