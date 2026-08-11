@@ -550,18 +550,27 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 // sits at the project root for every shipped template, not under
                 // the schema directory; gating this on `absoluteSchemaDirectory`
                 // first meant a root tsconfig save could never reach this branch.
-                // `findTsconfig` is recomputed on every call (a handful of
-                // `existsSync` checks, not a reparse) rather than captured once,
-                // so a tsconfig created AFTER the cached Project was first built —
-                // nothing was found walking up from the schema directory that
-                // time, so the Project fell back to an isolated one — still
-                // invalidates the moment it appears on disk. `tsconfig.*.json`
-                // variants (e.g. a referenced `tsconfig.build.json`) match by name
-                // wherever the watcher sees them; it never triggers codegen itself
-                // — there is nothing new to emit.
-                const tsconfigPath = findTsconfig(absoluteSchemaDirectory);
+                // `tsconfig.*.json` variants (e.g. a referenced
+                // `tsconfig.build.json`) match by name wherever the watcher sees
+                // them; it never triggers codegen itself — there is nothing new
+                // to emit.
+                if (TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
 
-                if (normalized === tsconfigPath || TSCONFIG_VARIANT_RE.test(normalized)) {
+                    return;
+                }
+
+                // Only a file literally named `tsconfig.json` can possibly be the
+                // one `findTsconfig` would resolve, so gate its (existsSync-walk)
+                // cost on that cheap basename check instead of paying it on every
+                // watcher event — every `.ts` save otherwise walked the tree just
+                // to answer a question only a tsconfig save could ever say yes to.
+                // Recomputed here rather than captured once, so a tsconfig created
+                // AFTER the cached Project was first built — nothing was found
+                // walking up from the schema directory that time, so the Project
+                // fell back to an isolated one — still invalidates the moment it
+                // appears on disk.
+                if (normalized.endsWith(`${sep}tsconfig.json`) && normalized === findTsconfig(absoluteSchemaDirectory)) {
                     cachedProject = undefined;
 
                     return;

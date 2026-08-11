@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCodegenProject } from "@lunora/codegen";
+import { createCodegenProject, findTsconfig } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
@@ -11,11 +11,17 @@ import type { ResolvedLunoraPluginOptions } from "../src/types";
 
 // Spy on `createCodegenProject` (kept fully functional via `importOriginal`) so
 // the tsconfig-invalidation tests below can tell a cache REBUILD apart from a
-// cache REUSE without adding a test-only hook to the plugin itself.
+// cache REUSE without adding a test-only hook to the plugin itself. `findTsconfig`
+// is spied the same way so a test can prove its (existsSync-walk) cost is paid
+// only for a file actually named `tsconfig.json`, not on every watcher event.
 vi.mock(import("@lunora/codegen"), async (importOriginal) => {
     const actual = await importOriginal();
 
-    return { ...actual, createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject) };
+    return {
+        ...actual,
+        createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject),
+        findTsconfig: vi.fn<typeof actual.findTsconfig>(actual.findTsconfig),
+    };
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
@@ -913,6 +919,38 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             await vi.runAllTimersAsync();
 
             expect(createCalls).toHaveBeenCalledTimes(before + 1);
+        });
+
+        it("does not pay findTsconfig's existsSync walk on a save that isn't named tsconfig.json (perf contract)", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const findTsconfigCalls = findTsconfig as ReturnType<typeof vi.fn>;
+
+            findTsconfigCalls.mockClear();
+
+            // A normal schema-dir save (the overwhelming majority of watcher
+            // events) must never reach `findTsconfig` — only a file literally
+            // named `tsconfig.json` can possibly be the one it would resolve.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(findTsconfigCalls).not.toHaveBeenCalled();
+
+            // A save actually named `tsconfig.json` still resolves it, so the
+            // invalidation guarantee above (the other test in this block) holds.
+            changeListener!(join(workdir, "tsconfig.json"));
+            await vi.runAllTimersAsync();
+
+            expect(findTsconfigCalls).toHaveBeenCalled();
         });
     });
 });
