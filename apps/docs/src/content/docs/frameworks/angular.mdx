@@ -14,8 +14,8 @@ This page is the task-oriented guide; for the full reference see
 
 <Callout type="warn">
     **Deliberately small surface.** The Angular adapter ships the core four — DI wiring, `liveQuery`, `mutate`, `connectionStatus`. Parity extras the other
-    adapters have (paginated queries, bound optimistic-mutation handles, presence, reactive loaders) aren't here yet. See [Bring your
-    framework](/docs/frameworks/bring-your-framework).
+    adapters have (paginated queries, bound optimistic-mutation handles, presence) aren't here yet. Reactive loaders are, via `@lunora/angular/server` +
+    `hydratePreloaded` — see below. See [Bring your framework](/docs/frameworks/bring-your-framework).
 </Callout>
 
 ## Install
@@ -136,8 +136,52 @@ readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connect
 The aggregate live-socket status across all shard connections — render it in a
 header badge or gate a "reconnecting…" banner.
 
+## Reactive loaders
+
+Run the query on the server with the socket-free `@lunora/angular/server` entry
+inside an Analog server route (or any Angular SSR loader), hand the serializable
+`Preloaded` token to the client, and `hydratePreloaded` seeds the signal
+**synchronously**. The first read returns the server value with no loading
+flash, then the live subscription attaches after mount.
+
+```ts title="server (Analog server route)"
+import { createServerClient, preloadQuery } from "@lunora/angular/server";
+
+import { api } from "./lunora/_generated/api";
+
+// Per request — never reuse a client across requests (token leakage).
+const client = createServerClient({ url: process.env["LUNORA_URL"]!, token });
+const preloaded = await preloadQuery(client, api.posts.list, {});
+```
+
+```ts
+import { Component, inject } from "@angular/core";
+import { hydratePreloaded } from "@lunora/angular";
+import type { Preloaded } from "@lunora/angular";
+
+import { POSTS_PRELOADED } from "./posts-preloaded-token"; // however your route hands off the token
+
+@Component({/* … */})
+export class Posts {
+    // Field initializers run in an injection context, so `inject()` (used here
+    // by `hydratePreloaded` for its `DestroyRef`) resolves correctly. Seeded
+    // synchronously from SSR on the first read, then live.
+    readonly posts = hydratePreloaded(inject(POSTS_PRELOADED));
+}
+```
+
+`@Input`-bound values aren't available until after field initializers run, so
+don't read `this.somePreloadedInput` inside one — inject the token instead (a
+route resolver, a DI provider seeded by the server route, or a constructor
+parameter) as shown above.
+
+`hydratePreloaded` opens no WebSocket and touches no browser globals — it is
+safe to import into a server render pass. See
+[Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
+
 ## See also
 
 - [@lunora/angular](/docs/packages/angular) — the full adapter reference
 - [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
+- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
 - [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

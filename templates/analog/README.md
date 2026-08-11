@@ -30,6 +30,17 @@ subscription into an Angular signal" demo. Swap `LunoraService` for a real
 `@lunora/angular` adapter once one ships — the component API (a `signal` + a
 `mutate` call) is deliberately small so the migration is mechanical.
 
+> **`@lunora/angular` exists today** and covers `liveQuery` / `mutate` /
+> `connectionStatus`, plus a server half for SSR data loading:
+> `@lunora/angular/server` (`createServerClient`, `preloadQuery`) pairs with
+> `hydratePreloaded` on the client to seed a signal from an Analog server route
+> with no loading flash, then hand it off to a live subscription — see
+> [Reactive loaders](https://lunora.sh/docs/frameworks/reactive-loaders) and
+> the [Angular framework guide](https://lunora.sh/docs/frameworks/angular).
+> This template still ships the hand-rolled `LunoraService` bridge above; the
+> swap to `@lunora/angular` in this template's demo page is tracked
+> separately.
+
 ## Single-worker architecture (Analog + Nitro)
 
 This template runs **everything in one worker** by mounting Lunora as an Analog

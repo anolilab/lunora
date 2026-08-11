@@ -195,27 +195,28 @@ same handoff: a live `useQuery` (or equivalent), an optimistic `useMutation` (or
 equivalent), a provider/context, and the preloaded-hydration primitive that seeds
 an SSR value into a live subscription.
 
-| Adapter          | Idiom                            | Status  |
-| ---------------- | -------------------------------- | ------- |
-| `@lunora/react`  | hooks + context                  | shipped |
-| `@lunora/solid`  | signals / resources              | preview |
-| `@lunora/svelte` | stores (`$store`) / runes        | preview |
-| `@lunora/vue`    | composables (`ref` / `reactive`) | preview |
+| Adapter           | Idiom                            | Status  |
+| ----------------- | -------------------------------- | ------- |
+| `@lunora/react`   | hooks + context                  | shipped |
+| `@lunora/solid`   | signals / resources              | preview |
+| `@lunora/svelte`  | stores (`$store`) / runes        | preview |
+| `@lunora/vue`     | composables (`ref` / `reactive`) | preview |
+| `@lunora/angular` | signals + DI                     | preview |
 
 <Callout type="info">
     Solid lands first after React: its fine-grained signals map most directly onto Lunora deltas, so it showcases live loaders with the least glue.
 </Callout>
 
-The Solid, Svelte, and Vue adapter **packages exist** and expose the same
-hydrate-then-subscribe handoff under their idiom, but they are **preview**: not
-yet proven end-to-end against a running app. The React adapter is the only one
-proven through the full live-loader path (see
+The Solid, Svelte, Vue, and Angular adapter **packages exist** and expose the
+same hydrate-then-subscribe handoff under their idiom, but they are
+**preview**: not yet proven end-to-end against a running app. The React
+adapter is the only one proven through the full live-loader path (see
 [Manual end-to-end verification](/docs/frameworks/verify-live-loaders)).
 
 For React today, the preloaded-hydration primitive is `usePreloadedQuery` (see
 [Reactive loaders](/docs/frameworks/reactive-loaders)). The Solid/Svelte/Vue
-adapters will expose the same hydrate-then-subscribe handoff under their idiom's
-name.
+adapters expose `hydratePreloaded` under their idiom's name; Angular's
+`hydratePreloaded` (`@lunora/angular`) follows the same shape.
 
 ### Adapter API notes (alpha)
 
