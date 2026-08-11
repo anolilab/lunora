@@ -151,10 +151,11 @@ const renderCall = (method: SdkMethod): string => {
         typed: (type) => `&self, args: &${type}, shard_key: Option<&str>`,
         untyped: "&self, args: &WireValue, shard_key: Option<&str>",
     });
-    const payload =
-        method.argsType === undefined
-            ? "&WireValue::Object(Vec::new())"
-            : "&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+    const payload = argsChoice(method, {
+        none: "&WireValue::Object(Vec::new())",
+        typed: () => "&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)",
+        untyped: "args",
+    });
     const call = `self.client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
 
     // A typed result is deserialised into the model; an untyped one is handed
@@ -184,10 +185,11 @@ const renderCall = (method: SdkMethod): string => {
  */
 const renderSubscribe = (method: SdkMethod): string => {
     const argument = argsChoice(method, { none: "", typed: (type) => `args: &${type}, `, untyped: "args: &WireValue, " });
-    const payload =
-        method.argsType === undefined
-            ? "WireValue::Object(Vec::new())"
-            : "from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)";
+    const payload = argsChoice(method, {
+        none: "WireValue::Object(Vec::new())",
+        typed: () => "from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)",
+        untyped: "args.clone()",
+    });
 
     return [
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,

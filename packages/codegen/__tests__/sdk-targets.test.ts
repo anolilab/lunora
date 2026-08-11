@@ -407,13 +407,19 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         // The function is reported as carrying an unrepresentable type...
         expect(reported).toContain("wallet:credit");
 
-        // ...and its generated method still takes an argument, so the caller has
-        // somewhere to put the wire value. Every target spells the parameter
-        // differently, so this asserts the one thing they share: the call site
-        // forwards a value rather than a hardcoded empty payload.
-        const emptyPayloads = ['"wallet:credit", {}', '"wallet:credit", nil', '"wallet:credit", {})'];
+        // ...and the call site FORWARDS that argument. Asserted positively rather
+        // than by listing empty-payload spellings: the first version of this test
+        // enumerated `{}` and `nil` and so missed Rust, which accepted `args` and
+        // sent `&WireValue::Object(Vec::new())` — a parameter silently discarded,
+        // which is worse than the missing parameter it replaced, because passing
+        // arguments then compiles and does nothing.
+        const forwarded = surface
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.includes('"wallet:credit"'))
+            .filter((line) => /\bargs\b/u.test(line));
 
-        expect(emptyPayloads.some((empty) => surface.includes(empty))).toBe(false);
+        expect(forwarded.length).toBeGreaterThan(0);
     });
 
     it("reports the result types its backend could not name", async () => {
