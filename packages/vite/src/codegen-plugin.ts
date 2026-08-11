@@ -646,9 +646,29 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }, DEBOUNCE_MS);
             };
 
+            // A tsconfig DELETION can't be caught by the `normalized === findTsconfig(...)`
+            // check inside `onChange` above: `findTsconfig` re-walks the tree at
+            // call time, and by the time this fires the file is already gone, so
+            // the live walk resolves to a DIFFERENT config (a parent's) or
+            // `undefined` — never the deleted path, so that equality never
+            // matches and a cached Project built against the now-missing
+            // tsconfig would survive stale. Basename alone is enough here
+            // (no `findTsconfig` re-walk needed): over-invalidating on an
+            // unrelated tsconfig.json's removal costs a wasted rebuild, never
+            // a wrong one — the same "degrade only toward extra work" contract
+            // `readShapeMemoCursor`-style fallbacks in this repo already lean on.
+            const onConfigFileRemoved = (file: string): void => {
+                const normalized = resolve(file);
+
+                if (normalized.endsWith(`${sep}tsconfig.json`) || TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
+                }
+            };
+
             server.watcher.on("add", onChange);
             server.watcher.on("change", onChange);
             server.watcher.on("unlink", onChange);
+            server.watcher.on("unlink", onConfigFileRemoved);
 
             // The config files whose binding-relevant drift restarts the dev server
             // in place. Both wrangler candidate names are watched (even if absent
@@ -758,6 +778,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 server.watcher.off("add", onChange);
                 server.watcher.off("change", onChange);
                 server.watcher.off("unlink", onChange);
+                server.watcher.off("unlink", onConfigFileRemoved);
                 server.watcher.off("add", onConfigChange);
                 server.watcher.off("change", onConfigChange);
                 server.watcher.off("unlink", onConfigChange);

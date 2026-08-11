@@ -389,7 +389,7 @@ describe("codegen-plugin", () => {
             (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: server.environments.client });
 
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(6);
+            expect(server.watcher.off).toHaveBeenCalledTimes(7);
 
             // The pending debounce fires after close but must no-op (closed guard).
             await vi.runAllTimersAsync();
@@ -430,7 +430,7 @@ describe("codegen-plugin", () => {
             closeListeners[0]?.();
 
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(6);
+            expect(server.watcher.off).toHaveBeenCalledTimes(7);
         });
     });
 
@@ -883,6 +883,57 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             // The NEXT schema-dir save proves the drop actually happened: it
             // rebuilds a fresh Project rather than reusing the old one.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("deleting the root tsconfig.json drops the cached Project (PR review)", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const tsconfigPath = join(workdir, "tsconfig.json");
+
+            writeFileSync(tsconfigPath, JSON.stringify({ compilerOptions: { strict: true } }), "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            // `unlink` has TWO listeners (the shared `onChange` — which can't
+            // re-resolve a deleted path via `findTsconfig` — and the dedicated
+            // deletion handler that actually drops the cache); chokidar would
+            // invoke every listener registered for the event, so this mirrors
+            // that instead of picking just one.
+            const unlinkListeners = onChangeCalls.filter((args) => args[0] === "unlink").map((args) => args[1] as (file: string) => void);
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            // Cold start: builds the cached Project.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // Delete the tsconfig the cached Project resolved, THEN fire the
+            // watcher's unlink listeners — matching real chokidar ordering,
+            // where the fs change always precedes the event.
+            rmSync(tsconfigPath);
+
+            for (const listener of unlinkListeners) {
+                listener(tsconfigPath);
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The NEXT schema-dir save proves the drop happened.
             changeListener!(join(workdir, "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 
