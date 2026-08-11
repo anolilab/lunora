@@ -372,6 +372,26 @@ const LUNORA_TTL_SWEEPS: Array<{ after?: number; field: string; softDeleteField?
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
 const LUNORA_ADVISORIES: AdvisoryFinding[] = [
     {
+        "cacheKey": "unbounded_collect:players:32:profiles",
+        "categories": [
+            "PERFORMANCE"
+        ],
+        "description": "A query calls `.collect()` with no `.withIndex()` and no `.filter()`, so it materializes every row of the table. Any live subscription over it also re-sends that whole result to every subscribed client on every write to the table.",
+        "detail": "Query on \"profiles\" at players:32 calls .collect() with no index and no filter — it loads every row of \"profiles\" from the root Durable Object's SQLite into memory. A live subscription over this query records a whole-table dependency, so every write to \"profiles\" re-runs it and re-sends the full result to each subscribed socket.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "list",
+            "file": "players",
+            "line": 32,
+            "shardKind": "root",
+            "table": "profiles"
+        },
+        "name": "unbounded_collect",
+        "remediation": "Narrow the read with `.withIndex(\"name\", (q) => q.eq(...))`, cap it with `.take(n)`, or page it with `.paginate(args.paginationOpts)` so neither the scan nor the subscription payload grows with the table.",
+        "title": "Unbounded collect"
+    },
+    {
         "cacheKey": "nondeterministic_query_mutation:games:99:Date.now",
         "categories": [
             "SCHEMA"
