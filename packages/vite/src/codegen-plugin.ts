@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
@@ -540,25 +540,40 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             const onChange = (file: string): void => {
-                // Only react to changes inside the schema dir, and ignore generated output.
                 const normalized = resolve(file);
 
+                // A tsconfig change can move path aliases / compiler options out
+                // from under a reused Project, so drop the cache and rebuild it
+                // from scratch on the next run. Checked FIRST — before the
+                // schema-directory gate below — because the tsconfig that backs
+                // cross-file type resolution (a shared validator, a path alias)
+                // sits at the project root for every shipped template, not under
+                // the schema directory; gating this on `absoluteSchemaDirectory`
+                // first meant a root tsconfig save could never reach this branch.
+                // `findTsconfig` is recomputed on every call (a handful of
+                // `existsSync` checks, not a reparse) rather than captured once,
+                // so a tsconfig created AFTER the cached Project was first built —
+                // nothing was found walking up from the schema directory that
+                // time, so the Project fell back to an isolated one — still
+                // invalidates the moment it appears on disk. `tsconfig.*.json`
+                // variants (e.g. a referenced `tsconfig.build.json`) match by name
+                // wherever the watcher sees them; it never triggers codegen itself
+                // — there is nothing new to emit.
+                const tsconfigPath = findTsconfig(absoluteSchemaDirectory);
+
+                if (normalized === tsconfigPath || TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
+
+                    return;
+                }
+
+                // Only react to changes inside the schema dir from here on, and
+                // ignore generated output.
                 if (!isInside(normalized, absoluteSchemaDirectory)) {
                     return;
                 }
 
                 if (isInside(normalized, absoluteGeneratedDirectory)) {
-                    return;
-                }
-
-                // A tsconfig change can move path aliases / compiler options out
-                // from under a reused Project, so drop the cache and rebuild it
-                // from scratch on the next run. Checked before the `.ts` gate so
-                // a `tsconfig*.json` save still invalidates (it never triggers
-                // codegen itself — there is nothing new to emit).
-                if (normalized.endsWith(`${sep}tsconfig.json`) || TSCONFIG_VARIANT_RE.test(normalized)) {
-                    cachedProject = undefined;
-
                     return;
                 }
 

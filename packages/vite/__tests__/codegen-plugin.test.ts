@@ -2,11 +2,21 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { createCodegenProject } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import codegenPlugin from "../src/codegen-plugin";
 import type { ResolvedLunoraPluginOptions } from "../src/types";
+
+// Spy on `createCodegenProject` (kept fully functional via `importOriginal`) so
+// the tsconfig-invalidation tests below can tell a cache REBUILD apart from a
+// cache REUSE without adding a test-only hook to the plugin itself.
+vi.mock(import("@lunora/codegen"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject) };
+});
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
 import { internal } from "./_generated/api.js";
@@ -818,6 +828,91 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             });
 
             expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+        });
+    });
+
+    describe("tsconfig invalidation (configureServer)", () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("a root tsconfig.json save drops the cached Project — the next codegen run builds a fresh one", async () => {
+            expect.assertions(4);
+
+            writeFixture(workdir);
+            writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { strict: true } }), "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            // Cold start: the first schema-dir save builds the cached Project.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // A second schema-dir save REUSES the cached Project (no rebuild).
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // Saving the ROOT tsconfig.json drops the cache. This alone triggers no
+            // codegen run — there is nothing new to emit from a tsconfig save.
+            changeListener!(join(workdir, "tsconfig.json"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The NEXT schema-dir save proves the drop actually happened: it
+            // rebuilds a fresh Project rather than reusing the old one.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("an unrelated file save does not drop the cached Project (perf contract)", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // Outside the schema dir entirely, and not a tsconfig — the plugin
+            // ignores it outright (no codegen run), and critically must not drop
+            // the cached Project either (the perf contract this plan preserves).
+            changeListener!(join(workdir, "src", "unrelated.md"));
+            await vi.runAllTimersAsync();
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
         });
     });
 });
