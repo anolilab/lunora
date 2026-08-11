@@ -259,7 +259,10 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
  * plugin-ordered-after-`twoFactor` hook, or reading `twoFactor`'s own
  * database state) and is left to a follow-up.
  */
-const buildAuditEntry = (context: AuditHookContext, now: number = Date.now(), trustProxyHeaders?: boolean): AppendAuthAuditEntry | undefined => {
+const buildAuditEntry = (
+    context: AuditHookContext,
+    { now = Date.now(), trustProxyHeaders }: { now?: number; trustProxyHeaders?: boolean } = {},
+): AppendAuthAuditEntry | undefined => {
     const event = context.path === undefined ? undefined : eventForPath(context.path);
 
     if (event === undefined) {
@@ -324,7 +327,7 @@ const buildAuditEntry = (context: AuditHookContext, now: number = Date.now(), tr
 const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAuthMiddleware> =>
     createAuthMiddleware(async (context) => {
         try {
-            const entry = buildAuditEntry(context, Date.now(), config.trustProxyHeaders);
+            const entry = buildAuditEntry(context, { trustProxyHeaders: config.trustProxyHeaders });
 
             if (entry !== undefined) {
                 const persisted = await appendAuthAuditEntry(config.executor, entry, {

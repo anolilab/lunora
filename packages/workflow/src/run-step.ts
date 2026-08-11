@@ -10,7 +10,7 @@ import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { parseValidatorMap } from "@lunora/values";
 
 import type { NativeNonRetryableErrorConstructor } from "./errors";
-import { convertNonRetryableError, NonRetryableError } from "./errors";
+import { convertNonRetryableError, raiseNonRetryable } from "./errors";
 import type {
     InferStepArgs,
     RunStepOptions,
@@ -93,11 +93,7 @@ const createRunStep =
                 // before the existing native-conversion boundary below, rather than
                 // burning the step's retry budget re-running its side effects.
                 if (isDeterministicDispatchFailure(error)) {
-                    const nonRetryable = new NonRetryableError((error as Error).message);
-
-                    nonRetryable.cause = error;
-
-                    return convertNonRetryableError(nonRetryable, deps.nonRetryableErrorClass);
+                    return raiseNonRetryable(error.message, error, deps.nonRetryableErrorClass);
                 }
 
                 return convertNonRetryableError(error, deps.nonRetryableErrorClass);
@@ -116,13 +112,8 @@ const createRunStep =
                 return step.returns.parse(result);
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : String(error);
-                const nonRetryable = new NonRetryableError(`step "${step.name}" returns validation failed: ${message}`);
 
-                if (error !== undefined) {
-                    nonRetryable.cause = error;
-                }
-
-                return convertNonRetryableError(nonRetryable, deps.nonRetryableErrorClass);
+                return raiseNonRetryable(`step "${step.name}" returns validation failed: ${message}`, error, deps.nonRetryableErrorClass);
             }
         };
 

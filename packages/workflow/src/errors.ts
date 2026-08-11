@@ -84,5 +84,24 @@ const convertNonRetryableError = (error: unknown, NativeNonRetryableError: Nativ
     throw error;
 };
 
+/**
+ * Build a portable {@link NonRetryableError} for `message`, attach `cause` when
+ * one is supplied, and immediately convert+throw it at the native boundary via
+ * {@link convertNonRetryableError} — the construct → attach-cause → convert
+ * sequence every non-retryable classification in `@lunora/workflow`'s
+ * `createRunStep` performs (a deterministic dispatch failure, a failed
+ * `returns` validation). Always throws — `return raiseNonRetryable(...)` reads
+ * the same as `return convertNonRetryableError(...)`.
+ */
+const raiseNonRetryable = (message: string, cause: unknown, NativeNonRetryableError: NativeNonRetryableErrorConstructor | undefined): never => {
+    const nonRetryable = new NonRetryableError(message);
+
+    if (cause !== undefined) {
+        nonRetryable.cause = cause;
+    }
+
+    return convertNonRetryableError(nonRetryable, NativeNonRetryableError);
+};
+
 export type { NativeNonRetryableErrorConstructor };
-export { convertNonRetryableError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError };
+export { convertNonRetryableError, isNonRetryableError, NonRetryableError, raiseNonRetryable, toNativeNonRetryableError };

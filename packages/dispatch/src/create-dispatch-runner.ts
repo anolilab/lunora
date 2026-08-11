@@ -111,8 +111,8 @@ const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 
  * `LunoraError` a step body throws (e.g. a genuine `STORAGE_OBJECT_NOT_FOUND`)
  * would be misclassified as non-retryable merely for sharing a status.
  */
-const isDeterministicDispatchFailure = (error: unknown): boolean =>
-    isLunoraError(error) && (error as Record<symbol, unknown>)[DISPATCH_FAILURE_BRAND] === true && DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+const isDeterministicDispatchFailure = (error: unknown): error is LunoraError =>
+    isLunoraError(error) && (error as { [DISPATCH_FAILURE_BRAND]?: unknown })[DISPATCH_FAILURE_BRAND] === true && DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class

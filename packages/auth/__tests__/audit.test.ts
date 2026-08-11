@@ -326,7 +326,7 @@ describe("auth audit trail", () => {
                     headers: new Headers({ "cf-connecting-ip": "203.0.113.7", "user-agent": "TestUA/1.0" }),
                     path: "/api/auth/sign-in/email",
                 },
-                1000,
+                { now: 1000 },
             );
 
             expect(entry?.actorId).toBe("u1");
@@ -354,7 +354,7 @@ describe("auth audit trail", () => {
                     headers: new Headers({ "user-agent": "UA" }),
                     path: "/api/auth/sign-in/email",
                 },
-                42,
+                { now: 42 },
             );
 
             // The append call is what a real hook would do with the built entry.
@@ -400,8 +400,7 @@ describe("auth audit trail", () => {
                     headers: new Headers({ "x-forwarded-for": "198.51.100.9, 10.0.0.1" }),
                     path: "/api/auth/sign-in/email",
                 },
-                Date.now(),
-                true,
+                { trustProxyHeaders: true },
             );
 
             expect(entry?.ip).toBe("198.51.100.9");
@@ -419,8 +418,7 @@ describe("auth audit trail", () => {
                     headers: new Headers({ "x-real-ip": "198.51.100.9" }),
                     path: "/api/auth/sign-in/email",
                 },
-                Date.now(),
-                true,
+                { trustProxyHeaders: true },
             );
 
             expect(trustOff?.ip).toBeUndefined();
