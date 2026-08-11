@@ -1,3 +1,5 @@
+## @lunora/codegen [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.104...%40lunora%2Fcodegen%401.0.0-alpha.105) (2026-08-11)
+
 ## @lunora/codegen [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.103...%40lunora%2Fcodegen%401.0.0-alpha.104) (2026-08-11)
 
 ## @lunora/codegen [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.102...%40lunora%2Fcodegen%401.0.0-alpha.103) (2026-08-10)
