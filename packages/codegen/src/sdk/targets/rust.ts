@@ -39,7 +39,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("rust")
@@ -142,7 +142,15 @@ const verbConstant = (verb: string): string => `Verb::${toPascalCase(verb)}`;
 
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
-    const parameters = method.argsType === undefined ? "&self, shard_key: Option<&str>" : `&self, args: &${method.argsType}, shard_key: Option<&str>`;
+    // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
+    // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
+    // Dropping the parameter made those functions uncallable with arguments, which is
+    // what the JVM targets already got right.
+    const parameters = argsChoice(method, {
+        none: "&self, shard_key: Option<&str>",
+        typed: (type) => `&self, args: &${type}, shard_key: Option<&str>`,
+        untyped: "&self, args: &WireValue, shard_key: Option<&str>",
+    });
     const payload =
         method.argsType === undefined
             ? "&WireValue::Object(Vec::new())"
@@ -175,7 +183,7 @@ const renderCall = (method: SdkMethod): string => {
  * frame names a query the server re-runs on every write to the tables it read.
  */
 const renderSubscribe = (method: SdkMethod): string => {
-    const argument = method.argsType === undefined ? "" : `args: &${method.argsType}, `;
+    const argument = argsChoice(method, { none: "", typed: (type) => `args: &${type}, `, untyped: "args: &WireValue, " });
     const payload =
         method.argsType === undefined
             ? "WireValue::Object(Vec::new())"

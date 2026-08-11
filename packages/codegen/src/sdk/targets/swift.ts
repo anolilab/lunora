@@ -40,7 +40,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
+import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("swift")
@@ -154,10 +154,22 @@ const memberName = (raw: string): string => {
     return SWIFT_KEYWORDS.has(camel) ? `\`${camel}\`` : camel;
 };
 
+// `wireValue` projects a Codable model; an untyped argument is already a wire
+// value and is passed through.
+const swiftPayload = (method: SdkMethod): string => argsChoice(method, { none: "nil", typed: () => "try LunoraClient.wireValue(args)", untyped: "args" });
+
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
-    const parameters = method.argsType === undefined ? "shardKey: String? = nil" : `_ args: ${method.argsType}, shardKey: String? = nil`;
-    const payload = method.argsType === undefined ? "nil" : "try LunoraClient.wireValue(args)";
+    // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
+    // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
+    // Dropping the parameter made those functions uncallable with arguments, which is
+    // what the JVM targets already got right.
+    const parameters = argsChoice(method, {
+        none: "shardKey: String? = nil",
+        typed: (type) => `_ args: ${type}, shardKey: String? = nil`,
+        untyped: "_ args: Any, shardKey: String? = nil",
+    });
+    const payload = swiftPayload(method);
     const returns = method.resultType ?? "Any";
     const call = `try client.${method.verb}("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`;
     // A typed result is re-decoded into the model; an untyped one is handed back.
@@ -186,8 +198,8 @@ const renderCall = (method: SdkMethod): string => {
  * frame names a query the server re-runs on every write to the tables it read.
  */
 const renderSubscribe = (method: SdkMethod): string => {
-    const argument = method.argsType === undefined ? "" : `_ args: ${method.argsType}, `;
-    const payload = method.argsType === undefined ? "nil" : "try LunoraClient.wireValue(args)";
+    const argument = argsChoice(method, { none: "", typed: (type) => `_ args: ${type}, `, untyped: "_ args: Any, " });
+    const payload = swiftPayload(method);
 
     return [
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,

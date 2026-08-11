@@ -755,6 +755,7 @@ interface SdkMethod {
     namespace: string;
     resultType: string | undefined;
     summary: string;
+    takesArgs: boolean;
     verb: RuntimeVerb;
 }
 ```

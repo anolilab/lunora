@@ -21,7 +21,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { allMethods, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { allMethods, argsChoice, commentText, generatedHeaderLines, referencedModels, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 /** Python reserved words a function name could collide with. */
@@ -79,11 +79,26 @@ const memberName = (raw: string): string => {
     return PYTHON_KEYWORDS.has(snake) ? `${snake}_` : snake;
 };
 
+/**
+ * The three arg shapes: typed model, untyped wire value, or none at all.
+ *
+ * `to_dict()` only exists on a generated model, so an untyped parameter is passed
+ * through unchanged — it is already the wire-shaped mapping the transport encodes.
+ */
+const argsPayload = (method: SdkMethod): string => argsChoice(method, { none: "{}", typed: () => "args.to_dict()", untyped: "args" });
+
+const argsParameter = (method: SdkMethod, none: string, typed: (type: string) => string, untyped: string): string =>
+    argsChoice(method, { none, typed, untyped });
+
 /** One function as an `async def` posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
     const returns = method.resultType ?? "Any";
-    const parameters = method.argsType === undefined ? "self" : `self, args: ${method.argsType}`;
-    const payload = method.argsType === undefined ? "{}" : "args.to_dict()";
+    // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema,
+    // or a shape this backend could not name) still TAKES arguments — it just takes
+    // them wire-shaped. Dropping the parameter made those functions uncallable with
+    // arguments, which is what the JVM targets already got right.
+    const parameters = argsParameter(method, "self", (type) => `self, args: ${type}`, "self, args: Any");
+    const payload = argsPayload(method);
     const call = `await self._client.${method.verb}("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
 
     return [
@@ -99,11 +114,11 @@ const renderCall = (method: SdkMethod): string => {
  * tables it read, and a write has nothing to re-run.
  */
 const renderSubscribe = (method: SdkMethod): string => {
-    const payload = method.argsType === undefined ? "{}" : "args.to_dict()";
+    const payload = argsPayload(method);
 
     const parameters = [
         "self",
-        ...(method.argsType === undefined ? [] : [`args: ${method.argsType}`]),
+        ...argsChoice<ReadonlyArray<string>>(method, { none: [], typed: (type) => [`args: ${type}`], untyped: ["args: Any"] }),
         "on_data: Callback",
         "on_error: Optional[ErrorCallback] = None",
         "*",

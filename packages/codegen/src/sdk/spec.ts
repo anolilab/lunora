@@ -42,7 +42,15 @@ type RuntimeVerb = "action" | "mutation" | "query";
 
 /** One RPC function, parsed and language-neutral. */
 interface SdkMethod {
-    /** Generated args model name, or `undefined` when the function takes none. */
+    /**
+     * Generated args model name, or `undefined` when NO model could be named for
+     * this function's arguments.
+     *
+     * `undefined` does NOT mean "takes no arguments" — see {@link SdkMethod.takesArgs}.
+     * A schema carrying a `v.bigint()` or `v.bytes()` gets no model deliberately
+     * (`hasUnrepresentableWireType`), and a backend that cannot name a shape leaves
+     * it undeclared. Both still take arguments, just untyped ones.
+     */
     argsType: string | undefined;
     /** Raw exported function name (`"list"`), before any naming convention. */
     functionName: string;
@@ -54,6 +62,17 @@ interface SdkMethod {
     resultType: string | undefined;
     /** Human summary for the doc comment. */
     summary: string;
+
+    /**
+     * Whether this function declares arguments at all, independent of whether a
+     * model could be named for them.
+     *
+     * A target emits three shapes from this: a TYPED parameter when `argsType` is
+     * set, an UNTYPED wire-shaped parameter when it is not but this is true, and no
+     * parameter at all when this is false. Collapsing the middle case into the last
+     * is what made `v.bigint()` functions uncallable with arguments.
+     */
+    takesArgs: boolean;
     /** Which runtime verb this dispatches to. */
     verb: RuntimeVerb;
 }
@@ -216,6 +235,25 @@ const DOLLAR_ESCAPE = ["$", "{", "'", "$", "'", "}"].join("");
  */
 const kotlinLiteral = (value: string): string => stringLiteral(value).split("$").join(DOLLAR_ESCAPE);
 
+/**
+ * Pick one of the three argument shapes a target must emit for a method.
+ *
+ * `typed` — a model was named, take it. `untyped` — the function takes arguments
+ * that no model can express (`v.bigint()`/`v.bytes()`, or a shape the backend could
+ * not name), so take a wire-shaped value. `none` — the function takes no arguments.
+ *
+ * Named rather than left as a conditional at each call site because collapsing
+ * `untyped` into `none` is precisely the bug this exists to prevent: five targets
+ * did that and made those functions uncallable with arguments.
+ */
+const argsChoice = <T>(method: SdkMethod, choices: { none: T; typed: (type: string) => T; untyped: T }): T => {
+    if (method.argsType !== undefined) {
+        return choices.typed(method.argsType);
+    }
+
+    return method.takesArgs ? choices.untyped : choices.none;
+};
+
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
 const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     const [namespace = "", functionName = ""] = method.name.split(":");
@@ -229,6 +267,7 @@ const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     // server's validator. The caller passes wire values directly instead.
     return {
         argsType: isTypedSchema(argsSchema) && !hasUnrepresentableWireType(argsSchema) ? `${base}Args` : undefined,
+        takesArgs: isTypedSchema(argsSchema),
         functionName,
         functionPath: method.name,
         namespace,
@@ -451,6 +490,7 @@ const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArra
 
 export {
     allMethods,
+    argsChoice,
     assertGeneratable,
     commentText,
     generatedHeaderLines,

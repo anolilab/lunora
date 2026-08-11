@@ -27,7 +27,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { allMethods, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
+import { allMethods, argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("ruby")
@@ -114,10 +114,19 @@ const WIRE_ARGS_HELPER = `  def self.wire_args(model)
 
 `;
 
+// A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
+// a shape this backend could not name) still TAKES arguments — wire-shaped ones.
+// Dropping the parameter made those functions uncallable with arguments, which is
+// what the JVM targets already got right.
+//
+// `wire_args` calls `to_dynamic`, which only a generated model has, so an untyped
+// argument is passed through — it is already the wire-shaped hash.
+const rubyPayload = (method: SdkMethod): string => argsChoice(method, { none: "{}", typed: () => "LunoraApi.wire_args(args)", untyped: "args" });
+
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
-    const parameters = method.argsType === undefined ? "shard_key: nil" : "args, shard_key: nil";
-    const payload = method.argsType === undefined ? "{}" : "LunoraApi.wire_args(args)";
+    const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
+    const payload = rubyPayload(method);
     const call = `@client.${method.verb}("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`;
     // A typed result routes the decoded payload through the model's own
     // constructor; an untyped one is handed back as-is.
@@ -131,8 +140,9 @@ const renderCall = (method: SdkMethod): string => {
  * frame names a query the server re-runs on every write to the tables it read.
  */
 const renderSubscribe = (method: SdkMethod): string => {
-    const parameters = method.argsType === undefined ? "on_data, on_error = nil, shard_key: nil" : "args, on_data, on_error = nil, shard_key: nil";
-    const payload = method.argsType === undefined ? "{}" : "LunoraApi.wire_args(args)";
+    const parameters =
+        method.argsType === undefined && !method.takesArgs ? "on_data, on_error = nil, shard_key: nil" : "args, on_data, on_error = nil, shard_key: nil";
+    const payload = rubyPayload(method);
 
     return [
         `    # live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
