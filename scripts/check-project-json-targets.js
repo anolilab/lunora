@@ -44,6 +44,30 @@ import { fileURLToPath } from "node:url";
  */
 const KNOWN_UNMIGRATED = new Map();
 
+/**
+ * The conventional `package.json` script set every `packages/*` workspace
+ * member carries. `.vis/templates/lunora-package.ts` scaffolds all seven;
+ * `test:coverage` missing it silently dropped a fresh package out of the CI
+ * coverage leg with everything else staying green (plan 321).
+ */
+const REQUIRED_PACKAGE_SCRIPTS = ["build", "build:prod", "lint:eslint", "lint:prettier", "lint:types", "test", "test:coverage"];
+
+/**
+ * Packages exempt from part of `REQUIRED_PACKAGE_SCRIPTS`, each with the
+ * missing script names and why. Same shape as `KNOWN_UNMIGRATED`: the check
+ * fails if a listed script is no longer missing (stale entry) or the package
+ * is gone, so this cannot silently grow into a way to skip build/lint/test.
+ */
+const KNOWN_SCRIPT_EXCEPTIONS = new Map([
+    [
+        "packages/auth-ui/package.json",
+        {
+            missing: ["build", "build:prod"],
+            reason: "private, not published — ships raw .ts/.css source with no dist, so there is no build step by design",
+        },
+    ],
+]);
+
 /** The pnpm workspace globs, minus the trailing `/*` — every project.json lives under one. */
 const WORKSPACE_DIRECTORIES = ["apps", "examples", "packages", "tests"];
 
@@ -104,6 +128,67 @@ for (const workspace of WORKSPACE_DIRECTORIES) {
     }
 }
 
+/** Repo-relative paths of every `package.json` under `packages/`. */
+const packageManifests = [];
+/** `path → parse error` for a `packages/` manifest that couldn't be read. */
+const packageMalformed = new Map();
+/** `path → scripts object`, for exemption-staleness checks below. */
+const scriptsByPath = new Map();
+/** `path → [required script names actually missing, after exemptions]`. */
+const missingScripts = new Map();
+
+let packageEntries;
+
+try {
+    packageEntries = readdirSync(join(rootDir, "packages"), { withFileTypes: true });
+} catch {
+    packageEntries = [];
+}
+
+for (const entry of packageEntries) {
+    if (!entry.isDirectory()) {
+        continue;
+    }
+
+    const relativePath = `packages/${entry.name}/package.json`;
+
+    let raw;
+
+    try {
+        raw = readFileSync(join(rootDir, relativePath), "utf8");
+    } catch {
+        continue;
+    }
+
+    packageManifests.push(relativePath);
+
+    let manifest;
+
+    try {
+        manifest = JSON.parse(raw);
+    } catch (error) {
+        packageMalformed.set(relativePath, error.message);
+        continue;
+    }
+
+    const scripts = manifest.scripts ?? {};
+
+    scriptsByPath.set(relativePath, scripts);
+
+    const exempt = new Set(KNOWN_SCRIPT_EXCEPTIONS.get(relativePath)?.missing ?? []);
+    const missing = REQUIRED_PACKAGE_SCRIPTS.filter((name) => !(name in scripts) && !exempt.has(name));
+
+    if (missing.length > 0) {
+        missingScripts.set(relativePath, missing);
+    }
+}
+
+const scriptExceptionsGone = [...KNOWN_SCRIPT_EXCEPTIONS.keys()].filter((path) => !packageManifests.includes(path));
+const scriptExceptionsStale = [...KNOWN_SCRIPT_EXCEPTIONS.entries()]
+    .filter(([path]) => packageManifests.includes(path))
+    .map(([path, { missing }]) => ({ nowPresent: missing.filter((name) => name in scriptsByPath.get(path)), path }))
+    .filter(({ nowPresent }) => nowPresent.length > 0);
+
 const unexpected = [...offenders.keys()].filter((path) => !KNOWN_UNMIGRATED.has(path));
 const allowedButGone = [...KNOWN_UNMIGRATED.keys()].filter((path) => !projectFiles.includes(path));
 const allowedButClean = [...KNOWN_UNMIGRATED.keys()].filter((path) => projectFiles.includes(path) && !offenders.has(path));
@@ -154,6 +239,50 @@ if (allowedButClean.length > 0) {
     }
 }
 
+if (packageMalformed.size > 0) {
+    failed = true;
+
+    console.error(`❌ ${packageMalformed.size} packages/*/package.json file(s) could not be parsed:`);
+
+    for (const [path, message] of packageMalformed) {
+        console.error(`   ${path} — ${message}`);
+    }
+}
+
+if (missingScripts.size > 0) {
+    failed = true;
+
+    console.error(`❌ ${missingScripts.size} packages/*/package.json file(s) are missing a required script:`);
+
+    for (const [path, scripts] of missingScripts) {
+        console.error(`   ${path} → ${scripts.join(", ")}`);
+    }
+
+    console.error(`   Required: ${REQUIRED_PACKAGE_SCRIPTS.join(", ")}.`);
+    console.error("   Add the missing script(s), or — if the package structurally has no build/dist step —");
+    console.error("   add a documented entry to KNOWN_SCRIPT_EXCEPTIONS.");
+}
+
+if (scriptExceptionsGone.length > 0) {
+    failed = true;
+
+    console.error(`❌ ${scriptExceptionsGone.length} entr(y/ies) in KNOWN_SCRIPT_EXCEPTIONS name a package.json that no longer exists:`);
+
+    for (const path of scriptExceptionsGone) {
+        console.error(`   ${path} — deleted or renamed; update scripts/check-project-json-targets.js`);
+    }
+}
+
+if (scriptExceptionsStale.length > 0) {
+    failed = true;
+
+    console.error(`❌ ${scriptExceptionsStale.length} entr(y/ies) in KNOWN_SCRIPT_EXCEPTIONS are stale (the script now exists):`);
+
+    for (const { nowPresent, path } of scriptExceptionsStale) {
+        console.error(`   ${path} → ${nowPresent.join(", ")} — remove from the exception's \`missing\` list`);
+    }
+}
+
 if (failed) {
     process.exit(1);
 }
@@ -167,3 +296,4 @@ if (offenders.size > 0) {
 }
 
 console.log(`✅ ${projectFiles.length - offenders.size} of ${projectFiles.length} project.json files declare no silently-skipped target.`);
+console.log(`✅ ${packageManifests.length - missingScripts.size} of ${packageManifests.length} packages/*/package.json files carry the required script set.`);
