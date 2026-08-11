@@ -197,12 +197,6 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
         }
 
         const timeoutMs = runOptions.timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
-        // Bound the dispatch fetch — see DEFAULT_DISPATCH_TIMEOUT_MS. Mirrors
-        // queue/src/capture.ts's AbortController + setTimeout shape.
-        const controller = new AbortController();
-        const timeout = setTimeout(() => {
-            controller.abort();
-        }, timeoutMs);
 
         let response: Response;
 
@@ -211,16 +205,24 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
                 headers,
                 method: "POST",
-                signal: controller.signal,
+                // Bound the dispatch fetch — see DEFAULT_DISPATCH_TIMEOUT_MS.
+                // `AbortSignal.timeout`'s internal timer is unref'd, so it never
+                // keeps the process alive on its own — no manual
+                // AbortController/setTimeout/clearTimeout needed (mirrors
+                // container/src/otel.ts's OTLP send and the CLI's fetch-timeout
+                // call sites).
+                signal: AbortSignal.timeout(timeoutMs),
             });
         } catch (error: unknown) {
-            if (controller.signal.aborted) {
+            // A timed-out `AbortSignal.timeout` rejects `fetch` with the signal's
+            // `reason` — a `DOMException` named `TimeoutError` (not `AbortError`,
+            // which is reserved for an explicit caller-triggered abort). Any other
+            // rejection (network failure, DNS, etc.) rethrows as-is.
+            if (error instanceof Error && error.name === "TimeoutError") {
                 throw toDispatchTimeoutError(label, function_.__lunoraRef, timeoutMs);
             }
 
             throw error;
-        } finally {
-            clearTimeout(timeout);
         }
 
         if (!response.ok) {

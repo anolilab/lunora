@@ -97,85 +97,94 @@ describe("createDispatchRunner", () => {
         );
     });
 
-    it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
-        expect.assertions(3);
+    // `AbortSignal.timeout`'s internal abort is a real native timer that
+    // `vi.useFakeTimers()` cannot advance (unlike a JS-land `setTimeout`), so
+    // these tests replace `AbortSignal.timeout` itself with a controller whose
+    // signal the test aborts directly — deterministic and instant, and it
+    // still proves the runner asked for the right duration.
+    const stubAbortSignalTimeout = (): { abort: (reason: Error) => void; spy: ReturnType<typeof vi.spyOn> } => {
+        const controller = new AbortController();
+        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 
-        vi.useFakeTimers();
+        return { abort: (reason: Error) => controller.abort(reason), spy };
+    };
+
+    // A fetchImpl that hangs until its signal aborts, rejecting with the
+    // signal's `reason` — the same contract real `fetch` follows for an
+    // `AbortSignal.timeout`-bound request (rejects with the signal's reason,
+    // not a hardcoded generic error).
+    const hangingFetchImpl = (): ReturnType<typeof vi.fn<typeof fetch>> =>
+        vi.fn<typeof fetch>(
+            (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal!.reason as Error);
+                    });
+                }),
+        );
+
+    it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
+        expect.assertions(4);
+
+        const { abort, spy } = stubAbortSignalTimeout();
 
         try {
-            // A fetchImpl that hangs until its abort signal fires — stands in for an
-            // unresponsive origin. Without the runner's timeout this would hold the
-            // caller (a queue consumer, a scheduled invocation) open indefinitely.
-            const fetchImpl = vi.fn<typeof fetch>(
-                (_url, init) =>
-                    new Promise((_resolve, reject) => {
-                        init?.signal?.addEventListener("abort", () => {
-                            reject(new DOMException("Aborted", "AbortError"));
-                        });
-                    }),
-            );
-
+            const fetchImpl = hangingFetchImpl();
             const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
 
-            await vi.advanceTimersByTimeAsync(30_000);
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
 
             const error = (await pending) as { status?: unknown };
 
+            expect(spy).toHaveBeenCalledWith(30_000);
             expect(error).toBeInstanceOf(Error);
             expect(error.status).toBe(503);
             expect((error as Error).message).toMatch(/timed out after 30000ms/);
         } finally {
-            vi.useRealTimers();
+            spy.mockRestore();
         }
     });
 
-    it("clears the timeout on a successful response so no pending timer keeps the process alive", async () => {
+    it("rethrows a non-timeout abort/network failure unchanged", async () => {
         expect.assertions(1);
 
-        vi.useFakeTimers();
-        const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+        const { abort, spy } = stubAbortSignalTimeout();
 
         try {
-            await createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ ok: 1 }, { status: 200 }), label: "@lunora/queue" })(REF);
+            const fetchImpl = hangingFetchImpl();
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
 
-            expect(clearTimeoutSpy).toHaveBeenCalledWith(expect.anything());
+            // Not a timeout — e.g. a DNS failure the fetch implementation
+            // surfaces on the same signal-driven rejection path.
+            abort(new TypeError("fetch failed"));
+
+            const error = (await pending) as Error;
+
+            expect(error.message).toBe("fetch failed");
         } finally {
-            clearTimeoutSpy.mockRestore();
-            vi.useRealTimers();
+            spy.mockRestore();
         }
     });
 
     it("overrides the default timeout with RunFunctionOptions.timeoutMs", async () => {
         expect.assertions(2);
 
-        vi.useFakeTimers();
+        const { abort, spy } = stubAbortSignalTimeout();
 
         try {
-            const fetchImpl = vi.fn<typeof fetch>(
-                (_url, init) =>
-                    new Promise((_resolve, reject) => {
-                        init?.signal?.addEventListener("abort", () => {
-                            reject(new DOMException("Aborted", "AbortError"));
-                        });
-                    }),
-            );
-
+            const fetchImpl = hangingFetchImpl();
             const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF, undefined, { timeoutMs: 1000 }).catch(
                 (error: unknown) => error,
             );
 
-            // Not yet aborted at the (shorter) override — still pending.
-            await vi.advanceTimersByTimeAsync(999);
-
-            expect(fetchImpl).toHaveBeenCalledTimes(1);
-
-            await vi.advanceTimersByTimeAsync(1);
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
 
             const error = (await pending) as { message?: unknown };
 
+            expect(spy).toHaveBeenCalledWith(1000);
             expect(error.message).toMatch(/timed out after 1000ms/);
         } finally {
-            vi.useRealTimers();
+            spy.mockRestore();
         }
     });
 });
