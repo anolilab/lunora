@@ -169,9 +169,10 @@ See [Deploy your framework](/docs/frameworks/deploy).
 
 The default `@lunora/nuxt` setup above mounts Lunora _inside_ Nitro (one
 worker, one deploy). If you'd rather run Lunora as a fully separate worker —
-independent scaling, independent deploys, or a Nitro preset other than
-`cloudflare_module` where in-process mounting doesn't apply — split into two
-workers instead:
+independent scaling or independent deploys — split into two workers instead.
+Both workers below still target Nitro's `cloudflare_module` preset (the only
+one `@lunora/nuxt`'s in-process mounting or this split supports); this is a
+topology choice, not a way to reach an unsupported preset:
 
 - The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset)
   handles all pages and server routes.

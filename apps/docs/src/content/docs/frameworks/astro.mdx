@@ -213,10 +213,12 @@ const client = createServerClient({ token: session?.session.token, url });
 
 ## Deploy
 
-Because `@astrojs/cloudflare` writes its build to `dist/_worker.js/` (it does
-**not** clobber the wrangler `main` field), Astro's wiring needs no `main`
-redirection, unlike SvelteKit, whose adapter overwrites `main`. Point wrangler's
-`main` at your `withLunora` wrapper and declare the `ShardDO` binding:
+Because `@astrojs/cloudflare` exports its SSR handler as an importable
+function (`handle` from `@astrojs/cloudflare/handler`, see above) rather than
+writing an adapter-owned worker entry to disk, there is no build output that
+would clobber the wrangler `main` field — unlike SvelteKit, whose adapter
+overwrites `main` with its own emitted `_worker.js`. Point wrangler's `main`
+at your `withLunora` wrapper and declare the `ShardDO` binding:
 
 ```jsonc
 // wrangler.jsonc

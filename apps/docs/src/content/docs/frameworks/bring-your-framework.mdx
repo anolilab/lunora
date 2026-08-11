@@ -188,9 +188,14 @@ then `wrangler deploy --dry-run`:
 
 The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
 (Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.
-Astro composes the same way via `src/worker.ts` plus `buildFrameworkWorker`.
-Because `@astrojs/cloudflare` writes to `dist/_worker.js/` and does **not**
-clobber `main`, its wiring needs no `main` redirection.
+Astro composes the same way via `src/worker.ts` plus `buildFrameworkWorker`,
+but its wrinkle runs the opposite direction from SvelteKit's: `@astrojs/cloudflare`
+exports its SSR handler as an importable function — `handle` from
+`@astrojs/cloudflare/handler` — rather than writing an adapter-owned worker
+entry to disk that would clobber `main`. `src/worker.ts` imports `handle`
+directly and hands it to `buildFrameworkWorker`, so wrangler's `main` points
+straight at `src/worker.ts` with no redirection: there is no build output to
+avoid overwriting in the first place.
 
 </Callout>
 
