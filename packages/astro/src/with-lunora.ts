@@ -13,8 +13,8 @@
  * surfaced as a plain 500 — it can never take down the realtime plane.
  *
  * The composition is the framework-neutral `withFrameworkWorker` from
- * `@lunora/runtime` (one implementation shared with `@lunora/svelte/worker` and
- * `@lunora/vue/worker`); `withLunora` is the Astro-named alias. It accepts Astro's
+ * `@lunora/runtime` (the same composer codegen's `buildFrameworkWorker` uses
+ * for SvelteKit); `withLunora` is the Astro-named alias. It accepts Astro's
  * handler as a bare `fetch` function *or* a `{ fetch }` object, fixed options or
  * an `(env) => options` factory (for the per-request `env.SHARD` binding), and
  * preserves any `scheduled` the adapter emits when no Lunora crons are configured.

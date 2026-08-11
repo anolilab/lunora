@@ -892,25 +892,3 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `createUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
-
-## `@lunora/svelte/worker`
-
-### `ExecutionContextLike` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `LunoraWorkerOptions` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `LunoraWorkerOptionsInput` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `SvelteKitWorker` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `withLunora` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.

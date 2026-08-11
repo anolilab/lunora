@@ -158,15 +158,20 @@ const posts = hydratePreloaded(props.preloaded);
 
 See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 
-## One worker, one deploy
+## Worker composition
 
-`@lunora/vue/worker` re-exports `withLunora` for frameworks that expose their
-emitted fetch handler as an importable module.
+Vue has no meta-framework SSR build of its own — worker composition depends on
+what you build it with:
 
-<Callout type="info">
-    **Using Nuxt?** The [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts Lunora _inside_ Nitro (`addServerHandler` at `/_lunora/**`, a `#lunora/app` alias,
-    and a root `worker.ts` wrapper re-exporting `ShardDO`), so Nuxt gets single-worker composition too — see the [Nuxt guide](/docs/frameworks/nuxt).
-</Callout>
+- **Nuxt** — the [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts Lunora
+  _inside_ Nitro (`addServerHandler` at `/_lunora/**`, a `#lunora/app` alias,
+  and a root `worker.ts` wrapper re-exporting `ShardDO`) for single-worker
+  composition, or split into two workers — see the [Nuxt guide](/docs/frameworks/nuxt).
+- **A framework whose build exposes an importable emitted handler** (e.g.
+  Astro, SvelteKit) — see [Bring your framework](/docs/frameworks/bring-your-framework)
+  for `withFrameworkWorker`, the shared composer.
+- **Plain SPA** — no SSR loaders, so there's nothing to compose; point the
+  client at a standalone Lunora worker.
 
 See [Deploy your framework](/docs/frameworks/deploy).
 

@@ -229,20 +229,6 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## `@lunora/vue/worker`
-
-Single-worker composition helper for frameworks whose build exposes the emitted
-fetch handler as an importable module. Re-exports `withLunora`
-(`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)), which wraps a
-framework handler as Lunora's fallback `httpRouter` and mounts only the reserved
-`/_lunora/*` plane plus `ShardDO`.
-
-<Callout type="warn">
-    **Nuxt caveat.** Nitro does not expose its emitted fetch handler as an importable virtual module, so single-worker `withLunora` composition is **not**
-    achievable for Nuxt. The supported Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker plus a separate standalone Lunora worker owning
-    `/_lunora/*` + `ShardDO`, wired by `NUXT_PUBLIC_LUNORA_URL`. `withLunora` stays useful for other frameworks that do expose their handler.
-</Callout>
-
 ## See also
 
 - [@lunora/react](/docs/packages/react) — the same contract for React

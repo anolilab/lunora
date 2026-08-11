@@ -160,22 +160,26 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 
 SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`
 (class-B, "own CF adapter, hook-injection"), so Lunora **injects** its realtime
-plane into the worker SvelteKit emits. `@lunora/svelte/worker` re-exports
-`withLunora`, which wraps the SvelteKit handler as Lunora's fallback `httpRouter`:
+plane into the worker SvelteKit emits, via `buildFrameworkWorker` on the
+generated app (`withFrameworkWorker` from `@lunora/runtime` under the hood):
 reserved `/_lunora/*` endpoints hit Lunora, everything else delegates to
-SvelteKit. One worker, one deploy. Keep this socket-free entry out of client code.
+SvelteKit. One worker, one deploy.
 
 ```ts title="src/worker.ts"
-import { withLunora } from "@lunora/svelte/worker";
 import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js"; // adapter output
 
-import { auth } from "./lunora/auth";
+import { defineApp } from "../lunora/_generated/app";
 
-// `shardDO` lives on `env` (per request), so pass a factory:
-export default withLunora(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .buildFrameworkWorker(svelteKitWorker);
+
+export const ShardDO = app.ShardDO;
+export default app;
 ```
 
-See [Deploy your framework](/docs/frameworks/deploy).
+See [Bring your framework](/docs/frameworks/bring-your-framework) for the full
+composition contract, and [Deploy your framework](/docs/frameworks/deploy).
 
 ## See also
 

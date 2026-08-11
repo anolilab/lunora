@@ -165,6 +165,24 @@ versions — verify them on your pinned toolchain:
 
 See [Deploy your framework](/docs/frameworks/deploy).
 
+## Alternative: two-worker split
+
+The default `@lunora/nuxt` setup above mounts Lunora _inside_ Nitro (one
+worker, one deploy). If you'd rather run Lunora as a fully separate worker —
+independent scaling, independent deploys, or a Nitro preset other than
+`cloudflare_module` where in-process mounting doesn't apply — split into two
+workers instead:
+
+- The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset)
+  handles all pages and server routes.
+- A separate standalone Lunora worker (`wrangler.lunora.jsonc`,
+  `lunora/server.ts`) owns `/_lunora/*` + `ShardDO`.
+- `runtimeConfig.public.lunoraUrl` (`NUXT_PUBLIC_LUNORA_URL`) tells the SSR
+  loader and the browser client where to reach the Lunora worker.
+
+This trades the same-origin convenience of the mounted route for two
+independently deployed workers.
+
 ## See also
 
 - [@lunora/nuxt](/docs/packages/nuxt) — the full module reference (incl. the h3 version note)

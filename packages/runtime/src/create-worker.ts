@@ -4809,8 +4809,8 @@ const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(opt
 /**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
- * (own-CF-adapter, hook-injection) composer behind `@lunora/svelte/worker`,
- * `@lunora/vue/worker`, and `@lunora/astro`'s `withLunora` (PLAN4 §3). It wraps
+ * (own-CF-adapter, hook-injection) composer behind `@lunora/astro`'s
+ * `withLunora` and codegen's `buildFrameworkWorker` (PLAN4 §3). It wraps
  * the framework handler as {@link composeWorker}'s `httpRouter`, so the reserved
  * realtime endpoints (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) plus
  * auth/explicit `routes` go to Lunora and **everything else** delegates to the
