@@ -197,6 +197,32 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
         }
 
         const timeoutMs = runOptions.timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
+        // Bound the WHOLE dispatch — response headers AND body. One signal,
+        // held in scope for the initial fetch below AND the response.text()
+        // body reads further down: a slow/hanging origin can stall AFTER
+        // headers arrive (so the outer `await fetchImpl` already resolved),
+        // and the deadline must still fire on the pending body read, not
+        // reset a fresh window for it.
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
+
+        // A timed-out `AbortSignal.timeout` rejects (or, for a body read,
+        // makes the stream reject) with the signal's `reason` — a
+        // `DOMException` named `TimeoutError` (not `AbortError`, reserved for
+        // an explicit caller-triggered abort) — map that to the same
+        // retryable 503 `LunoraError` regardless of which await it hit.
+        // Anything else (network failure, DNS, a malformed body) rethrows
+        // as-is. `never` return, called as `return rethrowAsTimeoutOrOriginal(error)`
+        // at each site — `throw` of a non-Error-typed expression trips
+        // `@typescript-eslint/only-throw-error`, and a bare call-as-statement
+        // doesn't satisfy TS's definite-assignment analysis on the `let` it
+        // guards the way `return` does.
+        const rethrowAsTimeoutOrOriginal = (error: unknown): never => {
+            if (error instanceof Error && error.name === "TimeoutError") {
+                throw toDispatchTimeoutError(label, function_.__lunoraRef, timeoutMs);
+            }
+
+            throw error;
+        };
 
         let response: Response;
 
@@ -205,31 +231,36 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
                 headers,
                 method: "POST",
-                // Bound the dispatch fetch — see DEFAULT_DISPATCH_TIMEOUT_MS.
                 // `AbortSignal.timeout`'s internal timer is unref'd, so it never
                 // keeps the process alive on its own — no manual
                 // AbortController/setTimeout/clearTimeout needed (mirrors
                 // container/src/otel.ts's OTLP send and the CLI's fetch-timeout
                 // call sites).
-                signal: AbortSignal.timeout(timeoutMs),
+                signal: timeoutSignal,
             });
         } catch (error: unknown) {
-            // A timed-out `AbortSignal.timeout` rejects `fetch` with the signal's
-            // `reason` — a `DOMException` named `TimeoutError` (not `AbortError`,
-            // which is reserved for an explicit caller-triggered abort). Any other
-            // rejection (network failure, DNS, etc.) rethrows as-is.
-            if (error instanceof Error && error.name === "TimeoutError") {
-                throw toDispatchTimeoutError(label, function_.__lunoraRef, timeoutMs);
-            }
-
-            throw error;
+            return rethrowAsTimeoutOrOriginal(error);
         }
 
         if (!response.ok) {
-            throw toDispatchError(label, response.status, await response.text());
+            let errorBody: string;
+
+            try {
+                errorBody = await response.text();
+            } catch (error: unknown) {
+                return rethrowAsTimeoutOrOriginal(error);
+            }
+
+            throw toDispatchError(label, response.status, errorBody);
         }
 
-        const text = await response.text();
+        let text: string;
+
+        try {
+            text = await response.text();
+        } catch (error: unknown) {
+            return rethrowAsTimeoutOrOriginal(error);
+        }
 
         if (text.length === 0) {
             return undefined;

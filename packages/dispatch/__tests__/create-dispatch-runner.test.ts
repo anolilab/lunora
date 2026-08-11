@@ -128,6 +128,32 @@ describe("createDispatchRunner", () => {
                 }),
         );
 
+    // A Response double whose headers "arrive" immediately (the outer fetch
+    // resolves), but whose `.text()` hangs until `signal` aborts — the
+    // real-`fetch` contract for a body stream that stalls AFTER headers land
+    // (the deadline is still bound to the same signal the initial fetch used).
+    // Checks `signal.aborted` synchronously, not just the future event, since
+    // `.text()` is only called a microtask after the fetch resolves — by then
+    // the test's `abort()` call (issued right after kicking off the run, with
+    // no intervening `await`) may already have fired.
+    const responseWithHangingBody = (init: { ok: boolean; status: number }, signal: AbortSignal | null | undefined): Response =>
+        ({
+            ok: init.ok,
+            status: init.status,
+            text: async () =>
+                new Promise<string>((_resolve, reject) => {
+                    if (signal?.aborted === true) {
+                        reject(signal.reason as Error);
+
+                        return;
+                    }
+
+                    signal?.addEventListener("abort", () => {
+                        reject(signal.reason as Error);
+                    });
+                }),
+        }) as unknown as Response;
+
     it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
         expect.assertions(4);
 
@@ -188,6 +214,50 @@ describe("createDispatchRunner", () => {
 
             expect(spy).toHaveBeenCalledWith(1000);
             expect(error.message).toMatch(/timed out after 1000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("maps a deadline that fires DURING a successful response's stalled body read to the same retryable 503 (PR review)", async () => {
+        expect.assertions(2);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: true, status: 200 }, init?.signal));
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            // Headers already "arrived" (fetchImpl resolved) by the time this
+            // fires; the pending `response.text()` read must still see it.
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { status?: unknown };
+
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("maps a deadline that fires DURING a non-ok response's stalled error-body read to the same retryable 503 (PR review)", async () => {
+        expect.assertions(2);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: false, status: 500 }, init?.signal));
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { status?: unknown };
+
+            // Must be the runner's own retryable timeout error, NOT toDispatchError's
+            // 500-status classification — the abort during the body read must win.
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
         } finally {
             spy.mockRestore();
         }
