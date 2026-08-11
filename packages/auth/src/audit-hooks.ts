@@ -31,6 +31,15 @@ interface AuthAuditHookConfig extends AppendAuthAuditOptions {
      * auth request.
      */
     onRecord?: (entry: AppendAuthAuditEntry) => Promise<void> | void;
+
+    /**
+     * When true, `x-forwarded-for` is trusted as a client-IP fallback when
+     * `cf-connecting-ip` is absent — only enable this behind a proxy you control,
+     * or the recorded IP is attacker-chosen. Defaults to `false`: off Cloudflare,
+     * with no trusted proxy configured, the audit record's `ip` is omitted rather
+     * than populated from a spoofable header.
+     */
+    trustProxyHeaders?: boolean;
 }
 
 /**
@@ -145,11 +154,27 @@ const header = (context: AuditHookContext, name: string): string | undefined => 
     return value ?? undefined;
 };
 
-/** Resolve the client IP from the usual proxy headers (Cloudflare first). */
-const resolveIp = (context: AuditHookContext): string | undefined => {
-    const forwarded = header(context, "x-forwarded-for");
+/**
+ * Resolve the client IP: `cf-connecting-ip` when present (edge-set on Cloudflare,
+ * unspoofable — see `packages/runtime/src/create-worker.ts`'s `clientIp` comment,
+ * the rule this mirrors). Otherwise `undefined`, unless the caller has opted into
+ * `trustProxyHeaders`, in which case the leftmost `x-forwarded-for` entry is used.
+ * No other proxy header is consulted — none is more trustworthy than
+ * `x-forwarded-for`, and an attacker-chosen IP in an audit row is worse than a
+ * missing one.
+ */
+const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undefined): string | undefined => {
+    const cfConnectingIp = header(context, "cf-connecting-ip");
 
-    return header(context, "cf-connecting-ip") ?? (forwarded === undefined ? undefined : forwarded.split(",")[0]?.trim()) ?? header(context, "x-real-ip");
+    if (cfConnectingIp !== undefined) {
+        return cfConnectingIp;
+    }
+
+    if (trustProxyHeaders !== true) {
+        return undefined;
+    }
+
+    return header(context, "x-forwarded-for")?.split(",")[0]?.trim();
 };
 
 /** Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session. */
@@ -234,14 +259,14 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
  * plugin-ordered-after-`twoFactor` hook, or reading `twoFactor`'s own
  * database state) and is left to a follow-up.
  */
-const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): AppendAuthAuditEntry | undefined => {
+const buildAuditEntry = (context: AuditHookContext, now: number = Date.now(), trustProxyHeaders?: boolean): AppendAuthAuditEntry | undefined => {
     const event = context.path === undefined ? undefined : eventForPath(context.path);
 
     if (event === undefined) {
         return undefined;
     }
 
-    const ip = resolveIp(context);
+    const ip = resolveIp(context, trustProxyHeaders);
     const userAgent = header(context, "user-agent");
     const targetEmail = resolveTargetEmail(context, event);
 
@@ -299,7 +324,7 @@ const buildAuditEntry = (context: AuditHookContext, now: number = Date.now()): A
 const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAuthMiddleware> =>
     createAuthMiddleware(async (context) => {
         try {
-            const entry = buildAuditEntry(context);
+            const entry = buildAuditEntry(context, Date.now(), config.trustProxyHeaders);
 
             if (entry !== undefined) {
                 const persisted = await appendAuthAuditEntry(config.executor, entry, {

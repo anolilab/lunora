@@ -366,4 +366,74 @@ describe("auth audit trail", () => {
             expect(row?.userAgent).toBe("UA");
         });
     });
+
+    // Plan 328: cf-connecting-ip wins when present; x-forwarded-for is only
+    // trusted opt-in, and x-real-ip is never recorded, in either mode.
+    describe("buildAuditEntry — client IP resolution (plan 328)", () => {
+        it("records cf-connecting-ip and ignores x-forwarded-for even when both are present and differ", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                headers: new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.9" }),
+                path: "/api/auth/sign-in/email",
+            });
+
+            expect(entry?.ip).toBe("203.0.113.7");
+        });
+
+        it("omits the IP when cf-connecting-ip is absent and proxy trust is off (default) — the regression test", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                headers: new Headers({ "x-forwarded-for": "198.51.100.9" }),
+                path: "/api/auth/sign-in/email",
+            });
+
+            expect(entry?.ip).toBeUndefined();
+        });
+
+        it("records the leftmost x-forwarded-for entry when cf-connecting-ip is absent and proxy trust is on", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry(
+                {
+                    headers: new Headers({ "x-forwarded-for": "198.51.100.9, 10.0.0.1" }),
+                    path: "/api/auth/sign-in/email",
+                },
+                Date.now(),
+                true,
+            );
+
+            expect(entry?.ip).toBe("198.51.100.9");
+        });
+
+        it("never records x-real-ip, with proxy trust off or on", () => {
+            expect.assertions(2);
+
+            const trustOff = buildAuditEntry({
+                headers: new Headers({ "x-real-ip": "198.51.100.9" }),
+                path: "/api/auth/sign-in/email",
+            });
+            const trustOn = buildAuditEntry(
+                {
+                    headers: new Headers({ "x-real-ip": "198.51.100.9" }),
+                    path: "/api/auth/sign-in/email",
+                },
+                Date.now(),
+                true,
+            );
+
+            expect(trustOff?.ip).toBeUndefined();
+            expect(trustOn?.ip).toBeUndefined();
+        });
+
+        it("still builds the audit entry when no IP-bearing headers are present at all", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({ path: "/api/auth/sign-in/email" });
+
+            expect(entry).toBeDefined();
+            expect(entry?.ip).toBeUndefined();
+        });
+    });
 });
