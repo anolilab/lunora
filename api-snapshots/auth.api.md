@@ -827,7 +827,10 @@ const authTables: (options: LunoraAuthOptions) => Record<string, TableDefinition
 ### `buildAuditEntry` (const)
 
 ```ts
-const buildAuditEntry: (context: AuditHookContext, now?: number, trustProxyHeaders?: boolean) => AppendAuthAuditEntry | undefined;
+const buildAuditEntry: (context: AuditHookContext, { now, trustProxyHeaders }?: {
+    now?: number;
+    trustProxyHeaders?: boolean;
+}) => AppendAuthAuditEntry | undefined;
 ```
 
 ### `classifyEmail` (const)

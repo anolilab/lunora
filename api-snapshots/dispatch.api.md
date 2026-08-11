@@ -64,5 +64,5 @@ const createDispatchRunner: (options: DispatchRunnerOptions) => DispatchRunFunct
 ### `isDeterministicDispatchFailure` (const)
 
 ```ts
-const isDeterministicDispatchFailure: (error: unknown) => boolean;
+const isDeterministicDispatchFailure: (error: unknown) => error is LunoraError;
 ```
