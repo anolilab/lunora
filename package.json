@@ -45,6 +45,7 @@
         "lint:affected:types": "vis affected lint:types --fail-fast",
         "lint:eslint": "vis run lint:eslint",
         "lint:eslint:fix": "vis run lint:eslint:fix",
+        "lint:node-capabilities-docs": "node scripts/check-node-capabilities-docs.js",
         "lint:package-json": "vis sort-package-json --check",
         "lint:package-json:fix": "vis sort-package-json",
         "lint:prettier": "prettier --check .",
