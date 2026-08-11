@@ -70,6 +70,14 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, hydrateDocsById } from "./ctx-db-rank-page";
 export { migrateSearchState, readSearchBackfillState, SEARCH_STATE_TABLE, writeSearchBackfillState } from "./ctx-db-search-state";
+export {
+    deleteShapePokeCursor,
+    deleteShapePokeCursorsForConnection,
+    migrateShapePokeCursor,
+    readShapePokeCursor,
+    SHAPE_POKE_CURSOR_TABLE,
+    writeShapePokeCursor,
+} from "./ctx-db-shape-poke-cursor";
 export type { ShapeRow } from "./ctx-db-shapes";
 export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type {

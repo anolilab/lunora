@@ -2079,6 +2079,12 @@ const SCHEMA_HISTORY_MAX_VERSIONS = 50;
 const SEARCH_STATE_TABLE = "__lunora_search_state";
 ```
 
+### `SHAPE_POKE_CURSOR_TABLE` (const)
+
+```ts
+const SHAPE_POKE_CURSOR_TABLE = "__shape_poke_cursor";
+```
+
 ### `SchedulableWorkflowReferenceLike` (interface)
 
 ```ts
@@ -3218,6 +3224,18 @@ const deleteGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: str
 const deleteGlobalShapeSnapshotsForConnection: (sql: SqlExec, connectionId: string) => void;
 ```
 
+### `deleteShapePokeCursor` (const)
+
+```ts
+const deleteShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string) => void;
+```
+
+### `deleteShapePokeCursorsForConnection` (const)
+
+```ts
+const deleteShapePokeCursorsForConnection: (sql: SqlExec, connectionId: string) => void;
+```
+
 ### `depKey` (const)
 
 ```ts
@@ -3546,6 +3564,12 @@ const migrateIdempotency: (sql: SqlExec) => void;
 const migrateSearchState: (sql: SqlExec) => void;
 ```
 
+### `migrateShapePokeCursor` (const)
+
+```ts
+const migrateShapePokeCursor: (sql: SqlExec) => void;
+```
+
 ### `minCdcSeq` (const)
 
 ```ts
@@ -3797,6 +3821,12 @@ const readSchemaVersion: (sql: SqlExec, hash: string) => SchemaVersionRow | unde
 
 ```ts
 const readSearchBackfillState: (sql: SqlExec, companion: string) => SearchBackfillState;
+```
+
+### `readShapePokeCursor` (const)
+
+```ts
+const readShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string) => number | undefined;
 ```
 
 ### `readTablePage` (const)
@@ -4170,6 +4200,12 @@ const writeIdempotent: (sql: SqlExec, identity: string, mutationId: string, resu
 
 ```ts
 const writeSearchBackfillState: (sql: SqlExec, companion: string, cursor: string | undefined, done: boolean, profile: string) => void;
+```
+
+### `writeShapePokeCursor` (const)
+
+```ts
+const writeShapePokeCursor: (sql: SqlExec, connectionId: string, subId: string, cursor: number) => void;
 ```
 
 ### `writeTouchesMemo` (const)
