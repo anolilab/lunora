@@ -150,19 +150,21 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
 };
 
 /**
- * Diff the previously-sent list snapshot (`previousJson`, the memo's
- * `lastJson`) against the new query result and produce per-row
- * {@link MutationDelta}s the client can merge in place via `applyDelta` —
- * Convex-parity live-pagination deltas (server half of gap #20).
+ * Diff the previously-sent list snapshot against the new query result, keyed by
+ * `_id`, returning each changed row paired with its pre-serialized frame body.
  *
- * Returns `undefined` (caller falls back to a full `{type:"data"}` snapshot)
+ * Returns `undefined` (the value is not expressible as row deltas at all)
  * unless ALL of these hold:
  *
  * 1. `previousJson` parses to an array (there IS a previous list to diff against).
  * 2. `nextResult` is also an array.
  * 3. Every row in both arrays is a plain object carrying a string `_id`.
  * 4. Order preservation — rows present in BOTH arrays appear in the same relative order.
- * 5. Chattiness cap — the number of deltas does not exceed the new array length (a near-total change is cheaper as a snapshot).
+ *
+ * These are EXPRESSIBILITY conditions only. Whether the deltas are the cheaper
+ * thing to put on the wire is a separate question, answered by
+ * {@link subscriptionFrames} against the frames it is about to send — see the
+ * note there on why no row-count proxy stands in for it.
  *
  * Diff is keyed by `_id`: rows only in prev → `delete`; rows only in next →
  * `insert`; rows in both whose JSON differs → `update`. Insert/update carry the
@@ -170,17 +172,12 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
  * parses). Deltas are ordered deletes-then-inserts/updates so the client never
  * sees a transient over-length page.
  *
- * Per-row serialization is done exactly **once** per refresh (finding #6). Each
+ * Per-row serialization is done exactly **once** per refresh (finding #6): each
  * row is stringified a single time into a fingerprint reused for both the
- * `prev !== next` change-detection compare and — when the caller passes the
- * optional `frames` sink — the pre-serialized delta frame body. The returned
- * `MutationDelta[]` shape is unchanged; `frames`, when supplied, receives the
- * exact `JSON.stringify(delta)` string for each returned delta, in the same
- * order, so the caller can splice it straight into the `{type:"delta"}` frame
- * without serializing the delta (and the row inside it) a second time.
- * @returns the per-row deltas to send, or `undefined` when any precondition fails and a full snapshot should be sent instead
+ * `prev !== next` change-detection compare and the frame body.
+ * @returns the changed rows with their frame bodies, or `undefined` when the change is not expressible as row deltas
  */
-const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string, frames?: string[]): MutationDelta[] | undefined => {
+const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: string): FramedDelta[] | undefined => {
     let parsed: unknown;
 
     try {
@@ -208,11 +205,30 @@ const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table
 
     const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
     const tableJson = JSON.stringify(deltaTable);
-    // Deletes precede upserts so the client never sees a transient over-length page.
-    const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
 
-    // (5): a near-total change is better sent as a single snapshot.
-    if (framed.length > next.order.length) {
+    // Deletes precede upserts so the client never sees a transient over-length page.
+    return [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
+};
+
+/**
+ * The per-row {@link MutationDelta}s a change decomposes into, or `undefined`
+ * when it is not expressible as row deltas — see {@link collectFramedDeltas}
+ * for the four conditions.
+ *
+ * This is the diff as a VALUE, for callers that want to inspect it (and for the
+ * unit tests that pin the diff's semantics). The delivery path does not use it:
+ * {@link subscriptionFrames} needs the frame strings, not the delta objects, and
+ * building both would allocate a `MutationDelta` per row per socket per
+ * write-flush that nothing reads.
+ *
+ * `frames`, when supplied, receives the exact `JSON.stringify(delta)` string for
+ * each returned delta, in the same order.
+ * @returns the per-row deltas, or `undefined` when the change is not expressible as row deltas
+ */
+const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string, frames?: string[]): MutationDelta[] | undefined => {
+    const framed = collectFramedDeltas(previousJson, nextResult, table);
+
+    if (framed === undefined) {
         return undefined;
     }
 
@@ -262,36 +278,73 @@ const trySendFrame = (ws: FrameSink, frame: string): boolean => {
     }
 };
 
-/**
- * Send every delta frame for one subscription. Reports `delivered` only when ALL
- * frames left the socket: a partial failure must keep the diff baseline at the
- * last fully-delivered value so the next flush re-diffs the whole change. Keyed
- * list deltas are idempotent on replay, so re-sending an already-applied row is
- * harmless.
- *
- * `lastMutationId` (when supplied) is stamped on EVERY delta frame in this
- * batch, not just the last — a client's checkpoint gate reads whichever frame
- * it happens to observe, and re-stamping the same value on each is a no-op
- * for a client that already saw an earlier one (idempotent, monotonic
- * `Math.max` on the read side). Without this, a `@lunora/db` list collection
- * — the exact id-keyed shape this delta path exists for — never sees a
- * per-frame watermark past its first snapshot, permanently starving the
- * checkpoint gate of the frame-carried signal `pushSubscriptionData`'s
- * snapshot branch provides (plan 266 finding d's fix was incomplete without
- * this — the delta path is this feature's common case, not a rare fallback).
- */
-const sendDeltaFrames = (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number): boolean => {
-    const idJson = JSON.stringify(subId);
-    const watermarkSuffix = lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`;
-    let delivered = true;
+/** Everything {@link subscriptionFrames} needs to render one subscription's frames. */
+interface SubscriptionFrameInput {
+    /** The trailing `,"cursor":<n>,"epoch":"<e>"` fragment, or `""` on a non-CDC shard. */
+    cursorSuffix: string;
+    /** This socket's custom-mutator watermark, stamped on every frame; omitted when the socket has none. */
+    lastMutationId?: number;
+    /** The fresh query result, unencoded — diffed row-wise against `previousJson`. */
+    nextResult: unknown;
+    /** The wire form of the value last DELIVERED for this subscription; `undefined` on a first send. */
+    previousJson?: string;
+    /** `JSON.stringify(encodeWire(nextResult))` — the exact `data` frame payload, built once by the caller. */
+    snapshotJson: string;
+    /** The subscription id the frames are addressed to. */
+    subId: string;
+    /** The table stamped on each delta; `""` falls back to {@link DELTA_FALLBACK_TABLE}. */
+    table: string;
+}
 
-    for (const deltaBody of deltaFrames) {
-        if (!trySendFrame(ws, `{"type":"delta","id":${idJson},"delta":${deltaBody}${watermarkSuffix}${cursorSuffix}}`)) {
-            delivered = false;
-        }
+/**
+ * Render the frames that carry one subscription's new value: either a run of
+ * `{type:"delta"}` frames or the single `{type:"data"}` snapshot, whichever is
+ * smaller on the wire.
+ *
+ * **Why the choice lives here.** Every delta frame re-pays the whole
+ * `{"type":"delta","id":…}` + `"table":…` + cursor/epoch/watermark envelope
+ * around ONE row body, which the snapshot pays once for the entire list. So the
+ * deltas stop being the cheaper encoding well before they stop being a valid
+ * one, and where that happens depends on the row size, the row count, and the
+ * envelope width together. No row-count proxy ("no more deltas than rows") can
+ * express that: it is blind to fat rows, to a wide envelope, and to a list of
+ * tiny rows where a single delta already costs more than re-sending everything.
+ * Rendering the frames first and summing their real lengths is exact, needs no
+ * heuristic, and cannot drift from the format — because it IS the format. That
+ * is also why the envelope is written in exactly one place (here) rather than
+ * modelled a second time by the caller doing the sizing.
+ *
+ * Lengths are UTF-16 code units, not UTF-8 bytes. Both sides carry the same row
+ * content, so a multi-byte payload inflates them together and the comparison
+ * holds; it only shifts the crossover slightly toward the snapshot, which is the
+ * safe direction (one frame is also one `ws.send` and one client apply). A tie
+ * goes to the snapshot for the same reason.
+ *
+ * `lastMutationId` is stamped on EVERY frame, not just the last — a client's
+ * checkpoint gate reads whichever frame it happens to observe, and re-stamping
+ * the same value is a no-op for one that already saw an earlier one (idempotent,
+ * monotonic `Math.max` on the read side). Without it a `@lunora/db` list
+ * collection — the exact id-keyed shape the delta path targets, so every write
+ * after its first snapshot goes out as deltas — would never see a frame-carried
+ * watermark again (plan 266 finding d).
+ * @returns the frames to send in order; always at least one unless the diff found no changed rows
+ */
+const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
+    const { cursorSuffix, lastMutationId, nextResult, previousJson, snapshotJson, subId, table } = input;
+    const idJson = JSON.stringify(subId);
+    const suffix = (lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`) + cursorSuffix;
+    const snapshot = `{"type":"data","id":${idJson},"data":${snapshotJson}${suffix}}`;
+    // No baseline (first send, or the last send never left the socket) — there is
+    // nothing to diff against, so the snapshot is the only option.
+    const framed = previousJson === undefined ? undefined : collectFramedDeltas(previousJson, nextResult, table);
+
+    if (framed === undefined) {
+        return [snapshot];
     }
 
-    return delivered;
+    const deltas = framed.map(({ frame }) => `{"type":"delta","id":${idJson},"delta":${frame}${suffix}}`);
+
+    return deltas.reduce((total, frame) => total + frame.length, 0) < snapshot.length ? deltas : [snapshot];
 };
 
 /**
@@ -320,5 +373,5 @@ const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
     }
 };
 
-export type { DrainableSink, FrameSink };
-export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame };
+export type { DrainableSink, FrameSink, SubscriptionFrameInput };
+export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame };

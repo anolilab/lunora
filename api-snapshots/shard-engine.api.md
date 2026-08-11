@@ -4152,12 +4152,6 @@ const selectShapeMemberIds: (sql: SqlExec, table: string, effectiveWhere: WhereI
 const selectShapeRows: (sql: SqlExec, table: string, effectiveWhere: WhereInput | undefined) => ShapeRow[];
 ```
 
-### `sendDeltaFrames` (const)
-
-```ts
-const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number) => boolean;
-```
-
 ### `serializeSqlValue` (const)
 
 ```ts
@@ -4200,6 +4194,12 @@ const stableStringify: (value: unknown) => string;
 
 ```ts
 const stableWireKey: (value: unknown) => string;
+```
+
+### `subscriptionFrames` (const)
+
+```ts
+const subscriptionFrames: (input: SubscriptionFrameInput) => string[];
 ```
 
 ### `subscriptionListDeltas` (const)

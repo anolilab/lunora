@@ -194,11 +194,10 @@ import {
     selectMatchingIds,
     selectShapeMemberIds,
     selectShapeRows,
-    sendDeltaFrames,
     ShardRunner,
     stableStringify,
     stableWireKey,
-    subscriptionListDeltas,
+    subscriptionFrames,
     summarizeFanoutTopics,
     summarizeSubscriptions,
     TransactionHeadroomTracker,
@@ -9017,11 +9016,11 @@ abstract class ShardDO {
      * so dependency tracking stays current even when the value is unchanged.
      *
      * When the result is a diffable list (Convex-parity live-pagination, gap
-     * #20), emit one `{type:"delta"}` frame per changed row instead of a full
-     * `{type:"data"}` snapshot — see {@link subscriptionListDeltas} for the
-     * five conditions under which deltas are safe. The first send (and any
-     * non-list / large-change result) falls back to the snapshot. The memo is
-     * always advanced to the new `lastJson`/`tables` regardless of path.
+     * #20), the push can go out as one `{type:"delta"}` frame per changed row
+     * instead of a full `{type:"data"}` snapshot. Which of the two is sent is
+     * `subscriptionFrames`' call, made by rendering both and measuring them —
+     * this method just sends what it is handed. The memo is always advanced to
+     * the new `lastJson`/`tables` regardless of path.
      *
      * `cursor` (when supplied) is the `__cdc_log` high-watermark this frame
      * covers; it is appended to the emitted `data`/`delta` JSON so a client can
@@ -9079,46 +9078,37 @@ abstract class ShardDO {
             return;
         }
 
-        // Try an incremental delta push when there's a prior list to diff
-        // against. `undefined` => not diffable, fall back to the snapshot below.
-        // `deltaFrames` receives the pre-serialized `delta` body for each delta
-        // (finding #6) so we never re-`JSON.stringify` a row that the diff has
-        // already fingerprinted.
-        const deltaFrames: string[] = [];
-        const deltas =
-            existing === undefined
-                ? undefined
-                : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
-
-        // Stamp this socket's per-mutator watermark on the plain `data` frame
-        // the same way the `settled` branch above does, so the client's
-        // checkpoint gate can trust what THIS frame's rows actually reflect
-        // instead of a provisional RPC-ack signal that can race ahead of it
-        // (plan 266 finding d: write A's data frame arriving after write B's
-        // ack has already landed, but before B's own rows synced, must not
-        // resolve B's overlay early). The delta branch below stamps the SAME
-        // watermark on every delta frame it sends (not a follow-up: a
-        // `@lunora/db` list collection is exactly the id-keyed shape the
-        // delta path targets, so after the first snapshot EVERY subsequent
-        // write for it goes out as deltas — leaving them unstamped would
-        // starve the checkpoint gate of a frame-carried watermark for the
-        // common case, not a rare one).
-        const lastMutationIdField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
+        // Row deltas or the full snapshot — `subscriptionFrames` renders both and
+        // returns whichever is smaller on the wire, so the frame layout and the
+        // choice between the two stay in one place (this method has no business
+        // re-deriving the delta envelope just to size it). `existing?.lastJson`
+        // is the last value that actually LEFT the socket, so a first send — or
+        // one whose predecessor was dropped — has no baseline and gets the
+        // snapshot. `clientWatermark` rides on every frame either way, so the
+        // client's checkpoint gate can trust what THIS frame's rows reflect
+        // instead of a provisional RPC-ack that can race ahead of it (plan 266
+        // finding d).
+        const frames = subscriptionFrames({
+            cursorSuffix,
+            lastMutationId: clientWatermark,
+            nextResult: outcome.result,
+            previousJson: existing?.lastJson,
+            snapshotJson: json,
+            subId,
+            table: outcome.tables.values().next().value ?? "",
+        });
 
         // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
-        // the frame(s) for this value actually leave the socket. `ws.send` throws
-        // when the socket has closed or its outbound buffer is gone. Advancing the
-        // baseline unconditionally (the prior behavior) would diff the NEXT value
-        // against a value the client never received, so a single dropped frame
-        // silently lost that update until the client reconnected. By keeping the
-        // last *delivered* baseline on failure, the next write-flush that touches a
-        // read table re-sends — and the reconnect resume path (`evaluateResume`)
-        // still covers a fully-gone socket. `tables` always advances so dependency
-        // tracking stays accurate even when delivery failed.
-        const delivered =
-            deltas === undefined
-                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${lastMutationIdField}${cursorSuffix}}`)
-                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix, clientWatermark);
+        // EVERY frame for this value has left the socket. `ws.send` throws when the
+        // socket has closed or its outbound buffer is gone, and a partial delta run
+        // must keep the baseline at the last fully-delivered value so the next flush
+        // re-diffs the whole change (keyed list deltas are idempotent on replay, so
+        // re-sending an already-applied row is harmless). Advancing unconditionally
+        // would diff the NEXT value against one the client never received, silently
+        // losing that update until it reconnected. `.map` before `.every` on purpose:
+        // every frame is attempted, and only then is the verdict taken. `tables`
+        // always advances so dependency tracking stays accurate even on failure.
+        const delivered = frames.map((frame) => trySendFrame(ws, frame)).every(Boolean);
 
         memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), ranges: outcome.ranges, tables: outcome.tables });
     }
