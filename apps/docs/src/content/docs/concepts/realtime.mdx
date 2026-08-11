@@ -77,10 +77,12 @@ Three things change:
   then continues live — the consumer's `for await` never sees the interruption.
 - **The producer outlives the socket.** Close the tab mid-run and the run
   finishes anyway; the transcript is waiting when you come back.
-- **A run is shared.** Its identity is `(functionPath, args)`, so a second tab
-  asking the same question attaches to the same run instead of paying for a
-  second generation. Give a stream that must not be shared a caller-unique
-  argument — the argument set _is_ the run key.
+- **A live run is shared.** Its identity is `(identity, functionPath, args)`, so
+  a second tab of the _same signed-in user_ attaches to the run already in flight
+  instead of paying for a second generation. A different identity always gets its
+  own run. A **finished** run is not shared: a later caller asking the same
+  question gets a fresh answer, because a transcript is the record of one
+  execution, not a cached response.
 
 On the client, opt in per call so the reconnect resumes rather than fails:
 
@@ -88,12 +90,15 @@ On the client, opt in per call so the reconnect resumes rather than fails:
 const { chunks, status } = useStream(api.chat.answer, { threadId, prompt }, { durable: true });
 ```
 
-Transcripts are trimmed after 24 hours by default (`{ durable: { ttlMs } }` to
-change it). One case is deliberately loud rather than silent: if the Durable
-Object is evicted mid-run, the persisted prefix is replayed and the stream then
-fails with `STREAM_INTERRUPTED` instead of quietly re-running the handler —
-re-running a model call would bill twice and duplicate the tail. When you need a
-producer that survives that too, the run belongs in a
+Transcripts are trimmed after 24 hours by default, per procedure
+(`{ durable: { ttlMs } }` to change it), and a run is capped at 50,000 chunks so
+a runaway generator cannot fill the shard's storage.
+
+If the Durable Object is evicted mid-run, what happens depends on who asks next.
+A client **resuming** that transcript gets `STREAM_INTERRUPTED` — its tail cannot
+be spliced back on, and re-generating would duplicate what it already has. A
+client asking **fresh** simply gets a new run: the dead one has no claim on its
+key. When you need a producer that survives eviction itself, the run belongs in a
 [workflow](/docs/packages/workflow).
 
 ## Why no MQTT / Pub/Sub

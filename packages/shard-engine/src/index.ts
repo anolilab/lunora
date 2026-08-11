@@ -85,7 +85,6 @@ export type {
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
-export { mulberry32, seedFrom, withDeterministicScope } from "./deterministic-scope";
 export { runDrizzle, runSql } from "./do-exec";
 export {
     AGG_COUNT,
@@ -107,16 +106,15 @@ export {
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
-export type { DurableStreamChunk, DurableStreamRun, DurableStreamStatus } from "./durable-stream";
+export type { DurableStreamRun } from "./durable-stream";
 export {
     appendStreamChunk,
     claimStreamRun,
+    deleteStreamRun,
     finishStreamRun,
     migrateDurableStreams,
     readStreamChunks,
     readStreamRun,
-    STREAM_CHUNKS_TABLE,
-    STREAM_RUNS_TABLE,
     trimStreamRuns,
 } from "./durable-stream";
 export type { ExternalSourceDiffResult } from "./external-source-diff";

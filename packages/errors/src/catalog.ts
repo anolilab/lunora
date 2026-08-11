@@ -327,12 +327,12 @@ export const ERROR_CATALOG = {
      */
     EXPIRED: { status: 404, title: "Session expired" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
-    NETWORK_IN_MUTATION: { status: 500, title: "Network call inside a mutation" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
     SHAPE_NOT_FOUND: { status: 404, title: "Shape not found" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
+    STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
     TOKEN_EXPIRED: { status: 401, title: "Authentication token expired" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
     UNKNOWN_ADMIN_OP: { status: 404, title: "Unknown admin operation" },

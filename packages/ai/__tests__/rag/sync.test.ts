@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ragSyncTriggers } from "../../src/rag/sync";
 
-const ACTION = { __lunoraRef: "docs:reindex" };
+const ACTION = { __lunoraRef: "docs:reindex" } as const;
 
 /** Records what the trigger scheduled, standing in for `ctx.scheduler`. */
 const fakeContext = () => {

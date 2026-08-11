@@ -17,6 +17,16 @@
  * the indexed text, so an unrelated column edit costs nothing at all.
  */
 
+/**
+ * A dispatchable function reference — the `internal.docs.reindex` you pass as
+ * `action`. Typed structurally (rather than `unknown`) so passing the wrong
+ * thing is a compile error: mis-wiring the action is the mistake this API is
+ * most likely to see, and it would otherwise surface as a silent no-op.
+ */
+interface RagSyncActionReference {
+    readonly __lunoraRef: string;
+}
+
 /** Structural slice of `ctx.scheduler` — enough to defer the re-index. */
 interface RagSyncScheduler {
     runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
@@ -50,7 +60,7 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
      * `rag.index` / `rag.remove`. An action, not a mutation: embedding is network
      * I/O and never runs in the deterministic write path.
      */
-    action: unknown;
+    action: RagSyncActionReference;
 
     /**
      * How long to wait before re-indexing. A small delay coalesces nothing by
@@ -141,5 +151,5 @@ const ragSyncTriggers = <Document extends Record<string, unknown> = Record<strin
     };
 };
 
-export type { RagSyncArgs, RagSyncOptions };
+export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions };
 export { ragSyncTriggers };

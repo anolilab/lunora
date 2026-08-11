@@ -6,6 +6,7 @@ import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import useOpenTrace from "../../hooks/use-open-trace";
 import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricHistoryResult, TracesResult, TraceSummary } from "../../lib/admin";
@@ -93,8 +94,6 @@ const EvalCardView = ({ card, onOpenTrace }: EvalCardViewProps): ReactElement =>
 
 interface EvalsPanelProps {
     readonly initialShardKey?: string;
-    /** Open a trace by id — the drill-down from a graded run to the generation. */
-    readonly onOpenTrace?: (traceId: string) => void;
 }
 
 /**
@@ -108,9 +107,12 @@ interface EvalsPanelProps {
  * `recordEvaluation`; the card says so plainly rather than drawing a trend the
  * data can't back.
  */
-const EvalsPanel = ({ initialShardKey, onOpenTrace }: EvalsPanelProps): ReactElement => {
+const EvalsPanel = ({ initialShardKey }: EvalsPanelProps): ReactElement => {
     const t = useT();
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
+    // The drill-down from a score to the generation that earned it — the same
+    // hand-off the Metrics panel's exemplars use.
+    const openTrace = useOpenTrace(queryShardKey);
 
     const { data, error } = useAdminQuery<TracesResult>(ADMIN_FUNCTIONS.getTraces, {}, { live: true, shardKey: queryShardKey });
     // The trend read's own failure is ignored: a worker predating the RPC, or an
@@ -134,7 +136,7 @@ const EvalsPanel = ({ initialShardKey, onOpenTrace }: EvalsPanelProps): ReactEle
             ) : (
                 <div className="grid gap-3 md:grid-cols-2">
                     {cards.map((card) => (
-                        <EvalCardView card={card} key={card.name} onOpenTrace={onOpenTrace} />
+                        <EvalCardView card={card} key={card.name} onOpenTrace={openTrace} />
                     ))}
                 </div>
             )}

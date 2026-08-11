@@ -82,7 +82,15 @@ const tokenBudget = <Names extends string>(limiter: RateLimiter<Names>, name: Na
                 return limiter.check(name, { key });
             }
 
-            return limiter.limit(name, { count: Math.ceil(tokens), key, reserve: true });
+            // Clamp to the bucket's capacity. The limiter refuses a count larger
+            // than capacity outright, and for a token budget that is exactly
+            // backwards: a single long-context call over a per-window budget is
+            // the ordinary case, and throwing would charge it NOTHING — the one
+            // call the budget exists to catch would escape it entirely. Charging
+            // the whole bucket is the strongest true statement available.
+            const { config } = await limiter.getValue(name, { key });
+
+            return limiter.limit(name, { count: Math.min(Math.ceil(tokens), config.capacity ?? config.rate), key, reserve: true });
         },
     };
 };

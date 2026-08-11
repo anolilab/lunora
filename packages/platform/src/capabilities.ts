@@ -208,8 +208,8 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
         },
         durableStreams: {
-            level: "emulated",
-            note: "Same shape as the Cloudflare host — chunks persisted per run in the shard's SQLite, producer detached from the socket. One process, so a restart mid-run ends it as STREAM_INTERRUPTED",
+            level: "unsupported",
+            note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it — a durable stream declared here would silently behave as an ephemeral one",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {

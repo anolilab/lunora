@@ -679,12 +679,16 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 /**
  * Durability settings for a `.stream()` procedure.
  *
- * A run is identified by the function path plus its arguments, so two clients
- * calling the same stream with the same arguments observe one producer and one
- * transcript. That identity is the feature: it is what makes a reload resume
- * rather than re-generate, and what lets a second tab watch the same answer.
- * Give a stream that must NOT be shared a caller-unique argument (a thread id,
- * a message id) — the argument set is the run key.
+ * A run is identified by the socket's verified identity plus the function path
+ * and arguments, so two clients of the SAME user calling the same stream with
+ * the same arguments observe one producer and one transcript. That identity is
+ * the feature: it is what makes a reload resume rather than re-generate, and
+ * what lets a second tab watch the same answer. A different identity always gets
+ * its own run.
+ *
+ * Sharing applies to a run still in flight. Once a run finishes, a later caller
+ * asking the same question gets a fresh one — a transcript is the record of one
+ * execution, not a cached response.
  */
 interface DurableStreamOptions {
     /**

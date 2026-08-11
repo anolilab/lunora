@@ -16,21 +16,27 @@ import createSqliteExec from "./_helpers/node-sqlite";
 
 interface FakeWebSocket {
     attachment: SocketAttachment | undefined;
+    deserializeAttachment: () => unknown;
     send: (data: string) => void;
     sent: string[];
     serializeAttachment: (value: unknown) => void;
 }
 
-const createFakeWebSocket = (): FakeWebSocket => {return {
-    attachment: undefined,
-    send(data: string) {
-        this.sent.push(data);
-    },
-    sent: [],
-    serializeAttachment(value: unknown) {
-        this.attachment = value as SocketAttachment | undefined;
-    },
-}};
+const createFakeWebSocket = (): FakeWebSocket => {
+    return {
+        attachment: undefined,
+        deserializeAttachment() {
+            return this.attachment;
+        },
+        send(data: string) {
+            this.sent.push(data);
+        },
+        sent: [],
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
+        },
+    };
+};
 
 const parseFrames = (ws: FakeWebSocket) => ws.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
 
@@ -204,8 +210,8 @@ describe("shardDO durable streams", () => {
         ).toStrictEqual(["first", "second"]);
     });
 
-    it("reports an interrupted run instead of silently re-running the handler", async () => {
-        expect.assertions(2);
+    it("reports an interrupted run to a client holding half of it, and reclaims it for a fresh one", async () => {
+        expect.assertions(4);
 
         const shard = new DurableStreamShard(state, {});
 
@@ -229,15 +235,106 @@ describe("shardDO durable streams", () => {
 
         revived.registered = shard.registered;
 
-        const second = createFakeWebSocket();
+        // A client RESUMING that transcript cannot be spliced back onto it: the
+        // tail would have to be re-generated, which duplicates.
+        const resumed = createFakeWebSocket();
 
-        revived.registerSocket(second, { subs: {} });
-        await revived.driveMessage(second, { id: "stream_2", query: { functionPath: "chat:answer" }, type: "stream" });
-        await waitForTerminator(second);
+        revived.registerSocket(resumed, { subs: {} });
+        await revived.driveMessage(resumed, { id: "stream_2", query: { functionPath: "chat:answer" }, sinceChunk: 1, type: "stream" });
+        await waitForTerminator(resumed);
 
-        const frames = parseFrames(second);
+        expect((parseFrames(resumed).at(-1) as { error?: { code?: string } }).error?.code).toBe("STREAM_INTERRUPTED");
 
-        expect(frames.filter((frame) => frame.type === "chunk").map((frame) => frame.data)).toStrictEqual(["half"]);
-        expect((frames.at(-1) as { error?: { code?: string } }).error?.code).toBe("STREAM_INTERRUPTED");
+        // A client asking fresh has no partial transcript to protect, so the dead
+        // run is reclaimed and a new one starts — an eviction must not wedge the
+        // key until its TTL expires.
+        revived.registered.set("chat:answer", async function* answer() {
+            yield "whole";
+        });
+
+        const fresh = createFakeWebSocket();
+
+        revived.registerSocket(fresh, { subs: {} });
+        await revived.driveMessage(fresh, { id: "stream_3", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(fresh);
+
+        const frames = parseFrames(fresh);
+
+        expect(frames.filter((frame) => frame.type === "chunk").map((frame) => frame.data)).toStrictEqual(["whole"]);
+        expect(frames.at(-1)?.type).toBe("complete");
+        // One start on the revived instance: the resuming attach refused rather
+        // than re-running, and only the fresh one produced.
+        expect(revived.starts).toBe(1);
+    });
+
+    it("re-runs for a later caller instead of serving a finished transcript as a cache", async () => {
+        expect.assertions(2);
+
+        const shard = new DurableStreamShard(state, {});
+        let answers = 0;
+
+        shard.registered.set("chat:answer", async function* answer() {
+            answers += 1;
+            yield `answer-${String(answers)}`;
+        });
+
+        const first = createFakeWebSocket();
+
+        shard.registerSocket(first, { subs: {} });
+        await shard.driveMessage(first, { id: "stream_1", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(first);
+
+        // Same arguments, but this caller is not resuming anything — it is asking
+        // a question. Replaying the stored answer would make a durable stream a
+        // response cache with a 24-hour TTL, including for a failed run.
+        const later = createFakeWebSocket();
+
+        shard.registerSocket(later, { subs: {} });
+        await shard.driveMessage(later, { id: "stream_2", query: { functionPath: "chat:answer" }, type: "stream" });
+        await waitForTerminator(later);
+
+        expect(
+            parseFrames(later)
+                .filter((frame) => frame.type === "chunk")
+                .map((frame) => frame.data),
+        ).toStrictEqual(["answer-2"]);
+        expect(shard.starts).toBe(2);
+    });
+
+    it("never shares a run across identities", async () => {
+        expect.assertions(2);
+
+        const shard = new DurableStreamShard(state, {});
+        let release = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        shard.registered.set("chat:answer", async function* answer() {
+            yield "secret";
+            await gate;
+        });
+
+        const alice = createFakeWebSocket();
+        const bob = createFakeWebSocket();
+
+        shard.registerSocket(alice, { subs: {}, userId: "alice" });
+        shard.registerSocket(bob, { subs: {}, userId: "bob" });
+
+        await shard.driveMessage(alice, { id: "stream_a", query: { functionPath: "chat:answer" }, type: "stream" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+        });
+        // Same function, same args, different verified identity: Bob must get his
+        // own run, not a replay of Alice's transcript — an attach never drives the
+        // procedure, so it would also skip its RLS middleware.
+        await shard.driveMessage(bob, { id: "stream_b", query: { functionPath: "chat:answer" }, type: "stream" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+        });
+        release();
+
+        expect(shard.starts).toBe(2);
+        expect(parseFrames(bob).filter((frame) => frame.type === "chunk")).toHaveLength(1);
     });
 });

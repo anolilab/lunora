@@ -1043,6 +1043,11 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
      * already owns the thread by that point, so there is no window in which two
      * runs believe they may append.
      */
+    /** The user turn that opens the run. Runs after any queue wait, so a parked run appends only once it owns the thread. */
+    const persistUserTurn = async (): Promise<void> => {
+        await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
+    };
+
     const finishRun = async (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }): Promise<void> => {
         const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
 
@@ -1086,13 +1091,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         await terminatePriorInstance(env, exportName, bootstrap.priorInstanceId);
     }
 
-    // Queue policy: when this run was parked behind the one in flight, hibernate
-    // until the finishing run's completion mutation hands us the thread — by
-    // which point we already own it, so the first append below lands on the
-    // shared seq counter with nobody else writing to it.
-    await awaitDequeue(step, params.threadKey, instanceId, bootstrap?.queued);
-
-    await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
+    await persistUserTurn();
 
     // Memory step: dispatch the configured retrieval action once per run and
     // inject the assembled context into every turn's prompt.
@@ -1130,6 +1129,19 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const usageBox: UsageBox = { value: undefined };
 
     try {
+        // Queue policy: when this run was parked behind the one in flight,
+        // hibernate until the finishing run's completion hands us the thread — by
+        // which point we already own it, so the first append lands on the shared
+        // seq counter with nobody else writing to it.
+        //
+        // INSIDE the try on purpose: `waitForEvent` throws when its timeout
+        // elapses (a wake that could never land), and outside the try that throw
+        // escaped without running `finishRun` — leaving this run's queue row
+        // behind forever. Five of those exhaust the depth cap and every later
+        // start on the thread is refused.
+        await awaitDequeue(step, params.threadKey, instanceId, bootstrap?.queued);
+        await persistUserTurn();
+
         const { final, stoppedByCondition, turnsRun } = await runTurns(turnContext, maxTurns, stopConditions, usageBox);
         const usagePatch = usageBox.value === undefined ? {} : { usage: usageBox.value };
 

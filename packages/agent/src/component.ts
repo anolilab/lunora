@@ -31,6 +31,18 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
 const MAX_QUEUE_DEPTH = 5;
 
 /**
+ * How long a thread may sit untouched under a live-looking run before a new run
+ * may take it.
+ *
+ * Ownership moves to a dequeued run before its wake event is sent, so an
+ * instance terminated while parked leaves the thread pointing at a workflow that
+ * will never resume — and nothing else would ever free it. The window is longer
+ * than the loop's own dequeue timeout so a genuinely parked run is never
+ * reclaimed out from under itself.
+ */
+const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
+
+/**
  * The agent thread tables, shipped as a schema extension so an app merges
  * them with one call and they can never collide with app tables:
  *
@@ -380,7 +392,17 @@ export const agentComponent = (): AgentComponent => {
                 // under the still-hibernating prior instance. So only a *matching*
                 // instance id is exempt; missing OR differing both trip the policy.
                 const priorInstanceId = existing["instanceId"] as string | undefined;
+                // Staleness reclaim. Ownership transfers to a dequeued run BEFORE
+                // its wake event is sent, so an instance terminated while parked
+                // leaves the thread owned by a workflow that will never resume.
+                // Nothing else reaps that: under `"reject"` every later run
+                // CONFLICTs, and under `"queue"` every later run parks behind a
+                // corpse. A thread untouched for longer than any run could
+                // plausibly hold it is treated as free.
+                const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
+                const abandoned = now - updatedAt > ABANDONED_RUN_MS;
                 const isConcurrentRun =
+                    !abandoned &&
                     (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
                     priorInstanceId !== undefined &&
                     (args.instanceId === undefined || args.instanceId !== priorInstanceId);
@@ -553,8 +575,21 @@ export const agentComponent = (): AgentComponent => {
                 .first();
 
             if (thread?.["instanceId"] !== args.instanceId) {
-                // Unknown thread, or ownership already moved on (a replay of this
-                // same completion) — either way not this call's to end.
+                // Not the owner: either a replay of a completion whose handoff
+                // already happened, or a run that ended while still PARKED — its
+                // wait timed out, or it threw before its turn came. The parked
+                // case must still release the slot it holds, or an abandoned run
+                // occupies a queue position forever and the depth cap eventually
+                // refuses every new start on this thread.
+                const parked = await context.db
+                    .query(RUN_QUEUE_TABLE)
+                    .withIndex("byThreadInstance", (q) => q.eq("threadKey", args.key).eq("instanceId", args.instanceId))
+                    .first();
+
+                if (parked) {
+                    await context.db.delete(parked["_id"] as never);
+                }
+
                 return {};
             }
 
@@ -583,11 +618,17 @@ export const agentComponent = (): AgentComponent => {
             // Ownership transfers here, before the waking event is sent: the
             // dequeued run is already the owner when it resumes, so it can append
             // on the shared seq counter the moment it wakes.
+            //
+            // The finishing run's `error` is CARRIED, not cleared: a run that
+            // failed with another queued behind it would otherwise vanish without
+            // trace — the thread goes straight from one run to the next and
+            // nothing records that the first one failed. The incoming run clears
+            // it through its own bootstrap.
             await context.db.patch(thread["_id"] as never, {
-                error: undefined,
                 instanceId: nextInstanceId,
                 status: "running",
                 updatedAt: now,
+                ...(args.error === undefined ? {} : { error: args.error }),
                 ...(args.usage === undefined ? {} : { usage: args.usage }),
             });
 

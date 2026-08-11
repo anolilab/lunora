@@ -75,7 +75,8 @@ const migrateDurableStreams = (sql: SqlExec): void => {
             last_seq INTEGER NOT NULL DEFAULT 0,
             error_code TEXT,
             error TEXT,
-            started_at REAL NOT NULL
+            started_at REAL NOT NULL,
+            ttl_ms REAL NOT NULL
         )`,
     );
 
@@ -122,28 +123,46 @@ const readStreamRun = (sql: SqlExec, runKey: string): DurableStreamRun | undefin
  * attach can interleave. `RETURNING` would fold them into one statement, but
  * nothing else in the engine relies on it against workerd's SQLite yet.
  */
-const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number): boolean => {
+const claimStreamRun = (sql: SqlExec, runKey: string, startedAt: number, ttlMs: number): boolean => {
     if (readStreamRun(sql, runKey) !== undefined) {
         return false;
     }
 
     runDrizzle(
         sql,
-        dsql`INSERT INTO ${dsql.identifier(STREAM_RUNS_TABLE)} (run_key, status, last_seq, started_at) VALUES (${runKey}, ${"running"}, 0, ${startedAt})`,
+        dsql`INSERT INTO ${dsql.identifier(STREAM_RUNS_TABLE)} (run_key, status, last_seq, started_at, ttl_ms)
+             VALUES (${runKey}, ${"running"}, 0, ${startedAt}, ${ttlMs})`,
     );
 
     return true;
 };
 
 /**
- * Append one chunk and advance the run's `last_seq`. Called before the chunk
- * reaches any socket, so a client that reconnects can always ask for everything
- * after the last `seq` it saw without a gap.
+ * Drop a run and its chunks outright — the reclaim path.
+ *
+ * A run is not a cache of an answer: it is the transcript of one execution. When
+ * that execution can no longer be attached to (its producer died with the
+ * instance) or a caller is asking for a NEW one rather than resuming, the row has
+ * to go, or its key stays wedged until the TTL expires.
+ */
+const deleteStreamRun = (sql: SqlExec, runKey: string): void => {
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key = ${runKey}`);
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE run_key = ${runKey}`);
+};
+
+/**
+ * Append one chunk. Called before the chunk reaches any socket, so a client that
+ * reconnects can always ask for everything after the last `seq` it saw without a
+ * gap.
+ *
+ * Deliberately one statement: the run row's `last_seq` is written once at the
+ * terminal instead of per chunk. A token-at-a-time generation is thousands of
+ * chunks, and nothing reads `last_seq` mid-run — an attach replays from
+ * `__stream_chunks` itself — so the second write was pure cost on the hottest
+ * path this feature has.
  */
 const appendStreamChunk = (sql: SqlExec, runKey: string, seq: number, dataJson: string): void => {
     runDrizzle(sql, dsql`INSERT OR IGNORE INTO ${dsql.identifier(STREAM_CHUNKS_TABLE)} (run_key, seq, data_json) VALUES (${runKey}, ${seq}, ${dataJson})`);
-
-    runDrizzle(sql, dsql`UPDATE ${dsql.identifier(STREAM_RUNS_TABLE)} SET last_seq = ${seq} WHERE run_key = ${runKey}`);
 };
 
 /**
@@ -162,7 +181,7 @@ const readStreamChunks = (sql: SqlExec, runKey: string, sinceSeq: number): Durab
         });
 
 /** Mark a run finished. `errorCode`/`error` are written only for the `error` status. */
-const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", failure?: { code: string; message: string }): void => {
+const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: { code: string; message: string }): void => {
     /* eslint-disable unicorn/no-null -- SQL NULL is the value being written: a run that completes must clear its error columns, and `undefined` is not bindable */
     const errorCode = failure?.code ?? null;
     const errorMessage = failure?.message ?? null;
@@ -171,30 +190,33 @@ const finishStreamRun = (sql: SqlExec, runKey: string, status: "complete" | "err
     runDrizzle(
         sql,
         dsql`UPDATE ${dsql.identifier(STREAM_RUNS_TABLE)}
-             SET status = ${status}, error_code = ${errorCode}, error = ${errorMessage}
+             SET status = ${status}, last_seq = ${lastSeq}, error_code = ${errorCode}, error = ${errorMessage}
              WHERE run_key = ${runKey}`,
     );
 };
 
 /**
- * Drop runs (and their chunks) that started before `olderThanTs`. Runs are a
- * cache of a transcript, not application data — the TTL is what keeps a chatty
- * shard's SQLite from growing without bound.
+ * Drop every run (and its chunks) whose OWN retention window has elapsed.
+ *
+ * Each run stores the `ttlMs` of the procedure that created it, so the comparison
+ * is per row. A shard mixing a 24h chat transcript with a 60s progress stream
+ * must not lose the former because the latter happened to trigger the sweep.
  */
-const trimStreamRuns = (sql: SqlExec, olderThanTs: number): void => {
+const trimStreamRuns = (sql: SqlExec, now: number): void => {
     runDrizzle(
         sql,
         dsql`DELETE FROM ${dsql.identifier(STREAM_CHUNKS_TABLE)} WHERE run_key IN (
-            SELECT run_key FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at < ${olderThanTs}
+            SELECT run_key FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at + ttl_ms < ${now}
         )`,
     );
 
-    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at < ${olderThanTs}`);
+    runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(STREAM_RUNS_TABLE)} WHERE started_at + ttl_ms < ${now}`);
 };
 
 export {
     appendStreamChunk,
     claimStreamRun,
+    deleteStreamRun,
     finishStreamRun,
     migrateDurableStreams,
     readStreamChunks,

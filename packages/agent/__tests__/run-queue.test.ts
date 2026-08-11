@@ -216,6 +216,55 @@ describe("onConcurrentRun: queue", () => {
         await expect(start("wf-g")).rejects.toThrow("run queue is full");
     });
 
+    it("releases the slot of a run that ends while still parked", async () => {
+        expect.assertions(2);
+
+        const { complete, queue, start } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+        await start("wf-c");
+
+        // B's 12h wait elapsed (or it threw before its turn): it is not the
+        // thread's owner, but it still holds a queue slot. Without releasing it,
+        // five abandoned runs exhaust the depth cap and every later start on this
+        // thread is refused forever.
+        await expect(complete({ instanceId: "wf-b", key: "thread-1", status: "error" })).resolves.toStrictEqual({});
+        expect(queue().map((row) => row["instanceId"])).toStrictEqual(["wf-c"]);
+    });
+
+    it("keeps a failed run's error visible when it hands the thread on", async () => {
+        expect.assertions(1);
+
+        const { complete, start, thread } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+        await complete({ error: "model refused", instanceId: "wf-a", key: "thread-1", status: "error" });
+
+        // The thread moves straight to B's run; clearing the error here would
+        // erase the only record that A failed at all.
+        expect(thread()).toMatchObject({ error: "model refused", instanceId: "wf-b", status: "running" });
+    });
+
+    it("reclaims a thread whose owner was terminated while parked", async () => {
+        expect.assertions(2);
+
+        const { start, thread } = setup();
+
+        await start("wf-a");
+        await start("wf-b");
+
+        // Ownership transfers before the wake is sent, so an instance terminated
+        // while parked leaves the thread pointing at a workflow that never
+        // resumes. Age the row past the abandonment window.
+        Object.assign(thread() ?? {}, { updatedAt: Date.now() - 14 * 60 * 60 * 1000 });
+
+        // A new run takes it rather than CONFLICTing against a corpse forever.
+        await expect(start("wf-z")).resolves.toStrictEqual({ created: false });
+        expect(thread()?.["instanceId"]).toBe("wf-z");
+    });
+
     it("refuses to queue a dispatch that has no instance id to wake", async () => {
         expect.assertions(2);
 

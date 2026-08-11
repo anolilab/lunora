@@ -661,15 +661,6 @@ interface DeployInfo {
 }
 ```
 
-### `DurableStreamChunk` (interface)
-
-```ts
-interface DurableStreamChunk {
-    dataJson: string;
-    seq: number;
-}
-```
-
 ### `DurableStreamRun` (interface)
 
 ```ts
@@ -680,12 +671,6 @@ interface DurableStreamRun {
     startedAt: number;
     status: DurableStreamStatus;
 }
-```
-
-### `DurableStreamStatus` (type)
-
-```ts
-type DurableStreamStatus = "complete" | "error" | "running";
 ```
 
 ### `ExportRow` (interface)
@@ -2106,18 +2091,6 @@ const SCHEMA_HISTORY_MAX_VERSIONS = 50;
 const SEARCH_STATE_TABLE = "__lunora_search_state";
 ```
 
-### `STREAM_CHUNKS_TABLE` (const)
-
-```ts
-const STREAM_CHUNKS_TABLE = "__stream_chunks";
-```
-
-### `STREAM_RUNS_TABLE` (const)
-
-```ts
-const STREAM_RUNS_TABLE = "__stream_runs";
-```
-
 ### `SchedulableWorkflowReferenceLike` (interface)
 
 ```ts
@@ -3137,7 +3110,7 @@ const bumpCdcEpoch: (sql: SqlExec) => string;
 ### `claimStreamRun` (const)
 
 ```ts
-const claimStreamRun: (sql: SqlExec, runKey: string, startedAt: number) => boolean;
+const claimStreamRun: (sql: SqlExec, runKey: string, startedAt: number, ttlMs: number) => boolean;
 ```
 
 ### `clampPromotionThresholds` (const)
@@ -3270,6 +3243,12 @@ const deleteGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: str
 const deleteGlobalShapeSnapshotsForConnection: (sql: SqlExec, connectionId: string) => void;
 ```
 
+### `deleteStreamRun` (const)
+
+```ts
+const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
+```
+
 ### `depKey` (const)
 
 ```ts
@@ -3378,7 +3357,7 @@ const findStorageReferences: (sql: SqlExec, storageColumns: Record<string, strin
 ### `finishStreamRun` (const)
 
 ```ts
-const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "error", failure?: {
+const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: {
     code: string;
     message: string;
 }) => void;
@@ -3617,12 +3596,6 @@ const migrateSearchState: (sql: SqlExec) => void;
 
 ```ts
 const minCdcSeq: (sql: SqlExec) => number | undefined;
-```
-
-### `mulberry32` (const)
-
-```ts
-const mulberry32: (seed: number) => (() => number);
 ```
 
 ### `nextPromotionState` (const)
@@ -4047,12 +4020,6 @@ const runSql: <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...pa
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
 ```
 
-### `seedFrom` (const)
-
-```ts
-const seedFrom: (text: string) => number;
-```
-
 ### `selectExpiredIds` (const)
 
 ```ts
@@ -4224,7 +4191,7 @@ const trimIdempotent: (sql: SqlExec, olderThanTs: number) => void;
 ### `trimStreamRuns` (const)
 
 ```ts
-const trimStreamRuns: (sql: SqlExec, olderThanTs: number) => void;
+const trimStreamRuns: (sql: SqlExec, now: number) => void;
 ```
 
 ### `tryRowToDocument` (const)
@@ -4249,15 +4216,6 @@ const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
-```
-
-### `withDeterministicScope` (const)
-
-```ts
-const withDeterministicScope: <T>(options: {
-    now: number;
-    seed: string;
-}, body: () => Promise<T> | T) => Promise<T>;
 ```
 
 ### `writeGlobalShapeSnapshot` (const)

@@ -3310,6 +3310,9 @@ class LunoraClient {
         // path before we return finds its target. The start frame is kept so a
         // durable stream can be re-sent verbatim (plus its resume watermark)
         // when the socket comes back.
+        // `durable` starts from the caller's intent and is corrected by the first
+        // `seq`-bearing chunk; a server that did not declare the procedure durable
+        // never sends one, so the stream stays non-resumable.
         this.streams.set(id, { durable: options.durable === true, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
 
         // Fast path: socket is open, try to send immediately. `sendOn` can still
@@ -5050,6 +5053,13 @@ class LunoraClient {
 
                 if (stream && typeof seq === "number") {
                     stream.lastSeq = seq;
+                    // `seq` rides only a DURABLE run, so the server's answer —
+                    // not the caller's `durable` flag — decides whether this
+                    // stream can resume. Trusting the caller meant a `durable:
+                    // true` against an ephemeral procedure re-sent its start
+                    // frame on a bounce and replayed the whole transcript into
+                    // the same consumer.
+                    stream.durable = true;
                 }
 
                 stream?.handle.push(decodeWire(data));

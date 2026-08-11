@@ -35,6 +35,19 @@ describe("tokenBudget", () => {
         await expect(shared.getValue("tokens", { key: "user-b" })).resolves.toMatchObject({ value: 1000 });
     });
 
+    it("charges an oversized call the whole bucket instead of throwing", async () => {
+        expect.assertions(2);
+
+        const shared = limiter();
+        const budget = tokenBudget(shared, "tokens");
+
+        // A single long-context call past the per-window capacity is ordinary for
+        // an LLM. Refusing to record it would let the one call the budget exists
+        // to catch escape it completely.
+        await expect(budget.record("user-x", 1500)).resolves.toMatchObject({ ok: true });
+        await expect(budget.check("user-x")).resolves.toMatchObject({ ok: false });
+    });
+
     it("keeps budgets separate per key", async () => {
         expect.assertions(1);
 
