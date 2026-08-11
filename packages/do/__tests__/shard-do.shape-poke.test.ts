@@ -459,6 +459,41 @@ describe("shardDO shape poke: durable poke-cursor survival (plan 326)", () => {
         expect(shard.sinceSeqSeen[0]).toBe(seenCursor);
     });
 
+    it("clamps an attachment sinceSeq above the current watermark down to 0 instead of trusting it (PITR rollback guard)", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new CountingShapePokeShard(makeState(sockets), {});
+
+        // Establish a real watermark below the inflated sinceSeq the socket
+        // below will claim.
+        await shard.fetch(write("messages:send", { _id: "seed", channelId: "c1", text: "seed" }));
+        const cursor = readCdcCursor(harness.sql);
+
+        const ws = createFakeWebSocket();
+
+        // No durable row for this connection (fresh conn id, so `stored` is
+        // undefined), and an attachment `sinceSeq` claiming to have seen MORE
+        // than the shard's current watermark — the same rollback scenario
+        // `evaluateResume`'s guard names (e.g. a PITR restore), or a durable
+        // write that silently failed at subscribe time after the client had
+        // already cached a higher value.
+        ws.attachment = {
+            connectionId: "conn-rollback",
+            shapes: { s1: { args: { channelId: "c1" }, name: "messagesByChannel", sinceSeq: cursor + 1000 } },
+            subs: {},
+        };
+        sockets.push(ws);
+
+        await shard.fetch(write("messages:send", { _id: "after-rollback", channelId: "c1", text: "after" }));
+
+        // The inflated sinceSeq must not be trusted as a diff baseline — a
+        // baseline above the watermark would make `buildShapeDiff` scan an
+        // empty range and silently drop this row for the subscriber.
+        expect(shard.sinceSeqSeen[0]).toBe(0);
+        expect(pokeOps(ws).some((op) => op.key === "after-rollback" && op.op === "insert")).toBe(true);
+    });
+
     it("falls back to 0 when neither a durable cursor nor an attachment sinceSeq exists, and still returns a correct diff", async () => {
         expect.assertions(2);
 

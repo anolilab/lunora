@@ -9036,8 +9036,13 @@ abstract class ShardDO {
      * attachment, and finally `0`. Every fallback degrades DOWNWARD only — a
      * baseline that is too high would silently skip rows a client never saw,
      * while too low is merely a wasted rescan of a range the client already
-     * has. A durable/attachment hit repopulates the in-memory cache so later
-     * reads this wake hit memory.
+     * has. The `sinceSeq` rung is a raw client-supplied wire value (unlike
+     * `stored`, which this shard wrote itself), so it is clamped against the
+     * current high-watermark: after a PITR restore — the same rollback
+     * {@link ShardDO.evaluateResume} guards against — a `sinceSeq` above the
+     * cursor must degrade to `0`, not be trusted as a baseline. A
+     * durable/attachment hit repopulates the in-memory cache so later reads
+     * this wake hit memory.
      */
     private readShapeMemoCursor(ws: ShardSocketLike, subId: string): number {
         const cached = this.shapeMemos.get(ws)?.get(subId)?.cursor;
@@ -9048,7 +9053,8 @@ abstract class ShardDO {
 
         const attachment = this.readAttachment(ws);
         const stored = this.loadShapePokeCursor(attachment.connectionId ?? "", subId);
-        const baseline = stored ?? attachment.shapes?.[subId]?.sinceSeq ?? 0;
+        const fallback = stored ?? attachment.shapes?.[subId]?.sinceSeq ?? 0;
+        const baseline = fallback > (this.currentCdcCursor() ?? 0) ? 0 : fallback;
 
         socketMap(this.shapeMemos, ws).set(subId, { cursor: baseline });
 
