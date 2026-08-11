@@ -91,6 +91,51 @@ describe("lunoraClient — mutation watermark scoped by identity (plan 316)", ()
         expect(client.confirmedMutationWatermark()).toBe(7);
     });
 
+    it("merges a same-token subject resolve INTO an identity that already has cached watermarks, without clobbering either bucket", async () => {
+        expect.assertions(2);
+
+        // Nested-map restampWatermarks branches on whether the TARGET identity
+        // already holds a bucket map: the old flat composite-key scheme never
+        // had this branch (a plain Map.set() always just overwrote). Reach it
+        // with: (1) populate "subj:user-a" directly, (2) a REAL credential
+        // change (different token + subject) to "subj:user-x" — tokenChanged
+        // is true, so setAuthToken takes the reject-queued-writes branch, NOT
+        // restamp, leaving "subj:user-a"'s cached bucket untouched but
+        // inactive, (3) populate "subj:user-x" directly, (4) a same-token
+        // subject change BACK to "user-a" — tokenChanged is now false, so THIS
+        // one takes the restamp branch, targeting "subj:user-a" while it still
+        // holds its step-1 data — the merge.
+        const fetchMock = vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(jsonResponse({ lastMutationId: 1, result: "ok" }))
+            .mockResolvedValueOnce(jsonResponse({ lastMutationId: 5, result: "ok" }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            url: "https://app.example",
+            WebSocket: NoopWebSocket as unknown as typeof WebSocket,
+        });
+
+        // (1) Pre-populate "subj:user-a" with its own bucket.
+        client.setAuthToken("token-a", "user-a");
+        await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 1, shardKey: "explicit-bucket" });
+
+        expect(client.confirmedMutationWatermark("explicit-bucket")).toBe(1);
+
+        // (2)+(3) A real credential change (new token AND subject) — leaves
+        // "subj:user-a"'s cache alone (see comment above) — then populate the
+        // new identity's own bucket.
+        client.setAuthToken("token-b", "user-x");
+        await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 5, shardKey: "new-bucket" });
+
+        // (4) Same token as the call above, subject resolves back to "user-a",
+        // which still has its step-1 watermark cached — the merge branch.
+        client.setAuthToken("token-b", "user-a");
+
+        // Both buckets survive under "subj:user-a": the pre-existing one
+        // (untouched) and the restamped one (merged in, not clobbered).
+        expect([client.confirmedMutationWatermark("explicit-bucket"), client.confirmedMutationWatermark("new-bucket")]).toStrictEqual([1, 5]);
+    });
+
     it("debug() emits bare bucket keys and never another identity's watermark", async () => {
         expect.assertions(2);
 
