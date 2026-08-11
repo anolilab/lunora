@@ -302,6 +302,7 @@ type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" |
 interface AuthAuditHookConfig extends AppendAuthAuditOptions {
     executor: SqlExecutor;
     onRecord?: (entry: AppendAuthAuditEntry) => Promise<void> | void;
+    trustProxyHeaders?: boolean;
 }
 ```
 
@@ -826,7 +827,7 @@ const authTables: (options: LunoraAuthOptions) => Record<string, TableDefinition
 ### `buildAuditEntry` (const)
 
 ```ts
-const buildAuditEntry: (context: AuditHookContext, now?: number) => AppendAuthAuditEntry | undefined;
+const buildAuditEntry: (context: AuditHookContext, now?: number, trustProxyHeaders?: boolean) => AppendAuthAuditEntry | undefined;
 ```
 
 ### `classifyEmail` (const)
