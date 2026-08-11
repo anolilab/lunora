@@ -139,6 +139,17 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
+ * Composite-key delimiter for {@link LunoraClient.watermarkKey} and its debug/
+ * restamp helpers (`identity + this + bucket`). U+FFFD (REPLACEMENT CHARACTER)
+ * rather than a printable separator like `:` — an identity fingerprint or
+ * bucket name is never expected to contain it, so it can't collide with a
+ * real key segment. Written as an escape sequence, not the raw glyph, so it
+ * stays visible in a diff/editor instead of being an invisible byte in the
+ * source.
+ */
+const WATERMARK_KEY_SEPARATOR = "\uFFFD";
+
+/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -1597,7 +1608,7 @@ class LunoraClient {
         // back to bare buckets and only surface the CURRENT identity's entries — a
         // previous identity's cached watermark leaking into this snapshot would be a
         // correctness regression, not a cosmetic one.
-        const currentIdentityPrefix = `${this.identityFingerprint() ?? ""}�`;
+        const currentIdentityPrefix = `${this.identityFingerprint() ?? ""}${WATERMARK_KEY_SEPARATOR}`;
         const watermarkBuckets = new Set<string>();
 
         for (const key of this.clientWatermarks.keys()) {
@@ -5617,7 +5628,7 @@ class LunoraClient {
      * instead of re-wedging it from 0.
      */
     private watermarkKey(bucket: string): string {
-        return `${this.identityFingerprint() ?? ""}�${bucket}`;
+        return `${this.identityFingerprint() ?? ""}${WATERMARK_KEY_SEPARATOR}${bucket}`;
     }
 
     /**
@@ -5730,7 +5741,7 @@ class LunoraClient {
      * reintroduced by the fix itself.
      */
     private restampWatermarks(from: string | null, to: string | null): void {
-        const fromPrefix = `${from ?? ""}�`;
+        const fromPrefix = `${from ?? ""}${WATERMARK_KEY_SEPARATOR}`;
         // Collect matches before mutating — deleting/setting keys on the same
         // Map while a `for…of` is still iterating it is a live-view hazard.
         const matches: [key: string, watermark: number][] = [];
@@ -5743,7 +5754,7 @@ class LunoraClient {
 
         for (const [key, watermark] of matches) {
             this.clientWatermarks.delete(key);
-            this.clientWatermarks.set(`${to ?? ""}�${key.slice(fromPrefix.length)}`, watermark);
+            this.clientWatermarks.set(`${to ?? ""}${WATERMARK_KEY_SEPARATOR}${key.slice(fromPrefix.length)}`, watermark);
         }
     }
 
