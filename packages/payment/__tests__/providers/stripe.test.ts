@@ -1,6 +1,8 @@
 import type { Stripe } from "stripe";
 import { describe, expect, it } from "vitest";
 
+import { money } from "../../src/money";
+import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
 
 interface RecordedCall {
@@ -72,7 +74,9 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
             },
         },
         subscriptions: {
-            cancel: async (id: string) => {
+            cancel: async (id: string, parameters?: unknown, options?: { idempotencyKey?: string }) => {
+                calls.push({ args: [id, parameters, options], name: "sub.cancel" });
+
                 return { id, metadata: { referenceId: "user_1" }, status: "canceled" };
             },
             retrieve: async (id: string) => {
@@ -278,5 +282,157 @@ describe("stripe adapter", () => {
         expect(parameters.identifier).toBe("usage_1");
         expect(parameters.payload).toMatchObject({ stripe_customer_id: "cus_1", value: "5" });
         expect((meterEvent?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("usage_1");
+    });
+
+    it("cancels immediately (no atPeriodEnd) via subscriptions.cancel", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        const subscription = await adapter.cancelSubscription("sub_1", { idempotencyKey: "cancel_1" });
+
+        const call = calls.find((entry) => entry.name === "sub.cancel");
+
+        expect(call?.args[0]).toBe("sub_1");
+        expect((call?.args[2] as { idempotencyKey?: string }).idempotencyKey).toBe("cancel_1");
+        expect(subscription.state).toBe("canceled");
+    });
+
+    it("cancels at period end via subscriptions.update, threading cancel_at_period_end", async () => {
+        expect.assertions(4);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true, idempotencyKey: "cancel_2" });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect(call?.args[0]).toBe("sub_1");
+        expect((call?.args[1] as { cancel_at_period_end?: boolean }).cancel_at_period_end).toBe(true);
+        expect((call?.args[2] as { idempotencyKey?: string }).idempotencyKey).toBe("cancel_2");
+        // The base stub reports status "active" (Stripe keeps the subscription active until the period
+        // ends) — pin the actual returned state rather than assuming "canceled".
+        expect(subscription.state).toBe("active");
+    });
+
+    it("resumes a subscription by toggling cancel_at_period_end back to false", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        const subscription = await adapter.resumeSubscription("sub_1");
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect(call?.args[0]).toBe("sub_1");
+        // The inverse toggle of cancelSubscription's atPeriodEnd path.
+        expect((call?.args[1] as { cancel_at_period_end?: boolean }).cancel_at_period_end).toBe(false);
+        expect(subscription.state).toBe("active");
+    });
+
+    it("carries the current subscription item id into a plan/quantity update", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.updateSubscription("sub_1", { priceId: "price_new", quantity: 3 });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+        const { items } = call?.args[1] as { items?: { id?: string; price?: string; quantity?: number }[] };
+
+        // The retrieved subscription's item id (si_1, from the base retrieve stub) must be carried so
+        // Stripe updates the EXISTING item rather than creating a second one.
+        expect(items?.[0]?.id).toBe("si_1");
+        expect(items?.[0]?.price).toBe("price_new");
+        expect(items?.[0]?.quantity).toBe(3);
+    });
+
+    it("sends an undefined item id (does not throw) when items.data is empty (degenerate case)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        // A minimal structural client (only the two methods updateSubscription actually calls) —
+        // avoids spreading the full `Stripe` class instance just to override one method.
+        const client: StripeClientLike = {
+            billing: undefined,
+            billingPortal: undefined,
+            checkout: undefined,
+            customers: undefined,
+            paymentIntents: undefined,
+            refunds: undefined,
+            subscriptions: {
+                retrieve: async (id: string) => {
+                    return { id, items: { data: [] }, metadata: { referenceId: "user_1" }, status: "active" };
+                },
+                update: async (id: string, parameters?: unknown, options?: unknown) => {
+                    calls.push({ args: [id, parameters, options], name: "sub.update" });
+
+                    return { id, items: { data: [] }, metadata: { referenceId: "user_1" }, status: "active" };
+                },
+            },
+            webhooks: undefined,
+        };
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        // Pinning today's actual behaviour (see plan §8): an empty items.data does not throw — it
+        // silently sends `id: undefined`, which Stripe would treat as creating a NEW subscription item
+        // rather than updating one. This is not fixed here; see the executor's notes.
+        await expect(adapter.updateSubscription("sub_1", { priceId: "price_new" })).resolves.toBeDefined();
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+        const { items } = call?.args[1] as { items?: { id?: string }[] };
+
+        expect(items?.[0]?.id).toBeUndefined();
+    });
+
+    it("refunds the full captured amount (no amount given) as state=refunded", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        const session = await adapter.refundPayment({ sessionId: "pi_1" });
+
+        const call = calls.find((entry) => entry.name === "refund");
+
+        expect((call?.args[0] as { amount?: number }).amount).toBeUndefined();
+        expect(session.state).toBe("refunded");
+        // capturedAmount comes from the retrieve stub (amount_received: 1000).
+        expect(session.refundedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("refunds a strictly smaller amount as state=partially_refunded", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "pi_1" });
+
+        const call = calls.find((entry) => entry.name === "refund");
+
+        expect((call?.args[0] as { amount?: number }).amount).toBe(500);
+        expect(session.state).toBe("partially_refunded");
+        expect(session.refundedAmount.minorUnits).toBe(500n);
+    });
+
+    it("refunds an amount equal to the captured charge as state=refunded (boundary)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        // Equal to the retrieve stub's amount_received (1000) — compareMoney is 0, not < 0, so this
+        // must land on the full-refund boundary, not the partial one.
+        const session = await adapter.refundPayment({ amount: money(1000n, "usd"), sessionId: "pi_1" });
+
+        const call = calls.find((entry) => entry.name === "refund");
+
+        expect((call?.args[0] as { amount?: number }).amount).toBe(1000);
+        expect(session.state).toBe("refunded");
     });
 });
