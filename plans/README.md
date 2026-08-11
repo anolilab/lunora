@@ -1148,8 +1148,8 @@ the socket watchdog (#281). All DONE and merged.
 ### Remaining files in this directory (why each stays)
 
 This list is re-verified against `ls plans/` — every file below exists, and no
-file in the directory is missing from it, except the seventeen wave-21 plans
-(316–332), which have their own table below.
+file in the directory is missing from it, except **332** (wave-21's one open
+plan), which is in the Wave 21 table below.
 
 Open work: **033** Stream (P3) · **037** Realtime/Calls (P3) · **078** custom
 scalar types (`v.custom` — verified NOT shipped) · **089** promise-pipelining
@@ -1601,29 +1601,32 @@ a later wave.
 ## Wave 21 — all-package sweep (baseline `70b7451b5`, 2026-08-11)
 
 Correctness, test-coverage and CI-gate sweep across the packages, plus three
-direction plans. **None has been executed** — every row below is TODO, and each
-plan carries its own drift check against `70b7451b5`, which is now several
-commits back. Run it before starting.
+direction plans. **Sixteen of the seventeen shipped together in PR
+[#408](https://github.com/anolilab/lunora/pull/408) (`bf7e3fb81`)** and their
+files were removed; the plan files themselves were never committed with that PR,
+so each was filed and retired in the two commits that follow it. Only **332**
+(spike) is open. Each row names the sub-commit that carries it — the PR is a
+squash, so `git show bf7e3fb81` is the record.
 
-| Plan | Title                                                                                                      | Category      | Pkg                     | Status |
-| ---- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------- | ------ |
-| 316  | Scope the client's mutation watermark to the identity, so a user switch stops wedging every custom mutator | bug           | client/db/do            | TODO   |
-| 317  | Route every `.dev.vars` write through the owner-only atomic writer                                         | bug/security  | cli/config              | TODO   |
-| 318  | Stop the Vite dev loop emitting codegen from a stale TypeScript program                                    | bug           | vite/codegen            | TODO   |
-| 319  | Bound the server-initiated dispatch call, and make the 4xx classification real                             | bug           | dispatch/workflow/queue | TODO   |
-| 320  | Cover the four money-mutating methods on the Stripe and Polar adapters                                     | tests         | payment                 | TODO   |
-| 321  | Put a coverage floor back under the six packages that lost one, and stop the generator minting more        | tests/ci      | repo/vis                | TODO   |
-| 322  | Make the randomized test seed actually randomize something                                                 | tests         | repo                    | TODO   |
-| 323  | Run `dist:check` on pull requests, where the regression it catches is still cheap to fix                   | ci            | repo                    | TODO   |
-| 324  | Test the shared client mutation path three adapters depend on, and floor `@lunora/client`                  | tests         | client                  | TODO   |
-| 325  | Test the signup gate on better-auth's native email path                                                    | tests         | auth                    | TODO   |
-| 326  | Stop the first write after every hibernation wake rescanning the whole change log                          | perf          | do/shard-engine         | TODO   |
-| 327  | Stop publishing a package for a dependency it never imports, and catalog the four that drifted             | build/hygiene | repo/packages           | TODO   |
-| 328  | Stop recording an attacker-chosen IP in the auth audit trail                                               | security      | auth/runtime            | TODO   |
-| 329  | Give `@lunora/platform-node` the capability page its graduation bar needs                                  | docs          | platform-node           | TODO   |
-| 330  | Let Angular produce the preloaded query it can already consume                                             | feature       | angular/solid           | TODO   |
-| 331  | Resolve the `/worker` subpath that publishes a composition its own docstring calls impossible              | direction     | vue/svelte              | TODO   |
-| 332  | [Spike] What would a payment-provider conformance suite actually assert?                                   | spike         | payment                 | TODO   |
+| Plan | Title                                                                                                      | Category      | Pkg                     | Status                                                                                                                                                                               |
+| ---- | ---------------------------------------------------------------------------------------------------------- | ------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 316  | Scope the client's mutation watermark to the identity, so a user switch stops wedging every custom mutator | bug           | client/db/do            | ✅ DONE & REMOVED — `fix(client): scope mutation watermark cache by identity`; `clientWatermarks` is now keyed identity → shard, captured before the RPC awaits                      |
+| 317  | Route every `.dev.vars` write through the owner-only atomic writer                                         | bug/security  | cli/config              | ✅ DONE & REMOVED — `fix(cli): write .dev.vars atomically at 0600`; `scaffold-dev-variables.ts` writes through `atomicWrite(…, { mode: 0o600 })`                                     |
+| 318  | Stop the Vite dev loop emitting codegen from a stale TypeScript program                                    | bug           | vite/codegen            | ✅ DONE & REMOVED — `fix(codegen): refresh reused project files outside lunora/` + three vite follow-ups (tsconfig save, tsconfig delete, watcher walk skip)                         |
+| 319  | Bound the server-initiated dispatch call, and make the 4xx classification real                             | bug           | dispatch/workflow/queue | ✅ DONE & REMOVED — `fix(dispatch): bound the server-initiated run fetch` (`AbortSignal.timeout`, `timeoutMs`) + `fix(workflow): stop retrying deterministic dispatch failures`      |
+| 320  | Cover the four money-mutating methods on the Stripe and Polar adapters                                     | tests         | payment                 | ✅ DONE & REMOVED — `test(payment): cover stripe and polar subscription mutations`; branch floor 60 → 68                                                                             |
+| 321  | Put a coverage floor back under the six packages that lost one, and stop the generator minting more        | tests/ci      | repo/vis                | ✅ DONE & REMOVED — `test(repo): floor coverage on the six unratcheted packages`; `agent`/`angular`/`replica`/`search-core` now route through `getVitestConfig` with explicit floors |
+| 322  | Make the randomized test seed actually randomize something                                                 | tests         | repo                    | ✅ DONE & REMOVED — `test(repo): make the vitest sequence seed take effect`; the seed is inert without `shuffle`, now gated on `LUNORA_SHUFFLE=1`                                    |
+| 323  | Run `dist:check` on pull requests, where the regression it catches is still cheap to fix                   | ci            | repo                    | ✅ DONE & REMOVED — `ci: run dist:check on pull requests`; the gate is in `lint.yml`, not just the release workflow                                                                  |
+| 324  | Test the shared client mutation path three adapters depend on, and floor `@lunora/client`                  | tests         | client                  | ✅ DONE & REMOVED — `test(client): cover the shared mutation runner` + `snapshot-precondition` coverage, floor re-pinned with margin                                                 |
+| 325  | Test the signup gate on better-auth's native email path                                                    | tests         | auth                    | ✅ DONE & REMOVED — `test(auth): cover the native signup email gate`                                                                                                                 |
+| 326  | Stop the first write after every hibernation wake rescanning the whole change log                          | perf          | do/shard-engine         | ✅ DONE & REMOVED — `feat(shard-engine): add the durable shape poke cursor table` + `perf(do): poke shapes from the stored cursor after a wake`, with the `sinceSeq` clamp follow-up |
+| 327  | Stop publishing a package for a dependency it never imports, and catalog the four that drifted             | build/hygiene | repo/packages           | ✅ DONE & REMOVED — `jsonc-parser`/`@lunora/errors` moved to `devDependencies`, angular toolchain cataloged, `scripts/check-catalog-drift.js` wired into CI                          |
+| 328  | Stop recording an attacker-chosen IP in the auth audit trail                                               | security      | auth/runtime            | ✅ DONE & REMOVED — `fix(auth): stop trusting spoofable ip headers in the audit trail`; `x-forwarded-for` only behind an explicit `trustProxyHeaders`                                |
+| 329  | Give `@lunora/platform-node` the capability page its graduation bar needs                                  | docs          | platform-node           | ✅ DONE & REMOVED — `docs(platform-node): publish the node host capability matrix`, guarded by a `node-capabilities-docs` CI check                                                   |
+| 330  | Let Angular produce the preloaded query it can already consume                                             | feature       | angular/solid           | ✅ DONE & REMOVED — `feat(angular): export preloadQuery from ./server` (re-export of `@lunora/client/ssr`, matching solid/svelte/vue)                                                |
+| 331  | Resolve the `/worker` subpath that publishes a composition its own docstring calls impossible              | direction     | vue/svelte              | ✅ DONE & REMOVED — decision taken: **drop it.** `refactor(vue,svelte): drop the framework-shaped worker subpath`; both `src/worker.ts` files are gone                               |
+| 332  | [Spike] What would a payment-provider conformance suite actually assert?                                   | spike         | payment                 | TODO — the one plan #408 did not touch. No shared provider suite exists (`packages/payment/__tests__/providers/` is still six independent files)                                     |
 
 ## Filed outside a wave
 
