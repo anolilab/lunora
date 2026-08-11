@@ -66,14 +66,13 @@ export interface ShapeSubscriptionQuery {
 
 export interface SubscriptionEnvelope {
     /**
-     * Optional capability tokens carried by the `connect` envelope, naming
-     * wire behaviours this client can handle that older ones cannot (currently
-     * only `"pageDelta"` — see `PAGE_DELTA_CAPABILITY`). Recorded on the socket
-     * attachment; unknown tokens are kept verbatim and simply never matched, so
-     * a newer client talking to an older server degrades silently.
-     *
-     * Everything here is strictly opt-in: absent means the server keeps to the
-     * wire behaviour every client already understood.
+     * Optional capability tokens carried by the `connect` envelope, naming wire
+     * behaviours this client can handle that older ones cannot (currently only
+     * `"pageDelta"` — see `shared/page-result.ts`). Resolved to the decisions
+     * they gate and recorded on the attachment; an unrecognised token is simply
+     * never matched, so a newer client talking to an older server degrades
+     * silently. Strictly opt-in: absent means the server keeps to the wire
+     * behaviour every client already understood.
      */
     caps?: string[];
 
@@ -200,15 +199,6 @@ export interface SocketAttachment {
     admin?: boolean;
 
     /**
-     * Capability tokens this socket announced on its `connect` envelope (see
-     * {@link SubscriptionEnvelope.caps}). Persisted so it survives hibernation:
-     * `connect` is one-shot, so a capability lost across a hibernation wake
-     * could never be re-announced, and the socket would silently fall back to
-     * snapshots for the rest of its life.
-     */
-    caps?: string[];
-
-    /**
      * Stable per-client id from the `connect` envelope (the same id the client
      * stamps on its custom-mutator pushes). Lets a shape poke echo this client's
      * `__client_watermark` as the poke's `lastMutationId`, so a `@lunora/db`
@@ -256,6 +246,19 @@ export interface SocketAttachment {
      * hooks so they run under the connecting user.
      */
     identity?: Record<string, unknown>;
+
+    /**
+     * `true` when the socket's `connect` envelope announced the `pageDelta`
+     * capability — i.e. this client can merge a row delta into the `page` of a
+     * paginated result, so the server may diff one instead of re-sending it.
+     *
+     * The resolved DECISION, not the announced token list: `caps` is
+     * client-supplied and unbounded, and nothing ever reads an unrecognised
+     * token back. Persisted so it survives hibernation — `connect` is one-shot,
+     * so a capability lost across a wake could never be re-announced and the
+     * socket would quietly fall back to snapshots for the rest of its life.
+     */
+    pageDeltas?: boolean;
 
     /**
      * Live shape subscriptions registered on this socket, keyed by the

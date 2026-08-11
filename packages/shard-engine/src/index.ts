@@ -331,7 +331,7 @@ export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
 export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
 export { lintReadonlySql } from "./sql-console";
-export { awaitWsDrain, PAGE_DELTA_CAPABILITY, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";
 export type {

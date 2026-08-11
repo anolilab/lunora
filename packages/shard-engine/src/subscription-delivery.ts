@@ -13,12 +13,10 @@
  * are unchanged.
  */
 
+import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
 import { stableStringify } from "../../../shared/stable-key";
 import { encodeWire } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
-
-/** Identity field every Lunora document row carries. */
-const ROW_ID_FIELD = "_id";
 
 /**
  * Fallback table name stamped on a delta when the subscription's read-table
@@ -37,7 +35,7 @@ const readRowId = (row: unknown): string | undefined => {
         return undefined;
     }
 
-    const id = (row as Record<string, unknown>)[ROW_ID_FIELD];
+    const id = (row as Record<string, unknown>)[ID_FIELD];
 
     return typeof id === "string" ? id : undefined;
 };
@@ -151,78 +149,97 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
     return out;
 };
 
-/** The row-array field a `.paginate()` result carries its page in. */
-const PAGE_FIELD = "page";
-
-/**
- * The `connect`-frame capability token a client sends to say it can merge a row
- * delta into the `page` of a `{ page, isDone, continueCursor }` result.
- *
- * Opt-in, and it has to be: an unmergeable delta is not ignored by a client that
- * predates this — `applyDelta` bails and the caller replaces the whole query
- * value with the raw delta object. A client that never announces this keeps
- * receiving snapshots, which is what every client did before and what the seven
- * non-JS SDKs still do (they send `connect` with no `caps` at all).
- */
-const PAGE_DELTA_CAPABILITY = "pageDelta";
-
 /** A plain (non-array, non-null) object — the shape a `.paginate()` result is. */
 const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
- * The row array to diff out of a query result, or `undefined` when the result
- * has no diffable list in it.
+ * The two row lists to diff, or `undefined` when this pair of results is not
+ * row-diffable at all.
  *
- * Two accepted shapes:
+ * Both sides must carry a list of the same KIND — two bare arrays, or two
+ * `{ page: [...] }` results. For the paginated pair everything outside `page`
+ * must also be byte-identical: a row-delta stream can only describe rows, so a
+ * moved `continueCursor` or a flipped `isDone` (how a paginated client decides
+ * whether to keep loading) has no way to reach the client and must force the
+ * snapshot instead.
  *
- * - the result IS the array (`ctx.db.query(...).collect()`);
- * - the result is `{ page: [...], … }` — what `.paginate()` yields, and
- * therefore what every `usePaginatedQuery` page subscribes to.
- *
- * For the paginated shape the caller must also confirm the fields AROUND the
- * page are unchanged; see {@link paginationEnvelopeMatches}. A row-delta stream
- * can only describe rows, so a moved `continueCursor` or a flipped `isDone` has
- * no way to reach the client and must force the snapshot.
- * @returns the row array to diff, or `undefined` when the result carries none
+ * The envelope comparison runs on the WIRE form with keys sorted, so it is
+ * insensitive to property order — `previous` was parsed back out of the last
+ * delivered frame, `next` is a fresh handler result — and a `bigint` or `Date`
+ * cursor is compared the way the frame would carry it. `previous` is already
+ * encoded; `next` is encoded here, the same asymmetry the per-row fingerprints
+ * use.
+ * @returns the previous and next row lists, or `undefined` when the pair is not diffable
  */
-const rowsOf = (value: unknown): unknown[] | undefined => {
-    if (Array.isArray(value)) {
-        return value as unknown[];
-    }
-
-    if (isPlainRecord(value) && Array.isArray(value[PAGE_FIELD])) {
-        return value[PAGE_FIELD] as unknown[];
-    }
-
-    return undefined;
-};
-
-/**
- * True when two paginated results agree on everything except their `page`.
- *
- * Both sides are compared in their WIRE form with keys sorted, so the check is
- * insensitive to property order (`previous` was parsed back out of the last
- * delivered frame; `next` is a fresh handler result) and treats a `bigint` or
- * `Date` cursor the same way the frame would. Non-paginated (bare array)
- * results have no envelope and trivially match.
- * @returns `true` when the two results differ only in their `page`
- */
-const paginationEnvelopeMatches = (previous: unknown, next: unknown): boolean => {
+const diffableLists = (previous: unknown, next: unknown): undefined | { next: unknown[]; previous: unknown[] } => {
     if (Array.isArray(previous) && Array.isArray(next)) {
-        return true;
+        return { next: next as unknown[], previous: previous as unknown[] };
     }
 
     if (!isPlainRecord(previous) || !isPlainRecord(next)) {
-        return false;
+        return undefined;
+    }
+
+    const previousPage = previous[PAGE_FIELD];
+    const nextPage = next[PAGE_FIELD];
+
+    if (!Array.isArray(previousPage) || !Array.isArray(nextPage)) {
+        return undefined;
     }
 
     const withoutPage = (value: Record<string, unknown>): Record<string, unknown> =>
         Object.fromEntries(Object.entries(value).filter(([key]) => key !== PAGE_FIELD));
 
-    // `previous` is already wire-encoded (it was parsed out of the delivered
-    // frame); `next` is raw, so it is encoded here — exactly the asymmetry the
-    // per-row fingerprints use.
-    return stableStringify(withoutPage(previous)) === stableStringify(encodeWire(withoutPage(next)));
+    if (stableStringify(withoutPage(previous)) !== stableStringify(encodeWire(withoutPage(next)))) {
+        return undefined;
+    }
+
+    return { next: nextPage as unknown[], previous: previousPage as unknown[] };
+};
+
+/**
+ * Would a client merging these deltas end up with the row order the server
+ * actually has?
+ *
+ * `update` and `delete` are positionally exact — they name a row that already
+ * exists. An `insert` is not: the delta carries no index, so the client places
+ * it with {@link insertionIndexFor}, which orders by `_creationTime`. A page
+ * ordered by a `.withIndex()` field instead (`paginateOrderKeys` in `ctx-db.ts`
+ * orders by the staged index fields, falling back to `_creationTime` only when
+ * there are none) can legitimately want the row somewhere else — a leaderboard
+ * by score, a queue by priority. `survivorsKeepOrder` does not catch it, because
+ * the survivors DID keep their order; only the newcomer is misplaced.
+ *
+ * Left unchecked that desyncs silently and permanently: the server advances its
+ * diff baseline to the value it believes the client now holds, so every later
+ * `update` lands in place at an index the client has wrong, and nothing
+ * reconciles until a reconnect or a forced snapshot.
+ *
+ * So replay the inserts here — against the same shared helper the client will
+ * use — and report whether the resulting order matches. Only ids are replayed:
+ * the row VALUES are exact by construction (each delta carries the full new
+ * row), so order is the only thing in doubt.
+ * @returns `true` when the client's merge will reproduce the server's row order
+ */
+const clientOrderMatches = (previous: RowIndex, next: RowIndex, framed: ReadonlyArray<FramedDelta>): boolean => {
+    const inserts = framed.filter(({ delta }) => delta.op === "insert");
+
+    // No insert, no ambiguity — updates and deletes are placed by id.
+    if (inserts.length === 0) {
+        return true;
+    }
+
+    // Start from the surviving prev rows in prev order (what the client holds
+    // once the deletes have been applied), then splice each insert in.
+    const rows: Record<string, unknown>[] = previous.order.filter((id) => next.byId.has(id)).map((id) => previous.byId.get(id) as Record<string, unknown>);
+
+    for (const { delta } of inserts) {
+        const row = delta.row as Record<string, unknown>;
+
+        rows.splice(insertionIndexFor(rows, row), 0, row);
+    }
+
+    return rows.length === next.order.length && rows.every((row, index) => row[ID_FIELD] === next.order[index]);
 };
 
 /**
@@ -232,10 +249,10 @@ const paginationEnvelopeMatches = (previous: unknown, next: unknown): boolean =>
  * Returns `undefined` (the value is not expressible as row deltas at all)
  * unless ALL of these hold:
  *
- * 1. `previousJson` parses to a diffable list — an array, or a `{ page: [...] }` result (see {@link rowsOf}).
- * 2. `nextResult` carries a list of the same kind, and (when paginated) an identical envelope around it.
- * 3. Every row in both lists is a plain object carrying a string `_id`.
- * 4. Order preservation — rows present in BOTH lists appear in the same relative order.
+ * 1. Both sides carry a row list of the same kind, with an identical envelope when paginated (see {@link diffableLists}).
+ * 2. Every row in both lists is a plain object carrying a string `_id`.
+ * 3. Order preservation — rows present in BOTH lists appear in the same relative order.
+ * 4. Insert placement — a merging client lands any inserted row where the server has it (see {@link clientOrderMatches}).
  *
  * These are EXPRESSIBILITY conditions only. Whether the deltas are the cheaper
  * thing to put on the wire is a separate question, answered by
@@ -262,37 +279,37 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
         return undefined;
     }
 
-    // (1) + (2): both sides must carry a diffable list, of the same kind, and a
-    // paginated pair must agree on everything outside the page.
-    const previousRows = rowsOf(parsed);
-    const nextRows = rowsOf(nextResult);
+    // (1): both sides must carry a row list of the same kind, and a paginated
+    // pair must agree on everything outside the page.
+    const lists = diffableLists(parsed, nextResult);
 
-    if (previousRows === undefined || nextRows === undefined || Array.isArray(parsed) !== Array.isArray(nextResult)) {
+    if (lists === undefined) {
         return undefined;
     }
 
-    if (!paginationEnvelopeMatches(parsed, nextResult)) {
-        return undefined;
-    }
-
-    // (3): both must be id-keyable.
-    const previous = indexRowsById(previousRows);
-    const next = indexRowsById(nextRows);
+    // (2): both must be id-keyable.
+    const previous = indexRowsById(lists.previous);
+    const next = indexRowsById(lists.next);
 
     if (previous === undefined || next === undefined) {
         return undefined;
     }
 
-    // (4): survivors keep their relative order.
+    // (3): survivors keep their relative order.
     if (!survivorsKeepOrder(previous, next)) {
         return undefined;
     }
 
     const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
     const tableJson = JSON.stringify(deltaTable);
-
     // Deletes precede upserts so the client never sees a transient over-length page.
-    return [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
+    const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
+
+    // (4): the client's insert placement agrees with ours. Checked LAST because
+    // it needs the deltas themselves; a mismatch discards them and sends the
+    // snapshot, which is the only encoding that can carry an order the delta
+    // protocol cannot express.
+    return clientOrderMatches(previous, next, framed) ? framed : undefined;
 };
 
 /**
@@ -373,17 +390,9 @@ interface SubscriptionFrameInput {
     nextResult: unknown;
 
     /**
-     * Whether this socket announced {@link PAGE_DELTA_CAPABILITY} on its
-     * `connect` frame, i.e. whether it can merge a row delta into the `page` of
-     * a `{ page, isDone, continueCursor }` result.
-     *
-     * Load-bearing, and fail-closed by default. A client that cannot do that
-     * merge does not IGNORE a page delta — `@lunora/client`'s `applyDelta`
-     * returns `undefined` for an unmergeable shape and the caller then replaces
-     * the whole query value with the raw delta object. So sending page deltas
-     * unconditionally would corrupt the value on every client that predates
-     * this, including all seven non-JS SDKs. Absent means snapshots, which is
-     * exactly the behaviour those clients have today.
+     * Whether this socket announced {@link PAGE_DELTA_CAPABILITY}. Absent means
+     * a paginated result is never diffed for it — fail-closed, and load-bearing
+     * rather than a tuning knob; see that constant for why.
      */
     pageDeltas?: boolean;
     /** The wire form of the value last DELIVERED for this subscription; `undefined` on a first send. */
@@ -500,4 +509,4 @@ const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
 };
 
 export type { DrainableSink, FrameSink, SubscriptionFrameInput };
-export { awaitWsDrain, PAGE_DELTA_CAPABILITY, subscriptionFrames, subscriptionListDeltas, trySendFrame };
+export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame };

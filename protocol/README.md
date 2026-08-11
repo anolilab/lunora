@@ -229,6 +229,29 @@ page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
 
+**Insert placement.** An `insert` op carries no index, so a merging client
+decides the position itself: if the new row and its neighbours all carry a
+numeric `_creationTime`, insert before the first neighbour that breaks the
+list's own direction (ascending → first larger, descending → first smaller);
+otherwise append. This rule is normative, and the server depends on it — before
+sending any batch containing an `insert` it replays this exact placement and
+falls back to a `data` snapshot when the result would not match the order its
+query returned. A read ordered by a `.withIndex()` field rather than by
+`_creationTime` is the common case where it does not match.
+
+That is what makes the merge exact: apply the frames for one push and a
+conforming client holds precisely the value the `data` snapshot would have
+carried. An SDK that implements a _different_ placement rule breaks the
+guarantee silently — the server will have cleared a batch your merge then
+misplaces, and it advances its diff baseline as if you had applied it — so
+implement this rule as written, and assert it against the `pageDeltaFrames`
+goldens in [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
+
+Those cases live under their own key rather than in `serverFrames` because they
+**merge** into a cached `baseWire` instead of replacing it, and an SDK that has
+not implemented `pageDelta` must keep applying `serverFrames` by replacement.
+Run `pageDeltaFrames` only once you announce the token.
+
 ### 5.2 Server → client frames
 
 | `type`     | Shape                                                          | Effect                                                                    |

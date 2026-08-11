@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { stableWireKey } from "../../../shared/wire-key";
 import createInMemoryBookmarkStorage from "./bookmark";
@@ -453,15 +454,18 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
 };
 
 /**
- * Capability tokens this client announces on its `connect` frame.
+ * Capability tokens this client announces on its `connect` frame — wire
+ * behaviours it can handle that an older client cannot.
  *
- * `"pageDelta"` says `applyDelta` can merge a row delta into the `page` of a
- * `.paginate()` result, so the server may answer a paginated live query with row
- * deltas instead of re-sending the whole page on every write. Strictly additive:
- * a server that does not recognise a token ignores it and keeps sending what it
- * always did.
+ * `PAGE_DELTA_CAPABILITY` says `applyDelta` can merge a row delta into the
+ * `page` of a `.paginate()` result, so the server may answer a paginated live
+ * query with row deltas instead of re-sending the whole page on every write.
+ *
+ * Strictly additive: a server that does not recognise a token ignores it and
+ * keeps sending what it always did. The token comes from `shared/` rather than
+ * being retyped here, so a mismatch with the server's gate is impossible.
  */
-const CLIENT_CAPABILITIES: ReadonlyArray<string> = ["pageDelta"];
+const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 
 /** Map a shard key to its connection-map key (the default shard uses `""`). */
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
@@ -4472,12 +4476,7 @@ class LunoraClient {
         const context = this.effectiveConnectionContext(connectionKey(conn.shardKey));
 
         sendOn(conn, {
-            // Wire behaviours this client can handle that an older one cannot,
-            // so the server can use them without breaking anyone who can't. It
-            // has to be announced rather than assumed: a client that cannot
-            // merge a row delta into a paginated result does not ignore one —
-            // `applyDelta` bails and the value is replaced by the raw delta —
-            // so the server must know before it sends the first page delta.
+            // See {@link CLIENT_CAPABILITIES}.
             caps: CLIENT_CAPABILITIES,
             // Lets the server scope this connection's `__client_watermark` so
             // custom-mutator pokes can echo this client's `lastMutationId`.

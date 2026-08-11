@@ -163,7 +163,6 @@ import {
     mergeChangedKeys,
     migrateClientWatermark,
     minCdcSeq,
-    PAGE_DELTA_CAPABILITY,
     parseExportShardArgs,
     parseImportShardArgs,
     projectColumns,
@@ -221,6 +220,7 @@ import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import { LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
+import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { isEnvFlagEnabled, verifyWsAdminToken } from "../../../shared/ws-admin-token";
@@ -4255,13 +4255,17 @@ abstract class ShardDO {
                 attachment.clientId = envelope.clientId;
             }
 
-            // Capability tokens gate wire behaviours an older client would
-            // mis-apply rather than ignore (see `PAGE_DELTA_CAPABILITY`), so
-            // they are recorded fail-closed: only a well-formed array of
-            // strings counts, and anything else leaves the socket on the
-            // behaviour every client already understood.
+            // Resolve the announced capabilities to the decisions they gate,
+            // rather than persisting the raw tokens. `caps` is client-supplied
+            // and otherwise unbounded — the sibling attachment arrays (`subs`,
+            // `whispers`) are both explicitly capped for exactly that reason,
+            // and an over-large one here would either starve `subs` or make
+            // `serializeAttachment` throw, dropping the whole attachment. A
+            // fixed set of booleans is bounded by construction, and nothing
+            // reads an unrecognised token back: the server can only act on ones
+            // it understands, so keeping them would store input with no reader.
             if (Array.isArray(envelope.caps)) {
-                attachment.caps = envelope.caps.filter((capability) => typeof capability === "string");
+                attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
             }
 
             attachment.connected = true;
@@ -8022,7 +8026,7 @@ abstract class ShardDO {
             // Resolved once per socket per flush, not once per affected
             // subscription below — both depend only on this socket, and are
             // identical for every subscription on it. See {@link SocketDelivery}.
-            const delivery = this.socketDelivery(ws, attachment);
+            const delivery = this.socketDelivery(attachment);
 
             for (const [subId, query] of Object.entries(attachment.subs)) {
                 const { functionPath } = query;
@@ -8159,18 +8163,29 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketDelivery(ws));
+        // A FRESH attachment read, not the one captured above: that one predates
+        // the `resolveReactiveOutcome` await, and a `connect` envelope can land
+        // during it. The identity above is deliberately by-value (see there);
+        // the delivery facts are not, and reading them stale would drop a
+        // `clientId`/capability this socket has since announced.
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketDelivery(this.readAttachment(ws)));
     }
 
     /**
-     * Resolve the per-socket delivery facts a subscription push needs. Pass
-     * `attachment` when the caller has already read it (the refresh loop has),
-     * so a hot flush does not deserialize it twice.
+     * Resolve the per-socket delivery facts a subscription push needs, from the
+     * attachment the caller already holds.
+     *
+     * Takes the attachment rather than the socket deliberately: neither field
+     * needs anything else from `ws`, and every caller has just read one. An
+     * earlier shape took `ws` with the attachment as an optional hint, which
+     * did not do what it claimed — `socketClientWatermark` read the attachment
+     * again internally, so the "already read it" fast path still deserialized
+     * twice on the refresh path and three times on the seed path.
      */
-    private socketDelivery(ws: ShardSocketLike, attachment?: SocketAttachment): SocketDelivery {
+    private socketDelivery(attachment: SocketAttachment): SocketDelivery {
         return {
-            clientWatermark: this.socketClientWatermark(ws),
-            pageDeltas: (attachment ?? this.readAttachment(ws)).caps?.includes(PAGE_DELTA_CAPABILITY) === true,
+            clientWatermark: this.socketClientWatermark(attachment),
+            pageDeltas: attachment.pageDeltas === true,
         };
     }
 
@@ -8988,7 +9003,13 @@ abstract class ShardDO {
     ): boolean {
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
-        const frames = buildPokeFrames(parts, { baseCheckpoint, checkpoint, epoch, lastMutationId: this.socketClientWatermark(ws), pokeId });
+        const frames = buildPokeFrames(parts, {
+            baseCheckpoint,
+            checkpoint,
+            epoch,
+            lastMutationId: this.socketClientWatermark(this.readAttachment(ws)),
+            pokeId,
+        });
 
         try {
             for (const frame of frames) {
@@ -9008,8 +9029,7 @@ abstract class ShardDO {
      * (a client that doesn't use custom mutators — nothing to drop an overlay
      * for). Read off the attachment so it survives hibernation.
      */
-    private socketClientWatermark(ws: ShardSocketLike): number | undefined {
-        const attachment = this.readAttachment(ws);
+    private socketClientWatermark(attachment: SocketAttachment): number | undefined {
         const { clientId } = attachment;
 
         if (clientId === undefined) {
