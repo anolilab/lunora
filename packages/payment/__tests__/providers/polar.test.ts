@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { money } from "../../src/money";
 import type { PolarClientLike } from "../../src/providers/polar";
 import { createPolarAdapter } from "../../src/providers/polar";
 
@@ -16,7 +17,12 @@ const headersFor = (id: string, timestamp: string, signature: string) => {
     };
 };
 
-const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike => {
+interface RecordedCall {
+    args: unknown[];
+    name: string;
+}
+
+const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall[] = []): PolarClientLike => {
     return {
         checkouts: {
             create: async (parameters: Record<string, unknown>) => {
@@ -43,12 +49,16 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
             },
         },
         orders: {
-            get: async () => {
+            get: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "order.get" });
+
                 return { currency: "usd", id: "ord_1", status: "paid", totalAmount: 2500 };
             },
         },
         refunds: {
-            create: async () => {
+            create: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "refund" });
+
                 return { id: "ref_1" };
             },
         },
@@ -56,11 +66,27 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
             get: async () => {
                 return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" };
             },
-            revoke: async () => {
+            revoke: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "sub.revoke" });
+
                 return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" };
             },
-            update: async () => {
-                return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" };
+            update: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "sub.update" });
+
+                const update = (parameters as { subscriptionUpdate?: { cancelAtPeriodEnd?: boolean; productId?: string } }).subscriptionUpdate ?? {};
+
+                // Echo the update back onto the response (Date fields, as the real SDK returns) so tests
+                // can assert the mapped Subscription reflects it, not just the raw request payload.
+                return {
+                    cancelAtPeriodEnd: update.cancelAtPeriodEnd ?? false,
+                    currentPeriodEnd: new Date("2026-09-01T00:00:00Z"),
+                    currentPeriodStart: new Date("2026-08-01T00:00:00Z"),
+                    id: "sub_1",
+                    metadata: { referenceId: "user_1" },
+                    productId: update.productId ?? "prod_pro",
+                    status: "active",
+                };
             },
         },
     };
@@ -242,5 +268,120 @@ describe("polar adapter", () => {
         await expect(adapter.parseWebhook({ headers: headersFor("msg_3", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({
             code: "WEBHOOK_SIGNATURE_INVALID",
         });
+    });
+
+    it("cancels immediately (no atPeriodEnd) via subscriptions.revoke", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.cancelSubscription("sub_1");
+
+        const call = calls.find((entry) => entry.name === "sub.revoke");
+
+        expect((call?.args[0] as { id?: string }).id).toBe("sub_1");
+        expect(subscription.state).toBe("canceled");
+    });
+
+    it("cancels at period end via subscriptions.update, threading cancelAtPeriodEnd", async () => {
+        expect.assertions(4);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+        const update = (call?.args[0] as { id?: string; subscriptionUpdate?: { cancelAtPeriodEnd?: boolean } }) ?? {};
+
+        expect(update.id).toBe("sub_1");
+        expect(update.subscriptionUpdate?.cancelAtPeriodEnd).toBe(true);
+        // The mapped Subscription reflects the toggle and the Date-typed period fields the SDK returns.
+        expect(subscription.cancelAtPeriodEnd).toBe(true);
+        expect(subscription.currentPeriodEnd).toBe(new Date("2026-09-01T00:00:00Z").getTime());
+    });
+
+    it("resumes a subscription by toggling cancelAtPeriodEnd back to false", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.resumeSubscription("sub_1");
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        // The inverse toggle of cancelSubscription's atPeriodEnd path.
+        expect((call?.args[0] as { subscriptionUpdate?: { cancelAtPeriodEnd?: boolean } }).subscriptionUpdate?.cancelAtPeriodEnd).toBe(false);
+        expect(subscription.cancelAtPeriodEnd).toBe(false);
+    });
+
+    it("updates the plan by sending productId on the subscription update", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.updateSubscription("sub_1", { priceId: "prod_enterprise" });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect((call?.args[0] as { subscriptionUpdate?: { productId?: string } }).subscriptionUpdate?.productId).toBe("prod_enterprise");
+        expect(subscription.priceId).toBe("prod_enterprise");
+    });
+
+    it("sends an empty subscriptionUpdate when the patch carries no priceId (quantity is not forwarded, degenerate case)", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        // Polar's updateSubscription only ever reads patch.priceId — a quantity-only patch (no priceId)
+        // is pinned as today's actual behaviour: an empty subscriptionUpdate, not a thrown error.
+        await adapter.updateSubscription("sub_1", { quantity: 5 });
+
+        const call = calls.find((entry) => entry.name === "sub.update");
+
+        expect((call?.args[0] as { subscriptionUpdate?: Record<string, unknown> }).subscriptionUpdate).toEqual({});
+    });
+
+    it("refunds the full order total (no amount given), reading it from orders.get", async () => {
+        expect.assertions(4);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const session = await adapter.refundPayment({ sessionId: "ord_1" });
+
+        expect(calls.some((entry) => entry.name === "order.get")).toBe(true);
+
+        const call = calls.find((entry) => entry.name === "refund");
+
+        // The base orders.get stub reports totalAmount: 2500.
+        expect((call?.args[0] as { amount?: number; orderId?: string }).amount).toBe(2500);
+        expect((call?.args[0] as { amount?: number; orderId?: string }).orderId).toBe("ord_1");
+        // Polar has no partial-refund state on this path — pin the actual (always "refunded") result.
+        expect(session.state).toBe("refunded");
+    });
+
+    it("refunds an explicit amount without querying orders.get, still landing on state=refunded", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+
+        const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "ord_1" });
+
+        // An explicit amount skips the order lookup entirely (see refundPayment's `input.amount ?
+        // undefined : ...`).
+        expect(calls.some((entry) => entry.name === "order.get")).toBe(false);
+
+        const call = calls.find((entry) => entry.name === "refund");
+
+        expect((call?.args[0] as { amount?: number }).amount).toBe(500);
+        // Unlike Stripe, Polar's refundPayment never distinguishes "partially_refunded" from
+        // "refunded" — a strictly smaller amount is still pinned as "refunded" here.
+        expect(session.state).toBe("refunded");
     });
 });
