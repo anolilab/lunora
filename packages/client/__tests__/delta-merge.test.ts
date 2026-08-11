@@ -122,11 +122,13 @@ describe("applyDelta", () => {
         expect(result).not.toBe(current);
     });
 
-    it("falls back (undefined) when current isn't an array", () => {
-        expect.assertions(2);
+    it("falls back (undefined) when current holds no row array", () => {
+        expect.assertions(3);
 
         expect(applyDelta({ count: 1 }, { key: "a", op: "insert", row: row("a"), table: "m" })).toBeUndefined();
         expect(applyDelta(undefined, { key: "a", op: "delete", table: "m" })).toBeUndefined();
+        // An object with a `page` that isn't an array is not the paginated shape.
+        expect(applyDelta({ page: 3 }, { key: "a", op: "delete", table: "m" })).toBeUndefined();
     });
 
     it("falls back (undefined) when array elements lack a stable _id", () => {
@@ -141,5 +143,52 @@ describe("applyDelta", () => {
 
         expect(applyDelta([row("a")], { key: "b", op: "insert", table: "m" })).toBeUndefined();
         expect(applyDelta([row("a")], { key: "a", op: "update", table: "m" })).toBeUndefined();
+    });
+});
+
+/**
+ * `.paginate()` returns `{ page, isDone, continueCursor }`, which is what every
+ * `usePaginatedQuery` page holds. Merging into `page` is what lets the server
+ * answer a paginated live query with one row delta instead of re-sending the
+ * whole page on every write to the table.
+ */
+describe("applyDelta — paginated results", () => {
+    const paginated = (rows: Record<string, unknown>[]): Record<string, unknown> => {
+        return { continueCursor: "cursor-2", isDone: false, page: rows };
+    };
+
+    it("merges an update into the page and keeps the surrounding fields", () => {
+        expect.assertions(1);
+
+        const current = paginated([row("a"), row("b")]);
+        const merged = applyDelta(current, { key: "b", op: "update", row: row("b", { text: "edited" }), table: "m" });
+
+        expect(merged).toStrictEqual({ continueCursor: "cursor-2", isDone: false, page: [row("a"), row("b", { text: "edited" })] });
+    });
+
+    it("merges an insert and a delete into the page", () => {
+        expect.assertions(2);
+
+        expect(applyDelta(paginated([row("a")]), { key: "b", op: "insert", row: row("b"), table: "m" })).toStrictEqual(paginated([row("a"), row("b")]));
+        expect(applyDelta(paginated([row("a"), row("b")]), { key: "a", op: "delete", table: "m" })).toStrictEqual(paginated([row("b")]));
+    });
+
+    it("never mutates the cached value or its page", () => {
+        expect.assertions(3);
+
+        const page = [row("a")];
+        const current = paginated(page);
+        const snapshot = { continueCursor: "cursor-2", isDone: false, page: [row("a")] };
+        const merged = applyDelta(current, { key: "b", op: "insert", row: row("b"), table: "m" });
+
+        expect(current).toStrictEqual(snapshot);
+        expect(page).toHaveLength(1);
+        expect(merged).not.toBe(current);
+    });
+
+    it("falls back (undefined) when the page holds rows without a stable _id", () => {
+        expect.assertions(1);
+
+        expect(applyDelta(paginated([{ name: "x" }]), { key: "a", op: "delete", table: "m" })).toBeUndefined();
     });
 });

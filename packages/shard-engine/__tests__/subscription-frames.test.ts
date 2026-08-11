@@ -109,10 +109,95 @@ describe("subscriptionFrames — delta vs snapshot", () => {
     it("takes the snapshot when the result is not a diffable list", () => {
         expect.assertions(2);
 
-        // The paginated shape `.paginate()` returns: an object wrapping the array,
-        // so there is no id-keyed list to diff and every write re-sends the page.
+        // Shape change (array → paginated object) is not a row-level diff.
         expect(typesOf(framesFor([row("a")], { continueCursor: null, isDone: true, page: [row("a"), row("b")] }))).toStrictEqual(["data"]);
         // A reordered survivor cannot be expressed as in-place merges either.
         expect(typesOf(framesFor([row("a"), row("b")], [row("b"), row("a")]))).toStrictEqual(["data"]);
+    });
+});
+
+/**
+ * A `.paginate()` result is `{ page, isDone, continueCursor }` — an object, so
+ * the row diff has to reach inside it. That is gated on the socket having
+ * announced `pageDelta`, because a client that cannot merge into `page` does not
+ * ignore such a delta: it replaces the whole query value with the raw delta
+ * object.
+ */
+describe("subscriptionFrames — paginated results", () => {
+    /** A page of `count` rows; `revision` bumps every row's body. */
+    const page = (count: number, revision = 1): Record<string, unknown>[] =>
+        Array.from({ length: count }, (_, index) => row(`r${String(index)}`, { revision }));
+
+    const paginated = (rows: Record<string, unknown>[], rest: Record<string, unknown> = {}): Record<string, unknown> => {
+        return { continueCursor: "cursor-20", isDone: false, page: rows, ...rest };
+    };
+
+    const paginatedFrames = (previous: Record<string, unknown>, next: Record<string, unknown>, pageDeltas?: boolean): string[] =>
+        subscriptionFrames({
+            ...base,
+            nextResult: next,
+            pageDeltas,
+            previousJson: JSON.stringify(previous),
+            snapshotJson: JSON.stringify(next),
+        });
+
+    it("sends the whole page as a snapshot when the socket did not announce the capability", () => {
+        expect.assertions(1);
+
+        // The pre-capability behaviour, and what every non-JS SDK still gets:
+        // they send `connect` with no `caps` at all.
+        const previous = paginated(page(20));
+        const next = paginated([...page(20).slice(0, 19), row("r19", { revision: 2 })]);
+
+        expect(typesOf(paginatedFrames(previous, next))).toStrictEqual(["data"]);
+    });
+
+    it("diffs the page for a socket that announced it", () => {
+        expect.assertions(2);
+
+        const previous = paginated(page(20));
+        const next = paginated([...page(20).slice(0, 19), row("r19", { revision: 2 })]);
+        const frames = paginatedFrames(previous, next, true);
+
+        expect(typesOf(frames)).toStrictEqual(["delta"]);
+        expect(JSON.parse(frames[0]!)).toMatchObject({ delta: { key: "r19", op: "update", table: "messages" } });
+    });
+
+    it("falls back to the snapshot when a field outside the page moved", () => {
+        expect.assertions(3);
+
+        // A row-delta stream can only describe rows. `continueCursor` and
+        // `isDone` are how a paginated client knows whether to keep loading, so
+        // a change to either has no way to reach it through deltas — sending
+        // them would silently strand the client on a stale cursor.
+        const previous = paginated(page(20));
+        const rows = [...page(20).slice(0, 19), row("r19", { revision: 2 })];
+
+        expect(typesOf(paginatedFrames(previous, paginated(rows, { continueCursor: "cursor-40" }), true))).toStrictEqual(["data"]);
+        expect(typesOf(paginatedFrames(previous, paginated(rows, { isDone: true }), true))).toStrictEqual(["data"]);
+        // A new field appearing outside the page is a change too.
+        expect(typesOf(paginatedFrames(previous, paginated(rows, { splitCursor: "cursor-30" }), true))).toStrictEqual(["data"]);
+    });
+
+    it("ignores property order in the envelope comparison", () => {
+        expect.assertions(1);
+
+        // `previous` was parsed back out of the delivered frame and `next` is a
+        // fresh handler result, so their key order is not guaranteed to match.
+        // Comparing them stably keeps that from forcing a pointless snapshot.
+        const previous = { continueCursor: "cursor-20", isDone: false, page: page(20) };
+        const next = { isDone: false, page: [...page(20).slice(0, 19), row("r19", { revision: 2 })], continueCursor: "cursor-20" };
+
+        expect(typesOf(paginatedFrames(previous, next, true))).toStrictEqual(["delta"]);
+    });
+
+    it("still prefers the snapshot when the whole page changed", () => {
+        expect.assertions(1);
+
+        // The size comparison applies to the paginated path exactly as it does
+        // to a bare array — the capability opens the diff, it does not force it.
+        const previous = paginated(page(20));
+
+        expect(typesOf(paginatedFrames(previous, paginated(page(20, 2)), true))).toStrictEqual(["data"]);
     });
 });

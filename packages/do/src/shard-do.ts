@@ -163,6 +163,7 @@ import {
     mergeChangedKeys,
     migrateClientWatermark,
     minCdcSeq,
+    PAGE_DELTA_CAPABILITY,
     parseExportShardArgs,
     parseImportShardArgs,
     projectColumns,
@@ -668,6 +669,23 @@ interface ShardDOOptions {
      * re-run their queries in response always observe the post-write state.
      */
     reactiveCache?: ReactiveCacheOptions;
+}
+
+/**
+ * The per-SOCKET facts a subscription push needs, resolved once per socket per
+ * write-flush rather than once per subscription.
+ *
+ * Both depend only on the socket, never on the subscription being pushed, and a
+ * single flush pushes many subscriptions down one socket — so recomputing them
+ * inside {@link ShardDO.pushSubscriptionData} would repeat a
+ * `__client_watermark` SELECT and an attachment read per subscription.
+ */
+interface SocketDelivery {
+    /** This socket's custom-mutator watermark, stamped on every outgoing frame. */
+    clientWatermark: number | undefined;
+
+    /** Whether this socket announced {@link PAGE_DELTA_CAPABILITY} on `connect`. */
+    pageDeltas: boolean;
 }
 
 /** Per-subscription memo used to suppress no-op pushes. */
@@ -4235,6 +4253,15 @@ abstract class ShardDO {
             // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
             if (envelope.clientId !== undefined) {
                 attachment.clientId = envelope.clientId;
+            }
+
+            // Capability tokens gate wire behaviours an older client would
+            // mis-apply rather than ignore (see `PAGE_DELTA_CAPABILITY`), so
+            // they are recorded fail-closed: only a well-formed array of
+            // strings counts, and anything else leaves the socket on the
+            // behaviour every client already understood.
+            if (Array.isArray(envelope.caps)) {
+                attachment.caps = envelope.caps.filter((capability) => typeof capability === "string");
             }
 
             attachment.connected = true;
@@ -7992,12 +8019,10 @@ abstract class ShardDO {
 
             const attachment = this.readAttachment(ws);
 
-            // Read once per socket per flush, not once per affected
-            // subscription below — the value depends only on this socket's
-            // announced `clientId`/`userId`, identical for every subscription
-            // on it, so re-reading it per subscription was a redundant
-            // `SELECT … FROM __client_watermark` per subscription per flush.
-            const clientWatermark = this.socketClientWatermark(ws);
+            // Resolved once per socket per flush, not once per affected
+            // subscription below — both depend only on this socket, and are
+            // identical for every subscription on it. See {@link SocketDelivery}.
+            const delivery = this.socketDelivery(ws, attachment);
 
             for (const [subId, query] of Object.entries(attachment.subs)) {
                 const { functionPath } = query;
@@ -8056,7 +8081,7 @@ abstract class ShardDO {
                     // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
                     await awaitWsDrain(ws);
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch, clientWatermark);
+                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch, delivery);
                 } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -8134,7 +8159,19 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketClientWatermark(ws));
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch, this.socketDelivery(ws));
+    }
+
+    /**
+     * Resolve the per-socket delivery facts a subscription push needs. Pass
+     * `attachment` when the caller has already read it (the refresh loop has),
+     * so a hot flush does not deserialize it twice.
+     */
+    private socketDelivery(ws: ShardSocketLike, attachment?: SocketAttachment): SocketDelivery {
+        return {
+            clientWatermark: this.socketClientWatermark(ws),
+            pageDeltas: (attachment ?? this.readAttachment(ws)).caps?.includes(PAGE_DELTA_CAPABILITY) === true,
+        };
     }
 
     /**
@@ -9028,13 +9065,13 @@ abstract class ShardDO {
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
      *
-     * `clientWatermark` is this socket's `socketClientWatermark(ws)` — read
-     * ONCE by the caller and passed in, not recomputed here. A single
-     * write-flush can call this method many times for the same socket (once
-     * per affected subscription — see `refreshOne`), and the watermark
-     * depends only on `ws`, never on `subId`/`outcome`, so recomputing it per
-     * subscription was a redundant `SELECT … FROM __client_watermark` per
-     * subscription per socket per flush.
+     * `delivery` carries the facts that depend on the SOCKET and not on the
+     * subscription — read once by the caller and passed in, never recomputed
+     * here. A single write-flush calls this method many times for one socket
+     * (once per affected subscription — see `refreshOne`), and both fields are
+     * identical across those calls: `clientWatermark` would otherwise be a
+     * redundant `SELECT … FROM __client_watermark` per subscription, and
+     * `pageDeltas` a redundant attachment read.
      */
     private pushSubscriptionData(
         ws: ShardSocketLike,
@@ -9042,10 +9079,11 @@ abstract class ShardDO {
         outcome: SubscriptionOutcome,
         cursor: number | undefined,
         epoch: string | undefined,
-        clientWatermark: number | undefined,
+        delivery: SocketDelivery,
     ): void {
         const memos = socketMap(this.subMemos, ws);
         const cursorSuffix = cdcSuffix(cursor, epoch);
+        const { clientWatermark, pageDeltas } = delivery;
 
         // Wire-encode the result so a `bytes`/`bigint` column survives the frame
         // (raw `JSON.stringify` drops a buffer to `{}` / throws on a bigint). A
@@ -9092,6 +9130,7 @@ abstract class ShardDO {
             cursorSuffix,
             lastMutationId: clientWatermark,
             nextResult: outcome.result,
+            pageDeltas,
             previousJson: existing?.lastJson,
             snapshotJson: json,
             subId,

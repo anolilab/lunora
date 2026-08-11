@@ -1255,6 +1255,65 @@ describe("shardDO subscription delta push", () => {
     const subscribeMessages = (shard: ReexecShard, ws: FakeWebSocket): Promise<void> =>
         shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" });
 
+    /** A `.paginate()` result: the shape every `usePaginatedQuery` page subscribes to. */
+    const paginated = (rows: Record<string, unknown>[]): Record<string, unknown> => {
+        return { continueCursor: "cursor-16", isDone: false, page: rows };
+    };
+
+    /** Drive the one-shot `connect` frame, optionally announcing capabilities. */
+    const connect = (shard: ReexecShard, ws: FakeWebSocket, caps?: string[]): Promise<void> =>
+        shard.driveMessage(ws, { id: "connect", type: "connect", ...(caps === undefined ? {} : { caps }) });
+
+    it("re-sends a whole page to a socket that announced no capabilities", async () => {
+        expect.assertions(2);
+
+        // The behaviour every client had before `pageDelta`, and the one all
+        // seven non-JS SDKs still get — they send `connect` with no `caps`.
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+        const next = paginated([...filler(16), idRow("new")]);
+
+        shard.outcomes.set("messages:list", { result: next, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(0);
+        expect(frames.find((frame) => frame.type === "data")?.data).toStrictEqual(next);
+    });
+
+    it("sends one page delta to a socket that announced pageDelta", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws, ["pageDelta"]);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: paginated([...filler(16), idRow("new")]), tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { delta?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "data")).toHaveLength(0);
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(1);
+        expect(frames[0]?.delta).toStrictEqual({ key: "new", op: "insert", row: idRow("new"), table: "messages" });
+    });
+
     it("first push is a data snapshot; an additive change pushes a delta frame", async () => {
         expect.assertions(3);
 

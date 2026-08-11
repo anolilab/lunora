@@ -1379,6 +1379,12 @@ class OwnerRelay extends RelayLink {
 type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
 ```
 
+### `PAGE_DELTA_CAPABILITY` (const)
+
+```ts
+const PAGE_DELTA_CAPABILITY = "pageDelta";
+```
+
 ### `PaginationOptions` (interface)
 
 ```ts
@@ -2386,6 +2392,7 @@ interface ShardSocketLike {
 ```ts
 interface SocketAttachment {
     admin?: boolean;
+    caps?: string[];
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
@@ -2559,6 +2566,7 @@ interface SubscriptionConnection {
 
 ```ts
 interface SubscriptionEnvelope {
+    caps?: string[];
     clientId?: string;
     context?: Record<string, unknown>;
     data?: unknown;

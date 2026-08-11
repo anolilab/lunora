@@ -517,6 +517,22 @@ export interface ClientUnsubscribeMessage {
  */
 export interface ClientConnectMessage {
     /**
+     * Wire behaviours this client can handle that an older one cannot, so the
+     * server can use them without breaking clients that can't.
+     *
+     * Currently just `"pageDelta"` — this client can merge a row delta into the
+     * `page` of a `.paginate()` result. It is announced rather than assumed
+     * because a client that can't do that merge does not IGNORE such a delta: it
+     * replaces the whole query value with the raw delta object. An SDK that
+     * sends no `caps` therefore keeps receiving full snapshots, exactly as
+     * before.
+     *
+     * Additive in both directions: a server that does not recognise a token
+     * ignores it.
+     */
+    caps?: ReadonlyArray<string>;
+
+    /**
      * Stable per-client id (persisted alongside the outbox). Lets the server
      * scope this connection's `__client_watermark` so custom-mutator pokes can
      * echo the right per-client `lastMutationId`. Omitted by clients that don't

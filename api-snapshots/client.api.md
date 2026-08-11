@@ -1469,7 +1469,7 @@ const anyApi: Record<string, Record<string, unknown>>;
 ### `applyDelta` (const)
 
 ```ts
-const applyDelta: (current: unknown, delta: MutationDelta) => undefined | unknown[];
+const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
 ```
 
 ### `createAsyncStoragePersistence` (const)

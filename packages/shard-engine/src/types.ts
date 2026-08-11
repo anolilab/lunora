@@ -66,6 +66,18 @@ export interface ShapeSubscriptionQuery {
 
 export interface SubscriptionEnvelope {
     /**
+     * Optional capability tokens carried by the `connect` envelope, naming
+     * wire behaviours this client can handle that older ones cannot (currently
+     * only `"pageDelta"` — see `PAGE_DELTA_CAPABILITY`). Recorded on the socket
+     * attachment; unknown tokens are kept verbatim and simply never matched, so
+     * a newer client talking to an older server degrades silently.
+     *
+     * Everything here is strictly opt-in: absent means the server keeps to the
+     * wire behaviour every client already understood.
+     */
+    caps?: string[];
+
+    /**
      * Stable per-client id carried by the `connect` envelope. Recorded on the
      * socket attachment so a shape poke can echo this client's
      * `__client_watermark` as its `lastMutationId`. Ignored on other envelope
@@ -186,6 +198,15 @@ export interface SocketAttachment {
      * user-subscription sockets, which may never read admin data over the wire.
      */
     admin?: boolean;
+
+    /**
+     * Capability tokens this socket announced on its `connect` envelope (see
+     * {@link SubscriptionEnvelope.caps}). Persisted so it survives hibernation:
+     * `connect` is one-shot, so a capability lost across a hibernation wake
+     * could never be re-announced, and the socket would silently fall back to
+     * snapshots for the rest of its life.
+     */
+    caps?: string[];
 
     /**
      * Stable per-client id from the `connect` envelope (the same id the client

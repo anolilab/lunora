@@ -1,17 +1,19 @@
 /**
  * Subscription wire-delivery for the DO store: the keyed list-diff encoder
- * (`subscriptionListDeltas` + its row-indexing helpers) and the best-effort
- * frame senders (`trySendFrame`/`sendDeltaFrames`).
+ * (`subscriptionListDeltas` + its row-indexing helpers), the frame renderer that
+ * chooses between deltas and a snapshot (`subscriptionFrames`), and the
+ * best-effort sender (`trySendFrame`).
  *
  * Extracted from `shard-do.ts` as a cohesive unit — these are pure functions
  * with no `this`/instance state: they turn a previous-vs-next query result into
- * the `{type:"delta"}` row deltas the client merges in place, and push frames
- * onto a hibernatable `WebSocket`, reporting whether each frame left the socket
- * so the caller can protect its diff baseline. `shard-do.ts` imports these and
- * re-exports `subscriptionListDeltas` so existing import sites (the index
- * barrel, tests) are unchanged.
+ * the frames a client merges in place, and push them onto a hibernatable
+ * `WebSocket`, reporting whether each frame left the socket so the caller can
+ * protect its diff baseline. `shard-do.ts` imports these and re-exports
+ * `subscriptionListDeltas` so existing import sites (the index barrel, tests)
+ * are unchanged.
  */
 
+import { stableStringify } from "../../../shared/stable-key";
 import { encodeWire } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
 
@@ -149,6 +151,80 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
     return out;
 };
 
+/** The row-array field a `.paginate()` result carries its page in. */
+const PAGE_FIELD = "page";
+
+/**
+ * The `connect`-frame capability token a client sends to say it can merge a row
+ * delta into the `page` of a `{ page, isDone, continueCursor }` result.
+ *
+ * Opt-in, and it has to be: an unmergeable delta is not ignored by a client that
+ * predates this — `applyDelta` bails and the caller replaces the whole query
+ * value with the raw delta object. A client that never announces this keeps
+ * receiving snapshots, which is what every client did before and what the seven
+ * non-JS SDKs still do (they send `connect` with no `caps` at all).
+ */
+const PAGE_DELTA_CAPABILITY = "pageDelta";
+
+/** A plain (non-array, non-null) object — the shape a `.paginate()` result is. */
+const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The row array to diff out of a query result, or `undefined` when the result
+ * has no diffable list in it.
+ *
+ * Two accepted shapes:
+ *
+ * - the result IS the array (`ctx.db.query(...).collect()`);
+ * - the result is `{ page: [...], … }` — what `.paginate()` yields, and
+ * therefore what every `usePaginatedQuery` page subscribes to.
+ *
+ * For the paginated shape the caller must also confirm the fields AROUND the
+ * page are unchanged; see {@link paginationEnvelopeMatches}. A row-delta stream
+ * can only describe rows, so a moved `continueCursor` or a flipped `isDone` has
+ * no way to reach the client and must force the snapshot.
+ * @returns the row array to diff, or `undefined` when the result carries none
+ */
+const rowsOf = (value: unknown): unknown[] | undefined => {
+    if (Array.isArray(value)) {
+        return value as unknown[];
+    }
+
+    if (isPlainRecord(value) && Array.isArray(value[PAGE_FIELD])) {
+        return value[PAGE_FIELD] as unknown[];
+    }
+
+    return undefined;
+};
+
+/**
+ * True when two paginated results agree on everything except their `page`.
+ *
+ * Both sides are compared in their WIRE form with keys sorted, so the check is
+ * insensitive to property order (`previous` was parsed back out of the last
+ * delivered frame; `next` is a fresh handler result) and treats a `bigint` or
+ * `Date` cursor the same way the frame would. Non-paginated (bare array)
+ * results have no envelope and trivially match.
+ * @returns `true` when the two results differ only in their `page`
+ */
+const paginationEnvelopeMatches = (previous: unknown, next: unknown): boolean => {
+    if (Array.isArray(previous) && Array.isArray(next)) {
+        return true;
+    }
+
+    if (!isPlainRecord(previous) || !isPlainRecord(next)) {
+        return false;
+    }
+
+    const withoutPage = (value: Record<string, unknown>): Record<string, unknown> =>
+        Object.fromEntries(Object.entries(value).filter(([key]) => key !== PAGE_FIELD));
+
+    // `previous` is already wire-encoded (it was parsed out of the delivered
+    // frame); `next` is raw, so it is encoded here — exactly the asymmetry the
+    // per-row fingerprints use.
+    return stableStringify(withoutPage(previous)) === stableStringify(encodeWire(withoutPage(next)));
+};
+
 /**
  * Diff the previously-sent list snapshot against the new query result, keyed by
  * `_id`, returning each changed row paired with its pre-serialized frame body.
@@ -156,10 +232,10 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
  * Returns `undefined` (the value is not expressible as row deltas at all)
  * unless ALL of these hold:
  *
- * 1. `previousJson` parses to an array (there IS a previous list to diff against).
- * 2. `nextResult` is also an array.
- * 3. Every row in both arrays is a plain object carrying a string `_id`.
- * 4. Order preservation — rows present in BOTH arrays appear in the same relative order.
+ * 1. `previousJson` parses to a diffable list — an array, or a `{ page: [...] }` result (see {@link rowsOf}).
+ * 2. `nextResult` carries a list of the same kind, and (when paginated) an identical envelope around it.
+ * 3. Every row in both lists is a plain object carrying a string `_id`.
+ * 4. Order preservation — rows present in BOTH lists appear in the same relative order.
  *
  * These are EXPRESSIBILITY conditions only. Whether the deltas are the cheaper
  * thing to put on the wire is a separate question, answered by
@@ -186,13 +262,22 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
         return undefined;
     }
 
-    // (1) + (2): both sides must be arrays. (3): both must be id-keyable.
-    if (!Array.isArray(parsed) || !Array.isArray(nextResult)) {
+    // (1) + (2): both sides must carry a diffable list, of the same kind, and a
+    // paginated pair must agree on everything outside the page.
+    const previousRows = rowsOf(parsed);
+    const nextRows = rowsOf(nextResult);
+
+    if (previousRows === undefined || nextRows === undefined || Array.isArray(parsed) !== Array.isArray(nextResult)) {
         return undefined;
     }
 
-    const previous = indexRowsById(parsed);
-    const next = indexRowsById(nextResult);
+    if (!paginationEnvelopeMatches(parsed, nextResult)) {
+        return undefined;
+    }
+
+    // (3): both must be id-keyable.
+    const previous = indexRowsById(previousRows);
+    const next = indexRowsById(nextRows);
 
     if (previous === undefined || next === undefined) {
         return undefined;
@@ -286,6 +371,21 @@ interface SubscriptionFrameInput {
     lastMutationId?: number;
     /** The fresh query result, unencoded — diffed row-wise against `previousJson`. */
     nextResult: unknown;
+
+    /**
+     * Whether this socket announced {@link PAGE_DELTA_CAPABILITY} on its
+     * `connect` frame, i.e. whether it can merge a row delta into the `page` of
+     * a `{ page, isDone, continueCursor }` result.
+     *
+     * Load-bearing, and fail-closed by default. A client that cannot do that
+     * merge does not IGNORE a page delta — `@lunora/client`'s `applyDelta`
+     * returns `undefined` for an unmergeable shape and the caller then replaces
+     * the whole query value with the raw delta object. So sending page deltas
+     * unconditionally would corrupt the value on every client that predates
+     * this, including all seven non-JS SDKs. Absent means snapshots, which is
+     * exactly the behaviour those clients have today.
+     */
+    pageDeltas?: boolean;
     /** The wire form of the value last DELIVERED for this subscription; `undefined` on a first send. */
     previousJson?: string;
     /** `JSON.stringify(encodeWire(nextResult))` — the exact `data` frame payload, built once by the caller. */
@@ -327,16 +427,23 @@ interface SubscriptionFrameInput {
  * collection — the exact id-keyed shape the delta path targets, so every write
  * after its first snapshot goes out as deltas — would never see a frame-carried
  * watermark again (plan 266 finding d).
+ *
+ * A `{ page, … }` result is only ever diffed for a socket that announced
+ * {@link PAGE_DELTA_CAPABILITY} — see {@link SubscriptionFrameInput.pageDeltas}
+ * for why that gate is a correctness requirement and not a tuning knob.
  * @returns the frames to send in order; always at least one unless the diff found no changed rows
  */
 const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
-    const { cursorSuffix, lastMutationId, nextResult, previousJson, snapshotJson, subId, table } = input;
+    const { cursorSuffix, lastMutationId, nextResult, pageDeltas, previousJson, snapshotJson, subId, table } = input;
     const idJson = JSON.stringify(subId);
     const suffix = (lastMutationId === undefined ? "" : `,"lastMutationId":${String(lastMutationId)}`) + cursorSuffix;
     const snapshot = `{"type":"data","id":${idJson},"data":${snapshotJson}${suffix}}`;
     // No baseline (first send, or the last send never left the socket) — there is
-    // nothing to diff against, so the snapshot is the only option.
-    const framed = previousJson === undefined ? undefined : collectFramedDeltas(previousJson, nextResult, table);
+    // nothing to diff against, so the snapshot is the only option. A paginated
+    // result is additionally gated on the socket having announced that it can
+    // merge into `page`; without that the diff is never even attempted.
+    const diffable = previousJson !== undefined && (pageDeltas === true || Array.isArray(nextResult));
+    const framed = diffable ? collectFramedDeltas(previousJson, nextResult, table) : undefined;
 
     if (framed === undefined) {
         return [snapshot];
@@ -393,4 +500,4 @@ const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
 };
 
 export type { DrainableSink, FrameSink, SubscriptionFrameInput };
-export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame };
+export { awaitWsDrain, PAGE_DELTA_CAPABILITY, subscriptionFrames, subscriptionListDeltas, trySendFrame };

@@ -136,14 +136,44 @@ const isMutationDelta = (value: unknown): value is MutationDelta => {
     );
 };
 
+/** The row-array field a `.paginate()` result carries its page in. */
+const PAGE_FIELD = "page";
+
 /**
- * Apply a structured `MutationDelta` to a cached array result, returning a new
- * array (never mutating the input). Returns `undefined` when the delta can't be
+ * The row array inside a cached query value, or `undefined` when there is none.
+ *
+ * Two mergeable shapes:
+ *
+ * - the value IS the array — `db.query(...).collect()`;
+ * - the value is `{ page: [...], isDone, continueCursor }` — what `.paginate()`
+ * yields, and therefore what every `usePaginatedQuery` page holds.
+ *
+ * The server only ever sends row deltas for the paginated shape when the fields
+ * around the page are unchanged, so merging into `page` and leaving the rest of
+ * the object untouched reproduces the server's value exactly.
+ * @returns the row array to merge into, or `undefined` when the value holds none
+ */
+const pageOf = (current: unknown): undefined | unknown[] => {
+    if (Array.isArray(current)) {
+        return current as unknown[];
+    }
+
+    if (typeof current === "object" && current !== null && Array.isArray((current as Record<string, unknown>)[PAGE_FIELD])) {
+        return (current as Record<string, unknown>)[PAGE_FIELD] as unknown[];
+    }
+
+    return undefined;
+};
+
+/**
+ * Apply a structured `MutationDelta` to a cached list result, returning a new
+ * value (never mutating the input). Returns `undefined` when the delta can't be
  * applied cleanly — the caller should then fall back to the existing
  * full-replacement behaviour (or trust the next snapshot to reconcile).
  *
- * Mergeable shape: a plain array of id-bearing row objects, e.g. the result of
- * `db.query().collect()`.
+ * Mergeable shapes: an array of id-bearing row objects, or a `.paginate()`
+ * result wrapping one in `page` (see {@link pageOf}). A paginated value keeps
+ * its other fields and comes back as a new object with a new `page`.
  *
  * Insert / update / delete are matched by row `_id`:
  * - `insert`: appended (or placed by `_creationTime` order) if absent; treated
@@ -152,19 +182,26 @@ const isMutationDelta = (value: unknown): value is MutationDelta => {
  * - `update`: replaces the matching row in place, preserving its position.
  * - `delete`: removes the matching row.
  *
- * Returns `undefined` when `current` isn't an array of id-keyable objects, or
+ * Returns `undefined` when `current` holds no array of id-keyable objects, or
  * when an `insert`/`update` delta carries no `row` to splice in.
  */
-const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown[] => {
-    if (!Array.isArray(current)) {
+const applyDelta = (current: unknown, delta: MutationDelta): Record<string, unknown> | undefined | unknown[] => {
+    const list = pageOf(current);
+
+    if (list === undefined) {
         return undefined;
     }
+
+    // Re-wrap the merged rows the way they arrived: a bare array stays an array,
+    // a paginated result keeps `isDone`/`continueCursor` and swaps its page.
+    const rewrap = (next: unknown[]): Record<string, unknown> | unknown[] =>
+        Array.isArray(current) ? next : { ...(current as Record<string, unknown>), [PAGE_FIELD]: next };
 
     // Only merge when every element is an id-bearing object; an array of
     // scalars (or rows without `_id`) has no stable key to splice against.
     const rows: Record<string, unknown>[] = [];
 
-    for (const element of current) {
+    for (const element of list) {
         const id = rowId(element);
 
         if (id === undefined) {
@@ -182,7 +219,7 @@ const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown
         // No row matched: the delete is a no-op for this page. Return the
         // (copied) list unchanged rather than bailing — a delete for a row this
         // page never held is legitimately nothing to do.
-        return next.length === rows.length ? [...rows] : next;
+        return rewrap(next.length === rows.length ? [...rows] : next);
     }
 
     // insert / update both need the new row body to splice in.
@@ -198,7 +235,7 @@ const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown
 
         next.splice(insertionIndex(rows, row), 0, row);
 
-        return next;
+        return rewrap(next);
     }
 
     // Present → replace in place (covers `update`, and an `insert` whose row a
@@ -207,7 +244,7 @@ const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown
 
     next[existingIndex] = row;
 
-    return next;
+    return rewrap(next);
 };
 
 export { applyDelta, isMutationDelta };

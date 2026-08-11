@@ -1,7 +1,8 @@
 {
-    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path.",
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) — an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it.",
     "clientFrames": {
         "connect": { "clientId": "client-test", "id": "connect", "type": "connect" },
+        "connect-with-caps": { "caps": ["pageDelta"], "clientId": "client-test", "id": "connect", "type": "connect" },
         "connect-with-context": { "clientId": "client-test", "id": "connect", "type": "connect", "context": { "roomId": "general" } },
         "subscribe-cold": {
             "id": "sub_1",

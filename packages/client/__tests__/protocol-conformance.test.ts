@@ -246,7 +246,11 @@ describe("ws-frames fixtures", () => {
 
         const sent = latestSocket().sent.map((raw) => JSON.parse(raw));
 
-        expect(sent[0]).toStrictEqual(ws.clientFrames.connect);
+        // The reference client implements `pageDelta`, so it emits the
+        // capability-announcing form. The plain `connect` fixture stays the
+        // conforming shape for an SDK that implements no tokens — see the
+        // fixture file's `$comment` and protocol README 5.1.1.
+        expect(sent[0]).toStrictEqual(ws.clientFrames["connect-with-caps"]);
         expect(sent[1]).toStrictEqual(ws.clientFrames["subscribe-cold"]);
     });
 
