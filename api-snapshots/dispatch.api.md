@@ -45,6 +45,7 @@ interface FunctionReference {
 ```ts
 interface RunFunctionOptions {
     shardKey?: string;
+    timeoutMs?: number;
 }
 ```
 
@@ -58,4 +59,10 @@ const createDispatchLogger: (prefix: string) => DispatchLogger;
 
 ```ts
 const createDispatchRunner: (options: DispatchRunnerOptions) => DispatchRunFunction;
+```
+
+### `isDeterministicDispatchFailure` (const)
+
+```ts
+const isDeterministicDispatchFailure: (error: unknown) => boolean;
 ```

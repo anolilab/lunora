@@ -8,13 +8,24 @@
  *
  * Node-safe (structural types, injectable `fetch`) so it's unit-testable.
  */
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
+
+/**
+ * Default cap on the dispatch fetch, overridable per call via
+ * {@link RunFunctionOptions.timeoutMs}. `ctx.run` is the load-bearing path every
+ * workflow step / queue handler / scheduled job takes back into a Lunora
+ * function — without a bound, an unresponsive origin holds the caller (a queue
+ * consumer, a scheduled invocation) open until the platform kills it. 30s is
+ * generous relative to `queue/src/capture.ts`'s 5s best-effort cap: that budget
+ * is for a side-channel write, this is a real function call.
+ */
+const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 
 /** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
 const trimTrailingSlashes = (value: string): string => {
@@ -32,11 +43,17 @@ const trimTrailingSlashes = (value: string): string => {
  * serializes a dispatch failure via `@lunora/errors`' `toErrorBody`, wrapped as
  * `{ error: { code, message, data?, ... } }` with the HTTP status carrying the
  * error's status. Reconstruct a `LunoraError` from that shape so the original
- * `code`/`status`/`data` survive and a consumer (`@lunora/workflow`'s
- * `createRunStep`, `@lunora/queue`'s consumer) can distinguish a deterministic
- * 4xx (map to a non-retryable failure / ack-without-retry) from a transient
- * one. An unparseable or unrecognized body falls back to a generic `INTERNAL`
- * carrying the HTTP status and the raw text.
+ * `code`/`status`/`data` survive: {@link isDeterministicDispatchFailure} keys off
+ * `status` to tell a deterministic failure (`400`/`403`/`404`/`422` — see
+ * `DETERMINISTIC_DISPATCH_STATUSES`) from a transient one.
+ * `@lunora/workflow`'s `createRunStep` consumes this to convert a deterministic
+ * failure into a non-retryable step failure instead of burning its retry budget
+ * on a call that can never succeed. `@lunora/queue`'s consumer does not yet act
+ * on it — `dispatchQueueBatch`'s retry unit is the whole batch, and turning a
+ * deterministic per-message failure into an ack-without-retry needs its own
+ * redelivery-semantics change. An unparseable or unrecognized body falls back to
+ * a generic `INTERNAL` carrying the HTTP status and the raw text (never
+ * deterministic, since it isn't in the allowlist).
  */
 const toDispatchError = (label: string, status: number, rawBody: string): LunoraError => {
     try {
@@ -54,6 +71,33 @@ const toDispatchError = (label: string, status: number, rawBody: string): Lunora
 
     return new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status });
 };
+
+/**
+ * Statuses a dispatch will fail on identically every time — retrying re-runs
+ * the caller's side effects for nothing. `408` (timeout) and `429` (rate limit)
+ * are deliberately absent: both are transient, and an intermediary can emit
+ * either, so treating them as permanent would turn a recoverable failure into a
+ * dead-lettered batch / a burned workflow retry budget.
+ */
+const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 422]);
+
+/**
+ * True when `error` is a {@link LunoraError} (as reconstructed by
+ * {@link toDispatchError}) whose `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES}
+ * — i.e. a dispatch failure a consumer (`@lunora/workflow`'s `createRunStep`,
+ * `@lunora/queue`'s consumer) should treat as non-retryable rather than
+ * rethrowing for the platform's default retry-on-throw.
+ */
+const isDeterministicDispatchFailure = (error: unknown): boolean => isLunoraError(error) && DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+
+/**
+ * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class
+ * status (503, not one of {@link DETERMINISTIC_DISPATCH_STATUSES}) — a timeout is
+ * transient by definition, so a consumer classifying on status must keep it
+ * retryable.
+ */
+const toDispatchTimeoutError = (label: string, functionPath: string, timeoutMs: number): LunoraError =>
+    new LunoraError("INTERNAL", `${label}: function dispatch to "${functionPath}" timed out after ${String(timeoutMs)}ms`, { status: 503 });
 
 interface DispatchRunnerOptions {
     /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
@@ -83,10 +127,12 @@ interface DispatchRunnerOptions {
  * a deterministic 4xx to a non-retryable failure); an unparseable error body
  * falls back to `INTERNAL`. A non-empty body that is not valid JSON is a
  * malformed response (e.g. an intermediary's HTML error page) and throws an
- * `INTERNAL` {@link LunoraError} rather than resolving to the raw text.
+ * `INTERNAL` {@link LunoraError} rather than resolving to the raw text. The
+ * fetch itself is bounded by {@link DEFAULT_DISPATCH_TIMEOUT_MS} (overridable
+ * via {@link RunFunctionOptions.timeoutMs}); an abort rejects with a retryable
+ * (5xx-status) {@link LunoraError}.
  */
-// eslint-disable-next-line import/prefer-default-export -- named export by package convention; index.ts re-exports it
-export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFunction => {
+const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFunction => {
     const { label } = options;
     const globalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
     // Bind the global `fetch` to `globalThis` so calling it through a captured
@@ -126,11 +172,32 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
             headers["x-lunora-identity"] = encodeIdentityHeader(options.identity.claims);
         }
 
-        const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
-            headers,
-            method: "POST",
-        });
+        const timeoutMs = runOptions.timeoutMs ?? DEFAULT_DISPATCH_TIMEOUT_MS;
+        // Bound the dispatch fetch — see DEFAULT_DISPATCH_TIMEOUT_MS. Mirrors
+        // queue/src/capture.ts's AbortController + setTimeout shape.
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            controller.abort();
+        }, timeoutMs);
+
+        let response: Response;
+
+        try {
+            response = await fetchImpl(url, {
+                body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
+                headers,
+                method: "POST",
+                signal: controller.signal,
+            });
+        } catch (error: unknown) {
+            if (controller.signal.aborted) {
+                throw toDispatchTimeoutError(label, function_.__lunoraRef, timeoutMs);
+            }
+
+            throw error;
+        } finally {
+            clearTimeout(timeout);
+        }
 
         if (!response.ok) {
             throw toDispatchError(label, response.status, await response.text());
@@ -155,3 +222,5 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
         }
     };
 };
+
+export { createDispatchRunner, isDeterministicDispatchFailure };
