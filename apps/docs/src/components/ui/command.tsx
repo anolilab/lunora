@@ -79,7 +79,7 @@ const CommandSeparator = ({ className, ...properties }: React.ComponentProps<typ
 const CommandItem = ({ className, ...properties }: React.ComponentProps<typeof CommandPrimitive.Item>) => (
     <CommandPrimitive.Item
         className={cn(
-            "data-[selected=true]:bg-white/[0.06] data-[selected=true]:text-white [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+            "data-[selected=true]:bg-hairline data-[selected=true]:text-ink [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
             className,
         )}
         data-slot="command-item"

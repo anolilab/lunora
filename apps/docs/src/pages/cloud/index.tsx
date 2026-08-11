@@ -97,7 +97,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                 <input
                     aria-label="Email address"
                     autoComplete="email"
-                    className="h-11 flex-1 border border-white/15 bg-white/[0.03] px-4 text-sm text-white placeholder:text-white/35 focus:border-white/35 focus:outline-none"
+                    className="h-11 flex-1 border border-hairline-strong bg-wash px-4 text-sm text-ink placeholder:text-ink-faint focus:border-hairline-strong focus:outline-none"
                     inputMode="email"
                     onChange={(event) => {
                         setEmail(event.target.value);
@@ -111,7 +111,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     value={email}
                 />
                 <button
-                    className="inline-flex h-11 items-center justify-center gap-2 bg-white px-5 text-sm font-medium text-black transition-colors hover:bg-white/90 disabled:opacity-60"
+                    className="inline-flex h-11 items-center justify-center gap-2 bg-panel px-5 text-sm font-medium text-on-panel transition-colors hover:bg-panel disabled:opacity-60"
                     disabled={status === "sending"}
                     type="submit"
                 >
@@ -119,10 +119,10 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     <ArrowRight className="size-4" />
                 </button>
             </div>
-            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-white/50" htmlFor="privacy-consent">
+            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-ink-muted" htmlFor="privacy-consent">
                 <input
                     checked={consent}
-                    className="mt-0.5 size-4 shrink-0 accent-[#9273e8]"
+                    className="mt-0.5 size-4 shrink-0 accent-accent-2"
                     id="privacy-consent"
                     name="privacy"
                     onChange={(event) => {
@@ -138,13 +138,13 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                 />
                 <span>
                     I agree to the{" "}
-                    <Link className="text-white/70 underline decoration-white/25 underline-offset-2 hover:text-white" to="/privacy">
+                    <Link className="text-ink-muted underline decoration-white/25 underline-offset-2 hover:text-ink" to="/privacy">
                         Privacy Policy
                     </Link>{" "}
                     and to receiving one email when Lunora Cloud opens. No spam; unsubscribe any time.
                 </span>
             </label>
-            <p className={`text-xs ${status === "error" ? "text-red-400" : "text-white/40"}`}>
+            <p className={`text-xs ${status === "error" ? "text-red-400" : "text-ink-faint"}`}>
                 {status === "error" ? errorMessage : "Your email is only used to notify you. You can self-host the open-source framework any time."}
             </p>
         </form>
@@ -165,14 +165,14 @@ const perks: Perk[] = [
 ];
 
 const CloudLanding: FC = () => (
-    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
         {/* vertical guide lines at the container edges, full page height */}
         <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
         />
         {/* Hero + waitlist */}
-        <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+        <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
             <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-80 opacity-60"
@@ -180,20 +180,20 @@ const CloudLanding: FC = () => (
             />
             <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-40 pb-20 text-center sm:pt-48">
                 <Reveal className="flex flex-col items-center gap-6">
-                    <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
+                    <span className="flex items-center gap-2 border border-hairline px-3 py-1 font-mono text-xs text-ink-muted">
                         <span className="size-1.5 bg-royal-amethyst" />
                         Lunora Cloud · coming soon
                     </span>
-                    <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-white sm:text-6xl">
+                    <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-ink sm:text-6xl">
                         The managed way to run{" "}
                         <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">Lunora.</span>
                     </h1>
-                    <p className="max-w-xl text-lg leading-relaxed text-white/55">
+                    <p className="max-w-xl text-lg leading-relaxed text-ink-muted">
                         Lunora is open source and runs on your own Cloudflare account today. Lunora Cloud will run it for you, so you can ship instead of
                         operate infrastructure.
                     </p>
                     <WaitlistForm />
-                    <p className="text-sm text-white/45">
+                    <p className="text-sm text-ink-faint">
                         Want it now?{" "}
                         <Pill to="/docs/$">
                             Self-host the open-source framework
@@ -205,20 +205,20 @@ const CloudLanding: FC = () => (
         </section>
 
         {/* No lock-in: own it or let us run it */}
-        <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-            <div className="mx-auto grid max-w-5xl grid-cols-1 gap-px border-white/[0.08] md:grid-cols-2 md:border-x">
-                <div className="flex flex-col gap-3 border-b border-white/[0.08] p-8 md:border-r md:border-b-0">
-                    <span className="font-mono text-xs tracking-wider text-white/40 uppercase">Own it</span>
-                    <h3 className="text-xl font-semibold text-white">Self-host on your Cloudflare</h3>
-                    <p className="text-sm leading-relaxed text-white/55">
+        <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
+            <div className="mx-auto grid max-w-5xl grid-cols-1 gap-px border-hairline md:grid-cols-2 md:border-x">
+                <div className="flex flex-col gap-3 border-b border-hairline p-8 md:border-r md:border-b-0">
+                    <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Own it</span>
+                    <h3 className="text-xl font-semibold text-ink">Self-host on your Cloudflare</h3>
+                    <p className="text-sm leading-relaxed text-ink-muted">
                         The framework is free and open source. Deploy to the Cloudflare account you already have. Your data, your infrastructure, ≈$0 at idle on
                         the free tier.
                     </p>
                 </div>
                 <div className="flex flex-col gap-3 p-8">
-                    <span className="font-mono text-xs tracking-wider text-white/40 uppercase">Or let us run it</span>
-                    <h3 className="text-xl font-semibold text-white">Lunora Cloud</h3>
-                    <p className="text-sm leading-relaxed text-white/55">
+                    <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Or let us run it</span>
+                    <h3 className="text-xl font-semibold text-ink">Lunora Cloud</h3>
+                    <p className="text-sm leading-relaxed text-ink-muted">
                         The same code, managed for you. No setup, no ops. You&apos;re never forced onto the cloud — you can take the open source and self-host
                         any time. No lock-in, ever.
                     </p>
@@ -227,28 +227,28 @@ const CloudLanding: FC = () => (
         </section>
 
         {/* What you get */}
-        <section className="relative border-t border-white/[0.08] bg-[#0e0e11] py-16" data-nav-theme="dark">
+        <section className="relative border-t border-hairline bg-canvas py-16" data-nav-theme="dark">
             <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-5 sm:grid-cols-2 lg:grid-cols-4">
                 {perks.map((perk) => (
                     <div className="flex flex-col gap-3" key={perk.title}>
-                        <span className="flex size-10 items-center justify-center border border-white/10 bg-white/[0.04] text-white/80">{perk.icon}</span>
-                        <h4 className="text-sm font-semibold text-white">{perk.title}</h4>
-                        <p className="text-sm leading-relaxed text-white/50">{perk.desc}</p>
+                        <span className="flex size-10 items-center justify-center border border-hairline bg-wash text-ink-muted">{perk.icon}</span>
+                        <h4 className="text-sm font-semibold text-ink">{perk.title}</h4>
+                        <p className="text-sm leading-relaxed text-ink-muted">{perk.desc}</p>
                     </div>
                 ))}
             </div>
         </section>
 
         {/* Closing waitlist nudge */}
-        <section className="relative overflow-hidden border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+        <section className="relative overflow-hidden border-t border-hairline bg-canvas" data-nav-theme="dark">
             <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
                 style={{ background: "radial-gradient(60% 100% at 50% 120%, hsl(256 72% 68% / 0.22), transparent 70%)" }}
             />
             <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-6 px-5 py-20 text-center">
-                <h2 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Be first on Lunora Cloud.</h2>
-                <p className="max-w-lg text-white/55">
+                <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Be first on Lunora Cloud.</h2>
+                <p className="max-w-lg text-ink-muted">
                     It&apos;s early. Join the waitlist and help shape the first managed tier — we&apos;ll ask what you&apos;d want it to do.
                 </p>
                 <WaitlistForm />

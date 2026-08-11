@@ -49,7 +49,7 @@ const CopyLinkButton: FC<{ url: string }> = ({ url }) => {
     return (
         <button
             aria-label="Copy link"
-            className="flex size-9 items-center justify-center border border-white/[0.08] text-white/55 transition-colors hover:border-white/20 hover:text-white"
+            className="flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
             onClick={onCopy}
             type="button"
         >
@@ -92,13 +92,13 @@ const TableOfContents: FC<{ items: TOCItemType[] }> = ({ items }) => {
 
     return (
         <nav aria-label="Table of contents" className="flex flex-col gap-2 text-sm">
-            <p className="mb-1 font-mono text-[11px] tracking-wider text-white/40 uppercase">On this page</p>
+            <p className="mb-1 font-mono text-[11px] tracking-wider text-ink-faint uppercase">On this page</p>
             {items.map((item) => {
                 const active = item.url.slice(1) === activeId;
 
                 return (
                     <a
-                        className={`transition-colors hover:text-white ${active ? "text-white" : "text-white/45"} ${item.depth >= 4 ? "pl-6" : ""} ${item.depth === 3 ? "pl-3" : ""}`}
+                        className={`transition-colors hover:text-ink ${active ? "text-ink" : "text-ink-faint"} ${item.depth >= 4 ? "pl-6" : ""} ${item.depth === 3 ? "pl-3" : ""}`}
                         href={item.url}
                         key={item.url}
                     >
@@ -120,9 +120,9 @@ const edgeClass = (index: number): string => {
 };
 
 const RelatedCard: FC<{ edge?: string; post: RelatedPost }> = ({ edge = "", post }) => (
-    <Link className={`group flex flex-col border border-white/[0.08] bg-white/[0.012] ${edge}`} params={{ slug: post.slug }} to="/blog/$slug">
+    <Link className={`group flex flex-col border border-hairline bg-wash ${edge}`} params={{ slug: post.slug }} to="/blog/$slug">
         {post.image ? (
-            <div className="relative aspect-1200/630 overflow-hidden bg-white/[0.03]">
+            <div className="relative aspect-1200/630 overflow-hidden bg-wash">
                 <img
                     alt={post.title ?? "Blog post"}
                     className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
@@ -134,8 +134,8 @@ const RelatedCard: FC<{ edge?: string; post: RelatedPost }> = ({ edge = "", post
         ) : null}
         <div className="flex flex-col gap-1.5 p-4">
             <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-            <h3 className="text-sm font-semibold tracking-tight text-white transition-colors group-hover:text-white/70">{post.title}</h3>
-            <time className="mt-1 font-mono text-[11px] tracking-wide text-white/40">{formatDate(post.publishedAt).formatted}</time>
+            <h3 className="text-sm font-semibold tracking-tight text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
+            <time className="mt-1 font-mono text-[11px] tracking-wide text-ink-faint">{formatDate(post.publishedAt).formatted}</time>
         </div>
     </Link>
 );
@@ -176,7 +176,7 @@ const BlogPost: FC<{
     };
 
     return (
-        <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
             <JsonLd data={articleLd} />
             <JsonLd data={breadcrumbLd} />
 
@@ -187,12 +187,12 @@ const BlogPost: FC<{
             />
             <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
             />
 
             <section className="relative z-10" data-nav-theme="dark">
                 <div className="mx-auto max-w-6xl px-5 pt-28 pb-24 lg:px-0">
-                    <Link className="inline-flex items-center gap-1.5 text-sm text-white/50 transition-colors hover:text-white" to="/blog">
+                    <Link className="inline-flex items-center gap-1.5 text-sm text-ink-muted transition-colors hover:text-ink" to="/blog">
                         <ArrowLeft className="size-4" />
                         Blog
                     </Link>
@@ -201,41 +201,41 @@ const BlogPost: FC<{
                     <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_minmax(0,440px)]">
                         <div>
                             <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-                            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">{post.title}</h1>
-                            {post.description ? <p className="mt-4 max-w-xl text-lg text-white/55">{post.description}</p> : null}
+                            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-ink sm:text-5xl">{post.title}</h1>
+                            {post.description ? <p className="mt-4 max-w-xl text-lg text-ink-muted">{post.description}</p> : null}
                         </div>
                         {post.image ? (
-                            <div className="overflow-hidden border border-white/[0.08] bg-white/[0.03] lg:border-r-0">
+                            <div className="overflow-hidden border border-hairline bg-wash lg:border-r-0">
                                 <img alt={post.title ?? "Blog post"} className="aspect-1200/630 w-full object-cover" decoding="async" src={post.image} />
                             </div>
                         ) : null}
                     </div>
 
                     {/* byline + share */}
-                    <div className="mt-10 flex flex-wrap items-center justify-between gap-4 border-y border-white/[0.08] py-4">
+                    <div className="mt-10 flex flex-wrap items-center justify-between gap-4 border-y border-hairline py-4">
                         <div className="flex items-center gap-3 text-sm">
                             <span className="flex size-8 flex-none items-center justify-center rounded-full bg-royal-amethyst/15 text-[11px] font-semibold text-royal-amethyst">
                                 {initials(post.author)}
                             </span>
-                            {post.author ? <span className="font-medium text-white">{post.author}</span> : null}
+                            {post.author ? <span className="font-medium text-ink">{post.author}</span> : null}
                             {formatted ? (
-                                <time className="font-mono text-xs tracking-wide text-white/40" dateTime={iso}>
+                                <time className="font-mono text-xs tracking-wide text-ink-faint" dateTime={iso}>
                                     {formatted}
                                 </time>
                             ) : null}
                             {post.readingMinutes ? (
                                 <>
-                                    <span aria-hidden="true" className="text-white/20">
+                                    <span aria-hidden="true" className="text-ink-faint">
                                         ·
                                     </span>
-                                    <span className="font-mono text-xs tracking-wide text-white/40">{`${String(post.readingMinutes)} min read`}</span>
+                                    <span className="font-mono text-xs tracking-wide text-ink-faint">{`${String(post.readingMinutes)} min read`}</span>
                                 </>
                             ) : null}
                         </div>
                         <div className="flex items-center gap-2">
                             <a
                                 aria-label="Share on X"
-                                className="flex size-9 items-center justify-center border border-white/[0.08] text-white/55 transition-colors hover:border-white/20 hover:text-white"
+                                className="flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
                                 href={shareUrl}
                                 rel="noreferrer"
                                 target="_blank"
@@ -264,27 +264,27 @@ const BlogPost: FC<{
 
                     {/* prev / next */}
                     {previous || next ? (
-                        <nav aria-label="More posts" className="mt-16 grid gap-4 border-t border-white/[0.08] pt-8 sm:grid-cols-2">
+                        <nav aria-label="More posts" className="mt-16 grid gap-4 border-t border-hairline pt-8 sm:grid-cols-2">
                             {previous ? (
                                 <Link
-                                    className="group flex flex-col gap-1 border border-white/[0.08] p-5 transition-colors hover:border-white/20"
+                                    className="group flex flex-col gap-1 border border-hairline p-5 transition-colors hover:border-hairline-strong"
                                     params={{ slug: previous.slug }}
                                     to="/blog/$slug"
                                 >
-                                    <span className="font-mono text-[11px] tracking-wider text-white/40 uppercase">← Previous</span>
-                                    <span className="font-medium text-white transition-colors group-hover:text-white/70">{previous.title}</span>
+                                    <span className="font-mono text-[11px] tracking-wider text-ink-faint uppercase">← Previous</span>
+                                    <span className="font-medium text-ink transition-colors group-hover:text-ink-muted">{previous.title}</span>
                                 </Link>
                             ) : (
                                 <div className="hidden sm:block" />
                             )}
                             {next ? (
                                 <Link
-                                    className="group flex flex-col items-end gap-1 border border-white/[0.08] p-5 text-right transition-colors hover:border-white/20"
+                                    className="group flex flex-col items-end gap-1 border border-hairline p-5 text-right transition-colors hover:border-hairline-strong"
                                     params={{ slug: next.slug }}
                                     to="/blog/$slug"
                                 >
-                                    <span className="font-mono text-[11px] tracking-wider text-white/40 uppercase">Next →</span>
-                                    <span className="font-medium text-white transition-colors group-hover:text-white/70">{next.title}</span>
+                                    <span className="font-mono text-[11px] tracking-wider text-ink-faint uppercase">Next →</span>
+                                    <span className="font-medium text-ink transition-colors group-hover:text-ink-muted">{next.title}</span>
                                 </Link>
                             ) : (
                                 <div className="hidden sm:block" />
@@ -294,8 +294,8 @@ const BlogPost: FC<{
 
                     {/* related */}
                     {related.length > 0 ? (
-                        <div className="mt-24 border-t border-white/[0.08] pt-12">
-                            <h2 className="text-2xl font-semibold tracking-tight text-white">More from the blog</h2>
+                        <div className="mt-24 border-t border-hairline pt-12">
+                            <h2 className="text-2xl font-semibold tracking-tight text-ink">More from the blog</h2>
                             <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                                 {related.map((item, index) => (
                                     <RelatedCard edge={edgeClass(index)} key={item.slug} post={item} />

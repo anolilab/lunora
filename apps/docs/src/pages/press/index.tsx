@@ -23,7 +23,7 @@ interface Swatch {
 
 // The aurora palette — values mirror marketing/design-tokens/tokens.css.
 const swatches: Swatch[] = [
-    { css: "#0E0E11", name: "Eclipse", note: "Page & body base", swatchClass: "bg-[#0e0e11] border border-white/15" },
+    { css: "#0E0E11", name: "Eclipse", note: "Page & body base", swatchClass: "bg-canvas border border-hairline-strong" },
     { css: "hsl(186 84% 56%)", name: "Aurora Cyan", note: "Info · active", swatchClass: "bg-aurora-cyan" },
     { css: "hsl(256 72% 68%)", name: "Aurora Violet", note: "Primary · brand", swatchClass: "bg-aurora-violet" },
     { css: "hsl(330 80% 64%)", name: "Aurora Rose", note: "Emphasis", swatchClass: "bg-aurora-rose" },
@@ -48,7 +48,7 @@ const logoBlocks: LogoBlock[] = [
             { href: "/brand/lunora-logomark-dark.svg", label: "SVG · dark" },
             { href: "/brand/lunora-logomark-violet.svg", label: "SVG · violet" },
         ],
-        logo: <LunoraLogomark className="h-16 w-auto text-white" />,
+        logo: <LunoraLogomark className="h-16 w-auto text-ink" />,
         title: "Logomark",
     },
     {
@@ -56,7 +56,7 @@ const logoBlocks: LogoBlock[] = [
             { href: "/brand/lunora-wordmark-light.svg", label: "SVG · light" },
             { href: "/brand/lunora-wordmark-dark.svg", label: "SVG · dark" },
         ],
-        logo: <LunoraWordmark className="h-9 w-auto text-white" />,
+        logo: <LunoraWordmark className="h-9 w-auto text-ink" />,
         title: "Wordmark",
     },
 ];
@@ -77,15 +77,15 @@ const BOILERPLATE =
     "Lunora is a type-safe, real-time backend framework for Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define your schema, queries, and mutations in TypeScript; Lunora keeps server and client types in lockstep, streams live updates over WebSockets, and runs your data at the edge — sharded or globally replicated.";
 
 const Tile: FC<{ children: ReactNode; dark?: boolean }> = ({ children, dark }) => (
-    <div className={`flex h-40 items-center justify-center ${dark ? "bg-[#0e0e11]" : "bg-white"}`}>{children}</div>
+    <div className={`flex h-40 items-center justify-center ${dark ? "bg-canvas" : "bg-panel"}`}>{children}</div>
 );
 
 const Press: FC = () => (
-    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
         {/* vertical guide lines at the container edges — matches the landing page */}
         <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
         />
 
         <section className="relative" data-nav-theme="dark">
@@ -101,25 +101,25 @@ const Press: FC = () => (
         <HatchSpacer />
 
         {/* logos */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-white/[0.08] md:grid-cols-2">
+        <section className="border-t border-hairline" data-nav-theme="dark">
+            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-hairline md:grid-cols-2">
                 {logoBlocks.map((block) => (
-                    <Reveal className="bg-[#0e0e11] p-8" key={block.title}>
-                        <h2 className="text-lg font-medium tracking-tight text-white">{block.title}</h2>
-                        <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden border border-white/[0.08]">
+                    <Reveal className="bg-canvas p-8" key={block.title}>
+                        <h2 className="text-lg font-medium tracking-tight text-ink">{block.title}</h2>
+                        <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden border border-hairline">
                             <Tile dark>{block.logo}</Tile>
                             <Tile>
                                 {block.title === "Logomark" ? (
-                                    <LunoraLogomark className="h-16 w-auto text-[#0e0e11]" />
+                                    <LunoraLogomark className="h-16 w-auto text-canvas" />
                                 ) : (
-                                    <LunoraWordmark className="h-9 w-auto text-[#0e0e11]" />
+                                    <LunoraWordmark className="h-9 w-auto text-canvas" />
                                 )}
                             </Tile>
                         </div>
                         <div className="mt-5 flex flex-wrap gap-2">
                             {block.downloads.map((download) => (
                                 <a
-                                    className="border border-white/15 px-3 py-1.5 text-xs font-medium text-white/70 transition-colors hover:border-white/30 hover:text-white"
+                                    className="border border-hairline-strong px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
                                     download
                                     href={download.href}
                                     key={download.href}
@@ -136,19 +136,19 @@ const Press: FC = () => (
         <HatchSpacer />
 
         {/* colors */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+        <section className="border-t border-hairline" data-nav-theme="dark">
             <div className="mx-auto max-w-6xl px-5 py-16 lg:px-0">
-                <h2 className="text-lg font-medium tracking-tight text-white">Colors</h2>
-                <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-white/50">
+                <h2 className="text-lg font-medium tracking-tight text-ink">Colors</h2>
+                <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-muted">
                     Eclipse anchors every surface; the aurora ramp (cyan → violet → rose) is an accent — light, not paint.
                 </p>
                 <div className="mt-8 grid grid-cols-2 gap-6 sm:grid-cols-4">
                     {swatches.map((swatch) => (
                         <div key={swatch.name}>
                             <div className={`h-24 w-full ${swatch.swatchClass}`} />
-                            <p className="mt-3 text-sm font-medium text-white">{swatch.name}</p>
-                            <p className="font-mono text-xs text-white/50">{swatch.css}</p>
-                            <p className="mt-0.5 text-xs text-white/40">{swatch.note}</p>
+                            <p className="mt-3 text-sm font-medium text-ink">{swatch.name}</p>
+                            <p className="font-mono text-xs text-ink-muted">{swatch.css}</p>
+                            <p className="mt-0.5 text-xs text-ink-faint">{swatch.note}</p>
                         </div>
                     ))}
                 </div>
@@ -158,33 +158,33 @@ const Press: FC = () => (
         <HatchSpacer />
 
         {/* boilerplate */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+        <section className="border-t border-hairline" data-nav-theme="dark">
             <div className="mx-auto max-w-6xl px-5 py-16 lg:px-0">
-                <h2 className="text-lg font-medium tracking-tight text-white">Boilerplate</h2>
-                <p className="mt-5 max-w-3xl text-base leading-relaxed text-white/70">{BOILERPLATE}</p>
+                <h2 className="text-lg font-medium tracking-tight text-ink">Boilerplate</h2>
+                <p className="mt-5 max-w-3xl text-base leading-relaxed text-ink-muted">{BOILERPLATE}</p>
             </div>
         </section>
 
         <HatchSpacer />
 
         {/* usage */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-white/[0.08] md:grid-cols-2">
-                <div className="bg-[#0e0e11] p-8">
+        <section className="border-t border-hairline" data-nav-theme="dark">
+            <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-hairline md:grid-cols-2">
+                <div className="bg-canvas p-8">
                     <h3 className="text-sm font-semibold tracking-[0.12em] text-aurora-cyan uppercase">Do</h3>
                     <ul className="mt-4 space-y-3">
                         {dos.map((item) => (
-                            <li className="text-sm leading-relaxed text-white/60" key={item}>
+                            <li className="text-sm leading-relaxed text-ink-muted" key={item}>
                                 {item}
                             </li>
                         ))}
                     </ul>
                 </div>
-                <div className="bg-[#0e0e11] p-8">
+                <div className="bg-canvas p-8">
                     <h3 className="text-sm font-semibold tracking-[0.12em] text-aurora-rose uppercase">Don&apos;t</h3>
                     <ul className="mt-4 space-y-3">
                         {donts.map((item) => (
-                            <li className="text-sm leading-relaxed text-white/60" key={item}>
+                            <li className="text-sm leading-relaxed text-ink-muted" key={item}>
                                 {item}
                             </li>
                         ))}
@@ -196,10 +196,10 @@ const Press: FC = () => (
         <HatchSpacer />
 
         {/* contact */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+        <section className="border-t border-hairline" data-nav-theme="dark">
             <div className="mx-auto max-w-6xl px-5 py-16 lg:px-0">
-                <h2 className="text-lg font-medium tracking-tight text-white">Press inquiries</h2>
-                <p className="mt-3 text-sm text-white/50">
+                <h2 className="text-lg font-medium tracking-tight text-ink">Press inquiries</h2>
+                <p className="mt-3 text-sm text-ink-muted">
                     Questions, interviews, or anything not covered here —{" "}
                     <a className="text-aurora-violet underline-offset-4 hover:underline" href="mailto:press@lunora.sh">
                         press@lunora.sh

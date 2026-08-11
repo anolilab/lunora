@@ -29,10 +29,10 @@ const tokenTone = (segment: string): string => {
     }
 
     if (PUNCT.test(segment)) {
-        return "text-white/35";
+        return "text-ink-faint";
     }
 
-    return "text-white/75";
+    return "text-ink-muted";
 };
 
 const CodeText: FC<{ line: string }> = ({ line }) => {
@@ -62,7 +62,7 @@ const Code: FC<{ lines: string[] }> = ({ lines }) => (
         <code>
             {lines.map((line, index) => (
                 <div className="flex" key={index}>
-                    <span className="mr-5 inline-block w-6 shrink-0 text-right text-white/25 select-none">{index + 1}</span>
+                    <span className="mr-5 inline-block w-6 shrink-0 text-right text-ink-faint select-none">{index + 1}</span>
                     <CodeText line={line} />
                 </div>
             ))}
@@ -270,20 +270,20 @@ const AgentPanel: FC = () => {
         <div className="relative mx-auto w-full max-w-6xl px-5 lg:px-0">
             <div className="grid grid-cols-1 gap-4 md:h-[540px] md:grid-cols-[1.2fr_1fr]">
                 {/* code — full height */}
-                <div className="flex min-h-0 flex-col border border-white/10 lg:border-l-0">
-                    <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10">
+                <div className="flex min-h-0 flex-col border border-hairline lg:border-l-0">
+                    <div className="flex h-14 shrink-0 items-center justify-between border-b border-hairline">
                         <div className="flex items-center gap-2 px-4">
-                            <span className="size-3 rounded-full border border-white/10 bg-white/25" />
-                            <span className="size-3 rounded-full border border-white/10 bg-white/25" />
-                            <span className="size-3 rounded-full border border-white/10 bg-white/25" />
+                            <span className="size-3 rounded-full border border-hairline bg-hairline-strong" />
+                            <span className="size-3 rounded-full border border-hairline bg-hairline-strong" />
+                            <span className="size-3 rounded-full border border-hairline bg-hairline-strong" />
                         </div>
                         <div className="flex h-full items-center">
                             {TABS.map((name) => (
                                 <button
                                     aria-pressed={tab === name}
                                     className={cn(
-                                        "flex h-full w-[104px] items-center justify-center border-l border-white/10 text-xs font-medium capitalize transition-colors",
-                                        tab === name ? "bg-white/[0.05] text-white" : "text-white/45 hover:text-white",
+                                        "flex h-full w-[104px] items-center justify-center border-l border-hairline text-xs font-medium capitalize transition-colors",
+                                        tab === name ? "bg-hairline text-ink" : "text-ink-faint hover:text-ink",
                                     )}
                                     key={name}
                                     onClick={() => {
@@ -297,13 +297,13 @@ const AgentPanel: FC = () => {
                         </div>
                     </div>
                     {tab === "client" ? (
-                        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-white/10 px-3">
+                        <div className="flex h-9 shrink-0 items-center gap-1 border-b border-hairline px-3">
                             {FRAMEWORKS.map((name) => (
                                 <button
                                     aria-pressed={framework === name}
                                     className={cn(
                                         "px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
-                                        framework === name ? "bg-white/[0.06] text-white" : "text-white/40 hover:text-white",
+                                        framework === name ? "bg-hairline text-ink" : "text-ink-faint hover:text-ink",
                                     )}
                                     key={name}
                                     onClick={() => {
@@ -324,9 +324,9 @@ const AgentPanel: FC = () => {
                 {/* right — app over table */}
                 <div className="flex min-h-0 flex-col gap-4">
                     {/* app */}
-                    <div className="flex min-h-0 flex-[1.1] flex-col border border-white/10 lg:border-r-0">
-                        <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4">
-                            <span className="font-mono text-xs tracking-wide text-white/45">app · todos</span>
+                    <div className="flex min-h-0 flex-[1.1] flex-col border border-hairline lg:border-r-0">
+                        <div className="flex h-14 shrink-0 items-center justify-between border-b border-hairline px-4">
+                            <span className="font-mono text-xs tracking-wide text-ink-faint">app · todos</span>
                             <span className="flex items-center gap-1.5 font-mono text-[11px] text-sky-sapphire">
                                 <span className="size-1.5 animate-pulse rounded-full bg-sky-sapphire" />
                                 live
@@ -335,7 +335,7 @@ const AgentPanel: FC = () => {
                         <div className="min-h-0 grow space-y-1 overflow-y-auto p-3">
                             {todos.map((todo) => (
                                 <button
-                                    className="flex w-full items-center gap-3 px-2 py-2 text-left transition-colors hover:bg-white/[0.03]"
+                                    className="flex w-full items-center gap-3 px-2 py-2 text-left transition-colors hover:bg-wash"
                                     key={todo.id}
                                     onClick={() => {
                                         toggleTodo(todo.id);
@@ -345,18 +345,18 @@ const AgentPanel: FC = () => {
                                     <span
                                         className={cn(
                                             "flex size-4 shrink-0 items-center justify-center border transition-colors",
-                                            todo.done ? "border-emerald-400/60 bg-emerald-400/20" : "border-white/20",
+                                            todo.done ? "border-emerald-400/60 bg-emerald-400/20" : "border-hairline-strong",
                                         )}
                                     >
                                         {todo.done ? <Check className="size-3 text-emerald-400" /> : null}
                                     </span>
-                                    <span className={cn("truncate text-sm", todo.done ? "text-white/30 line-through" : "text-white/75")}>{todo.text}</span>
+                                    <span className={cn("truncate text-sm", todo.done ? "text-ink-faint line-through" : "text-ink-muted")}>{todo.text}</span>
                                 </button>
                             ))}
                         </div>
-                        <div className="flex shrink-0 items-center gap-2 border-t border-white/10 p-2.5">
+                        <div className="flex shrink-0 items-center gap-2 border-t border-hairline p-2.5">
                             <input
-                                className="min-w-0 flex-1 bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none transition-colors placeholder:text-white/30 focus:bg-white/[0.06]"
+                                className="min-w-0 flex-1 bg-wash px-3 py-2 text-sm text-ink-muted outline-none transition-colors placeholder:text-ink-faint focus:bg-hairline"
                                 onChange={(event) => {
                                     setValue(event.target.value);
                                 }}
@@ -369,7 +369,7 @@ const AgentPanel: FC = () => {
                                 value={value}
                             />
                             <button
-                                className="inline-flex shrink-0 items-center gap-1.5 bg-white px-3 py-2 text-xs font-semibold text-black transition-colors hover:bg-white/90"
+                                className="inline-flex shrink-0 items-center gap-1.5 bg-panel px-3 py-2 text-xs font-semibold text-on-panel transition-colors hover:bg-panel"
                                 onClick={addTodo}
                                 type="button"
                             >
@@ -380,22 +380,22 @@ const AgentPanel: FC = () => {
                     </div>
 
                     {/* table — mirrors the same data */}
-                    <div className="flex min-h-0 flex-1 flex-col border border-white/10 lg:border-r-0">
-                        <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/10 px-4">
+                    <div className="flex min-h-0 flex-1 flex-col border border-hairline lg:border-r-0">
+                        <div className="flex h-9 shrink-0 items-center justify-between border-b border-hairline px-4">
                             <span className="flex items-center gap-2">
                                 <span className="size-2 bg-crimson-energy/70" />
-                                <span className="font-mono text-[11px] tracking-wide text-white/45">studio · todos</span>
+                                <span className="font-mono text-[11px] tracking-wide text-ink-faint">studio · todos</span>
                             </span>
-                            <span className="font-mono text-[10px] text-white/30">{todos.length} docs</span>
+                            <span className="font-mono text-[10px] text-ink-faint">{todos.length} docs</span>
                         </div>
                         <div className="min-h-0 grow overflow-auto">
                             <table className="w-full border-collapse text-left font-mono text-[12px]">
                                 <thead className="sticky top-0 z-10 bg-[hsl(240_20%_5%)]">
-                                    <tr className="text-white/40">
-                                        <th className="w-8 border-r border-b border-white/[0.08] px-2 py-2 text-center font-normal text-white/25">#</th>
+                                    <tr className="text-ink-faint">
+                                        <th className="w-8 border-r border-b border-hairline px-2 py-2 text-center font-normal text-ink-faint">#</th>
                                         {COLUMNS.map((column) => (
-                                            <th className="border-r border-b border-white/[0.08] px-3 py-2 font-normal last:border-r-0" key={column.name}>
-                                                {column.name} <span className="text-white/20">{column.type}</span>
+                                            <th className="border-r border-b border-hairline px-3 py-2 font-normal last:border-r-0" key={column.name}>
+                                                {column.name} <span className="text-ink-faint">{column.type}</span>
                                             </th>
                                         ))}
                                     </tr>
@@ -404,20 +404,20 @@ const AgentPanel: FC = () => {
                                     {todos.map((todo, index) => (
                                         <motion.tr
                                             animate={{ backgroundColor: todo.fresh ? "hsl(186 84% 56% / 0.16)" : "hsl(186 84% 56% / 0)" }}
-                                            className="text-white/55"
+                                            className="text-ink-muted"
                                             initial={false}
                                             key={todo.id}
                                             transition={{ duration: reduceMotion ? 0 : 0.9, ease: "easeOut" }}
                                         >
-                                            <td className="w-8 border-r border-b border-white/[0.05] px-2 py-1.5 text-center text-white/25">{index + 1}</td>
-                                            <td className="border-r border-b border-white/[0.05] px-3 py-1.5 text-white/35">{todo.docId}</td>
-                                            <td className="border-r border-b border-white/[0.05] px-3 py-1.5 text-white/30 tabular-nums">
+                                            <td className="w-8 border-r border-b border-hairline px-2 py-1.5 text-center text-ink-faint">{index + 1}</td>
+                                            <td className="border-r border-b border-hairline px-3 py-1.5 text-ink-faint">{todo.docId}</td>
+                                            <td className="border-r border-b border-hairline px-3 py-1.5 text-ink-faint tabular-nums">
                                                 {formatTime(todo.creationTime)}
                                             </td>
-                                            <td className="max-w-[8rem] truncate border-r border-b border-white/[0.05] px-3 py-1.5 text-sky-sapphire/70">
+                                            <td className="max-w-[8rem] truncate border-r border-b border-hairline px-3 py-1.5 text-sky-sapphire/70">
                                                 &quot;{todo.text}&quot;
                                             </td>
-                                            <td className={cn("border-b border-white/[0.05] px-3 py-1.5", todo.done ? "text-emerald-400/80" : "text-white/40")}>
+                                            <td className={cn("border-b border-hairline px-3 py-1.5", todo.done ? "text-emerald-400/80" : "text-ink-faint")}>
                                                 {String(todo.done)}
                                             </td>
                                         </motion.tr>

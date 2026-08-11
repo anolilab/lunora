@@ -10,12 +10,12 @@ const Play = ({ tooltipPlacement }: { tooltipPlacement?: any }) => {
     return (
         <Tooltip.Root>
             <Tooltip.Trigger asChild>
-                <PlayButton className="ring-media-focus group relative inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md outline-hidden ring-inset hover:bg-white/20 data-focus:ring-4">
+                <PlayButton className="ring-media-focus group relative inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md outline-hidden ring-inset hover:bg-hairline-strong data-focus:ring-4">
                     {isPaused ? <PlayIcon className="h-8 w-8" /> : <PauseIcon className="h-8 w-8" />}
                 </PlayButton>
             </Tooltip.Trigger>
             <Tooltip.Content
-                className="parent-data-[open]:hidden animate-out fade-out slide-out-to-bottom-2 data-visible:animate-in data-visible:fade-in data-visible:slide-in-from-bottom-4 z-10 rounded-sm bg-black/90 px-2 py-0.5 text-sm font-medium text-white"
+                className="parent-data-[open]:hidden animate-out fade-out slide-out-to-bottom-2 data-visible:animate-in data-visible:fade-in data-visible:slide-in-from-bottom-4 z-10 rounded-sm bg-black/90 px-2 py-0.5 text-sm font-medium text-ink"
                 placement={tooltipPlacement}
             >
                 {isPaused ? "Play" : "Pause"}
@@ -26,7 +26,7 @@ const Play = ({ tooltipPlacement }: { tooltipPlacement?: any }) => {
 
 const Player: FC<{ posterSrc?: string; src: string; title: string }> = ({ posterSrc, src, title }) => (
     <MediaPlayer
-        className="ring-media-focus aspect-video w-full overflow-hidden rounded-md bg-slate-900 font-sans text-white data-focus:ring-4"
+        className="ring-media-focus aspect-video w-full overflow-hidden rounded-md bg-slate-900 font-sans text-ink data-focus:ring-4"
         crossOrigin
         playsInline
         src={src}

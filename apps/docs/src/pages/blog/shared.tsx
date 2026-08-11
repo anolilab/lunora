@@ -30,5 +30,5 @@ export const initials = (name?: string): string => {
 
 /** Mono, uppercase category/section label used across the blog. */
 export const Eyebrow: FC<{ children: ReactNode }> = ({ children }) => (
-    <span className="font-mono text-[11px] tracking-wider text-white/40 uppercase">{children}</span>
+    <span className="font-mono text-[11px] tracking-wider text-ink-faint uppercase">{children}</span>
 );

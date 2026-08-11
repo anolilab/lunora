@@ -33,18 +33,18 @@ const frameworks: Framework[] = [
 ];
 
 const FrameworkStrip: FC = () => (
-    <div className="border-t border-white/[0.08]" data-nav-theme="dark">
+    <div className="border-t border-hairline" data-nav-theme="dark">
         <Reveal className="mx-auto flex max-w-6xl flex-col items-center gap-5 px-5 py-7 sm:flex-row sm:justify-between">
-            <span className="font-mono text-[11px] tracking-[0.18em] text-white/50 uppercase">Works with your stack</span>
+            <span className="font-mono text-[11px] tracking-[0.18em] text-ink-muted uppercase">Works with your stack</span>
             <div className="flex flex-wrap items-center justify-center gap-x-7 gap-y-3">
                 {frameworks.map(({ brand, icon: Icon, label }) => (
-                    <span className="flex items-center gap-2 text-white/65 transition-colors hover:text-white" key={label}>
+                    <span className="flex items-center gap-2 text-ink-muted transition-colors hover:text-ink" key={label}>
                         <Icon aria-hidden="true" className="size-4" color={brand ? "default" : undefined} />
                         <span className="text-sm font-medium">{label}</span>
                     </span>
                 ))}
-                <span className="hidden h-4 w-px bg-white/10 sm:block" />
-                <span className="flex items-center gap-2 text-white/65 transition-colors hover:text-white">
+                <span className="hidden h-4 w-px bg-hairline sm:block" />
+                <span className="flex items-center gap-2 text-ink-muted transition-colors hover:text-ink">
                     <SiCloudflare aria-hidden="true" className="size-4" color="default" />
                     <span className="text-sm font-medium">on Cloudflare</span>
                 </span>

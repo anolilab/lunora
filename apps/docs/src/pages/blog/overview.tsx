@@ -17,17 +17,19 @@ const Avatar: FC<{ name?: string }> = ({ name }) => (
 );
 
 const Chip: FC<{ children: string }> = ({ children }) => (
-    <span className="border border-white/15 bg-black/40 px-2 py-1 font-mono text-[10px] tracking-wider text-white/85 uppercase backdrop-blur">{children}</span>
+    <span className="border border-hairline-strong bg-black/40 px-2 py-1 font-mono text-[10px] tracking-wider text-ink-muted uppercase backdrop-blur">
+        {children}
+    </span>
 );
 
-const cardClass = "group flex flex-col border border-white/[0.08] bg-white/[0.012] transition-colors hover:border-white/20";
+const cardClass = "group flex flex-col border border-hairline bg-wash transition-colors hover:border-hairline-strong";
 
 const FeaturedMain: FC<{ post: BlogPostSummary }> = ({ post }) => {
     const { formatted, iso } = formatDate(post.publishedAt);
 
     return (
         <Link className={`${cardClass} h-full lg:border-l-0`} params={{ slug: post.slug }} to="/blog/$slug">
-            <div className="relative min-h-[300px] flex-1 overflow-hidden bg-white/[0.03]">
+            <div className="relative min-h-[300px] flex-1 overflow-hidden bg-wash">
                 {post.image ? (
                     <img
                         alt={post.title ?? "Blog post"}
@@ -41,14 +43,14 @@ const FeaturedMain: FC<{ post: BlogPostSummary }> = ({ post }) => {
                 </span>
             </div>
             <div className="p-5">
-                <h2 className="text-2xl font-semibold tracking-tight text-balance text-white transition-colors group-hover:text-white/70">{post.title}</h2>
-                {post.description ? <p className="mt-2 line-clamp-2 text-sm text-white/50">{post.description}</p> : null}
+                <h2 className="text-2xl font-semibold tracking-tight text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
+                {post.description ? <p className="mt-2 line-clamp-2 text-sm text-ink-muted">{post.description}</p> : null}
             </div>
-            <div className="mt-auto flex items-center gap-2 border-t border-white/[0.08] px-5 py-4 text-xs text-white/45">
+            <div className="mt-auto flex items-center gap-2 border-t border-hairline px-5 py-4 text-xs text-ink-faint">
                 <Avatar name={post.author} />
-                {post.author ? <span className="text-white/70">{post.author}</span> : null}
+                {post.author ? <span className="text-ink-muted">{post.author}</span> : null}
                 {formatted ? (
-                    <time className="ml-auto font-mono tracking-wide text-white/40" dateTime={iso}>
+                    <time className="ml-auto font-mono tracking-wide text-ink-faint" dateTime={iso}>
                         {formatted}
                     </time>
                 ) : null}
@@ -59,7 +61,7 @@ const FeaturedMain: FC<{ post: BlogPostSummary }> = ({ post }) => {
 
 const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className={`${cardClass} flex-1 lg:border-r-0`} params={{ slug: post.slug }} to="/blog/$slug">
-        <div className="relative aspect-1200/630 overflow-hidden bg-white/[0.03]">
+        <div className="relative aspect-1200/630 overflow-hidden bg-wash">
             {post.image ? (
                 <img
                     alt={post.title ?? "Blog post"}
@@ -72,8 +74,8 @@ const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
         </div>
         <div className="flex flex-1 flex-col gap-1.5 p-4">
             <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-            <h3 className="text-sm font-semibold tracking-tight text-white transition-colors group-hover:text-white/70">{post.title}</h3>
-            <time className="mt-auto pt-2 font-mono text-[11px] tracking-wide text-white/40">{formatDate(post.publishedAt).formatted}</time>
+            <h3 className="text-sm font-semibold tracking-tight text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
+            <time className="mt-auto pt-2 font-mono text-[11px] tracking-wide text-ink-faint">{formatDate(post.publishedAt).formatted}</time>
         </div>
     </Link>
 );
@@ -82,13 +84,9 @@ const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
     const { formatted, iso } = formatDate(post.publishedAt);
 
     return (
-        <li className="border-t border-white/[0.08] last:border-b">
-            <Link
-                className="group flex items-center gap-4 px-2 py-5 transition-colors hover:bg-white/[0.02] sm:gap-6"
-                params={{ slug: post.slug }}
-                to="/blog/$slug"
-            >
-                <div className="relative aspect-1200/630 w-28 flex-none overflow-hidden border border-white/[0.08] bg-white/[0.03] sm:w-40">
+        <li className="border-t border-hairline last:border-b">
+            <Link className="group flex items-center gap-4 px-2 py-5 transition-colors hover:bg-wash sm:gap-6" params={{ slug: post.slug }} to="/blog/$slug">
+                <div className="relative aspect-1200/630 w-28 flex-none overflow-hidden border border-hairline bg-wash sm:w-40">
                     {post.image ? (
                         <img
                             alt={post.title ?? "Blog post"}
@@ -101,28 +99,28 @@ const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-                    <h3 className="truncate text-base font-medium text-white transition-colors group-hover:text-white/70">{post.title}</h3>
-                    <div className="flex items-center gap-2 text-xs text-white/45">
+                    <h3 className="truncate text-base font-medium text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
+                    <div className="flex items-center gap-2 text-xs text-ink-faint">
                         <Avatar name={post.author} />
                         {post.author ? <span>{post.author}</span> : null}
                     </div>
                 </div>
                 {formatted ? (
-                    <time className="ml-auto hidden flex-none font-mono text-[11px] tracking-wide text-white/40 sm:block" dateTime={iso}>
+                    <time className="ml-auto hidden flex-none font-mono text-[11px] tracking-wide text-ink-faint sm:block" dateTime={iso}>
                         {formatted}
                     </time>
                 ) : null}
-                <ArrowUpRight className="size-4 flex-none text-white/0 transition-colors group-hover:text-white/40" />
+                <ArrowUpRight className="size-4 flex-none text-ink/0 transition-colors group-hover:text-ink-faint" />
             </Link>
         </li>
     );
 };
 
 const pillClass = (active: boolean): string =>
-    `border px-3 py-1 text-sm transition-colors ${active ? "border-white/20 bg-white/10 text-white" : "border-white/[0.08] text-white/55 hover:border-white/20 hover:text-white"}`;
+    `border px-3 py-1 text-sm transition-colors ${active ? "border-hairline-strong bg-hairline text-ink" : "border-hairline text-ink-muted hover:border-hairline-strong hover:text-ink"}`;
 
 const arrowClass =
-    "flex size-9 items-center justify-center border border-white/[0.08] text-white/55 transition-colors hover:border-white/20 hover:text-white disabled:opacity-40";
+    "flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink disabled:opacity-40";
 
 const Pagination: FC<{ current: number; onGoTo: (page: number) => void; total: number }> = ({ current, onGoTo, total }) => {
     if (total <= 1) {
@@ -230,7 +228,7 @@ const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 
     };
 
     return (
-        <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
             {/* atmospheric aurora glow behind the header */}
             <div
                 aria-hidden="true"
@@ -238,21 +236,21 @@ const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 
             />
             <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
             />
 
             <section className="relative z-10" data-nav-theme="dark">
                 <div className={`mx-auto max-w-6xl px-5 pt-28 lg:px-0 ${posts.length === 0 ? "pb-24" : ""}`}>
                     <header className="mb-14">
                         <Eyebrow>Blog</Eyebrow>
-                        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">News &amp; insights</h1>
-                        <p className="mt-3 max-w-2xl text-lg text-white/55">Updates, deep dives, and engineering notes from the team building Lunora.</p>
+                        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-ink sm:text-5xl">News &amp; insights</h1>
+                        <p className="mt-3 max-w-2xl text-lg text-ink-muted">Updates, deep dives, and engineering notes from the team building Lunora.</p>
                     </header>
 
                     {posts.length === 0 ? (
-                        <div className="border border-white/[0.08] py-20 text-center">
-                            <p className="text-lg font-semibold text-white">No posts yet</p>
-                            <p className="mt-2 text-sm text-white/50">Check back soon for news and insights.</p>
+                        <div className="border border-hairline py-20 text-center">
+                            <p className="text-lg font-semibold text-ink">No posts yet</p>
+                            <p className="mt-2 text-sm text-ink-muted">Check back soon for news and insights.</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -277,11 +275,11 @@ const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 
                         </div>
 
                         <div className="mx-auto max-w-6xl px-5 pb-24 lg:px-0">
-                            <h2 className="text-3xl font-semibold tracking-tight text-white">All articles</h2>
+                            <h2 className="text-3xl font-semibold tracking-tight text-ink">All articles</h2>
 
-                            <div className="mt-6 flex flex-col gap-4 border-b border-white/[0.08] pb-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="mt-6 flex flex-col gap-4 border-b border-hairline pb-4 sm:flex-row sm:items-center sm:justify-between">
                                 <div className="flex flex-wrap items-center gap-2">
-                                    <span className="mr-1 font-mono text-[11px] tracking-wider text-white/40 uppercase">Categories</span>
+                                    <span className="mr-1 font-mono text-[11px] tracking-wider text-ink-faint uppercase">Categories</span>
                                     {categories.map((item) => (
                                         <button
                                             className={pillClass(item === category)}
@@ -297,10 +295,10 @@ const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 
                                 </div>
 
                                 <div className="relative sm:w-64">
-                                    <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-white/35" />
+                                    <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
                                     <input
                                         aria-label="Search articles"
-                                        className="w-full border border-white/[0.12] bg-white/[0.03] py-1.5 pr-3 pl-9 text-sm text-white placeholder:text-white/35 focus:border-white/40 focus:outline-none"
+                                        className="w-full border border-hairline] bg-wash py-1.5 pr-3 pl-9 text-sm text-ink placeholder:text-ink-faint focus:border-hairline-strong focus:outline-none"
                                         onChange={(event) => {
                                             onQuery(event.target.value);
                                         }}
@@ -312,7 +310,7 @@ const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 
                             </div>
 
                             {visible.length === 0 ? (
-                                <p className="py-16 text-center text-sm text-white/45">No articles match your filters.</p>
+                                <p className="py-16 text-center text-sm text-ink-faint">No articles match your filters.</p>
                             ) : (
                                 <ul>
                                     {visible.map((post) => (

@@ -24,6 +24,7 @@
     --color-surface-raised: var(--site-surface-raised);
     --color-hairline: var(--site-hairline);
     --color-hairline-strong: var(--site-hairline-strong);
+    --color-wash: var(--site-wash);
     --color-ink: var(--site-ink);
     --color-ink-muted: var(--site-ink-muted);
     --color-ink-faint: var(--site-ink-faint);
@@ -100,6 +101,9 @@
     /* Structure is drawn with 1px hairlines, never shadows or radii. */
     --site-hairline: rgb(255 255 255 / 0.08);
     --site-hairline-strong: rgb(255 255 255 / 0.16);
+    /* Barely-there fill that lifts a panel off the canvas without reading as
+       a distinct surface. Too faint to be a border; too subtle to be `surface`. */
+    --site-wash: rgb(255 255 255 / 0.03);
 
     /* Ink — three steps is enough; a fourth always ends up unreadable. */
     --site-ink: hsl(228 30% 96%);
@@ -157,6 +161,7 @@
 
     --site-hairline: rgb(14 14 17 / 0.1);
     --site-hairline-strong: rgb(14 14 17 / 0.2);
+    --site-wash: rgb(14 14 17 / 0.04);
 
     --site-ink: hsl(240 14% 10%);
     --site-ink-muted: rgb(14 14 17 / 0.62);

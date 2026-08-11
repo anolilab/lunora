@@ -55,7 +55,7 @@ const CopyButton: FC<{ text: string }> = ({ text }) => {
     return (
         <button
             aria-label="Copy install command"
-            className="absolute top-1/2 right-3 -translate-y-1/2 p-1.5 text-white/40 transition-colors hover:text-white"
+            className="absolute top-1/2 right-3 -translate-y-1/2 p-1.5 text-ink-faint transition-colors hover:text-ink"
             onClick={handleCopy}
             type="button"
         >
@@ -115,7 +115,7 @@ const MiniChart: FC<{ accentColor: AccentColor; data: MonthlyDataPoint[] }> = me
                     <circle className="animate-pulse" cx={lastPoint.x} cy={lastPoint.y} fill={color} r="4" />
                 </svg>
             </motion.div>
-            <div className="absolute right-4 bottom-1 left-4 flex justify-between font-mono text-xs text-white/30">
+            <div className="absolute right-4 bottom-1 left-4 flex justify-between font-mono text-xs text-ink-faint">
                 <span>{formatMonth(firstMonth)}</span>
                 <span>Today</span>
             </div>
@@ -147,7 +147,7 @@ const PackageDetail: FC = () => {
     const downloadField = totalDownloads > 0 ? { downloadCount: totalDownloads } : {};
 
     return (
-        <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
             <JsonLd
                 data={{
                     "@type": "SoftwareApplication",
@@ -167,28 +167,31 @@ const PackageDetail: FC = () => {
             {/* vertical guide lines */}
             <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
             />
 
             {/* hero */}
-            <section className="relative border-t border-white/[0.08]" data-nav-theme="dark">
+            <section className="relative border-t border-hairline" data-nav-theme="dark">
                 <Reveal className="mx-auto flex max-w-6xl flex-col gap-8 px-5 pt-32 pb-12 lg:px-0">
-                    <div className="flex items-center gap-2 font-mono text-xs text-white/40">
-                        <Link className="transition-colors hover:text-white" to="/packages">
+                    <div className="flex items-center gap-2 font-mono text-xs text-ink-faint">
+                        <Link className="transition-colors hover:text-ink" to="/packages">
                             Packages
                         </Link>
-                        <span className="text-white/20">/</span>
-                        <span className="text-white/60">{pkg.category}</span>
+                        <span className="text-ink-faint">/</span>
+                        <span className="text-ink-muted">{pkg.category}</span>
                     </div>
 
                     <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
                         <div className="flex flex-col gap-5">
-                            <h1 className="text-5xl font-semibold tracking-tight text-balance text-white sm:text-6xl">{pkg.name}</h1>
-                            <p className="max-w-2xl text-lg leading-relaxed text-white/55">{pkg.description}</p>
+                            <h1 className="text-5xl font-semibold tracking-tight text-balance text-ink sm:text-6xl">{pkg.name}</h1>
+                            <p className="max-w-2xl text-lg leading-relaxed text-ink-muted">{pkg.description}</p>
                         </div>
                         <div className="flex shrink-0 items-center gap-4 font-mono text-xs">
                             <a
-                                className={cn("inline-flex items-center gap-1.5 border-b border-white/15 pb-0.5 transition-colors hover:opacity-70", accent)}
+                                className={cn(
+                                    "inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 transition-colors hover:opacity-70",
+                                    accent,
+                                )}
                                 href={`https://www.npmjs.com/package/${pkg.npmName}`}
                                 rel="noreferrer"
                                 target="_blank"
@@ -197,7 +200,7 @@ const PackageDetail: FC = () => {
                                 <ExternalLink className="size-3" />
                             </a>
                             <a
-                                className="inline-flex items-center gap-1.5 border-b border-white/15 pb-0.5 text-white/50 transition-colors hover:text-white"
+                                className="inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 text-ink-muted transition-colors hover:text-ink"
                                 href={`https://github.com/anolilab/lunora/tree/alpha/packages/${pkg.slug}`}
                                 rel="noreferrer"
                                 target="_blank"
@@ -208,9 +211,9 @@ const PackageDetail: FC = () => {
                         </div>
                     </div>
 
-                    <div className="flex flex-col gap-3 border-t border-white/[0.08] pt-8 sm:flex-row sm:items-center">
+                    <div className="flex flex-col gap-3 border-t border-hairline pt-8 sm:flex-row sm:items-center">
                         <div className="relative w-full sm:max-w-md">
-                            <div className="flex items-center gap-3 border border-white/12 bg-[hsl(240_22%_4%)] px-4 py-3 pr-12 font-mono text-sm text-white/70">
+                            <div className="flex items-center gap-3 border border-hairline bg-[hsl(240_22%_4%)] px-4 py-3 pr-12 font-mono text-sm text-ink-muted">
                                 <Terminal className={cn("size-4 shrink-0", accent)} />
                                 {installCommand}
                             </div>
@@ -227,30 +230,30 @@ const PackageDetail: FC = () => {
             </section>
 
             {/* stats */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-                <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px border-white/[0.08] sm:grid-cols-4 lg:border-x-0">
-                    <div className="flex flex-col gap-1 bg-white/[0.012] p-8">
-                        <span className="font-mono text-2xl font-semibold tracking-tight text-white">
+            <section className="border-t border-hairline" data-nav-theme="dark">
+                <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px border-hairline sm:grid-cols-4 lg:border-x-0">
+                    <div className="flex flex-col gap-1 bg-wash p-8">
+                        <span className="font-mono text-2xl font-semibold tracking-tight text-ink">
                             {weeklyDownloads > 0 ? formatNumber(weeklyDownloads) : "—"}
                         </span>
-                        <span className="flex items-center gap-1.5 text-sm text-white/40">
+                        <span className="flex items-center gap-1.5 text-sm text-ink-faint">
                             <Download className="size-3.5" />
                             weekly
                         </span>
                     </div>
-                    <div className="flex flex-col gap-1 bg-white/[0.012] p-8">
-                        <span className="font-mono text-2xl font-semibold tracking-tight text-white">
+                    <div className="flex flex-col gap-1 bg-wash p-8">
+                        <span className="font-mono text-2xl font-semibold tracking-tight text-ink">
                             {totalDownloads > 0 ? formatNumber(totalDownloads) : "—"}
                         </span>
-                        <span className="text-sm text-white/40">total downloads</span>
+                        <span className="text-sm text-ink-faint">total downloads</span>
                     </div>
-                    <div className="flex flex-col gap-1 bg-white/[0.012] p-8">
-                        <span className="font-mono text-2xl font-semibold tracking-tight text-white">{pkg.features.length}</span>
-                        <span className="text-sm text-white/40">key features</span>
+                    <div className="flex flex-col gap-1 bg-wash p-8">
+                        <span className="font-mono text-2xl font-semibold tracking-tight text-ink">{pkg.features.length}</span>
+                        <span className="text-sm text-ink-faint">key features</span>
                     </div>
-                    <div className="flex flex-col gap-1 bg-white/[0.012] p-8">
-                        <span className="truncate font-mono text-sm font-medium text-white">{pkg.npmName}</span>
-                        <span className="text-sm text-white/40">npm package</span>
+                    <div className="flex flex-col gap-1 bg-wash p-8">
+                        <span className="truncate font-mono text-sm font-medium text-ink">{pkg.npmName}</span>
+                        <span className="text-sm text-ink-faint">npm package</span>
                     </div>
                 </div>
             </section>
@@ -260,19 +263,16 @@ const PackageDetail: FC = () => {
                     <HatchSpacer />
 
                     {/* features */}
-                    <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+                    <section className="border-t border-hairline" data-nav-theme="dark">
                         <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
-                            <h2 className="text-2xl font-semibold tracking-tight text-white">Features</h2>
-                            <div className="mt-10 grid gap-px border border-white/[0.08] sm:grid-cols-2 lg:border-x-0">
+                            <h2 className="text-2xl font-semibold tracking-tight text-ink">Features</h2>
+                            <div className="mt-10 grid gap-px border border-hairline sm:grid-cols-2 lg:border-x-0">
                                 {pkg.features.map((feature) => (
-                                    <div
-                                        className="group flex items-center gap-4 bg-white/[0.012] px-6 py-6 transition-colors hover:bg-white/[0.028]"
-                                        key={feature}
-                                    >
-                                        <span className="flex size-8 shrink-0 items-center justify-center border border-white/12 bg-white/[0.03]">
+                                    <div className="group flex items-center gap-4 bg-wash px-6 py-6 transition-colors hover:bg-panel/[0.028]" key={feature}>
+                                        <span className="flex size-8 shrink-0 items-center justify-center border border-hairline bg-wash">
                                             <Check className={cn("size-4", accent)} />
                                         </span>
-                                        <h3 className="text-sm font-medium text-white/75 transition-colors group-hover:text-white">{feature}</h3>
+                                        <h3 className="text-sm font-medium text-ink-muted transition-colors group-hover:text-ink">{feature}</h3>
                                     </div>
                                 ))}
                             </div>
@@ -283,23 +283,23 @@ const PackageDetail: FC = () => {
 
             {/* downloads */}
             {chartData.length > 0 ? (
-                <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+                <section className="border-t border-hairline" data-nav-theme="dark">
                     <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
-                        <h2 className="text-2xl font-semibold tracking-tight text-white">Downloads</h2>
-                        <div className="mt-8 grid grid-cols-2 gap-px border border-white/[0.08] sm:grid-cols-2 lg:border-x-0">
-                            <div className="flex flex-col gap-2 bg-white/[0.012] p-8">
-                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-white" suffix="+" value={weeklyDownloads} />
-                                <span className="flex items-center gap-1.5 text-sm text-white/40">
+                        <h2 className="text-2xl font-semibold tracking-tight text-ink">Downloads</h2>
+                        <div className="mt-8 grid grid-cols-2 gap-px border border-hairline sm:grid-cols-2 lg:border-x-0">
+                            <div className="flex flex-col gap-2 bg-wash p-8">
+                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={weeklyDownloads} />
+                                <span className="flex items-center gap-1.5 text-sm text-ink-faint">
                                     <Download className="size-3.5" />
                                     Weekly downloads
                                 </span>
                             </div>
-                            <div className="flex flex-col gap-2 bg-white/[0.012] p-8">
-                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-white" suffix="+" value={totalDownloads} />
-                                <span className="text-sm text-white/40">Total downloads</span>
+                            <div className="flex flex-col gap-2 bg-wash p-8">
+                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={totalDownloads} />
+                                <span className="text-sm text-ink-faint">Total downloads</span>
                             </div>
                         </div>
-                        <div className="mt-px aspect-[5/2] border border-white/[0.08] bg-white/[0.012] lg:border-x-0">
+                        <div className="mt-px aspect-[5/2] border border-hairline bg-wash lg:border-x-0">
                             <MiniChart accentColor={pkg.accentColor} data={chartData} />
                         </div>
                     </div>
@@ -309,7 +309,7 @@ const PackageDetail: FC = () => {
             <HatchSpacer />
 
             {/* CTA */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+            <section className="border-t border-hairline" data-nav-theme="dark">
                 <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
                     <SectionHead
                         eyebrow="Get started"

@@ -14,16 +14,16 @@ import { cn } from "@/lib/utils";
 
 const SectionHead: FC<{ eyebrow: string; subtitle: string; title: string }> = ({ eyebrow, subtitle, title }) => (
     <Reveal className="mx-auto flex max-w-2xl flex-col items-center gap-3 text-center">
-        <span className="font-mono text-xs tracking-[0.18em] text-white/40 uppercase">{eyebrow}</span>
-        <h2 className="text-3xl font-semibold tracking-tight text-balance text-white sm:text-4xl">{title}</h2>
-        <p className="text-base leading-relaxed text-white/55">{subtitle}</p>
+        <span className="font-mono text-xs tracking-[0.18em] text-ink-faint uppercase">{eyebrow}</span>
+        <h2 className="text-3xl font-semibold tracking-tight text-balance text-ink sm:text-4xl">{title}</h2>
+        <p className="text-base leading-relaxed text-ink-muted">{subtitle}</p>
     </Reveal>
 );
 
 const Pill: FC<{ children: ReactNode; href?: string; primary?: boolean; to?: string }> = ({ children, href, primary, to }) => {
     const className = cn(
         "inline-flex h-10 items-center gap-2 px-5 text-sm font-medium transition-colors",
-        primary ? "bg-white text-black hover:bg-white/90" : "border border-white/15 text-white/85 hover:border-white/30 hover:bg-white/[0.06]",
+        primary ? "bg-panel text-on-panel hover:bg-panel" : "border border-hairline-strong text-ink-muted hover:border-hairline-strong hover:bg-hairline",
     );
 
     if (href) {
@@ -42,15 +42,15 @@ const Pill: FC<{ children: ReactNode; href?: string; primary?: boolean; to?: str
 };
 
 const ClosingCta: FC = () => (
-    <section className="relative overflow-hidden border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+    <section className="relative overflow-hidden border-t border-hairline bg-canvas" data-nav-theme="dark">
         <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
             style={{ background: "radial-gradient(60% 100% at 50% 120%, hsl(256 72% 68% / 0.22), transparent 70%)" }}
         />
         <Reveal className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-6 px-5 py-28 text-center">
-            <h2 className="text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">Ready to ship realtime apps?</h2>
-            <p className="max-w-lg text-base text-white/55">Open source, deployed to your own Cloudflare account, with no infrastructure to manage.</p>
+            <h2 className="text-4xl font-semibold tracking-tight text-balance text-ink sm:text-5xl">Ready to ship realtime apps?</h2>
+            <p className="max-w-lg text-base text-ink-muted">Open source, deployed to your own Cloudflare account, with no infrastructure to manage.</p>
             <Pill primary>
                 Start building
                 <ArrowRight className="size-4" />

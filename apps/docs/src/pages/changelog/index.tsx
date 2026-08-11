@@ -49,7 +49,7 @@ const Changelog: FC<{ data: { key: string; MdxContent: FC; title: string }[] }> 
                 <Section
                     classes={{
                         childrenWrapper: "h-full",
-                        root: "py-0 min-h-screen border-x border-b border-white/[0.08]",
+                        root: "py-0 min-h-screen border-x border-b border-hairline",
                     }}
                     gridLength={2}
                     mode="dark"
@@ -81,7 +81,7 @@ const Changelog: FC<{ data: { key: string; MdxContent: FC; title: string }[] }> 
                         {changelogs.length > 0 && (
                             <ScrollArea className="h-[calc(100vh-140px)] px-6 mt-4 prose prose-invert">
                                 {changelogs.map((item, index) => (
-                                    <div className={index > 0 ? "mt-12 border-t border-white/[0.08] pt-12" : ""} key={item.key}>
+                                    <div className={index > 0 ? "mt-12 border-t border-hairline pt-12" : ""} key={item.key}>
                                         <h2 className="mt-0">{item.title}</h2>
                                         <item.MdxContent />
                                     </div>
