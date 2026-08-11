@@ -195,7 +195,7 @@ const CloudLanding: FC = () => (
                     <WaitlistForm />
                     <p className="text-sm text-ink-faint">
                         Want it now?{" "}
-                        <Pill to="/docs/$">
+                        <Pill to="/docs">
                             Self-host the open-source framework
                             <ArrowRight className="size-4" />
                         </Pill>

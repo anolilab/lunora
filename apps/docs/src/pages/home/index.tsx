@@ -3,7 +3,8 @@ import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiVite from "@icons-pack/react-simple-icons/icons/SiVite.mjs";
 import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
-import type { ComponentType, FC, ReactNode } from "react";
+import { ArrowRight } from "lucide-react";
+import type { ComponentType, FC } from "react";
 
 import AnalogLogo from "@/assets/frameworks/analog.svg?react";
 import AstroLogo from "@/assets/frameworks/astro.svg?react";
@@ -11,64 +12,75 @@ import NuxtLogo from "@/assets/frameworks/nuxt.svg?react";
 import TanstackLogo from "@/assets/frameworks/tanstack.svg?react";
 import schemaImg from "@/assets/studio/schema.png";
 import timeTravelImg from "@/assets/studio/time-travel.png";
+import AgentPanel from "@/components/sections/agent-panel";
 import CodeView from "@/components/sections/code-view";
-import HatchSpacer from "@/components/sections/hatch-spacer";
-import { ClosingCta, SectionHead } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import { Action } from "@/kit/action";
+import { GridCell, HairlineGrid } from "@/kit/grid";
+import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
+import { cn } from "@/lib/utils";
 import Capabilities from "@/pages/home/sections/capabilities";
-import FrameworkStrip from "@/pages/home/sections/framework-strip";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
 import SupportSection from "@/pages/home/sections/support";
+import siteConfig from "~/site.config";
 
 /**
- * Axon-style landing page in the Lunora brand (Geist + aurora accents): a
- * two-column hero, a trust strip, the interactive panel, a feature bento with
- * code/studio visuals, a steps + stats band, the Cloudflare platform grid,
- * support, and the closing CTA.
+ * The landing page. Every band is a `Section` + `Shell` + `SectionHeader` from
+ * `src/kit`; this file contributes content and ordering, never spacing or
+ * colour. If a band here needs a bespoke padding value, the kit is wrong — fix
+ * it there so the rest of the site inherits the correction.
  */
 
-interface Bento {
+interface Feature {
+    blurb: string;
     code?: string[];
-    desc: string;
     file?: string;
     image?: string;
+    /** Mono line pinned to the cell's bottom edge. */
+    readout: string;
     title: string;
 }
 
-const bento: Bento[] = [
+const features: Feature[] = [
     {
+        blurb: "Schema, queries, and mutations in pure TypeScript — codegen keeps server and client in lockstep.",
         code: ["export default defineSchema({", "  todos: defineTable({", "    text: v.string(),", "    done: v.boolean(),", "  }),", "});"],
-        desc: "Schema, queries, and mutations in pure TypeScript — codegen keeps server and client in lockstep.",
         file: "lunora/schema.ts",
+        readout: "defineSchema() -> _generated/",
         title: "Everything is code",
     },
     {
+        blurb: "Queries are subscriptions. Every mutation pushes live updates to all clients — with optimistic writes and an offline queue.",
         code: ["// subscribes once, re-renders on every change", "const todos = useQuery(api.todos.list);", "const add = useMutation(api.todos.add);"],
-        desc: "Queries are subscriptions. Every mutation pushes live updates to all clients — with optimistic writes and an offline queue.",
         file: "Todos.tsx",
+        readout: "useQuery() -> live",
         title: "Realtime by default",
     },
     {
+        blurb: "State lives in SQLite-backed Durable Objects at the edge. Shard by key, or go global to replicate reads across regions.",
         code: ["export const messages = defineTable({", "  roomId: v.string(),", "  body: v.string(),", "}).shardBy('roomId');"],
-        desc: "State lives in SQLite-backed Durable Objects at the edge. Shard by key, or go global to replicate reads across regions.",
         file: "lunora/schema.ts",
+        readout: ".shardBy('roomId')",
         title: "Edge-native & sharded",
     },
     {
-        desc: "A local admin UI for schema, data, SQL, logs, and time-travel ships with every app — running against your live edge database.",
+        blurb: "A local admin UI for schema, data, SQL, logs, and time-travel ships with every app — running against your live edge database.",
         image: schemaImg,
+        readout: "lunora dev -> :5173/studio",
         title: "Studio included",
     },
     {
+        blurb: "Types flow from server functions to the client via codegen. Rename a field and the client stops compiling.",
         code: ["export type Todo = {", "  _id: Id<'todos'>;", "  text: string;", "  done: boolean;", "};"],
-        desc: "Types flow from server functions to the client via codegen. Rename a field and the client stops compiling.",
         file: "_generated/dataModel.ts",
+        readout: "Id<'todos'> | Doc<'todos'>",
         title: "End-to-end typed",
     },
     {
-        desc: "Every shard is a SQLite database you can rewind — restore to any moment in the last 30 days, with no extra infrastructure.",
+        blurb: "Every shard is a SQLite database you can rewind — restore to any moment in the last 30 days, with no extra infrastructure.",
         image: timeTravelImg,
+        readout: "restore --at 30d",
         title: "Rewind your data",
     },
 ];
@@ -76,118 +88,120 @@ const bento: Bento[] = [
 // `brand` simple-icons render their brand hex via `color="default"`; the
 // downloaded official marks (Astro gradient, TanStack white emblem, Nuxt green,
 // Analog red waveform) carry their own fills.
-const logos: { brand?: boolean; Icon: ComponentType<{ className?: string; color?: string }>; name: string }[] = [
-    { brand: true, Icon: SiReact, name: "React" },
-    { brand: true, Icon: SiVuedotjs, name: "Vue" },
-    { brand: true, Icon: SiSvelte, name: "Svelte" },
-    { brand: true, Icon: SiSolid, name: "Solid" },
-    { Icon: AstroLogo, name: "Astro" },
-    { Icon: TanstackLogo, name: "TanStack" },
-    { Icon: NuxtLogo, name: "Nuxt" },
-    { Icon: AnalogLogo, name: "Analog" },
-    { brand: true, Icon: SiVite, name: "Vite" },
+const runtimes: { brand?: boolean; Icon: ComponentType<{ className?: string; color?: string }>; name: string; to: string }[] = [
+    { brand: true, Icon: SiReact, name: "React", to: "/docs/frameworks/react" },
+    { brand: true, Icon: SiVuedotjs, name: "Vue", to: "/docs/frameworks/vue" },
+    { brand: true, Icon: SiSvelte, name: "Svelte", to: "/docs/frameworks/svelte" },
+    { brand: true, Icon: SiSolid, name: "Solid", to: "/docs/frameworks/solid" },
+    { Icon: AstroLogo, name: "Astro", to: "/docs/frameworks/astro" },
+    { Icon: TanstackLogo, name: "TanStack", to: "/docs/frameworks/tanstack" },
+    { Icon: NuxtLogo, name: "Nuxt", to: "/docs/frameworks/nuxt" },
+    { Icon: AnalogLogo, name: "Analog", to: "/docs/frameworks/analog" },
+    { brand: true, Icon: SiVite, name: "Vite", to: "/docs/frameworks/vite" },
 ];
 
-const BentoVisual: FC<{ cell: Bento }> = ({ cell }) => {
-    if (cell.image) {
-        return (
-            <div className="relative overflow-hidden border border-white/[0.08]">
-                <img alt={`${cell.title} — Lunora Studio`} className="block h-44 w-full object-cover object-left-top" loading="lazy" src={cell.image} />
-            </div>
-        );
-    }
-
-    return <CodeView className="h-44" filename={cell.file ?? "lunora.ts"} lines={cell.code ?? []} />;
-};
-
-const Showcase: FC<{ children: ReactNode; className?: string }> = ({ children, className }) => (
-    <section className={`border-t border-white/[0.08] bg-[#0e0e11] ${className ?? ""}`} data-nav-theme="dark">
-        {children}
-    </section>
-);
+const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature, highlight = false }) =>
+    feature.image ? (
+        <img alt={`${feature.title} — Lunora Studio`} className="block h-48 w-full object-cover object-left-top" loading="lazy" src={feature.image} />
+    ) : (
+        <CodeView
+            className={cn("h-48 border-0", highlight && "opacity-95 mix-blend-luminosity")}
+            filename={feature.file ?? "lunora.ts"}
+            lines={feature.code ?? []}
+        />
+    );
 
 const Home: FC = () => (
-    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
-        {/* vertical guide lines at the container edges, full page height */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
-        />
-
+    <div className="bg-canvas" data-theme="dark">
         <Hero />
-        <FrameworkStrip />
 
-        <HatchSpacer />
+        <Section id="features">
+            <Shell>
+                <SectionHeader index="01" label="Framework" title="Everything you need to ship realtime">
+                    <p className="text-body text-ink-muted">Realtime, storage, types, and a studio — with no glue code between them.</p>
+                </SectionHeader>
 
-        {/* feature bento */}
-        <Showcase className="py-24">
-            <div className="mx-auto max-w-6xl px-5 lg:px-0">
-                <SectionHead
-                    eyebrow="Features"
-                    subtitle="Realtime, storage, types, and a studio — typed and edge-native by default."
-                    title="Everything you need to ship realtime"
-                />
-                <div className="mt-14 grid grid-cols-1 gap-px border border-white/[0.08] md:grid-cols-2 lg:grid-cols-3 lg:border-x-0">
-                    {bento.map((cell, index) => (
-                        <Reveal className="flex flex-col gap-4 bg-white/[0.012] p-6" delay={(index % 3) * 0.05} key={cell.title}>
-                            <div>
-                                <h3 className="text-lg font-medium tracking-tight text-white">{cell.title}</h3>
-                                <p className="mt-1.5 text-sm leading-relaxed text-white/50">{cell.desc}</p>
-                            </div>
-                            <div className="mt-auto">
-                                <BentoVisual cell={cell} />
-                            </div>
-                        </Reveal>
+                <HairlineGrid className="border border-hairline" columns={3}>
+                    {features.map((feature, index) => (
+                        <GridCell
+                            blurb={feature.blurb}
+                            highlight={index === 1}
+                            index={String(index + 1).padStart(2, "0")}
+                            key={feature.title}
+                            readout={feature.readout}
+                            stage={<FeatureVisual feature={feature} highlight={index === 1} />}
+                            title={feature.title}
+                        />
                     ))}
-                </div>
-            </div>
-        </Showcase>
+                </HairlineGrid>
+            </Shell>
+        </Section>
 
-        <HatchSpacer />
+        <Section id="playground" tone="deep">
+            <Shell>
+                <SectionHeader index="02" label="Playground" title="Copy, paste, ship.">
+                    <p className="text-body text-ink-muted">A schema, a function, and a component — the whole round trip in one screen.</p>
+                </SectionHeader>
+            </Shell>
+            <Reveal>
+                <AgentPanel />
+            </Reveal>
+        </Section>
 
-        {/* batteries-included add-on ecosystem */}
+        <Section id="how-it-works">
+            <Shell>
+                <SectionHeader index="03" label="How it works" title="Define. Write. Ship.">
+                    <p className="text-body text-ink-muted">From a schema to a live, globally-synced backend.</p>
+                </SectionHeader>
+                <HowItWorks />
+            </Shell>
+        </Section>
+
         <Capabilities />
 
-        <HatchSpacer />
+        <Section id="runtimes" tone="deep">
+            <Shell>
+                <SectionHeader index="05" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime">
+                    <p className="text-body text-ink-muted">One backend, every frontend — live adapters powered by a Vite-first dev experience.</p>
+                </SectionHeader>
 
-        {/* how it works */}
-        <Showcase className="py-24">
-            <div className="mx-auto max-w-6xl px-5 lg:px-0">
-                <SectionHead eyebrow="How it works" subtitle="From a schema to a live, globally-synced backend in three steps." title="Define. Write. Ship." />
-                <div className="mt-14">
-                    <HowItWorks />
-                </div>
-            </div>
-        </Showcase>
-
-        <HatchSpacer />
-
-        {/* integrations */}
-        <Showcase className="py-24">
-            <div className="mx-auto max-w-6xl px-5 lg:px-0">
-                <SectionHead
-                    eyebrow="Integrations"
-                    subtitle="One framework, every frontend — Lunora ships live adapters for React, Vue, Svelte, Solid, Astro, TanStack, Nuxt, and Analog, powered by a Vite-first dev experience."
-                    title="Works with your entire stack"
-                />
-                <div className="mt-14 grid grid-cols-2 gap-px border border-white/[0.08] bg-white/[0.08] sm:grid-cols-3 lg:border-x-0">
-                    {logos.map(({ brand, Icon, name }) => (
-                        <div className="flex h-32 items-center justify-center gap-3 bg-[#0e0e11] text-white/70 transition-colors hover:text-white" key={name}>
-                            <Icon className="size-6" color={brand ? "default" : undefined} />
-                            <span className="text-xl font-medium tracking-tight">{name}</span>
-                        </div>
+                <HairlineGrid columns={3}>
+                    {runtimes.map(({ brand, Icon, name, to }) => (
+                        <GridCell className="justify-center" key={name}>
+                            <Action className="h-auto w-full justify-between px-0 hover:bg-transparent" to={to} variant="ghost">
+                                <span className="flex items-center gap-3">
+                                    <Icon aria-hidden="true" className="size-6" color={brand ? "default" : undefined} />
+                                    <span className="text-h3 font-bold tracking-tight text-ink normal-case">{name}</span>
+                                </span>
+                                <ArrowRight className="size-4" />
+                            </Action>
+                        </GridCell>
                     ))}
-                </div>
-            </div>
-        </Showcase>
-
-        <HatchSpacer />
+                </HairlineGrid>
+            </Shell>
+        </Section>
 
         <SupportSection />
 
-        <HatchSpacer />
-
-        <ClosingCta />
+        {/* Closing CTA */}
+        <Section className="overflow-hidden" tone="deep">
+            <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-72 opacity-50"
+                style={{ background: "radial-gradient(60% 100% at 50% 120%, var(--site-accent-2), transparent 70%)" }}
+            />
+            <Shell className="relative">
+                <div className="flex max-w-2xl flex-col items-start gap-6">
+                    <Kicker tone="accent">Get started</Kicker>
+                    <h2 className="text-h1 font-bold text-balance text-ink">Ready to ship realtime apps?</h2>
+                    <p className="text-body text-ink-muted">Open source, deployed to your own Cloudflare account, with no infrastructure to manage.</p>
+                    <Action to={siteConfig.cta.primary.to} variant="primary">
+                        {siteConfig.cta.primary.label}
+                        <ArrowRight className="size-4" />
+                    </Action>
+                </div>
+            </Shell>
+        </Section>
     </div>
 );
 

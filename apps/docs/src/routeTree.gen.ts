@@ -27,6 +27,7 @@ import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
 import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
+import { Route as DocsIndexRouteImport } from './routes/docs/index'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as PackagesIndexRouteImport } from './routes/packages/index'
 import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
@@ -126,6 +127,11 @@ const BlogRssDotxmlRoute = BlogRssDotxmlRouteImport.update({
   path: '/blog/rss.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/docs/',
+  path: '/docs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DocsSplatRoute = DocsSplatRouteImport.update({
   id: '/docs/$',
   path: '/docs/$',
@@ -192,6 +198,7 @@ export interface FileRoutesByFullPath {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
@@ -220,6 +227,7 @@ export interface FileRoutesByTo {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog': typeof BlogIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
@@ -249,6 +257,7 @@ export interface FileRoutesById {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
@@ -279,6 +288,7 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesByTo: FileRoutesByTo
@@ -307,6 +317,7 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog'
+    | '/docs'
     | '/packages'
     | '/llms.mdx/docs/$'
   id:
@@ -335,6 +346,7 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesById: FileRoutesById
@@ -364,6 +376,7 @@ export interface RootRouteChildren {
   VsFirebaseRoute: typeof VsFirebaseRoute
   VsSupabaseRoute: typeof VsSupabaseRoute
   BlogIndexRoute: typeof BlogIndexRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
 }
@@ -496,6 +509,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogRssDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/docs/$': {
       id: '/docs/$'
       path: '/docs/$'
@@ -580,6 +600,7 @@ const rootRouteChildren: RootRouteChildren = {
   VsFirebaseRoute: VsFirebaseRoute,
   VsSupabaseRoute: VsSupabaseRoute,
   BlogIndexRoute: BlogIndexRoute,
+  DocsIndexRoute: DocsIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
 }

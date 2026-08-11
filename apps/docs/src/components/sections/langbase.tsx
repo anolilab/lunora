@@ -35,7 +35,7 @@ const Pill: FC<{ children: ReactNode; href?: string; primary?: boolean; to?: str
     }
 
     return (
-        <Link className={className} to={to ?? "/docs/$"}>
+        <Link className={className} to={to ?? "/docs"}>
             {children}
         </Link>
     );

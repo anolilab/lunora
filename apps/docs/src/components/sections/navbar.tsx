@@ -174,7 +174,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                     setIsOpen(true);
                 }}
             >
-                <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs/$" : "/"}>
+                <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs" : "/"}>
                     <LunoraLogo className="h-7 w-7" title="Lunora" />
                     <span className={cn("text-body font-semibold tracking-tight", light ? "text-[hsl(240_14%_10%)]" : "text-ink")}>Lunora</span>
                 </Link>
@@ -423,7 +423,7 @@ const Navbar = (): ReactElement => {
                                 "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
                                 lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
                             )}
-                            to="/docs/$"
+                            to="/docs"
                         >
                             Docs
                         </Link>
@@ -504,7 +504,7 @@ const Navbar = (): ReactElement => {
                         )}
                         variant="ghost"
                     >
-                        <Link to="/docs/$">
+                        <Link to="/docs">
                             Get started
                             <ChevronRight className="size-4" />
                         </Link>
@@ -582,7 +582,7 @@ const Navbar = (): ReactElement => {
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}
-                            to="/docs/$"
+                            to="/docs"
                         >
                             Docs
                         </Link>
@@ -637,7 +637,7 @@ const Navbar = (): ReactElement => {
                                     onClick={() => {
                                         setIsMobileMenuOpen(false);
                                     }}
-                                    to="/docs/$"
+                                    to="/docs"
                                 >
                                     Get started
                                     <ChevronRight className="size-4" />

@@ -2,7 +2,9 @@ import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { ArrowUpRight, CircleDot, GitPullRequest, MessagesSquare } from "lucide-react";
 import type { FC, ReactNode } from "react";
 
-import { Pill, SectionHead } from "@/components/sections/langbase";
+import { Action } from "@/kit/action";
+import { HairlineGrid } from "@/kit/grid";
+import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 
 /**
  * Open-source / contribute section — a centered section header, CTAs, and a
@@ -19,62 +21,62 @@ const paths: { desc: string; href: string; icon: ReactNode; title: string }[] = 
     {
         desc: "Fork the repo, make your change, and open a PR — we review every contribution.",
         href: "https://github.com/anolilab/lunora",
-        icon: <GitPullRequest className="size-5 text-royal-amethyst/70" />,
+        icon: <GitPullRequest className="size-5 text-accent-2" />,
         title: "Submit a pull request",
     },
     {
         desc: "New to open source? These are a good place to start.",
         href: GOOD_FIRST_ISSUES_URL,
-        icon: <CircleDot className="size-5 text-emerald-400/70" />,
+        icon: <CircleDot className="size-5 text-positive" />,
         title: "Good first issues",
     },
     {
         desc: "Ask questions, share ideas, and help shape the roadmap.",
         href: "https://github.com/anolilab/lunora/discussions",
-        icon: <MessagesSquare className="size-5 text-sky-sapphire/70" />,
+        icon: <MessagesSquare className="size-5 text-accent" />,
         title: "Join the discussion",
     },
 ];
 
 const SupportSection: FC = () => (
-    <section className="border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-        <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
-            <SectionHead
-                eyebrow="Support"
-                subtitle="Lunora is open source and built in the open. Star the repo, file an issue, or send a pull request — every contribution keeps it moving."
-                title="Open source, built together"
-            />
+    <Section id="support">
+        <Shell>
+            <SectionHeader index="06" note="Every contribution keeps it moving." title="Open source, built together">
+                <p className="text-body text-ink-muted">Lunora is built in the open. Star the repo, file an issue, or send a pull request.</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2.5">
+                    <Action href="https://github.com/anolilab/lunora" variant="primary">
+                        <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
+                        Star on GitHub
+                    </Action>
+                    <Action to="/docs">Contribution guide</Action>
+                </div>
+            </SectionHeader>
 
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-                <Pill href="https://github.com/anolilab/lunora" primary>
-                    <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
-                    Star on GitHub
-                </Pill>
-                <Pill to="/docs/$">Contribution guide</Pill>
-            </div>
-
-            <div className="mt-14 grid gap-px border border-white/[0.08] bg-white/[0.08] md:grid-cols-3 lg:border-x-0">
-                {paths.map((path) => (
+            <HairlineGrid columns={3}>
+                {paths.map((path, index) => (
                     <a
-                        className="group flex flex-col gap-4 bg-[#0e0e11] p-6 transition-colors hover:bg-white/[0.02]"
+                        className="group flex flex-col gap-5 bg-canvas p-6 transition-colors hover:bg-hairline"
                         href={path.href}
                         key={path.title}
                         rel="noreferrer"
                         target="_blank"
                     >
-                        <span className="flex size-10 items-center justify-center border border-white/12 bg-white/[0.03]">{path.icon}</span>
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="flex size-10 items-center justify-center border border-hairline-strong">{path.icon}</span>
+                            <Kicker tone="accent">{String(index + 1).padStart(2, "0")}</Kicker>
+                        </div>
                         <div className="flex items-start justify-between gap-2">
-                            <div className="flex flex-col gap-1">
-                                <span className="text-sm font-semibold text-white">{path.title}</span>
-                                <span className="text-xs leading-relaxed text-white/45">{path.desc}</span>
+                            <div className="flex flex-col gap-1.5">
+                                <span className="text-h3 font-bold text-ink">{path.title}</span>
+                                <span className="text-blurb text-ink-muted">{path.desc}</span>
                             </div>
-                            <ArrowUpRight className="size-4 shrink-0 text-white/30 transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-white/70" />
+                            <ArrowUpRight className="size-4 shrink-0 text-ink-faint transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent" />
                         </div>
                     </a>
                 ))}
-            </div>
-        </div>
-    </section>
+            </HairlineGrid>
+        </Shell>
+    </Section>
 );
 
 export default SupportSection;

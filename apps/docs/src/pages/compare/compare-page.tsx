@@ -242,7 +242,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                         Lunora is alpha and open source. Try it on a side project and tell us where it breaks. Prefer managed? Join the Lunora Cloud waitlist.
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-2.5">
-                        <Pill primary to="/docs/$">
+                        <Pill primary to="/docs">
                             Start building
                             <ArrowRight className="size-4" />
                         </Pill>

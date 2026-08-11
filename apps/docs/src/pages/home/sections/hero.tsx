@@ -1,18 +1,19 @@
 "use client";
 
-import { ArrowRight, Check, Copy } from "lucide-react";
+import { Check, ChevronRight, Copy } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
 
-import AgentPanel from "@/components/sections/agent-panel";
-import { Pill } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
+import { Action } from "@/kit/action";
+import { RuleGrid } from "@/kit/grid";
+import { Kicker, Shell } from "@/kit/layout";
+import { PageHeader } from "@/kit/page-header";
 import posthog from "@/lib/posthog";
+import siteConfig from "~/site.config";
 
 /**
- * Hero: a centered headline + CTAs over a faint scenic backdrop, then the
- * interactive panel (code tabs + live todo + reactive table) below. Lunora
- * brand (Geist + aurora accents).
+ * Landing hero: the colour field and its panel, then the numbered promise row
+ * that states what Lunora is before any section argues for it.
  */
 
 const InstallCommand: FC = () => {
@@ -21,7 +22,7 @@ const InstallCommand: FC = () => {
     const copy = () => {
         const run = async () => {
             try {
-                await navigator.clipboard.writeText("npx lunorash@alpha init my-app");
+                await navigator.clipboard.writeText(siteConfig.cta.install);
             } catch {
                 // Permission denied, or no secure context. Nothing was copied,
                 // so neither the check mark nor the event should claim it was.
@@ -40,53 +41,75 @@ const InstallCommand: FC = () => {
 
     return (
         <button
-            className="group flex w-fit items-center gap-3 border border-white/12 px-4 py-2 font-mono text-sm text-white/60 transition-colors hover:border-white/25 hover:text-white"
+            className="group flex w-full items-center gap-3 border border-hairline px-4 py-2.5 font-mono text-blurb text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
             onClick={copy}
             type="button"
         >
-            <span className="text-white/30 select-none">$</span>
-            npx lunorash@alpha init my-app
-            {copied ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-3.5 text-white/35 transition-colors group-hover:text-white/60" />}
+            <span className="text-ink-faint select-none">$</span>
+            {siteConfig.cta.install}
+            {copied ? (
+                <Check className="ml-auto size-4 text-positive" />
+            ) : (
+                <Copy className="ml-auto size-3.5 text-ink-faint transition-colors group-hover:text-ink-muted" />
+            )}
         </button>
     );
 };
 
-const Hero: FC = () => (
-    <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-        <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 pt-40 pb-14 text-center sm:pt-48">
-            <p className="sr-only">
-                Lunora is a type-safe, real-time backend framework on Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define a
-                schema and write query, mutation, and action functions on the server; the client gets end-to-end typed data with live subscriptions, optimistic
-                updates, and an offline queue — types sync from server to client automatically via codegen.
-            </p>
-            <Reveal className="flex flex-col items-center gap-6">
-                <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
-                    <span className="size-1.5 bg-sky-sapphire" />
-                    The realtime backend for Cloudflare
-                </span>
-                <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-white sm:text-6xl">
-                    Realtime backends, in a few lines of{" "}
-                    <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">code.</span>
-                </h1>
-                <p className="max-w-xl text-lg leading-relaxed text-white/55">
-                    Define a schema, write a function — Lunora gives you a typed, live-syncing API on Cloudflare&apos;s edge. No glue code, no infrastructure to
-                    manage.
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-2.5">
-                    <Pill primary>
-                        Start building
-                        <ArrowRight className="size-4" />
-                    </Pill>
-                    <Pill href="https://github.com/anolilab/lunora">View on GitHub</Pill>
-                </div>
-                <InstallCommand />
-            </Reveal>
-        </div>
+const PROMISES = [
+    { label: "Open source", text: "FSL-1.1-Apache-2.0, deployed to your own Cloudflare account." },
+    { label: "Realtime", text: "Every query is a subscription; mutations push to all clients." },
+    { label: "Typed end to end", text: "Codegen keeps server and client in lockstep, or it stops compiling." },
+    { label: "Edge native", text: "SQLite-backed Durable Objects, shardable by user, tenant, or room." },
+    { label: "Vite first", text: "One dev server for the frontend, the backend, and the studio." },
+];
 
-        <Reveal className="relative z-10 pb-20">
-            <AgentPanel />
-        </Reveal>
-    </section>
+const Hero: FC = () => (
+    <>
+        <p className="sr-only">
+            Lunora is a type-safe, real-time backend framework on Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define a schema
+            and write query, mutation, and action functions on the server; the client gets end-to-end typed data with live subscriptions, optimistic updates,
+            and an offline queue — types sync from server to client automatically via codegen.
+        </p>
+
+        <PageHeader>
+            <div className="mb-7 flex items-center justify-between gap-4">
+                <Kicker>Open source / FSL-1.1-Apache-2.0</Kicker>
+                <Kicker>Alpha</Kicker>
+            </div>
+
+            <h1 className="text-h1 font-bold text-ink">
+                <span className="text-accent">{siteConfig.brand.name}.</span>
+                <br />
+                Realtime backends, in a few lines of code.
+            </h1>
+
+            <p className="mt-5 text-body text-ink-muted">
+                Define a schema, write a function — Lunora gives you a typed, live-syncing API on Cloudflare&apos;s edge. No glue code, no infrastructure to
+                manage.
+            </p>
+
+            <div className="mt-7 flex flex-wrap items-center gap-2.5">
+                <Action to={siteConfig.cta.primary.to} variant="primary">
+                    {siteConfig.cta.primary.label}
+                    <ChevronRight className="size-4" />
+                </Action>
+                <Action href={siteConfig.cta.secondary.href}>{siteConfig.cta.secondary.label}</Action>
+            </div>
+
+            <p className="mt-6">
+                <Kicker size="micro">Available for React · Vue · Svelte · Solid</Kicker>
+            </p>
+
+            <div className="mt-4">
+                <InstallCommand />
+            </div>
+        </PageHeader>
+
+        <Shell className="mt-[clamp(2.5rem,1.5rem+4vw,5rem)]">
+            <RuleGrid items={PROMISES} />
+        </Shell>
+    </>
 );
 
 export default Hero;
