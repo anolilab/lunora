@@ -1,3 +1,4 @@
+import { createDispatchRunner } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 import { v, ValidationError } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
@@ -58,6 +59,22 @@ const make = (overrides?: { nonRetryableErrorClass?: NativeNonRetryableErrorCons
 
     return { calls: fake.calls, run, runStep };
 };
+
+/**
+ * Produce a real dispatch failure through `@lunora/dispatch`'s own error path
+ * (rather than hand-constructing a `LunoraError`) so it carries the same
+ * dispatch-origin brand a genuine `ctx.run` failure would — the thing
+ * `isDeterministicDispatchFailure` now checks in addition to `status`.
+ */
+const realDispatchFailure = async (status: number, code: string, message: string): Promise<unknown> =>
+    createDispatchRunner({
+        env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" },
+        fetchImpl: async () => Response.json({ error: { code, message } }, { status }),
+        label: "@lunora/workflow",
+    })({ __lunoraRef: "flaky" }).then(
+        () => undefined,
+        (error: unknown) => error,
+    );
 
 describe("createRunStep", () => {
     it("validates args, runs the body, and returns the result", async () => {
@@ -174,7 +191,7 @@ describe("createRunStep", () => {
         // re-running the handler's side effects.
         expect.assertions(4);
 
-        const dispatchFailure = new LunoraError("VALIDATION_ERROR", "bad args", { status: 400 });
+        const dispatchFailure = await realDispatchFailure(400, "VALIDATION_ERROR", "bad args");
         const flaky = defineStep("flaky", {
             args: {},
             handler: async () => {
@@ -207,6 +224,32 @@ describe("createRunStep", () => {
 
         expect(nativeError).toBeInstanceOf(FakeNative);
         expect((nativeError as Error).message).toBe("bad args");
+    });
+
+    it("keeps a Lunora-shaped 404 that did NOT come from a dispatch retryable — rethrown unchanged", async () => {
+        // Same allowlisted status (404) as a deterministic dispatch failure, but
+        // this is a plain `LunoraError` a step body threw directly (e.g. a
+        // genuine storage lookup miss) — it never carries the dispatch-origin
+        // brand, so it must stay retryable rather than being misclassified as a
+        // dispatch failure just because the status matches.
+        expect.assertions(2);
+
+        const notFound = new LunoraError("STORAGE_OBJECT_NOT_FOUND", "object missing", { status: 404 });
+        const flakyNotFound = defineStep("flakyNotFound", {
+            args: {},
+            handler: async () => {
+                throw notFound;
+            },
+        });
+
+        const { runStep } = make();
+        const error = await runStep(flakyNotFound, {}).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        );
+
+        expect(error).toBe(notFound);
+        expect(isNonRetryableError(error)).toBe(false);
     });
 
     it("keeps a 429 (rate limit) and a 500 dispatch failure retryable — rethrown unchanged", async () => {

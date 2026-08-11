@@ -39,12 +39,31 @@ const trimTrailingSlashes = (value: string): string => {
 };
 
 /**
+ * Non-enumerable brand stamped on every error {@link toDispatchError} builds.
+ * A step body can throw an unrelated `LunoraError` that happens to share one
+ * of {@link DETERMINISTIC_DISPATCH_STATUSES} (e.g. a genuine 404 from a
+ * storage lookup) — the brand is what lets {@link isDeterministicDispatchFailure}
+ * tell "this specific error came from a dispatch response" from "this error
+ * merely has a matching status", so classification stays scoped to actual
+ * dispatch failures instead of every step-body error in the allowlisted range.
+ */
+const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
+
+/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} and return it. */
+const markAsDispatchFailure = (error: LunoraError): LunoraError => {
+    Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
+
+    return error;
+};
+
+/**
  * Turn a non-ok dispatch response into a {@link LunoraError}. The runtime
  * serializes a dispatch failure via `@lunora/errors`' `toErrorBody`, wrapped as
  * `{ error: { code, message, data?, ... } }` with the HTTP status carrying the
  * error's status. Reconstruct a `LunoraError` from that shape so the original
  * `code`/`status`/`data` survive: {@link isDeterministicDispatchFailure} keys off
- * `status` to tell a deterministic failure (`400`/`403`/`404`/`422` — see
+ * the {@link DISPATCH_FAILURE_BRAND} stamped here plus `status` to tell a
+ * deterministic failure (`400`/`403`/`404`/`422` — see
  * `DETERMINISTIC_DISPATCH_STATUSES`) from a transient one.
  * `@lunora/workflow`'s `createRunStep` consumes this to convert a deterministic
  * failure into a non-retryable step failure instead of burning its retry budget
@@ -63,13 +82,13 @@ const toDispatchError = (label: string, status: number, rawBody: string): Lunora
         if (typeof errorBody === "object" && errorBody !== null && typeof (errorBody as { code?: unknown }).code === "string") {
             const { code, data, message } = errorBody as { code: string; data?: unknown; message?: unknown };
 
-            return new LunoraError(code, typeof message === "string" ? message : undefined, { data, status });
+            return markAsDispatchFailure(new LunoraError(code, typeof message === "string" ? message : undefined, { data, status }));
         }
     } catch {
         // Not JSON / not the expected envelope — fall through to the generic error.
     }
 
-    return new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status });
+    return markAsDispatchFailure(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }));
 };
 
 /**
@@ -82,13 +101,18 @@ const toDispatchError = (label: string, status: number, rawBody: string): Lunora
 const DETERMINISTIC_DISPATCH_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 422]);
 
 /**
- * True when `error` is a {@link LunoraError} (as reconstructed by
- * {@link toDispatchError}) whose `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES}
- * — i.e. a dispatch failure a consumer (`@lunora/workflow`'s `createRunStep`,
- * `@lunora/queue`'s consumer) should treat as non-retryable rather than
- * rethrowing for the platform's default retry-on-throw.
+ * True when `error` is a {@link LunoraError} actually built by
+ * {@link toDispatchError} (carrying its {@link DISPATCH_FAILURE_BRAND}) whose
+ * `status` is in {@link DETERMINISTIC_DISPATCH_STATUSES} — i.e. a dispatch
+ * failure a consumer (`@lunora/workflow`'s `createRunStep`, `@lunora/queue`'s
+ * consumer) should treat as non-retryable rather than rethrowing for the
+ * platform's default retry-on-throw. The brand check is what keeps this
+ * scoped to dispatch failures specifically: without it, an unrelated
+ * `LunoraError` a step body throws (e.g. a genuine `STORAGE_OBJECT_NOT_FOUND`)
+ * would be misclassified as non-retryable merely for sharing a status.
  */
-const isDeterministicDispatchFailure = (error: unknown): boolean => isLunoraError(error) && DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
+const isDeterministicDispatchFailure = (error: unknown): boolean =>
+    isLunoraError(error) && (error as Record<symbol, unknown>)[DISPATCH_FAILURE_BRAND] === true && DETERMINISTIC_DISPATCH_STATUSES.has(error.status);
 
 /**
  * Build the error a timed-out dispatch rejects with. Deliberately a 5xx-class

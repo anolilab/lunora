@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDispatchLogger } from "../src/create-dispatch-logger";
@@ -197,6 +198,18 @@ describe("isDeterministicDispatchFailure", () => {
         expect(isDeterministicDispatchFailure(await errorWithStatus(429))).toBe(false);
         expect(isDeterministicDispatchFailure(await errorWithStatus(500))).toBe(false);
         expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
+    });
+
+    it("is false for a LunoraError that merely shares an allowlisted status but did not come from a dispatch response", () => {
+        expect.assertions(1);
+
+        // Same shape (structural code/status/type) as a real dispatch failure,
+        // but built directly by unrelated code (e.g. a storage lookup) rather
+        // than by `toDispatchError` — must not be misclassified as a
+        // dispatch failure just because its status is in the allowlist.
+        const unrelated = new LunoraError("STORAGE_OBJECT_NOT_FOUND", "not found", { status: 404 });
+
+        expect(isDeterministicDispatchFailure(unrelated)).toBe(false);
     });
 });
 
