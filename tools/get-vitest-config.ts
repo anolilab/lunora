@@ -18,11 +18,14 @@ export interface CoverageThresholds {
  *
  * Thresholds only apply when coverage is enabled (`vitest run --coverage`, the
  * `test:coverage` scripts); plain `vitest run` is unaffected. The workerd-gated
- * packages (client, d1, do, runtime, scheduler, storage) use inline
- * `defineConfig` configs — not this helper — and stay threshold-free: their
- * workerd projects run without coverage (v8/`node:inspector` is unsupported in
+ * packages (client, container, d1, dispatch, do, queue, runtime, scheduler,
+ * storage, workflow, x402) use inline `defineConfig` configs — not this
+ * helper — and stay threshold-free: their workerd projects run without
+ * coverage (v8/`node:inspector` is unsupported in
  * `@cloudflare/vitest-pool-workers`), so a floor there would gate on a
- * structurally incomplete number.
+ * structurally incomplete number. The exemption is workers-pool-only — a
+ * package that moves off this helper for any other reason needs its own
+ * justification, not this comment.
  */
 export const DEFAULT_COVERAGE_THRESHOLDS: Required<CoverageThresholds> = {
     branches: 70,

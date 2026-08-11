@@ -1,5 +1,7 @@
 import { defineConfig, coverageConfigDefaults } from "vitest/config";
 
+import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
+
 // Plain-Node unit suite over a fake `@cloudflare/playwright` double. There is no
 // workerd project here: the whole surface is a thin wrapper over
 // `launch(env.BROWSER)`, which can't run in this sandbox (workerd +
@@ -21,6 +23,9 @@ const coverage = {
         "**/node_modules/**",
         "**/dist/**",
     ],
+    // Measured well above the default floor (99.27/97.97/100/99.24); the default
+    // is already a safe ratchet here.
+    thresholds: { ...DEFAULT_COVERAGE_THRESHOLDS },
 };
 
 export default defineConfig({

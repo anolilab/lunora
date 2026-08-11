@@ -1,5 +1,7 @@
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
+import { DEFAULT_COVERAGE_THRESHOLDS } from "../../tools/get-vitest-config";
+
 // @lunora/seed is a build-time / test-time tool (schema introspection + a
 // deterministic faker-backed generator), so the suite is plain-Node — no
 // workerd pool needed. The testing-adapter test drives @lunora/testing's
@@ -10,6 +12,9 @@ const coverage = {
     reporter: ["clover", "cobertura", "lcov", "text", "html"],
     include: ["src"],
     exclude: [...(coverageConfigDefaults.exclude ?? []), "__fixtures__/**", "src/**/types.ts", "e2e", "**/node_modules/**", "**/dist/**"],
+    // ratchet: functions measured at 75.53% (testing.ts + copycat/index.ts are the
+    // laggards), below the 80% default; the other three metrics clear it.
+    thresholds: { ...DEFAULT_COVERAGE_THRESHOLDS, functions: 75 },
 };
 
 export default defineConfig({
