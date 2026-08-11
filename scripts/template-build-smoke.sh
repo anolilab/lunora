@@ -38,11 +38,10 @@
 #   ./scripts/template-build-smoke.sh       # same
 #   ./scripts/template-build-smoke.sh tanstack-start-react  # single template (fast iteration)
 #
-# Scaffolding note: `lunora init -t` only supports vite|standalone|tanstack-start
-# (next is unfinished). All 8 templates are obtained by direct `cp -R` from the
-# templates/ root — offline-deterministic, identical to what giget would produce.
-# This avoids the isTemplate guard in init/handler.ts that falls back to "vite"
-# for unsupported names.
+# Scaffolding note: templates are obtained by direct `cp -R` from the templates/
+# root — offline-deterministic, identical to what giget would produce. This
+# avoids the isTemplate guard in init/handler.ts that falls back to "vite" for
+# unsupported names.
 #
 # What this does NOT cover:
 #   - The remote giget fetch path (needs network + a published template ref).

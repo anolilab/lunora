@@ -443,6 +443,48 @@ describe("lunora init", () => {
             expect(pkg).toContain('"name": "next-app"');
         });
 
+        it("vinext (App Router) template scaffolds the class-A composed worker", async () => {
+            expect.assertions(4);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "vinext-app",
+                templateType: "vinext",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "vinext-app");
+
+            // App-Router scaffold: app/ directory + the composed `virtual:lunora/worker` entry.
+            expect(existsSync(join(target, "app", "page.tsx"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain("virtual:lunora/worker");
+        });
+
+        it("vinext-pages (Pages Router) template scaffolds the class-A composed worker", async () => {
+            expect.assertions(4);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "vinext-pages-app",
+                templateType: "vinext-pages",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "vinext-pages-app");
+
+            // Pages-Router scaffold: pages/ + the composed `virtual:lunora/worker` entry.
+            expect(existsSync(join(target, "pages", "index.tsx"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            expect(readFileSync(join(target, "wrangler.jsonc"), "utf8")).toContain("virtual:lunora/worker");
+        });
+
         it("refuses to scaffold into a non-empty target", async () => {
             expect.assertions(2);
 
@@ -539,17 +581,19 @@ describe("lunora init", () => {
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
-        it("isTemplate accepts the real template dir names and next (not the removed vite-react)", () => {
-            expect.assertions(10);
+        it("isTemplate accepts the real template dir names incl. next and vinext (not the removed vite-react)", () => {
+            expect.assertions(12);
 
             expect(isTemplate("astro")).toBe(true);
             expect(isTemplate("expo")).toBe(true);
+            expect(isTemplate("next")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start-react")).toBe(true);
             expect(isTemplate("tanstack-start-solid")).toBe(true);
-            expect(isTemplate("next")).toBe(true);
+            expect(isTemplate("vinext")).toBe(true);
+            expect(isTemplate("vinext-pages")).toBe(true);
             expect(isTemplate("vite-react")).toBe(false);
             expect(isTemplate("unknown-framework")).toBe(false);
         });

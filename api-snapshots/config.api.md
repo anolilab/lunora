@@ -333,7 +333,7 @@ interface DestructivePolicyEdit {
 ### `DetectedFramework` (type)
 
 ```ts
-type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
+type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
 ```
 
 ### `DevRequest` (interface)

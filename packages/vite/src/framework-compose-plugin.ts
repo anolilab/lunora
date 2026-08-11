@@ -88,6 +88,16 @@ const CLASS_A_WIRING: Readonly<Partial<Record<DetectedFramework, ClassAWiring>>>
         handler: "ssrModule.default",
         imports: 'import * as ssrModule from "@tanstack/solid-start/server-entry";',
     },
+    vinext: {
+        // vinext (Next.js on Vite) default-exports a `{ fetch(request, env, ctx) }`
+        // handler — exactly the `httpRouter` contract. `composeWorker` forwards
+        // `env` (with `__lunoraCtx`) and the execution `ctx`, so vinext's bindings
+        // + `ctx.waitUntil` cache writes work unchanged. `fetch-handler` is the
+        // router-selected entry: vinext's Vite plugin resolves it to the App-Router
+        // or Pages-Router handler at build time, so one wiring row covers both.
+        handler: "ssrModule.default",
+        imports: 'import * as ssrModule from "vinext/server/fetch-handler";',
+    },
 };
 
 /**

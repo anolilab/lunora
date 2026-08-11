@@ -598,7 +598,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)

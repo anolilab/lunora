@@ -62,7 +62,19 @@ const COPY = {
     packageManager: "Which package manager?",
 } as const;
 
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
+type Template =
+    | "analog"
+    | "astro"
+    | "expo"
+    | "next"
+    | "nuxt"
+    | "react-router"
+    | "standalone"
+    | "sveltekit"
+    | "tanstack-start-react"
+    | "tanstack-start-solid"
+    | "vinext"
+    | "vinext-pages";
 
 interface InitCommandOptions {
     /**
@@ -1288,6 +1300,8 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
+    { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
+    { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },
     { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
     { description: "Astro + a standalone Lunora worker", label: "Astro", value: "astro" },
     { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },

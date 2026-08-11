@@ -42,16 +42,23 @@ React is the default when you do not choose.
 These pair SSR with live subscriptions — the server render resolves data, and the
 client hydrates it into a live query rather than refetching.
 
-| Framework              | Command                                   | Topology                                 |
-| ---------------------- | ----------------------------------------- | ---------------------------------------- |
-| Next.js (App Router)   | `lunora init app -t next`                 | Two workers — OpenNext + a Lunora worker |
-| TanStack Start (React) | `lunora init app -t tanstack-start-react` | Single worker                            |
-| TanStack Start (Solid) | `lunora init app -t tanstack-start-solid` | Single worker                            |
-| React Router v7        | `lunora init app -t react-router`         | SSR composed into the Lunora worker      |
-| SvelteKit              | `lunora init app -t sveltekit`            | Standalone Lunora worker                 |
-| Astro                  | `lunora init app -t astro`                | Standalone Lunora worker                 |
-| Nuxt                   | `lunora init app -t nuxt`                 | Single worker — Lunora mounted in Nitro  |
-| AnalogJS (Angular)     | `lunora init app -t analog`               | Single worker — Lunora mounted in Nitro  |
+| Framework                      | Command                                   | Topology                                 |
+| ------------------------------ | ----------------------------------------- | ---------------------------------------- |
+| Next.js (App Router)           | `lunora init app -t next`                 | Two workers — OpenNext + a Lunora worker |
+| Next.js on Vite (App Router)   | `lunora init app -t vinext`               | SSR composed into the Lunora worker      |
+| Next.js on Vite (Pages Router) | `lunora init app -t vinext-pages`         | SSR composed into the Lunora worker      |
+| TanStack Start (React)         | `lunora init app -t tanstack-start-react` | Single worker                            |
+| TanStack Start (Solid)         | `lunora init app -t tanstack-start-solid` | Single worker                            |
+| React Router v7                | `lunora init app -t react-router`         | SSR composed into the Lunora worker      |
+| SvelteKit                      | `lunora init app -t sveltekit`            | Standalone Lunora worker                 |
+| Astro                          | `lunora init app -t astro`                | Standalone Lunora worker                 |
+| Nuxt                           | `lunora init app -t nuxt`                 | Single worker — Lunora mounted in Nitro  |
+| AnalogJS (Angular)             | `lunora init app -t analog`               | Single worker — Lunora mounted in Nitro  |
+
+The two `vinext` rows run [vinext](https://github.com/cloudflare/vinext) —
+Cloudflare's reimplementation of the Next.js API surface on Vite. It is
+pre-1.0/experimental; Lunora's wiring is the same class-A composition the other
+single-worker templates use.
 
 The topology column matters for deployment. **Single worker** means one
 `wrangler deploy`. **Two workers** means the framework's worker and the Lunora

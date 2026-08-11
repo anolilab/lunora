@@ -5,7 +5,7 @@ import { join } from "node:path";
  * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
  * SPA / SSR-less project (the current default). Mirrors PLAN4 §2.4.
  */
-type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
+type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
 
 /**
  * void's class model (PLAN4 §3). Class A is Vite-native and Lunora owns the
@@ -38,6 +38,10 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
     { class: "A", dependency: "@tanstack/react-start", framework: "tanstack-start" },
     { class: "A", dependency: "@tanstack/solid-start", framework: "tanstack-start-solid" },
     { class: "A", dependency: "@react-router/dev", framework: "react-router" },
+    // vinext (Next.js on Vite). Its router-selected worker entry
+    // (`vinext/server/fetch-handler`) is a clean `{ fetch(request, env, ctx) }`
+    // handler for both the App and Pages Router — class-A auto-compose either way.
+    { class: "A", dependency: "vinext", framework: "vinext" },
     { class: "A", dependency: "@solidjs/start", framework: "solid-start" },
     { class: "A", dependency: "solid-start", framework: "solid-start" },
     { class: "B", dependency: "@sveltejs/kit", framework: "sveltekit" },
