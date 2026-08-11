@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { queryReadLocation, shardKindsByTable } from "../helpers";
 
 /**
  * Flags a query read that calls `.filter()` without first narrowing with
@@ -23,7 +24,7 @@ const filterWithoutIndex: Lint = {
     remediation: 'Narrow the read with `.withIndex("name", (q) => q.eq(...))` first, then `.filter()` only for what the index cannot express.',
     run: (context) => {
         const findings = [];
-        const shardKindByTable = new Map(context.schema.tables.map((table) => [table.name, table.shardKind]));
+        const shardKindByTable = shardKindsByTable(context.schema);
 
         for (const read of context.queries ?? []) {
             // Only an *unindexed* filter on a known table is a scan we can name.
@@ -38,7 +39,7 @@ const filterWithoutIndex: Lint = {
                 continue;
             }
 
-            const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
+            const location = queryReadLocation(read);
             const shardKind = shardKindByTable.get(read.table);
             const metadata = { exportName: read.exportName, file: read.file, line: read.line, shardKind: shardKind ?? "unknown", table: read.table };
             const cacheKey = `filter_without_index:${read.file}:${read.line.toString()}:${read.table}`;

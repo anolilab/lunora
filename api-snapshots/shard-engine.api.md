@@ -2398,6 +2398,7 @@ interface SocketAttachment {
     context?: Record<string, unknown>;
     expiresAt?: number;
     identity?: Record<string, unknown>;
+    pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;
     userId?: string;
@@ -2565,6 +2566,7 @@ interface SubscriptionConnection {
 
 ```ts
 interface SubscriptionEnvelope {
+    caps?: string[];
     clientId?: string;
     context?: Record<string, unknown>;
     data?: unknown;
@@ -4182,12 +4184,6 @@ const selectShapeMemberIds: (sql: SqlExec, table: string, effectiveWhere: WhereI
 const selectShapeRows: (sql: SqlExec, table: string, effectiveWhere: WhereInput | undefined) => ShapeRow[];
 ```
 
-### `sendDeltaFrames` (const)
-
-```ts
-const sendDeltaFrames: (ws: FrameSink, subId: string, deltaFrames: ReadonlyArray<string>, cursorSuffix: string, lastMutationId?: number) => boolean;
-```
-
 ### `serializeSqlValue` (const)
 
 ```ts
@@ -4230,6 +4226,12 @@ const stableStringify: (value: unknown) => string;
 
 ```ts
 const stableWireKey: (value: unknown) => string;
+```
+
+### `subscriptionFrames` (const)
+
+```ts
+const subscriptionFrames: (input: SubscriptionFrameInput) => string[];
 ```
 
 ### `subscriptionListDeltas` (const)
