@@ -96,7 +96,7 @@ const capabilities: Capability[] = [
 const Capabilities: FC = () => (
     <Section id="capabilities">
         <Shell>
-            <SectionHeader index="04" note="Deployed to your own Cloudflare account." title="Everything a real app needs">
+            <SectionHeader index="05" label="Add-ons" note="Deployed to your own Cloudflare account." title="Everything a real app needs">
                 <p className="text-body text-ink-muted">Opt-in packages for auth, payments, email, AI, storage, and jobs — typed onto your ctx.</p>
             </SectionHeader>
 

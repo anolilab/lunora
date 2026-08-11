@@ -20,8 +20,12 @@ import { GridCell, HairlineGrid } from "@/kit/grid";
 import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 import Capabilities from "@/pages/home/sections/capabilities";
+import CompareBand from "@/pages/home/sections/compare-band";
+import Cost from "@/pages/home/sections/cost";
+import Faq from "@/pages/home/sections/faq";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
+import PlatformStrip from "@/pages/home/sections/platform-strip";
 import SupportSection from "@/pages/home/sections/support";
 import siteConfig from "~/site.config";
 
@@ -114,6 +118,7 @@ const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature,
 const Home: FC = () => (
     <div className="bg-canvas" data-theme="dark">
         <Hero />
+        <PlatformStrip />
 
         <Section id="features">
             <Shell>
@@ -157,11 +162,13 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <Cost />
+
         <Capabilities />
 
-        <Section id="runtimes" tone="deep">
+        <Section id="runtimes">
             <Shell>
-                <SectionHeader index="05" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime">
+                <SectionHeader index="06" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime">
                     <p className="text-body text-ink-muted">One backend, every frontend — live adapters powered by a Vite-first dev experience.</p>
                 </SectionHeader>
 
@@ -180,6 +187,10 @@ const Home: FC = () => (
                 </HairlineGrid>
             </Shell>
         </Section>
+
+        <CompareBand />
+
+        <Faq />
 
         <SupportSection />
 
