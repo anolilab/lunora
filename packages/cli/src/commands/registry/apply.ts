@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEV_VARS_FILE, parseDevVariableEntries } from "@lunora/config";
+import { DEV_VARS_FILE, parseDevVariableEntries, writeDevVariablesFileAtomically } from "@lunora/config";
 import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 
@@ -202,7 +202,7 @@ const applyEnvVariables = (envVariables: ReadonlyArray<RegistryEnvVariable>, pro
     if (appended.length > 0) {
         const prefix = existing === "" || existing.endsWith("\n") ? existing : `${existing}\n`;
 
-        writeFileSync(devVariablesPath, `${prefix}${lines.join("\n")}\n`, "utf8");
+        writeDevVariablesFileAtomically(devVariablesPath, `${prefix}${lines.join("\n")}\n`);
         logger.success(`scaffolded ${String(appended.length)} env var(s) into .dev.vars: ${appended.join(", ")}`);
     }
 

@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain secret-like strings */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -595,6 +595,17 @@ describe("lunora env", () => {
 
     describe("lunora env generate", () => {
         const HEX64 = /^[a-f0-9]{64}$/u;
+
+        it.skipIf(process.platform === "win32")("writes .dev.vars owner-only (mode 0o600) when --set creates it fresh — regression for plan 317", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, set: true, subcommand: "generate" });
+
+            expect(result.code).toBe(0);
+            // eslint-disable-next-line no-bitwise -- checking the permission bits is the point of this test
+            expect(statSync(join(workdir, ".dev.vars")).mode & 0o777).toBe(0o600);
+        });
 
         it("writes generated values for the project's mintable secrets with --set (skipping provider keys)", async () => {
             expect.assertions(5);

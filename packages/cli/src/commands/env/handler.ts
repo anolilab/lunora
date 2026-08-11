@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -16,6 +16,7 @@ import {
     resolveDeployDriver,
     resolveProjectTarget,
     upsertDevVariableLine,
+    writeDevVariablesFileAtomically,
 } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
@@ -206,7 +207,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
 
     const raw = readDevVariablesRaw(devVariablesPath);
 
-    writeFileSync(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value), "utf8");
+    writeDevVariablesFileAtomically(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value));
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
     return { code: 0, descriptors: [] };
@@ -235,7 +236,7 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
         return { code: 0, descriptors: [] };
     }
 
-    writeFileSync(devVariablesPath, removeDevVariableLine(raw, options.key), "utf8");
+    writeDevVariablesFileAtomically(devVariablesPath, removeDevVariableLine(raw, options.key));
     logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
 
     return { code: 0, descriptors: [] };
@@ -487,7 +488,7 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
             raw = upsertDevVariableLine(raw, entry.key, entry.value);
         }
 
-        writeFileSync(devVariablesPath, raw, "utf8");
+        writeDevVariablesFileAtomically(devVariablesPath, raw);
         logger.success(`env: generated ${String(generated.length)} secret(s) into ${DEV_VARS_FILE}: ${generated.map((entry) => entry.key).join(", ")}`);
 
         return { code: 0, descriptors: [] };
