@@ -5,8 +5,32 @@ import { enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { QueryReadIR } from "./ir";
 
-/** Chain methods that narrow a read so it is not a full scan. */
-const INDEX_METHODS = new Set(["withIndex", "withSearchIndex"]);
+/**
+ * Chain methods that narrow a read so it is not a full scan.
+ *
+ * `withGeoIndex` belongs here for the same reason as the other two: it resolves
+ * a geohash-prefix range plus a distance refine, never a table scan. It was
+ * missing while this feeder only reported `.filter()` reads — a geo query is
+ * normally written without one, so nothing could observe the gap. Once
+ * unfiltered reads are reported (for `unbounded_collect`), omitting it would
+ * flag the idiomatic `withGeoIndex(...).collect()` as an unbounded scan, which
+ * `geo_index_unused` tells authors to write in the first place.
+ */
+const INDEX_METHODS = new Set(["withGeoIndex", "withIndex", "withSearchIndex"]);
+
+/**
+ * Chain methods that MATERIALIZE a read — the point at which how much of the
+ * narrowed set is actually loaded gets decided.
+ *
+ * Matched as a known set rather than taken as the chain's last call.
+ * {@link chainMethods} follows any property-access-then-call parent, and a
+ * terminal returns a Promise, so `.collect().then(...)` / `.catch(...)` keep the
+ * walk going and the last call is a combinator rather than the terminal. Taking
+ * the last RECOGNISED terminal reports `collect` for that chain instead of
+ * `then`; a chain with none (`.order("desc")` handed on, or a bare
+ * `query(...)`) reports `undefined`, which the terminal-shaped lints skip.
+ */
+const TERMINAL_METHODS = new Set(["collect", "collectWithScores", "first", "paginate", "take", "unique"]);
 
 /**
  * True for a `ctx.db.query(...)` (or bare `db.query(...)`) call — the database
@@ -116,10 +140,13 @@ const tableOf = (queryCall: CallExpression): string => {
 };
 
 /**
- * Discover `ctx.db.query("table")…` reads under the lunora source directory and
- * reduce each to a {@link QueryReadIR}. Only reads that call `.filter()` are
- * returned — an unfiltered read is never a `filter_without_index` candidate, so
- * dropping the rest keeps the lint input small.
+ * Discover every `ctx.db.query("table")…` read under the lunora source directory
+ * and reduce each to a {@link QueryReadIR}.
+ *
+ * Reads without a `.filter()` are kept too. They are never
+ * `filter_without_index` candidates (that lint gates on `hasFilter`), but an
+ * unfiltered, unindexed `.collect()` is the read `unbounded_collect` exists for
+ * — and dropping it here is precisely why nothing could see it.
  */
 const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] => {
     const reads: QueryReadIR[] = [];
@@ -134,19 +161,17 @@ const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR
             }
 
             const methods = chainMethods(call);
-
-            if (!methods.includes("filter")) {
-                continue;
-            }
+            const hasFilter = methods.includes("filter");
 
             reads.push({
                 exportName: enclosingExportName(call),
                 file: relativePath,
-                filtersPrimaryKey: filtersPrimaryKeyOf(call),
-                hasFilter: true,
+                filtersPrimaryKey: hasFilter && filtersPrimaryKeyOf(call),
+                hasFilter,
                 hasIndex: methods.some((method) => INDEX_METHODS.has(method)),
                 line: call.getStartLineNumber(),
                 table: tableOf(call),
+                terminal: methods.findLast((method) => TERMINAL_METHODS.has(method)),
             });
         }
     }

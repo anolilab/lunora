@@ -517,6 +517,14 @@ export interface ClientUnsubscribeMessage {
  */
 export interface ClientConnectMessage {
     /**
+     * Wire behaviours this client can handle that an older one cannot, so the
+     * server can use them without breaking clients that can't. Currently just
+     * `"pageDelta"`; see `shared/page-result.ts` for what it promises and why it
+     * must be announced rather than assumed. Omitting it is always safe.
+     */
+    caps?: ReadonlyArray<string>;
+
+    /**
      * Stable per-client id (persisted alongside the outbox). Lets the server
      * scope this connection's `__client_watermark` so custom-mutator pokes can
      * echo the right per-client `lastMutationId`. Omitted by clients that don't

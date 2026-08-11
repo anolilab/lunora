@@ -175,16 +175,16 @@ are ignored by the client parser.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                        |
-| ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, context? }` — one-shot, first on open     |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }` |
-| `unsubscribe`                               | `{ type, id }`                                                               |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`        |
-| `shape_unsubscribe`                         | `{ type, id }`                                                               |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk? }`       |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                            |
-| `whisper`                                   | `{ type, topic, data? }`                                                     |
+| `type`                                      | Shape                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------- |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`    |
+| `unsubscribe`                               | `{ type, id }`                                                                  |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`           |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                  |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk? }`          |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                               |
+| `whisper`                                   | `{ type, topic, data? }`                                                        |
 
 `subscribe.query.args` is `encodeWire(args)`. `table` defaults to
 `functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
@@ -201,6 +201,56 @@ durable ignores `sinceChunk` and emits chunks without `seq`.
 
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
+
+#### 5.1.1 `connect.caps` — capability negotiation
+
+`caps` is an optional array of string tokens naming wire behaviours the client
+can handle that older clients cannot. **Omitting it is always safe**, and it is
+what an SDK should do until it implements a token: the server then keeps to the
+behaviour every client has always understood. A server that does not recognise a
+token ignores it, so the field is additive in both directions.
+
+| Token       | The client guarantees                                                                     |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| `pageDelta` | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result. |
+
+**`pageDelta` in detail.** A paginated read (`.paginate()`) returns
+`{ page: [...], isDone, continueCursor }` — an object, not an array. Without this
+token the server must re-send that whole object as a `data` snapshot on every
+write touching the query's tables, because a client that cannot merge into `page`
+does not _ignore_ such a delta — the reference client replaces the entire query
+value with the raw delta object. Announcing `pageDelta` lets the server send one
+`delta` per changed row instead.
+
+A conforming `pageDelta` client applies a delta to a paginated value by merging
+the `RowOp` into `page` **by `_id`**, exactly as it would for a bare array
+result, and returning the surrounding fields unchanged. The server only sends
+page deltas when every field outside `page` is byte-identical to the last
+delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
+as a full `data` snapshot instead.
+
+**Insert placement.** An `insert` op carries no index, so a merging client
+decides the position itself: if the new row and its neighbours all carry a
+numeric `_creationTime`, insert before the first neighbour that breaks the
+list's own direction (ascending → first larger, descending → first smaller);
+otherwise append. This rule is normative, and the server depends on it — before
+sending any batch containing an `insert` it replays this exact placement and
+falls back to a `data` snapshot when the result would not match the order its
+query returned. A read ordered by a `.withIndex()` field rather than by
+`_creationTime` is the common case where it does not match.
+
+That is what makes the merge exact: apply the frames for one push and a
+conforming client holds precisely the value the `data` snapshot would have
+carried. An SDK that implements a _different_ placement rule breaks the
+guarantee silently — the server will have cleared a batch your merge then
+misplaces, and it advances its diff baseline as if you had applied it — so
+implement this rule as written, and assert it against the `pageDeltaFrames`
+goldens in [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
+
+Those cases live under their own key rather than in `serverFrames` because they
+**merge** into a cached `baseWire` instead of replacing it, and an SDK that has
+not implemented `pageDelta` must keep applying `serverFrames` by replacement.
+Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 

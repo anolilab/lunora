@@ -1145,14 +1145,18 @@ describe("subscriptionListDeltas", () => {
         expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
     });
 
-    it("returns the snapshot sentinel on a near-total change where deltas would exceed the new length", () => {
+    it("still decomposes a near-total change — cost is not this function's call", () => {
         expect.assertions(1);
 
-        // 2 deletes + 1 insert = 3 deltas for a new array of length 1 → snapshot.
+        // 2 deletes + 1 insert against a new array of length 1. This used to
+        // return the snapshot sentinel via a row-count cap, which was a cost
+        // heuristic living in a function that cannot see the wire. The diff is
+        // expressible, so it is returned; `subscriptionFrames` decides whether
+        // sending it is cheaper than the snapshot, by measuring the real frames.
         const prev = JSON.stringify([row("a"), row("b")]);
         const next = [row("c")];
 
-        expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
+        expect(subscriptionListDeltas(prev, next, "messages")).toHaveLength(3);
     });
 
     it("falls back to a non-empty table name when the read-table set is empty", () => {
@@ -1175,8 +1179,7 @@ describe("subscriptionListDeltas", () => {
     it("the frames sink yields bodies byte-identical to JSON.stringify(delta) across insert/update/delete", () => {
         expect.assertions(2);
 
-        // One delete (c), one update (a), one insert (d) — exercises all three
-        // branches while staying at/under the chattiness cap (3 deltas, length-3 next).
+        // One delete (c), one update (a), one insert (d) — exercises all three branches.
         const prev = JSON.stringify([row("a", { text: "old" }), row("b"), row("c")]);
         const next = [row("a", { text: "new" }), row("b"), row("d", { text: "fresh" })];
 
@@ -1234,8 +1237,82 @@ describe("shardDO subscription delta push", () => {
         return { _creationTime: 1, _id: id, ...rest };
     };
 
+    /**
+     * `count` rows that never change, prepended to a fixture so the list is long
+     * enough for a handful of deltas to be the cheaper encoding.
+     *
+     * These cases assert WHICH frame type goes out, and `subscriptionFrames`
+     * decides that by measuring the rendered frames — a few deltas against a
+     * two-row list genuinely cost more than re-sending it, so without a
+     * list-sized baseline the snapshot branch wins and the delta assertions have
+     * nothing to look at. Length is the only lever used (never row width), so
+     * these stay in the delta regime by a wide margin under any change to the
+     * frame envelope. The threshold itself is pinned directly, without a DO or a
+     * socket, by the `subscriptionFrames` unit tests in `@lunora/shard-engine`.
+     */
+    const filler = (count: number): Record<string, unknown>[] => Array.from({ length: count }, (_, index) => idRow(`fill-${String(index)}`));
+
     const subscribeMessages = (shard: ReexecShard, ws: FakeWebSocket): Promise<void> =>
         shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" });
+
+    /** A `.paginate()` result: the shape every `usePaginatedQuery` page subscribes to. */
+    const paginated = (rows: Record<string, unknown>[]): Record<string, unknown> => {
+        return { continueCursor: "cursor-16", isDone: false, page: rows };
+    };
+
+    /** Drive the one-shot `connect` frame, optionally announcing capabilities. */
+    const connect = (shard: ReexecShard, ws: FakeWebSocket, caps?: string[]): Promise<void> =>
+        shard.driveMessage(ws, { id: "connect", type: "connect", ...(caps === undefined ? {} : { caps }) });
+
+    it("re-sends a whole page to a socket that announced no capabilities", async () => {
+        expect.assertions(2);
+
+        // The behaviour every client had before `pageDelta`, and the one all
+        // seven non-JS SDKs still get — they send `connect` with no `caps`.
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+        const next = paginated([...filler(16), idRow("new")]);
+
+        shard.outcomes.set("messages:list", { result: next, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(0);
+        expect(frames.find((frame) => frame.type === "data")?.data).toStrictEqual(next);
+    });
+
+    it("sends one page delta to a socket that announced pageDelta", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws, ["pageDelta"]);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: paginated([...filler(16), idRow("new")]), tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { delta?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "data")).toHaveLength(0);
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(1);
+        expect(frames[0]?.delta).toStrictEqual({ key: "new", op: "insert", row: idRow("new"), table: "messages" });
+    });
 
     it("first push is a data snapshot; an additive change pushes a delta frame", async () => {
         expect.assertions(3);
@@ -1244,13 +1321,13 @@ describe("shardDO subscription delta push", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        shard.outcomes.set("messages:list", { result: [idRow("a")], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["messages"]) });
 
         await subscribeMessages(shard, ws);
 
-        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [idRow("a")], id: "sub-1", type: "data" });
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [...filler(16), idRow("a")], id: "sub-1", type: "data" });
 
-        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b", { text: "hi" })], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })], tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
         await shard.writeRpc();
 
@@ -1280,6 +1357,42 @@ describe("shardDO subscription delta push", () => {
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: { count: 2 }, id: "sub-1", type: "data" });
     });
 
+    it("takes the snapshot when the delta frames would out-weigh it on the wire", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        const before = filler(20);
+
+        shard.outcomes.set("messages:list", { result: before, tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        // Every row changes. `subscriptionListDeltas` accepts this — 20 deltas
+        // for a 20-row result is within its own row-count cap — but each frame
+        // re-pays the `{"type":"delta","id":…,"table":…}` envelope that one
+        // snapshot pays once, so 20 frames carry MORE bytes than the single
+        // `{type:"data"}` frame holding the same rows. Row count cannot see
+        // that; the byte comparison in `pushSubscriptionData` can.
+        const after = before.map((row) => {
+            return { ...row, text: "edited" };
+        });
+
+        shard.outcomes.set("messages:list", { result: after, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(0);
+        expect(frames.filter((frame) => frame.type === "data")).toHaveLength(1);
+        expect(frames.find((frame) => frame.type === "data")?.data).toEqual(after);
+    });
+
     it("applying the pushed delta frames to the prior snapshot yields the new result", async () => {
         expect.assertions(1);
 
@@ -1287,15 +1400,16 @@ describe("shardDO subscription delta push", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b"), idRow("c")], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b"), idRow("c")], tables: new Set(["messages"]) });
 
         await subscribeMessages(shard, ws);
 
         const baseline = (JSON.parse(ws.sent.at(-1)!) as { data: Record<string, unknown>[] }).data;
         const sentBefore = ws.sent.length;
 
-        // Delete c, update a, insert d — 3 deltas for a length-3 result (under the cap).
-        const nextResult = [idRow("a", { text: "edited" }), idRow("b"), idRow("d")];
+        // Delete c, update a, insert d — 3 deltas against a 19-row list, so the
+        // three frames stay well under the snapshot they are weighed against.
+        const nextResult = [...filler(16), idRow("a", { text: "edited" }), idRow("b"), idRow("d")];
 
         shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
@@ -1338,7 +1452,7 @@ describe("shardDO subscription delta push", () => {
 
         shard.registerSocket(ws);
 
-        const prevResult = [idRow("a", { text: "old" }), idRow("b"), idRow("c")];
+        const prevResult = [...filler(16), idRow("a", { text: "old" }), idRow("b"), idRow("c")];
 
         shard.outcomes.set("messages:list", { result: prevResult, tables: new Set(["messages"]) });
         await subscribeMessages(shard, ws);
@@ -1346,8 +1460,8 @@ describe("shardDO subscription delta push", () => {
         const sentBefore = ws.sent.length;
 
         // delete c, update a, insert d — all three delta branches in one refresh,
-        // 3 deltas for a length-3 next result (under the chattiness cap).
-        const nextResult = [idRow("a", { text: "new" }), idRow("b"), idRow("d", { text: "hi" })];
+        // 3 deltas against a 19-row list, so the delta path stays cheaper.
+        const nextResult = [...filler(16), idRow("a", { text: "new" }), idRow("b"), idRow("d", { text: "hi" })];
 
         shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";

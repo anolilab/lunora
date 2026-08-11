@@ -520,6 +520,7 @@ interface AdvisorQueryRead {
     hasIndex: boolean;
     line: number;
     table: string;
+    terminal?: string;
 }
 ```
 

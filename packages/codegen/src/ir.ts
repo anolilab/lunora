@@ -718,9 +718,10 @@ export interface WorkflowCallIR {
 
 /**
  * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
- * the `filter_without_index` advisor lint needs: which table, whether the chain
- * narrows with an index, and whether it filters. `table` is `""` when the
- * `query(...)` argument is not a string literal (a dynamic table — not lintable).
+ * the query advisor lints need: which table, whether the chain narrows with an
+ * index, whether it filters, and which terminal materializes the result.
+ * `table` is `""` when the `query(...)` argument is not a string literal (a
+ * dynamic table — not lintable).
  */
 export interface QueryReadIR {
     /** Exported procedure the read sits in, or `""` at module scope. */
@@ -743,6 +744,19 @@ export interface QueryReadIR {
     line: number;
     /** Queried table name, or `""` when the argument is not a string literal. */
     table: string;
+
+    /**
+     * The materializing call the chain ends in — `"collect"`, `"take"`,
+     * `"paginate"`, `"first"`, `"unique"`, … — i.e. how much of the narrowed set
+     * the read actually loads.
+     *
+     * `undefined` when the chain reaches no recognised terminal (a reader passed
+     * on, a bare `query(...)`) AND when a feeder predating this field produced
+     * the read. The two are deliberately not distinguished: no consumer could act
+     * on the difference, so the terminal-shaped lints skip the read either way
+     * rather than guessing a terminal.
+     */
+    terminal?: string;
 }
 
 /**

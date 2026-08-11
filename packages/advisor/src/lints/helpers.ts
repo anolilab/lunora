@@ -1,5 +1,6 @@
 import type { AdvisorProcedureProtection } from "../procedure-protections";
-import type { AdvisorTable } from "../schema";
+import type { AdvisorQueryRead } from "../queries";
+import type { AdvisorSchema, AdvisorTable } from "../schema";
 
 /**
  * Ownership / tenancy columns whose presence marks a table as holding user- or
@@ -76,3 +77,21 @@ export const tableColumnSet = (table: AdvisorTable): ReadonlySet<string> => new 
  */
 export const isPublicWrite = (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">): boolean =>
     procedure.visibility === "public" && (procedure.kind === "mutation" || procedure.kind === "action");
+
+/**
+ * Where a discovered query read sits, as the `file:line` string the query lints
+ * put in their `detail`. Falls back to the bare file when the feeder could not
+ * resolve a line (`0`), so the text never reads `messages:0`.
+ */
+export const queryReadLocation = (read: Pick<AdvisorQueryRead, "file" | "line">): string =>
+    read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
+
+/**
+ * Table name -> declared storage tier, for the query lints that word a finding
+ * by where the rows actually live (`shardBy` reads one Durable Object, `global`
+ * reads D1, `root` reads the single DO). A `Map` so a table named `toString`
+ * resolves to `undefined` and takes the neutral fallback, rather than to an
+ * inherited `Object.prototype` member.
+ */
+export const shardKindsByTable = (schema: AdvisorSchema): ReadonlyMap<string, string | undefined> =>
+    new Map(schema.tables.map((table) => [table.name, table.shardKind]));
