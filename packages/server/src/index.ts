@@ -113,6 +113,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    DurableStreamOptions,
     ExposeConfig,
     FunctionKind,
     FunctionVisibility,

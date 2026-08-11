@@ -50,6 +50,57 @@ The client (`@lunora/client`) uses exponential backoff with jitter and
 **resumes by bookmark**: it sends the last delta sequence it acknowledged so
 the server can replay anything that was missed during the disconnect.
 
+## Durable streams
+
+A `.stream()` procedure is ephemeral by default: the producer belongs to the
+socket that opened it, so closing the tab ends the run and a reconnect starts
+over. That is right for a progress ticker and wrong for anything expensive —
+a model's answer must not disappear because someone refreshed.
+
+Declare the stream durable and the run stops belonging to the socket:
+
+```ts
+export const answer = query.input({ threadId: v.id("threads"), prompt: v.string() }).stream(
+    async function* ({ ctx, args }) {
+        for await (const token of callTheModel(args.prompt)) {
+            yield token;
+        }
+    },
+    { durable: true },
+);
+```
+
+Three things change:
+
+- **Every chunk is persisted before it is sent**, under a monotonic `seq`. A
+  reconnecting client replays the frames it missed out of the shard's SQLite and
+  then continues live — the consumer's `for await` never sees the interruption.
+- **The producer outlives the socket.** Close the tab mid-run and the run
+  finishes anyway; the transcript is waiting when you come back.
+- **A live run is shared.** Its identity is `(identity, functionPath, args)`, so
+  a second tab of the _same signed-in user_ attaches to the run already in flight
+  instead of paying for a second generation. A different identity always gets its
+  own run. A **finished** run is not shared: a later caller asking the same
+  question gets a fresh answer, because a transcript is the record of one
+  execution, not a cached response.
+
+On the client, opt in per call so the reconnect resumes rather than fails:
+
+```tsx
+const { chunks, status } = useStream(api.chat.answer, { threadId, prompt }, { durable: true });
+```
+
+Transcripts are trimmed after 24 hours by default, per procedure
+(`{ durable: { ttlMs } }` to change it), and a run is capped at 50,000 chunks so
+a runaway generator cannot fill the shard's storage.
+
+If the Durable Object is evicted mid-run, what happens depends on who asks next.
+A client **resuming** that transcript gets `STREAM_INTERRUPTED` — its tail cannot
+be spliced back on, and re-generating would duplicate what it already has. A
+client asking **fresh** simply gets a new run: the dead one has no claim on its
+key. When you need a producer that survives eviction itself, the run belongs in a
+[workflow](/docs/packages/workflow).
+
 ## Why no MQTT / Pub/Sub
 
 Real-time fan-out in Lunora is entirely Durable-Object-based: hibernated

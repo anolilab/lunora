@@ -260,12 +260,18 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           ctx: unknown;
                           signal: AbortSignal;
                       }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+                      streamOptions?: { durable?: boolean | { ttlMs?: number } },
                   ) => {
                       const rls = collectRls(state.middlewares);
                       const maskedTables = collectMask(state.middlewares);
+                      // `durable: true` and `durable: { … }` are the same thing to
+                      // the runtime — normalise here so it only ever sees the object
+                      // (and `false`/omitted collapse to "not durable").
+                      const durable = streamOptions?.durable === true ? {} : streamOptions?.durable;
 
                       return {
                           args: state.args,
+                          ...(durable ? { durable } : {}),
                           ...(state.expose ? { expose: state.expose } : {}),
                           handler: makeStreamHandler(state.args, state.middlewares, userHandler),
                           kind: "stream" as const,

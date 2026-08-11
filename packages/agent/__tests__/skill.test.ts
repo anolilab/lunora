@@ -4,7 +4,8 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import { defineSkill, isSkillDefinition } from "../src/skill";
-import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentInstructionsContext, AgentRunFunction } from "../src/types";
+import type { AgentDefinition, AgentGenerate, AgentGenerateResult, AgentInstructionsContext } from "../src/types";
+import { memoryRuntime } from "./loop-harness";
 
 const NAME_PATTERN = /identifier/u;
 const COLLIDES_PATTERN = /collides/u;
@@ -46,134 +47,12 @@ class DurableStepJournal {
     }
 }
 
-interface StoredMessage {
-    content: string;
-    messageKey: string;
-    role: "assistant" | "system" | "tool" | "user";
-    seq: number;
-    threadKey: string;
-    toolCallId?: string;
-    toolCalls?: { id: string; input: unknown; name: string }[];
-    toolName?: string;
-}
-
-interface StoredThread {
-    agent: string;
-    error?: string;
-    instanceId?: string;
-    key: string;
-    messageCount: number;
-    status: string;
-}
-
 /**
- * In-memory double of the agent runtime functions (`agents:*`) plus an
- * arbitrary set of memory-retrieval actions, dispatched by `__lunoraRef` with
- * the same idempotency semantics the component implements.
+ * The shared runtime double, adapted to this suite's shape: each skill-knowledge
+ * source is an extra dispatch handler returning a fixed result.
  */
-const memoryRuntime = (
-    memories: ReadonlyArray<{ path: string; result: unknown }> = [],
-): {
-    dispatches: { args: Record<string, unknown> | undefined; path: string }[];
-    messages: Map<string, StoredMessage>;
-    run: AgentRunFunction;
-    threads: Map<string, StoredThread>;
-} => {
-    const threads = new Map<string, StoredThread>();
-    const messages = new Map<string, StoredMessage>();
-    const dispatches: { args: Record<string, unknown> | undefined; path: string }[] = [];
-
-    const ensureThread = (args?: Record<string, unknown>): unknown => {
-        const key = args?.["key"] as string;
-        const instanceId = args?.["instanceId"] as string | undefined;
-        const existing = threads.get(key);
-
-        if (existing) {
-            existing.status = "running";
-            delete existing.error;
-
-            if (instanceId !== undefined) {
-                existing.instanceId = instanceId;
-            }
-
-            return { created: false };
-        }
-
-        threads.set(key, { agent: args?.["agent"] as string, instanceId, key, messageCount: 0, status: "running" });
-
-        return { created: true };
-    };
-
-    const appendMessage = (args?: Record<string, unknown>): unknown => {
-        const threadKey = args?.["threadKey"] as string;
-        const messageKey = args?.["messageKey"] as string;
-        const id = `${threadKey}:${messageKey}`;
-        const existing = messages.get(id);
-
-        if (existing) {
-            return { seq: existing.seq };
-        }
-
-        const thread = threads.get(threadKey);
-
-        if (!thread) {
-            throw new Error(`unknown thread ${threadKey}`);
-        }
-
-        const seq = thread.messageCount;
-
-        thread.messageCount += 1;
-        messages.set(id, { ...(args as unknown as StoredMessage), seq });
-
-        return { seq };
-    };
-
-    const listMessages = (args?: Record<string, unknown>): unknown => {
-        const key = args?.["key"] as string;
-
-        return [...messages.values()].filter((message) => message.threadKey === key).toSorted((a, b) => a.seq - b.seq);
-    };
-
-    const patchThread = (args?: Record<string, unknown>): unknown => {
-        const thread = threads.get(args?.["key"] as string);
-
-        if (thread) {
-            if (args?.["status"] !== undefined) {
-                thread.status = args["status"] as string;
-            }
-
-            if (args?.["error"] !== undefined) {
-                thread.error = args["error"] as string;
-            }
-        }
-
-        return undefined;
-    };
-
-    const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
-        [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
-        [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
-        [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
-        [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
-        ...memories.map((memory) => [memory.path, (): unknown => memory.result] as const),
-    ]);
-
-    const run: AgentRunFunction = async (reference: AgentFunctionReference, args?: Record<string, unknown>) => {
-        const path = reference["__lunoraRef"];
-
-        dispatches.push({ args, path });
-
-        const handler = handlers.get(path);
-
-        if (!handler) {
-            throw new Error(`unexpected dispatch: ${path}`);
-        }
-
-        return handler(args);
-    };
-
-    return { dispatches, messages, run, threads };
-};
+const skillRuntime = (memories: ReadonlyArray<{ path: string; result: unknown }> = []) =>
+    memoryRuntime({ handlers: Object.fromEntries(memories.map((memory) => [memory.path, (): unknown => memory.result])) });
 
 /** A scripted LLM: pops one decision per turn, recording what it was shown. */
 const scriptedGenerate = (script: AgentGenerateResult[]): AgentGenerate & { seen: ReadonlyArray<unknown>[] } => {
@@ -210,7 +89,7 @@ const loopDefaults = (agent: AgentDefinition, overrides?: Partial<Parameters<typ
         instanceId: "wf-1",
         params: { input: "hello", threadKey: "thread-1" },
         paths: DEFAULT_AGENT_FUNCTION_PATHS,
-        run: memoryRuntime().run,
+        run: skillRuntime().run,
         step: new DurableStepJournal(),
         ...overrides,
     };
@@ -371,7 +250,7 @@ describe("skill knowledge retrieval in the loop", () => {
             skills: [billing],
         });
 
-        const runtime = memoryRuntime([
+        const runtime = skillRuntime([
             { path: "rag:general", result: { context: "General runtime facts." } },
             { path: "rag:billing", result: { context: "Invoices are billed monthly." } },
         ]);
@@ -396,7 +275,7 @@ describe("skill knowledge retrieval in the loop", () => {
 
     it("keeps the exact `memory:retrieve` step for a plain memory agent (back-compat, no skills)", async () => {
         const agent = defineAgent({ memory: { source: "rag:general", topK: 3 }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
-        const runtime = memoryRuntime([{ path: "rag:general", result: { context: "Just the default source." } }]);
+        const runtime = skillRuntime([{ path: "rag:general", result: { context: "Just the default source." } }]);
         const journal = new DurableStepJournal();
         const generate = scriptedGenerate([finalTurn("answered")]);
 
@@ -413,7 +292,7 @@ describe("skill knowledge retrieval in the loop", () => {
 
     it("runs no memory step for an agent with neither memory nor skill knowledge", async () => {
         const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
-        const runtime = memoryRuntime();
+        const runtime = skillRuntime();
         const journal = new DurableStepJournal();
 
         await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("hi")]), run: runtime.run, step: journal }));

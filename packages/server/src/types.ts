@@ -663,9 +663,47 @@ type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "
  */
 interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
+
+    /**
+     * Present when the stream was declared `durable`. Chunks are persisted per
+     * run before they reach a socket, the producer outlives the socket that
+     * opened it, and a reconnecting (or second) client attaches to the same run
+     * and replays what it missed. See {@link DurableStreamOptions}.
+     */
+    readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
+}
+
+/**
+ * Durability settings for a `.stream()` procedure.
+ *
+ * A run is identified by the socket's verified identity plus the function path
+ * and arguments, so two clients of the SAME user calling the same stream with
+ * the same arguments observe one producer and one transcript. That identity is
+ * the feature: it is what makes a reload resume rather than re-generate, and
+ * what lets a second tab watch the same answer. A different identity always gets
+ * its own run.
+ *
+ * Sharing applies to a run still in flight. Once a run finishes, a later caller
+ * asking the same question gets a fresh one — a transcript is the record of one
+ * execution, not a cached response.
+ *
+ * **What an attach does not do:** it replays a transcript, it does not re-run the
+ * handler — so the procedure's middleware chain (`.use(rls(...))`, rate limits,
+ * any custom guard) runs once, for the caller that started the run. That is why
+ * the run key is identity-scoped: a guard that has already passed for one user
+ * must never be skipped for another.
+ */
+interface DurableStreamOptions {
+    /**
+     * How long a finished transcript is kept before it is trimmed, in
+     * milliseconds. Defaults to 24 hours — long enough to survive a reload and
+     * a commute, short enough that a chatty shard doesn't accumulate
+     * transcripts forever.
+     */
+    readonly ttlMs?: number;
 }
 
 // --- Context types -----------------------------------------------------------
@@ -2233,6 +2271,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    DurableStreamOptions,
     ExposeConfig,
     ExternalSourceCursor,
     ExternalSourceDefinition,

@@ -167,6 +167,35 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagSyncActionReference` (interface)
+
+```ts
+interface RagSyncActionReference {
+    readonly __lunoraRef: string;
+}
+```
+
+### `RagSyncArgs` (interface)
+
+```ts
+interface RagSyncArgs extends Record<string, unknown> {
+    deleted?: boolean;
+    id: string;
+    text?: string;
+}
+```
+
+### `RagSyncOptions` (interface)
+
+```ts
+interface RagSyncOptions<Document extends Record<string, unknown> = Record<string, unknown>> {
+    action: RagSyncActionReference;
+    delayMs?: number;
+    id?: (document: Document) => string;
+    text: (document: Document) => string | undefined;
+}
+```
+
 ### `RagTextStore` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -244,3 +273,13 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `hybridRank` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ragSyncTriggers` (const)
+
+```ts
+const ragSyncTriggers: <Document extends Record<string, unknown> = Record<string, unknown>>(options: RagSyncOptions<Document>) => {
+    afterDelete: RagSyncHandler;
+    afterInsert: RagSyncHandler;
+    afterUpdate: RagSyncHandler;
+};
+```

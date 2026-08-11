@@ -578,6 +578,18 @@ export interface ClientAckMessage {
 export interface ClientStreamMessage {
     id: string;
     query: { args?: Record<string, unknown>; functionPath: string; shardKey?: string };
+
+    /**
+     * Resume watermark: the highest chunk `seq` this client already received.
+     * Only meaningful for a stream the server declared `durable` — the run
+     * replays everything after it and then continues live, which is what turns
+     * a reconnect into a resume instead of a lost generation. Omitted on a
+     * first attach.
+     *
+     * Named `sinceChunk`, not `sinceSeq`, because a subscribe envelope already
+     * carries a `query.sinceSeq` meaning the CDC cursor.
+     */
+    sinceChunk?: number;
     type: "stream";
 }
 
@@ -700,6 +712,14 @@ export interface ServerCompleteMessage {
 export interface ServerChunkMessage {
     data: unknown;
     id: string;
+
+    /**
+     * Monotonic position of this chunk within a **durable** run, starting at 1.
+     * The client stores the last one it saw and replays it as
+     * {@link ClientStreamMessage.sinceChunk} when the socket comes back. Absent
+     * on an ephemeral stream, which has nothing to resume from.
+     */
+    seq?: number;
     type: "chunk";
 }
 

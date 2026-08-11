@@ -1090,7 +1090,7 @@ interface StudioProps {
 ### `StudioTab` (type)
 
 ```ts
-type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
+type StudioTab = "agents" | "analytics" | "api" | "audit" | "authAudit" | "authConfig" | "authSessions" | "containers" | "dashboards" | "data" | "deploymentHealth" | "drains" | "export" | "fanout" | "files" | "flags" | "functions" | "health" | "home" | "insights" | "issues" | "kv" | "logs" | "mail" | "metrics" | "migrations" | "notifications" | "organizations" | "payments" | "permissions" | "pitr" | "queues" | "realtime" | "rls" | "schedule" | "schema" | "advisorHealth" | "evals" | "security" | "settings" | "sql" | "storageRules" | "traces" | "users" | "vectors" | "workflows";
 ```
 
 ### `TFunction` (type)

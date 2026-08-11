@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { SchemaExtension } from "@lunora/server";
+import type { DatabaseWriter, SchemaExtension } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
@@ -7,14 +7,41 @@ import type { AgentRegisteredFunction } from "./component-shared";
 import { AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
+import type { EnsureThreadOutcome } from "./types";
 
 /** Bare table names — auto-prefixed with the extension key at merge time. */
 const THREADS_BARE_TABLE = "threads";
 const MESSAGES_BARE_TABLE = "messages";
+const RUN_QUEUE_BARE_TABLE = "run_queue";
 
 /** The physical (merged) table names the runtime functions read/write. */
 const THREADS_TABLE: "agent_threads" = `${AGENT_EXTENSION_KEY}_${THREADS_BARE_TABLE}`;
 const MESSAGES_TABLE: "agent_messages" = `${AGENT_EXTENSION_KEY}_${MESSAGES_BARE_TABLE}`;
+const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_BARE_TABLE}`;
+
+/**
+ * How many runs may park behind the one in flight under
+ * `onConcurrentRun: "queue"` before further starts are rejected.
+ *
+ * Each parked run is a live workflow instance hibernating on `waitForEvent`, so
+ * the cap is a real resource bound, not a formality: five is enough to absorb an
+ * impatient user double-sending, and small enough that a runaway trigger loop
+ * fails loudly instead of billing an unbounded pile of paused instances. Past
+ * the cap the start fails with the same `CONFLICT` `"reject"` already throws.
+ */
+const MAX_QUEUE_DEPTH = 5;
+
+/**
+ * How long a thread may sit untouched under a live-looking run before a new run
+ * may take it.
+ *
+ * Ownership moves to a dequeued run before its wake event is sent, so an
+ * instance terminated while parked leaves the thread pointing at a workflow that
+ * will never resume — and nothing else would ever free it. The window is longer
+ * than the loop's own dequeue timeout so a genuinely parked run is never
+ * reclaimed out from under itself.
+ */
+const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
 
 /**
  * The agent thread tables, shipped as a schema extension so an app merges
@@ -120,6 +147,29 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             // internal-only writes.
             .public(),
 
+        [RUN_QUEUE_BARE_TABLE]: defineTable({
+            agent: v.string(),
+            enqueuedAt: v.number(),
+            /** The parked run's workflow instance — the wake event is scoped to it. */
+            instanceId: v.string(),
+
+            /**
+             * Monotonic per-thread position, allocated as `max(position) + 1`
+             * over the rows currently queued on this thread. Ordering by it
+             * rather than by `enqueuedAt` keeps FIFO exact when two runs are
+             * enqueued inside the same millisecond.
+             */
+            position: v.number(),
+            threadKey: v.string(),
+        })
+            // FIFO dequeue.
+            .index("byThread", ["threadKey", "position"])
+            // Idempotent enqueue: a replay of a still-parked run's bootstrap
+            // finds its own row instead of taking a second slot.
+            .index("byThreadInstance", ["threadKey", "instanceId"], { unique: true })
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
+
         // The owner-scoped graph-memory tables (`agent_entities`/`agent_edges`)
         // live in graph-component.ts alongside the functions that read/write
         // them; spread in here so the app still merges one `agentExtension`.
@@ -136,6 +186,114 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
 const { mutation, query } = initLunora.dataModel().create();
 
 /**
+ * The writer the queue helpers take. Named from `@lunora/server`'s exported
+ * `DatabaseWriter` rather than derived through three levels of `Parameters`
+ * indexing off the builder — the derivation was correct and told the next
+ * reader nothing about what the type actually is.
+ */
+type QueueDatabase = DatabaseWriter;
+
+/**
+ * Park a run behind the one currently in flight (`onConcurrentRun: "queue"`).
+ *
+ * Three properties make this safe, and all three come from the DO executing one
+ * mutation at a time: the enqueue is idempotent by `(threadKey, instanceId)`, so
+ * a workflow replay of a still-parked run finds its own slot instead of taking a
+ * second; the position is allocated from the rows currently queued, so FIFO is
+ * exact; and the thread's ownership is untouched, so the in-flight run keeps the
+ * seq counter until it finishes and hands it over in one mutation.
+ */
+const enqueueRun = async (
+    database: QueueDatabase,
+    args: { agent: string; instanceId: string | undefined; key: string; priorInstanceId: string },
+    now: number,
+): Promise<EnsureThreadOutcome> => {
+    if (args.instanceId === undefined) {
+        // The id-less dispatch paths (inbound email / inbound channel) can't be
+        // told apart from each other later, so they can't be parked and woken by
+        // instance id. Rejecting is the honest answer, and the same one an
+        // overflowing queue gives.
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: thread "${args.key}" already has a run in flight (instance "${args.priorInstanceId}") — cannot queue a dispatch with no instance id`,
+        );
+    }
+
+    const { instanceId } = args;
+    const alreadyQueued = await database
+        .query(RUN_QUEUE_TABLE)
+        .withIndex("byThreadInstance", (q) => q.eq("threadKey", args.key).eq("instanceId", instanceId))
+        .first();
+
+    if (alreadyQueued) {
+        return { outcome: "queued", position: alreadyQueued["position"] as number };
+    }
+
+    const queued = await database
+        .query(RUN_QUEUE_TABLE)
+        .withIndex("byThread", (q) => q.eq("threadKey", args.key))
+        .collect();
+
+    if (queued.length >= MAX_QUEUE_DEPTH) {
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: thread "${args.key}" run queue is full (depth ${String(MAX_QUEUE_DEPTH)}) — rejecting instance "${instanceId}"`,
+        );
+    }
+
+    const position = ((queued.at(-1)?.["position"] as number | undefined) ?? -1) + 1;
+
+    await database.insert(RUN_QUEUE_TABLE, { agent: args.agent, enqueuedAt: now, instanceId, position, threadKey: args.key });
+
+    return { outcome: "queued", position };
+};
+
+/**
+ * Apply `onConcurrentRun` when a second run arrives on a thread another live
+ * instance already owns: park it, take the thread over, or reject.
+ *
+ * Split out of `agentEnsureThread` so the mutation body stays about the thread
+ * lifecycle (create / continue / replay) and this stays about the policy.
+ */
+const applyConcurrencyPolicy = async (
+    database: QueueDatabase,
+    args: {
+        agent: string;
+        existingId: string;
+        instanceId: string | undefined;
+        key: string;
+        policy: "queue" | "reject" | "replace";
+        priorInstanceId: string;
+    },
+    now: number,
+): Promise<EnsureThreadOutcome> => {
+    if (args.policy === "queue") {
+        return enqueueRun(database, { agent: args.agent, instanceId: args.instanceId, key: args.key, priorInstanceId: args.priorInstanceId }, now);
+    }
+
+    if (args.policy !== "replace") {
+        throw new LunoraError(
+            "CONFLICT",
+            `@lunora/agent: thread "${args.key}" already has a run in flight (instance "${args.priorInstanceId}") — onConcurrentRun="${args.policy}"`,
+        );
+    }
+
+    // Replace: take the thread over now (the caller terminates the prior
+    // instance) so the next append is attributed to this run. The incoming
+    // instance id may itself be absent (an id-less caller replacing a live run)
+    // — omit the column rather than writing an explicit `undefined`, which the
+    // validators reject.
+    await database.patch(args.existingId as never, {
+        error: undefined,
+        status: "running",
+        updatedAt: now,
+        ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
+    });
+
+    return { outcome: "replaced", priorInstanceId: args.priorInstanceId };
+};
+
+/**
  * `AgentComponent` is part of the experimental `@lunora/agent` API and may change without a major version bump.
  * @experimental
  */
@@ -143,6 +301,7 @@ export interface AgentComponent {
     extension: SchemaExtension;
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
+        agentCompleteRun: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
         agentEpisodeRecall: AgentRegisteredFunction;
         agentEpisodeUpsert: AgentRegisteredFunction;
@@ -185,7 +344,7 @@ export const agentComponent = (): AgentComponent => {
             owner: v.optional(v.string()),
             title: v.optional(v.string()),
         })
-        .mutation(async ({ args, ctx: context }): Promise<{ created: boolean; priorInstanceId?: string; replaced?: boolean }> => {
+        .mutation(async ({ args, ctx: context }): Promise<EnsureThreadOutcome> => {
             const now = Date.now();
             const existing = await context.db
                 .query(THREADS_TABLE)
@@ -217,36 +376,34 @@ export const agentComponent = (): AgentComponent => {
                 // under the still-hibernating prior instance. So only a *matching*
                 // instance id is exempt; missing OR differing both trip the policy.
                 const priorInstanceId = existing["instanceId"] as string | undefined;
+                // Staleness reclaim. Ownership transfers to a dequeued run BEFORE
+                // its wake event is sent, so an instance terminated while parked
+                // leaves the thread owned by a workflow that will never resume.
+                // Nothing else reaps that: under `"reject"` every later run
+                // CONFLICTs, and under `"queue"` every later run parks behind a
+                // corpse. A thread untouched for longer than any run could
+                // plausibly hold it is treated as free.
+                const updatedAt = typeof existing["updatedAt"] === "number" ? existing["updatedAt"] : 0;
+                const abandoned = now - updatedAt > ABANDONED_RUN_MS;
                 const isConcurrentRun =
+                    !abandoned &&
                     (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
                     priorInstanceId !== undefined &&
                     (args.instanceId === undefined || args.instanceId !== priorInstanceId);
 
                 if (isConcurrentRun) {
-                    const policy = args.onConcurrentRun ?? "reject";
-
-                    // "queue" has no durable queue yet — degrade to reject rather
-                    // than silently interleave (tracked as a follow-up).
-                    if (policy !== "replace") {
-                        throw new LunoraError(
-                            "CONFLICT",
-                            `@lunora/agent: thread "${args.key}" already has a run in flight (instance "${priorInstanceId}") — onConcurrentRun="${policy}"`,
-                        );
-                    }
-
-                    // Replace: take the thread over now (the caller terminates the
-                    // prior instance) so the next append is attributed to this run.
-                    // The incoming instance id may itself be absent (an id-less
-                    // caller replacing a live run) — omit the column rather than
-                    // writing an explicit `undefined`, which the validators reject.
-                    await context.db.patch(existing["_id"] as never, {
-                        error: undefined,
-                        status: "running",
-                        updatedAt: now,
-                        ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
-                    });
-
-                    return { created: false, priorInstanceId, replaced: true };
+                    return applyConcurrencyPolicy(
+                        context.db,
+                        {
+                            agent: args.agent,
+                            existingId: existing["_id"] as string,
+                            instanceId: args.instanceId,
+                            key: args.key,
+                            policy: args.onConcurrentRun ?? "reject",
+                            priorInstanceId,
+                        },
+                        now,
+                    );
                 }
 
                 // Replay (same instance) or a resumed idle/errored/cancelled
@@ -260,7 +417,7 @@ export const agentComponent = (): AgentComponent => {
                     ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
                 });
 
-                return { created: false };
+                return { outcome: "continued" };
             }
 
             await context.db.insert(THREADS_TABLE, {
@@ -273,7 +430,7 @@ export const agentComponent = (): AgentComponent => {
                 ...definedColumns({ instanceId: args.instanceId, owner: args.owner, state: args.initialState, title: args.title }),
             });
 
-            return { created: true };
+            return { outcome: "created" };
         });
 
     const agentAppendMessage = mutation
@@ -370,6 +527,96 @@ export const agentComponent = (): AgentComponent => {
                 // than adding) keeps the write idempotent under workflow replay.
                 ...(args.usage === undefined ? {} : { usage: args.usage }),
             });
+        });
+
+    /**
+     * End the owning run and, in the SAME mutation, hand the thread to the next
+     * parked run if one is waiting.
+     *
+     * Doing both here is the whole correctness argument: a separate
+     * "patch terminal status" then "dequeue" pair would leave a window in which
+     * the thread is ownerless, and a third run arriving inside that window would
+     * see an idle thread and start immediately — ahead of runs that had been
+     * queued for their turn, and racing the one being woken.
+     *
+     * Idempotent under a workflow replay of the FINISHING run: the caller must
+     * still own the thread, so a second call (after ownership has already moved
+     * on) is a no-op rather than a second dequeue that skips someone's turn.
+     */
+    const agentCompleteRun = mutation
+        .input({
+            error: v.optional(v.string()),
+            instanceId: v.string(),
+            key: v.string(),
+            status: v.union(v.literal("idle"), v.literal("error"), v.literal("cancelled")),
+            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<{ dequeued?: string }> => {
+            const now = Date.now();
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.key))
+                .first();
+
+            if (thread?.["instanceId"] !== args.instanceId) {
+                // Not the owner: either a replay of a completion whose handoff
+                // already happened, or a run that ended while still PARKED — its
+                // wait timed out, or it threw before its turn came. The parked
+                // case must still release the slot it holds, or an abandoned run
+                // occupies a queue position forever and the depth cap eventually
+                // refuses every new start on this thread.
+                const parked = await context.db
+                    .query(RUN_QUEUE_TABLE)
+                    .withIndex("byThreadInstance", (q) => q.eq("threadKey", args.key).eq("instanceId", args.instanceId))
+                    .first();
+
+                if (parked) {
+                    await context.db.delete(parked["_id"] as never);
+                }
+
+                return {};
+            }
+
+            // `byThread` is `(threadKey, position)`, so an index read is already
+            // position-ascending — the head of this list is the FIFO next.
+            const queued = await context.db
+                .query(RUN_QUEUE_TABLE)
+                .withIndex("byThread", (q) => q.eq("threadKey", args.key))
+                .collect();
+            const next = queued[0];
+
+            if (!next) {
+                await context.db.patch(thread["_id"] as never, {
+                    status: args.status,
+                    updatedAt: now,
+                    ...(args.error === undefined ? {} : { error: args.error }),
+                    ...(args.usage === undefined ? {} : { usage: args.usage }),
+                });
+
+                return {};
+            }
+
+            const nextInstanceId = next["instanceId"] as string;
+
+            await context.db.delete(next["_id"] as never);
+            // Ownership transfers here, before the waking event is sent: the
+            // dequeued run is already the owner when it resumes, so it can append
+            // on the shared seq counter the moment it wakes.
+            //
+            // The finishing run's `error` is CARRIED, not cleared: a run that
+            // failed with another queued behind it would otherwise vanish without
+            // trace — the thread goes straight from one run to the next and
+            // nothing records that the first one failed. The incoming run clears
+            // it through its own bootstrap.
+            await context.db.patch(thread["_id"] as never, {
+                instanceId: nextInstanceId,
+                status: "running",
+                updatedAt: now,
+                ...(args.error === undefined ? {} : { error: args.error }),
+                ...(args.usage === undefined ? {} : { usage: args.usage }),
+            });
+
+            return { dequeued: nextInstanceId };
         });
 
     /**
@@ -687,6 +934,7 @@ export const agentComponent = (): AgentComponent => {
         extension: agentExtension,
         functions: {
             agentAppendMessage: asInternal(agentAppendMessage),
+            agentCompleteRun: asInternal(agentCompleteRun),
             agentEnsureThread: asInternal(agentEnsureThread),
             agentEpisodeRecall: episodic.agentEpisodeRecall,
             agentEpisodeUpsert: episodic.agentEpisodeUpsert,

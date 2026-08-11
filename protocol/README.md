@@ -182,7 +182,7 @@ are ignored by the client parser.
 | `unsubscribe`                               | `{ type, id }`                                                               |
 | `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`        |
 | `shape_unsubscribe`                         | `{ type, id }`                                                               |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? } }`                    |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk? }`       |
 | `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                            |
 | `whisper`                                   | `{ type, topic, data? }`                                                     |
 
@@ -190,6 +190,14 @@ are ignored by the client parser.
 `functionPath` (unless codegen surfaced a distinct table). `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
+
+`stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
+to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
+client already holds for this run. A run is identified by `(functionPath, args)`,
+so re-sending the same start frame with `sinceChunk` re-attaches to the run
+already in flight, replays the chunks after that watermark from the server's
+transcript, and then continues live. A server that did not declare the procedure
+durable ignores `sinceChunk` and emits chunks without `seq`.
 
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
@@ -205,7 +213,7 @@ The `connect` frame is sent once per socket open, **before** resubscribing, so
 | `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`               | write touched tables, byte-identical result; advance only                 |
 | `error`    | `{ type, id?, error: { code?, message? }, message? }`          | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired) |
 | `complete` | `{ type, id }`                                                 | subscription/stream closed server-side                                    |
-| `chunk`    | `{ type, id, data: <wire> }`                                   | one streaming-query chunk                                                 |
+| `chunk`    | `{ type, id, data: <wire>, seq? }`                             | one streaming-query chunk (`seq` on a durable run only)                   |
 | `whisper`  | `{ type, topic, data: <wire>, from? }`                         | ephemeral relay                                                           |
 
 ### 5.3 Shape poke protocol (partial replication)

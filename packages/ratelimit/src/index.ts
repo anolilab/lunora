@@ -19,6 +19,8 @@ export type {
     SqlStoreOptions,
 } from "./store";
 export { createDbStore, createMemoryStore, createReadOnlyDbStore, createSqlStore } from "./store";
+export type { TokenBudget } from "./token-budget";
+export { tokenBudget } from "./token-budget";
 export type {
     RateLimitArgs,
     RateLimitConfig,

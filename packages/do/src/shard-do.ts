@@ -77,6 +77,7 @@ import type {
     ColumnMeta,
     CreateWorkflowInstanceResult,
     DependencyTracker,
+    DurableStreamSink,
     ExportRow,
     FanoutMetricsResult,
     FlagsResult,
@@ -147,6 +148,7 @@ import {
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
     diffGlobalMembership,
+    DurableStreamRunner,
     ensureAuditTable,
     facetColumn,
     findStorageReferences,
@@ -195,6 +197,7 @@ import {
     sendDeltaFrames,
     ShardRunner,
     stableStringify,
+    stableWireKey,
     subscriptionListDeltas,
     summarizeFanoutTopics,
     summarizeSubscriptions,
@@ -723,6 +726,54 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
  * dispatch rather than a timer.
  */
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
+
+/**
+ * The run-key component for a caller with no verified identity.
+ *
+ * Anonymous callers must not share a transcript with each other — collapsing
+ * them onto a constant hands the second caller the first one's answer without
+ * ever running the handler. But they should still resume their OWN run across a
+ * reload, which is the whole point of a durable stream, so the key has to be
+ * something stable across sockets.
+ *
+ * The client's own `clientId` (the stable id it sends on `connect`, already
+ * trusted for the mutation watermark) is that. It is client-supplied, so it
+ * separates honest callers rather than defending against a hostile one — which
+ * is the right bar here: `userId` takes precedence whenever the socket has an
+ * identity to check, so this path only ever governs anonymous traffic sharing
+ * its own answers. A client that sent none falls back to its connection, which
+ * isolates correctly and simply cannot resume.
+ */
+const anonymousStreamCaller = (attachment: SocketAttachment, streamId: string): string =>
+    attachment.clientId === undefined ? `conn:${attachment.connectionId ?? streamId}` : `client:${attachment.clientId}`;
+
+/**
+ * The stream wire vocabulary, bound to one socket + stream id.
+ *
+ * Both stream paths — the ephemeral per-socket iterator and the durable
+ * runner's sink — speak the same four frames. Building them in one place keeps
+ * the two from drifting (they already had, on canceller cleanup), and keeps the
+ * shape of an `error` frame in a single spot, which matters because the durable
+ * path PERSISTS the message it sends and replays it to every later attach.
+ */
+const streamFrames = (
+    ws: ShardSocketLike,
+    id: string,
+): {
+    ack: () => void;
+    chunk: (data: unknown, seq?: number) => boolean;
+    complete: () => boolean;
+    fail: (failure: { code: string; message: string }) => boolean;
+} => {
+    return {
+        ack: () => {
+            ws.send(JSON.stringify({ id, type: "ack" }));
+        },
+        chunk: (data, seq) => trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, id, seq, type: "chunk" })),
+        complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
+        fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
+    };
+};
 
 /**
  * Reserved shard name for the fallback Durable Object that hosts every
@@ -1257,6 +1308,20 @@ abstract class ShardDO {
      * pumping into it would have nowhere to write.
      */
     private readonly streamCancellers = new WeakMap<ShardSocketLike, Map<string, AbortController>>();
+
+    /**
+     * Live producers for durable streams, keyed by run key. In-memory on
+     * purpose: it tracks who is *currently* producing, while the transcript
+     * itself lives in SQLite. A run whose entry is missing but whose row still
+     * says `running` was interrupted by an eviction — see
+     * {@link ShardDO.attachDurableStream}.
+     */
+
+    /**
+     * Durable-stream runs for this shard. The engine owns the state machine and
+     * the producer; this class only adapts sockets onto it.
+     */
+    private readonly durableStreams = new DurableStreamRunner({ sql: () => this.sql as SqlExec, waitUntil: (promise) => this.shardHost.waitUntil?.(promise) });
 
     /**
      * Lifetime request counters surfaced by the `__lunora_admin__:getMetrics`
@@ -3412,7 +3477,10 @@ abstract class ShardDO {
      * the wire-frame loop in `handleStream`.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+    protected executeStream(
+        _functionPath: string,
+        _args: Record<string, unknown>,
+    ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
         return null;
     }
@@ -4312,7 +4380,16 @@ abstract class ShardDO {
             // surface as an unhandled rejection.
             // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
             // before handing them to the stream handler — mirrors the `/rpc` path.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
+            this.handleStream(
+                ws,
+                envelope.id,
+                envelope.query.functionPath,
+                decodeWire(envelope.query.args ?? {}) as Record<string, unknown>,
+                // Client input: a non-integer or negative watermark would seed
+                // `delivered` past real chunks and silently truncate the stream,
+                // so it is normalised here rather than trusted.
+                Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+            ).catch(() => {
                 /* socket already gone; nothing to report */
             });
 
@@ -7489,7 +7566,7 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
+    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>, sinceSeq = 0): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
@@ -7516,6 +7593,12 @@ abstract class ShardDO {
             } catch {
                 /* socket may be closed */
             }
+
+            return;
+        }
+
+        if (iterable.durable) {
+            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq);
 
             return;
         }
@@ -7573,6 +7656,96 @@ abstract class ShardDO {
                 this.streamCancellers.delete(ws);
             }
         }
+    }
+
+    /**
+     * Attach a socket to a **durable** stream run.
+     *
+     * Everything about the run's lifecycle — who may attach to a stored
+     * transcript, when a dead run is reclaimed, driving the producer — lives in
+     * `@lunora/shard-engine`'s {@link DurableStreamRunner}, because none of it is
+     * Cloudflare-specific. This method is the socket adapter: it derives the run
+     * key, turns the WebSocket into a sink, and wires the client's cancel.
+     *
+     * The run key folds in the socket's **verified identity**. Sharing a live run
+     * is the feature — a second tab of the same user watches one generation
+     * instead of paying for two — but an attach never drives the handler, so a
+     * run shared across identities would also skip the procedure's RLS
+     * middleware. Identity-scoping the key is what keeps that impossible.
+     */
+    private async attachDurableStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
+        sinceChunk: number,
+    ): Promise<void> {
+        const attachment = this.readAttachment(ws);
+        // An ANONYMOUS caller shares nothing. Falling back to a constant here
+        // collapsed every anonymous caller onto one key, so the second caller
+        // read the first one's transcript and the handler never ran for them —
+        // the same cross-caller leak the identity scope closes for signed-in
+        // users, on the path where there is no identity to check. The socket's
+        // connection id keeps each one to its own run; the cost is that an
+        // anonymous reload starts over, which is the honest answer when nothing
+        // durable identifies the caller.
+        const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
+        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
+        const cancellers = socketMap(this.streamCancellers, ws);
+        const controller = new AbortController();
+        const frames = streamFrames(ws, id);
+
+        cancellers.set(id, controller);
+        frames.ack();
+
+        const detach = (): void => {
+            cancellers.delete(id);
+
+            // Drop the now-empty per-socket canceller map so a socket that churns
+            // through many short-lived streams doesn't accumulate empty `Map`s.
+            if (cancellers.size === 0) {
+                this.streamCancellers.delete(ws);
+            }
+        };
+
+        let delivered = 0;
+
+        const sink: DurableStreamSink = {
+            chunk: (chunk) => {
+                if (chunk.seq <= delivered) {
+                    return true;
+                }
+
+                delivered = chunk.seq;
+
+                return frames.chunk(chunk.data, chunk.seq);
+            },
+            complete: () => {
+                frames.complete();
+                detach();
+            },
+            fail: (failure) => {
+                frames.fail(failure);
+                detach();
+            },
+        };
+
+        // Cancelling a durable stream detaches this consumer; the producer keeps
+        // going so the transcript completes for whoever attaches next. That is
+        // the whole point of declaring it durable.
+        controller.signal.addEventListener("abort", () => {
+            this.durableStreams.detach(runKey, sink);
+            detach();
+        });
+
+        await this.durableStreams.attach({
+            iterator: registration.iterator,
+            runKey,
+            sinceChunk,
+            sink,
+            ...(registration.durable.ttlMs === undefined ? {} : { ttlMs: registration.durable.ttlMs }),
+        });
     }
 
     /**

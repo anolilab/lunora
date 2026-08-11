@@ -66,6 +66,10 @@
             "types": "./dist/skill-markdown.d.ts",
             "import": "./dist/skill-markdown.mjs"
         },
+        "./reply": {
+            "types": "./dist/reply.d.ts",
+            "import": "./dist/reply.mjs"
+        },
         "./sandbox": {
             "types": "./dist/sandbox.d.ts",
             "import": "./dist/sandbox.mjs"

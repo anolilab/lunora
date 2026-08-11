@@ -744,6 +744,7 @@ class LunoraClient {
         shardKey?: string;
     }): Unsubscribe;
     stream<F extends FunctionReference<"stream">>(function_: F, args: ArgsOf<F>, options?: {
+        durable?: boolean;
         maxBuffer?: number;
         shardKey?: string;
     }): StreamIterable<ReturnOf<F>>;

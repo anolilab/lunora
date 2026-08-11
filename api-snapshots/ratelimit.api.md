@@ -246,6 +246,15 @@ interface SqlStoreOptions {
 }
 ```
 
+### `TokenBudget` (interface)
+
+```ts
+interface TokenBudget {
+    check: (key: string) => Promise<RateLimitStatus>;
+    record: (key: string, tokens: number) => Promise<RateLimitStatus>;
+}
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -311,4 +320,10 @@ const rateLimit: <Context>(limiter: LimiterResolver<Context>, name: string, opti
 
 ```ts
 const ratelimitPlugin: <Context = unknown>(limiter: LimiterResolver<Context>) => Plugin<Record<never, never>, Context, Context & RatelimitApiContext<Context>>;
+```
+
+### `tokenBudget` (const)
+
+```ts
+const tokenBudget: <Names extends string>(limiter: RateLimiter<Names>, name: Names) => TokenBudget;
 ```

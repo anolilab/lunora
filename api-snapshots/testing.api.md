@@ -76,6 +76,14 @@ interface EvalResult {
 type EvaluationAttributeValue = number | string;
 ```
 
+### `EvaluationMetrics` (interface)
+
+```ts
+interface EvaluationMetrics {
+    gauge: (name: string, value: number, attributes?: Record<string, unknown>) => void;
+}
+```
+
 ### `EvaluationSpanHandle` (interface)
 
 ```ts
@@ -164,6 +172,7 @@ interface LunoraTestOptions {
 ```ts
 interface RecordEvaluationInput {
     label?: string;
+    metrics?: EvaluationMetrics;
     name: string;
     score: number;
     span?: EvaluationSpanHandle;

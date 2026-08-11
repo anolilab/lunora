@@ -1,0 +1,123 @@
+---
+title: Components
+description: Package backend features — tables, functions, and context — as an installable unit that cannot collide with the app that installs it.
+---
+
+A **component** is a backend feature shipped as an npm package: its own tables,
+its own functions, and (optionally) something it adds to `ctx`. The app installs
+it with one `.extend(...)` call and one re-export, and the component's tables can
+never collide with the app's.
+
+Everything below is what `@lunora/agent`, `@lunora/ratelimit`, and the built-in
+presence component are made of — there is no privileged first-party path.
+
+## Defining one
+
+```ts title="my-component/src/index.ts"
+import { defineComponent, defineSchemaExtension, defineTable, initLunora, v } from "@lunora/server";
+
+const { mutation, query } = initLunora.dataModel().create();
+
+const votes = defineTable({ subject: v.string(), value: v.number(), voter: v.string() })
+    .index("bySubject", ["subject"])
+    .index("byVoter", ["subject", "voter"], { unique: true });
+
+export const voting = defineComponent("voting", {
+    // Bare table names — prefixed at merge, so this becomes `voting_votes`.
+    extension: defineSchemaExtension("voting", { tables: { votes } }),
+
+    functions: {
+        castVote: mutation.input({ subject: v.string(), value: v.number() }).mutation(async ({ args, ctx }) => {
+            await ctx.db.insert("voting_votes", { ...args, voter: ctx.auth.userId ?? "anon" });
+        }),
+        tally: query.input({ subject: v.string() }).query(async ({ args, ctx }) => {
+            const rows = await ctx.db
+                .query("voting_votes")
+                .withIndex("bySubject", (q) => q.eq("subject", args.subject))
+                .collect();
+
+            return rows.reduce((total, row) => total + (row.value as number), 0);
+        }),
+    },
+
+    // Optional: everything after `.use(voting.middleware)` sees `ctx.voting`.
+    // Anything you put here shows up as `ctx.voting` for procedures that opt in.
+    middleware: ({ ctx, next }) => next({ ctx: { ...ctx, voting: { subject: (id: string) => `voting:${id}` } } }),
+});
+```
+
+Three parts, all optional except the name:
+
+| Part         | What it contributes                                                           |
+| ------------ | ----------------------------------------------------------------------------- |
+| `extension`  | Tables, merged under the component's key                                      |
+| `functions`  | Queries / mutations / actions the app re-exports                              |
+| `middleware` | A `ctx` addition for procedures that opt in with `.use(component.middleware)` |
+
+## Installing one
+
+```ts title="lunora/schema.ts"
+import { defineSchema, defineTable, v } from "@lunora/server";
+import { voting } from "my-component";
+
+export const schema = defineSchema({ posts: defineTable({ title: v.string() }) }).extend(voting.extension);
+```
+
+```ts title="lunora/voting.ts"
+import { voting } from "my-component";
+
+// One line: re-exporting is what puts the component's functions in your API.
+export const { castVote, tally } = voting.functions;
+```
+
+That is the whole installation. Codegen chases the re-export back to the
+component's registration call, so `api.voting.tally` is typed end to end exactly
+like a function you wrote yourself, and `voting_votes` appears in `Doc`/`api`
+types. A component whose extension lives in `node_modules` is introspected at
+codegen time — you do not vendor its schema.
+
+## What the namespace guarantees
+
+Every extension table is prefixed with the component's key (`votes` →
+`voting_votes`), and every intra-component reference — relation targets,
+aggregate and rank index `on`, standalone vector index `table` — is rewritten to
+match. So:
+
+- **An app can never collide with a component.** Your `votes` table and the
+  component's are different tables.
+- **A component cannot silently retarget your data.** Its references resolve
+  inside its own namespace; only references to base tables are left alone.
+- **Two components collide only if they pick the same key**, which is a loud
+  error at merge, not a silent overwrite.
+
+## What a component does NOT get
+
+Stated plainly, because a component contract is only useful if its limits are
+known:
+
+- **No isolation from the app's data.** A component's functions run with an
+  ordinary `ctx.db` and can read and write app tables. The namespace prevents
+  accidents, not a malicious package — installing a component is as much trust as
+  installing any npm dependency.
+- **No per-component configuration surface.** There is no `app.use(component, {
+options })` layer; a component that needs configuration takes it as a factory
+  argument (`voting({ maxVotes: 5 })`) and closes over it.
+- **No component-scoped RLS.** Policies are declared on the merged schema by the
+  app. A component whose tables must stay internal should say so in its docs;
+  `.public()` on an extension table is what makes it readable through the studio
+  and the generated data model.
+- **No version negotiation.** A component is an npm dependency and follows its
+  own SemVer; there is no runtime capability handshake between it and the app.
+
+## Migrations
+
+A component's tables migrate with the app's — they are merged into one schema, so
+`lunora migrate generate` sees them and one migration covers both. Upgrading a
+component that added a column is an ordinary schema change in your project.
+
+## See also
+
+- [Schema](/docs/concepts/schema) — `defineSchema` and `.extend(...)`
+- [Middleware](/docs/concepts/middleware) — the `ctx` extension half
+- [Registry items](/docs/concepts/registry-items) — the copy-in alternative, for
+  code you want to own and edit rather than depend on

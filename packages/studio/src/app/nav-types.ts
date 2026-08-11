@@ -45,6 +45,7 @@ type StudioTab =
     | "schedule"
     | "schema"
     | "advisorHealth"
+    | "evals"
     | "security"
     | "settings"
     | "sql"

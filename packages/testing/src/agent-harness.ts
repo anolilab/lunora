@@ -185,7 +185,7 @@ const createRuntime = (
                 existing.instanceId = instanceId;
             }
 
-            return { created: false };
+            return { outcome: "continued" };
         }
 
         threads.set(key, {
@@ -198,7 +198,7 @@ const createRuntime = (
             title: args?.["title"] as string | undefined,
         });
 
-        return { created: true };
+        return { outcome: "created" };
     };
 
     const appendMessage = (args?: Record<string, unknown>): unknown => {
@@ -247,8 +247,32 @@ const createRuntime = (
         return undefined;
     };
 
+    /**
+     * The run-completion mutation: terminal status plus, in production, the
+     * hand-off to the next queued run. The harness keeps no run queue — a test
+     * drives one run at a time — so it applies the terminal patch and reports an
+     * empty queue, including the ownership guard that makes a replayed
+     * completion a no-op.
+     */
+    const completeRun = (args?: Record<string, unknown>): unknown => {
+        const thread = threads.get(args?.["key"] as string);
+
+        if (!args || !thread || thread.instanceId !== args["instanceId"]) {
+            return {};
+        }
+
+        for (const [field, value] of Object.entries(args)) {
+            if (field !== "key" && field !== "instanceId" && value !== undefined) {
+                (thread as unknown as Record<string, unknown>)[field] = value;
+            }
+        }
+
+        return {};
+    };
+
     const handlers = new Map<string, HarnessFunction>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],

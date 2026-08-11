@@ -3,6 +3,8 @@ export { default as defineRag } from "./define-rag";
 export { contentHash, guessMimeTypeFromExtension } from "./helpers";
 export { default as hybridRank } from "./hybrid-rank";
 export { default as bm25LexicalStore } from "./lexical-store";
+export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions } from "./sync";
+export { ragSyncTriggers } from "./sync";
 export type {
     IndexInput,
     IndexResult,

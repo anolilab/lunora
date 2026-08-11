@@ -162,7 +162,12 @@ A few smaller boundaries, most of them covered in depth on
   [`@lunora/db`](/docs/packages/db) mutators, whose outbox is strictly ordered.
   See [Write ordering](/docs/concepts/offline-first#write-ordering).
 - **No runtime enforcement of query/mutation determinism yet** — it's an advisor
-  lint today, not a hard runtime guard.
+  lint (`nondeterministic_query_mutation`) plus `ctx.now`, not a hard runtime
+  guard. Swapping the ambient `Date.now`/`Math.random`/`fetch` for the duration of
+  a mutation looks tempting and is unsound here: workerd hosts many Durable
+  Objects in one isolate, so `blockConcurrencyWhile` gates one shard's writes, not
+  the isolate's globals — two shards mutating concurrently would see each other's
+  patched clock. A sound version injects per-context instead; see `plans/334`.
 
 ## See also
 

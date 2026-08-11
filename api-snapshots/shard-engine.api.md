@@ -661,6 +661,66 @@ interface DeployInfo {
 }
 ```
 
+### `DurableAttachDecision` (type)
+
+```ts
+type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-terminal";
+```
+
+### `DurableStreamAttach` (interface)
+
+```ts
+interface DurableStreamAttach {
+    readonly iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
+    readonly runKey: string;
+    readonly sinceChunk: number;
+    readonly sink: DurableStreamSink;
+    readonly ttlMs?: number;
+}
+```
+
+### `DurableStreamRun` (interface)
+
+```ts
+interface DurableStreamRun {
+    error?: string;
+    errorCode?: string;
+    lastSeq: number;
+    startedAt: number;
+    status: DurableStreamStatus;
+}
+```
+
+### `DurableStreamRunner` (class)
+
+```ts
+class DurableStreamRunner {
+    constructor(dependencies: {
+        sql: () => SqlExec;
+        waitUntil?: (promise: Promise<unknown>) => void;
+    });
+    attach(request: DurableStreamAttach): Promise<void>;
+    detach(runKey: string, sink: DurableStreamSink): void;
+    isLive(runKey: string): boolean;
+}
+```
+
+### `DurableStreamSink` (interface)
+
+```ts
+interface DurableStreamSink {
+    readonly chunk: (chunk: {
+        data: unknown;
+        seq: number;
+    }) => boolean;
+    readonly complete: () => void;
+    readonly fail: (failure: {
+        code: string;
+        message: string;
+    }) => void;
+}
+```
+
 ### `ExportRow` (interface)
 
 ```ts
@@ -1125,6 +1185,18 @@ const MAIL_RETENTION = 500;
 
 ```ts
 const MAIL_TABLE = "__lunora_mail";
+```
+
+### `MAX_DURABLE_STREAM_BYTES` (const)
+
+```ts
+const MAX_DURABLE_STREAM_BYTES: number;
+```
+
+### `MAX_DURABLE_STREAM_CHUNKS` (const)
+
+```ts
+const MAX_DURABLE_STREAM_CHUNKS = 50000;
 ```
 
 ### `MAX_PAGE_SIZE` (const)
@@ -2497,6 +2569,7 @@ interface SubscriptionEnvelope {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceChunk?: number;
     sinceEpoch?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
@@ -2952,6 +3025,12 @@ const appendAuditEntry: (sql: SqlExec, entry: AppendAuditEntry) => void;
 const appendCdcChange: (sql: SqlExec, ts: number, table: string, id: string, op: CdcChange["op"], doc: Record<string, unknown> | undefined) => void;
 ```
 
+### `appendStreamChunk` (const)
+
+```ts
+const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: string) => void;
+```
+
 ### `applyCdcChanges` (const)
 
 ```ts
@@ -3088,6 +3167,12 @@ const buildSettings: (rawEnv: unknown) => SettingsResult;
 const bumpCdcEpoch: (sql: SqlExec) => string;
 ```
 
+### `claimStreamRun` (const)
+
+```ts
+const claimStreamRun: (sql: SqlExec, runKey: string, startedAt: number, ttlMs: number) => boolean;
+```
+
 ### `clampPromotionThresholds` (const)
 
 ```ts
@@ -3200,6 +3285,15 @@ const createShardCtxDb: (options: CtxDbOptions) => DatabaseWriterLike;
 const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReader;
 ```
 
+### `decideDurableAttach` (const)
+
+```ts
+const decideDurableAttach: (run: DurableStreamRun | undefined, context: {
+    live: boolean;
+    resuming: boolean;
+}) => DurableAttachDecision;
+```
+
 ### `decodeCursor` (const)
 
 ```ts
@@ -3216,6 +3310,12 @@ const deleteGlobalShapeSnapshot: (sql: SqlExec, connectionId: string, subId: str
 
 ```ts
 const deleteGlobalShapeSnapshotsForConnection: (sql: SqlExec, connectionId: string) => void;
+```
+
+### `deleteStreamRun` (const)
+
+```ts
+const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
 ```
 
 ### `depKey` (const)
@@ -3321,6 +3421,15 @@ const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => P
 
 ```ts
 const findStorageReferences: (sql: SqlExec, storageColumns: Record<string, string[]>, keys: string[]) => StorageReferenceResult;
+```
+
+### `finishStreamRun` (const)
+
+```ts
+const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "error", lastSeq: number, failure?: {
+    code: string;
+    message: string;
+}) => void;
 ```
 
 ### `foldAggregateTally` (const)
@@ -3526,6 +3635,12 @@ const migrateCdcMeta: (sql: SqlExec) => void;
 
 ```ts
 const migrateClientWatermark: (sql: SqlExec) => void;
+```
+
+### `migrateDurableStreams` (const)
+
+```ts
+const migrateDurableStreams: (sql: SqlExec) => void;
 ```
 
 ### `migrateGlobalShapeSnapshot` (const)
@@ -3797,6 +3912,18 @@ const readSchemaVersion: (sql: SqlExec, hash: string) => SchemaVersionRow | unde
 
 ```ts
 const readSearchBackfillState: (sql: SqlExec, companion: string) => SearchBackfillState;
+```
+
+### `readStreamChunks` (const)
+
+```ts
+const readStreamChunks: (sql: SqlExec, runKey: string, sinceSeq: number) => DurableStreamChunk[];
+```
+
+### `readStreamRun` (const)
+
+```ts
+const readStreamRun: (sql: SqlExec, runKey: string) => DurableStreamRun | undefined;
 ```
 
 ### `readTablePage` (const)
@@ -4128,6 +4255,12 @@ const trimCdcChanges: (sql: SqlExec, throughSeq: number) => void;
 
 ```ts
 const trimIdempotent: (sql: SqlExec, olderThanTs: number) => void;
+```
+
+### `trimStreamRuns` (const)
+
+```ts
+const trimStreamRuns: (sql: SqlExec, now: number) => void;
 ```
 
 ### `tryRowToDocument` (const)

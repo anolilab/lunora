@@ -129,6 +129,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DurableStreamOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `EmptyArgs` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -3491,6 +3495,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
+### `TokenBudget` (interface)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
 ### `VERSION` (const)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
@@ -3528,6 +3536,10 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 ### `ratelimitPlugin` (const)
+
+Re-exported from `@lunora/ratelimit` — signature tracked at its source.
+
+### `tokenBudget` (const)
 
 Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
@@ -4616,6 +4628,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DurableObjectJurisdiction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DurableStreamOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6666,6 +6682,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `DurableObjectJurisdiction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DurableStreamOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

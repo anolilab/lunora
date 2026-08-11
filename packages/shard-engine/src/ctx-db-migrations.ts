@@ -33,6 +33,7 @@ import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateSearchState } from "./ctx-db-search-state";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
+import { migrateDurableStreams } from "./durable-stream";
 import { rankTableName, sortColumnName } from "./rank";
 import { recordSchemaVersion } from "./schema-history";
 
@@ -268,4 +269,9 @@ export const runShardMigrations = (
     // empty until the first global shape is seeded, so a non-global DO pays
     // nothing — but persisting it lets the poll-loop diff survive hibernation.
     migrateGlobalShapeSnapshot(sql);
+
+    // Always present: a `.stream()` procedure can be declared `durable` without
+    // a schema change, so the transcript tables have to exist before the first
+    // one runs. Empty (and free) on a shard that never opens a durable stream.
+    migrateDurableStreams(sql);
 };

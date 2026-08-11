@@ -106,6 +106,19 @@ export {
 } from "./do-sql";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { param, renderSql, sqliteInList, unionAll } from "./drizzle";
+export type { DurableStreamRun } from "./durable-stream";
+export {
+    appendStreamChunk,
+    claimStreamRun,
+    deleteStreamRun,
+    finishStreamRun,
+    migrateDurableStreams,
+    readStreamChunks,
+    readStreamRun,
+    trimStreamRuns,
+} from "./durable-stream";
+export type { DurableAttachDecision, DurableStreamAttach, DurableStreamSink } from "./durable-stream-runner";
+export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_BYTES, MAX_DURABLE_STREAM_CHUNKS } from "./durable-stream-runner";
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";

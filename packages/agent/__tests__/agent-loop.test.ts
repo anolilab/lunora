@@ -8,7 +8,6 @@ import type {
     AgentCompact,
     AgentDefinition,
     AgentEpisodeExtract,
-    AgentFunctionReference,
     AgentGenerate,
     AgentGenerateResult,
     AgentGraphExtract,
@@ -20,6 +19,7 @@ import type {
     AgentTokenSink,
     AgentToolContext,
 } from "../src/types";
+import { memoryRuntime } from "./loop-harness";
 
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 
@@ -111,181 +111,12 @@ const flushMicrotasks = async (): Promise<void> => {
     });
 };
 
-interface StoredMessage {
-    content: string;
-    messageKey: string;
-    role: "assistant" | "system" | "tool" | "user";
-    seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
-    stepName?: string;
-    threadKey: string;
-    toolCallId?: string;
-    toolCalls?: { id: string; input: unknown; name: string }[];
-    toolName?: string;
-}
-
-interface StoredThread {
-    agent: string;
-    error?: string;
-    instanceId?: string;
-    key: string;
-    messageCount: number;
-    status: string;
-    title?: string;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-}
-
 /**
  * In-memory double of the agent runtime functions (`agents:*`), dispatched by
  * `__lunoraRef` exactly like the real `/_lunora/scheduler/dispatch` runner —
  * with the same idempotency semantics the component's mutations implement
  * (keyed appends, get-or-create threads, counter-allocated seq).
  */
-const memoryRuntime = (options?: {
-    /** Extra `path → handler` dispatch entries (e.g. an agentic `read` action). */
-    handlers?: Record<string, (args?: Record<string, unknown>) => unknown>;
-    /** The memory action's `result` — a fixed value, or a fn of the dispatch args (per-query results). */
-    memory?: { path: string; result: Record<string, unknown> | ((args?: Record<string, unknown>) => unknown) };
-}): {
-    dispatches: { args: Record<string, unknown> | undefined; path: string }[];
-    messages: Map<string, StoredMessage>;
-    run: AgentRunFunction;
-    threads: Map<string, StoredThread>;
-} => {
-    const threads = new Map<string, StoredThread>();
-    const messages = new Map<string, StoredMessage>();
-    const dispatches: { args: Record<string, unknown> | undefined; path: string }[] = [];
-
-    const ensureThread = (args?: Record<string, unknown>): unknown => {
-        const key = args?.["key"] as string;
-        const instanceId = args?.["instanceId"] as string | undefined;
-        const existing = threads.get(key);
-
-        if (existing) {
-            // Mirror the real component's concurrency guard: a running thread
-            // owned by a DIFFERENT instance is a genuine second run.
-            const isConcurrentRun =
-                existing.status === "running" && existing.instanceId !== undefined && instanceId !== undefined && existing.instanceId !== instanceId;
-
-            if (isConcurrentRun) {
-                const policy = (args?.["onConcurrentRun"] as string | undefined) ?? "reject";
-                const priorInstanceId = existing.instanceId ?? "";
-
-                if (policy !== "replace") {
-                    throw new Error(`@lunora/agent: thread "${key}" already has a run in flight (instance "${priorInstanceId}") — onConcurrentRun="${policy}"`);
-                }
-
-                existing.status = "running";
-                existing.instanceId = instanceId;
-                delete existing.error;
-
-                return { created: false, priorInstanceId, replaced: true };
-            }
-
-            existing.status = "running";
-            delete existing.error;
-
-            if (instanceId !== undefined) {
-                existing.instanceId = instanceId;
-            }
-
-            return { created: false };
-        }
-
-        threads.set(key, {
-            agent: args?.["agent"] as string,
-            instanceId,
-            key,
-            messageCount: 0,
-            status: "running",
-            title: args?.["title"] as string | undefined,
-        });
-
-        return { created: true };
-    };
-
-    const appendMessage = (args?: Record<string, unknown>): unknown => {
-        const threadKey = args?.["threadKey"] as string;
-        const messageKey = args?.["messageKey"] as string;
-        const id = `${threadKey}:${messageKey}`;
-        const existing = messages.get(id);
-
-        if (existing) {
-            return { seq: existing.seq };
-        }
-
-        const thread = threads.get(threadKey);
-
-        if (!thread) {
-            throw new Error(`unknown thread ${threadKey}`);
-        }
-
-        const seq = thread.messageCount;
-
-        thread.messageCount += 1;
-        messages.set(id, { ...(args as unknown as StoredMessage), seq });
-
-        return { seq };
-    };
-
-    const listMessages = (args?: Record<string, unknown>): unknown => {
-        const key = args?.["key"] as string;
-
-        return [...messages.values()].filter((message) => message.threadKey === key).toSorted((a, b) => a.seq - b.seq);
-    };
-
-    const patchThread = (args?: Record<string, unknown>): unknown => {
-        const thread = threads.get(args?.["key"] as string);
-
-        if (thread) {
-            if (args?.["status"] !== undefined) {
-                thread.status = args["status"] as string;
-            }
-
-            if (args?.["error"] !== undefined) {
-                thread.error = args["error"] as string;
-            }
-
-            if (args?.["usage"] !== undefined) {
-                thread.usage = args["usage"] as StoredThread["usage"];
-            }
-        }
-
-        return undefined;
-    };
-
-    const memoryHandler = (args?: Record<string, unknown>): unknown => {
-        const result = options?.memory?.result;
-
-        return typeof result === "function" ? result(args) : result;
-    };
-
-    const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
-        [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
-        [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
-        [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
-        [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
-        ...(options?.memory ? ([[options.memory.path, memoryHandler]] as const) : []),
-        ...Object.entries(options?.handlers ?? {}),
-    ]);
-
-    const run: AgentRunFunction = async (reference: AgentFunctionReference, args?: Record<string, unknown>) => {
-        const path = reference["__lunoraRef"];
-
-        dispatches.push({ args, path });
-
-        const handler = handlers.get(path);
-
-        if (!handler) {
-            throw new Error(`unexpected dispatch: ${path}`);
-        }
-
-        return handler(args);
-    };
-
-    return { dispatches, messages, run, threads };
-};
-
 /** A scripted LLM: pops one decision per turn, records what it was shown. */
 const scriptedGenerate = (script: AgentGenerateResult[]): AgentGenerate & { seen: ReadonlyArray<unknown>[] } => {
     const seen: ReadonlyArray<unknown>[] = [];
@@ -764,10 +595,10 @@ describe(runAgentLoop, () => {
         const journal = new DurableStepJournal();
         const params = { input: "hi", owner: "user-a", threadKey: "thread-1" };
 
-        // First attempt crashes AFTER the final turn + extraction, on the terminal patch dispatch.
+        // First attempt crashes AFTER the final turn + extraction, on the run-completion dispatch.
         let failPatch = true;
         const crashingRun: AgentRunFunction = async (reference, args) => {
-            if (failPatch && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.patchThread && args?.["status"] === "idle") {
+            if (failPatch && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.completeRun && args?.["status"] === "idle") {
                 failPatch = false;
                 throw new Error("crash after extract");
             }

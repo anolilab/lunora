@@ -2482,6 +2482,12 @@ export interface RegisteredLunoraFunction {
     kind: "action" | "mutation" | "query" | "stream";
     args: Record<string, unknown>;
     /**
+     * Present on a \`"stream"\` declared \`durable\`: its run is persisted and
+     * survives the socket that opened it. Absent on every other kind, and on an
+     * ephemeral stream.
+     */
+    durable?: { ttlMs?: number };
+    /**
      * For \`"action" | "mutation" | "query"\` the handler is awaited and its result returned.
      * For \`"stream"\` the handler returns an \`AsyncIterable\` synchronously and takes an
      * \`AbortSignal\` as a third argument — the runtime drives it frame-by-frame.
@@ -4998,7 +5004,7 @@ ${relationFanout.override}
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -5008,6 +5014,7 @@ ${relationFanout.override}
             this.ensureMigrated();
 
             return {
+                ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }

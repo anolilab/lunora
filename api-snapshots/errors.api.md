@@ -518,6 +518,14 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "SQL storage unavailable";
     };
+    readonly STREAM_INTERRUPTED: {
+        readonly status: 503;
+        readonly title: "Durable stream interrupted";
+    };
+    readonly STREAM_TOO_LONG: {
+        readonly status: 507;
+        readonly title: "Durable stream exceeded its chunk ceiling";
+    };
     readonly TOKEN_EXPIRED: {
         readonly status: 401;
         readonly title: "Authentication token expired";

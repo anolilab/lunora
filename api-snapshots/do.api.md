@@ -376,6 +376,9 @@ abstract class ShardDO {
     protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void;
     protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void;
     protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | {
+        durable?: {
+            ttlMs?: number;
+        };
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
     protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R>;

@@ -24,6 +24,7 @@
         "concepts/server-clients",
         "concepts/caching",
         "concepts/middleware",
+        "concepts/components",
         "concepts/scheduling",
         "concepts/notifications",
         "concepts/error-handling",

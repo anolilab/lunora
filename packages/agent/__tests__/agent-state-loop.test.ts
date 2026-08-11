@@ -5,27 +5,11 @@ import { agentComponent } from "../src/component";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentFunctionReference, AgentRunFunction } from "../src/types";
-import { DurableStepJournal, finalTurn, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, finalTurn, makeIndexQuery, scriptedGenerate, toolTurn } from "./loop-harness";
 
 interface FakeRow extends Record<string, unknown> {
     _id: string;
 }
-
-/** Collect the `.eq(...)` conditions a `withIndex` callback declares. */
-const collectConditions = (build: (q: unknown) => unknown): [string, unknown][] => {
-    const conditions: [string, unknown][] = [];
-    const builder = {
-        eq: (field: string, value: unknown) => {
-            conditions.push([field, value]);
-
-            return builder;
-        },
-    };
-
-    build(builder);
-
-    return conditions;
-};
 
 const RETRY_MAX_ATTEMPTS = 4;
 
@@ -73,16 +57,6 @@ class RetryingStepJournal {
         return new Promise<{ payload: T; type: string }>(() => {});
     }
 }
-
-const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
-    const conditions = collectConditions(build);
-    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
-
-    return {
-        collect: async () => matches(),
-        first: async () => matches()[0] ?? null,
-    };
-};
 
 /**
  * A `run` that dispatches the loop's `agents:*` refs to the REAL component
@@ -145,6 +119,7 @@ const ownedRuntime = (userId: string): { rows: Map<string, FakeRow[]>; run: Agen
     const { functions } = agentComponent();
     const handlers = new Map<string, { handler: (context: unknown, args: never) => unknown }>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, functions.agentAppendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, functions.agentCompleteRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, functions.agentEnsureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, functions.agentMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, functions.agentPatchThread],

@@ -554,6 +554,7 @@ describe("auto-registered agent runtime functions", () => {
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual([
             "agentAppendMessage",
+            "agentCompleteRun",
             "agentEnsureThread",
             "agentEpisodeRecall",
             "agentEpisodeUpsert",
