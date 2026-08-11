@@ -8287,7 +8287,7 @@ abstract class ShardDO {
                 return await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
             }
 
-            return await this.seedOpLogShape(ws, subId, shape, resolved);
+            return await this.seedOpLogShape(ws, attachment.connectionId ?? "", subId, shape, resolved);
         } catch (error) {
             this.recordShapeError(`shape:seed:${subId}`, error);
 
@@ -8306,7 +8306,7 @@ abstract class ShardDO {
      * throw (a stub `sql` handle, a membership probe failure); the caller converts
      * it to a structured `shape_subscribe` error.
      */
-    private async seedOpLogShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+    private async seedOpLogShape(ws: ShardSocketLike, connectionId: string, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
         const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
@@ -8314,7 +8314,7 @@ abstract class ShardDO {
         await awaitWsDrain(ws);
 
         if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
-            this.recordShapeMemo(ws, subId, cursor);
+            this.recordShapeMemo(ws, connectionId, subId, cursor);
         }
 
         return "ok";
@@ -8392,14 +8392,25 @@ abstract class ShardDO {
                 return;
             }
 
+            const connectionId = attachment.connectionId ?? "";
+
             try {
                 const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql, opRangeCache);
+                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(
+                    ws,
+                    connectionId,
+                    shapes,
+                    identity,
+                    changed,
+                    checkpoint,
+                    sql,
+                    opRangeCache,
+                );
 
                 // Empty-diff shapes advance regardless (nothing to deliver for them),
                 // so the next flush doesn't re-scan the same op range.
                 for (const subId of emptyAdvanced) {
-                    this.recordShapeMemo(ws, subId, checkpoint);
+                    this.recordShapeMemo(ws, connectionId, subId, checkpoint);
                 }
 
                 // Await drain before the (potentially large) poke so a slow consumer
@@ -8414,7 +8425,7 @@ abstract class ShardDO {
                         delivered += 1;
 
                         for (const subId of partAdvanced) {
-                            this.recordShapeMemo(ws, subId, checkpoint);
+                            this.recordShapeMemo(ws, connectionId, subId, checkpoint);
                         }
                     }
                 }
@@ -8459,6 +8470,7 @@ abstract class ShardDO {
      */
     private collectShapePokeParts(
         ws: ShardSocketLike,
+        connectionId: string,
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         changed: Set<string>,
@@ -8478,7 +8490,7 @@ abstract class ShardDO {
                     continue;
                 }
 
-                const memoCursor = this.readShapeMemoCursor(ws, subId);
+                const memoCursor = this.readShapeMemoCursor(ws, connectionId, subId, shape.sinceSeq);
                 const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint, opRangeCache);
 
                 if (rowsPatch.length > 0) {
@@ -9021,39 +9033,42 @@ abstract class ShardDO {
      * per-socket map lazily), and write it through to the durable
      * `__shape_poke_cursor` table so it survives hibernation. Called only on
      * a delivered/advanced poke (never on a computed-but-unsent diff) — see
-     * the call sites in {@link ShardDO.pokeShapeSubscribers}.
+     * the call sites in {@link ShardDO.pokeShapeSubscribers}. Takes
+     * `connectionId` from the caller rather than re-deserializing the
+     * attachment (`deserializeAttachment()` is a structured-clone read) —
+     * every caller already holds it from resolving the socket's shapes.
      */
-    private recordShapeMemo(ws: ShardSocketLike, subId: string, cursor: number): void {
+    private recordShapeMemo(ws: ShardSocketLike, connectionId: string, subId: string, cursor: number): void {
         socketMap(this.shapeMemos, ws).set(subId, { cursor });
-        this.saveShapePokeCursor(this.readAttachment(ws).connectionId ?? "", subId, cursor);
+        this.saveShapePokeCursor(connectionId, subId, cursor);
     }
 
     /**
      * Read a socket's poke baseline cursor for a shape: the hot in-memory
      * {@link ShardDO.shapeMemos} cache, falling back to the durable
      * `__shape_poke_cursor` row on a miss (a cold socket after a hibernation
-     * eviction), then the shape's subscribe-time `sinceSeq` off the
-     * attachment, and finally `0`. Every fallback degrades DOWNWARD only — a
-     * baseline that is too high would silently skip rows a client never saw,
-     * while too low is merely a wasted rescan of a range the client already
-     * has. The `sinceSeq` rung is a raw client-supplied wire value (unlike
-     * `stored`, which this shard wrote itself), so it is clamped against the
-     * current high-watermark: after a PITR restore — the same rollback
-     * {@link ShardDO.evaluateResume} guards against — a `sinceSeq` above the
-     * cursor must degrade to `0`, not be trusted as a baseline. A
-     * durable/attachment hit repopulates the in-memory cache so later reads
-     * this wake hit memory.
+     * eviction), then the shape's subscribe-time `sinceSeq` (passed in by the
+     * caller, which already holds the attachment this came from — see
+     * {@link ShardDO.recordShapeMemo}), and finally `0`. Every fallback
+     * degrades DOWNWARD only — a baseline that is too high would silently
+     * skip rows a client never saw, while too low is merely a wasted rescan
+     * of a range the client already has. The `sinceSeq` rung is a raw
+     * client-supplied wire value (unlike `stored`, which this shard wrote
+     * itself), so it is clamped against the current high-watermark: after a
+     * PITR restore — the same rollback {@link ShardDO.evaluateResume} guards
+     * against — a `sinceSeq` above the cursor must degrade to `0`, not be
+     * trusted as a baseline. A durable/`sinceSeq` hit repopulates the
+     * in-memory cache so later reads this wake hit memory.
      */
-    private readShapeMemoCursor(ws: ShardSocketLike, subId: string): number {
+    private readShapeMemoCursor(ws: ShardSocketLike, connectionId: string, subId: string, sinceSeq: number | undefined): number {
         const cached = this.shapeMemos.get(ws)?.get(subId)?.cursor;
 
         if (cached !== undefined) {
             return cached;
         }
 
-        const attachment = this.readAttachment(ws);
-        const stored = this.loadShapePokeCursor(attachment.connectionId ?? "", subId);
-        const fallback = stored ?? attachment.shapes?.[subId]?.sinceSeq ?? 0;
+        const stored = this.loadShapePokeCursor(connectionId, subId);
+        const fallback = stored ?? sinceSeq ?? 0;
         const baseline = fallback > (this.currentCdcCursor() ?? 0) ? 0 : fallback;
 
         socketMap(this.shapeMemos, ws).set(subId, { cursor: baseline });
