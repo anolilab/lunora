@@ -20,7 +20,21 @@ const coverage = {
         "e2e",
         "**/node_modules/**",
         "**/dist/**",
+        // Real gap (measured ~11% stmts / 6% branches), not a floor evasion — service-worker
+        // testing needs an environment decision (fake-indexeddb + a ServiceWorkerGlobalScope
+        // shim, or a workerd-style pool) this plan doesn't make. Excluded from the denominator
+        // so it doesn't set a floor that later sw work has to fight; see plans/324.
+        "src/sw/**",
     ],
+    // Deliberate floor, pinned just under measured (with `src/sw/**` excluded above) so it
+    // catches regressions without redding on arrival. Inline (not `tools/get-vitest-config`)
+    // because the workers pool needs `defineConfig` directly — see the file-level comment.
+    thresholds: {
+        branches: 75,
+        functions: 76,
+        lines: 84,
+        statements: 84,
+    },
 };
 
 /**
