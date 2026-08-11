@@ -12,22 +12,22 @@ Lunora is a pnpm monorepo for the Lunora framework — a type-safe, real-time ba
 
 pnpm workspaces are `apps/*`, `packages/*`, `examples/*`, `tests/*`. The rest of the top level is not a workspace:
 
-| Path             | What it is                                                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/*`     | The published `@lunora/*` packages (+ the `lunorash` umbrella). See [Packages](#packages).                                      |
-| `apps/*`         | `docs` (site), `studio` (admin UI), `playground` (dev app), `cloud` (hosted control plane).                                     |
-| `examples/*`     | Runnable example apps (`todo-app`, `blog`, `expo`, `payment-demo`, …).                                                          |
-| `templates/*`    | Whole-project starters fetched by `lunora init` (`next`, `nuxt`, `expo`, `standalone`, …).                                      |
-| `registry/*`     | Copy-in registry items installed with `lunora registry add` (`auth`, `auth-ui-*`, `ai`, …).                                     |
-| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright) and `vis-templates`.                                                    |
-| `scripts/*`      | Repo checks + release helpers (`check-*.js` run from `postinstall`, `api-snapshot.js`).                                         |
-| `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                 |
-| `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package). |
-| `protocol/`      | Wire-protocol spec + shared fixtures.                                                                                           |
-| `plans/`         | Implementation plans handed to agents; `plans/README.md` is the index.                                                          |
-| `sdks/`          | Non-JS client SDKs (`python`).                                                                                                  |
-| `patches/`       | pnpm patches applied to third-party deps.                                                                                       |
-| `marketing/`     | Brand + design tokens.                                                                                                          |
+| Path             | What it is                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/*`     | The published `@lunora/*` packages (+ the `lunorash` umbrella). See [Packages](#packages).                                            |
+| `apps/*`         | `docs` (site), `studio` (admin UI), `playground` (dev app), `cloud` (hosted control plane).                                           |
+| `examples/*`     | Runnable example apps (`todo-app`, `blog`, `expo`, `payment-demo`, …).                                                                |
+| `templates/*`    | Whole-project starters fetched by `lunora init` (`next`, `nuxt`, `expo`, `standalone`, …).                                            |
+| `registry/*`     | Copy-in registry items installed with `lunora registry add` (`auth`, `auth-ui-*`, `ai`, …).                                           |
+| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright) and `vis-templates`.                                                          |
+| `scripts/*`      | Repo checks + release helpers (`check-*.js` run from `postinstall`, `api-snapshot.js`).                                               |
+| `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                       |
+| `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package).       |
+| `protocol/`      | Wire-protocol spec + shared fixtures.                                                                                                 |
+| `plans/`         | Implementation plans handed to agents; `plans/README.md` is the index.                                                                |
+| `sdks/`          | Non-JS client SDKs (`python`, `go`, `ruby`, `rust`, `swift`, `java`, `kotlin`) + `lunora sdk generate` targets. See `sdks/README.md`. |
+| `patches/`       | pnpm patches applied to third-party deps.                                                                                             |
+| `marketing/`     | Brand + design tokens.                                                                                                                |
 
 ## Build & Test Commands
 
@@ -58,8 +58,11 @@ pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/aut
 # Gates that lint/test do not cover (see the CI gates note below)
 pnpm run api:check                # public API vs api-snapshots/*.api.md (api:update to accept)
 pnpm run dist:check               # built dist/ is production-clean
-pnpm run test:templates           # templates/* still build
+pnpm run test:templates           # templates/* scaffold, install, build + typecheck the auth-ui payload
 pnpm run e2e                      # Playwright suite in tests/e2e
+bash sdks/run-all.sh              # the 7 non-JS SDK conformance suites, in parallel
+bash sdks/lint-all.sh             # per-language lint + format for the same 7
+bash sdks/generated-check.sh      # generate each SDK into a scratch dir, then build + CALL it
 ```
 
 > **`package.json` key-order gotcha.** Key order is enforced by its own CI job ("Lint (package.json sort)") and by **nothing else** — ESLint, Prettier, `lint:types`, `api:check`, and `dist:check` are all blind to it. So a hand-added block in the wrong position (classically `peerDependencies` placed above `devDependencies` instead of below) goes green locally and red in CI. Canonical order is whatever `vis sort-package-json` emits; run `pnpm run lint:package-json` (= `vis sort-package-json --check`) after editing any manifest.

@@ -1,0 +1,449 @@
+//! Protocol-conformance tests: drive the Rust SDK against the shared golden
+//! fixtures in `protocol/fixtures/`, the same files the TypeScript client and
+//! the Python, Go, Ruby and Swift ports are tested against.
+
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use lunora::client::{
+    build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
+};
+use lunora::key::{stable_stringify, stable_wire_key};
+use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
+use serde_json::{json, Value};
+
+/// Walks up from the crate directory to the repo's `protocol/fixtures`.
+fn fixtures_dir() -> PathBuf {
+    let mut directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    for _ in 0..8 {
+        let candidate = directory.join("protocol/fixtures");
+
+        if candidate.is_dir() {
+            return candidate;
+        }
+
+        if !directory.pop() {
+            break;
+        }
+    }
+
+    panic!("could not locate protocol/fixtures");
+}
+
+fn fixture(name: &str) -> Value {
+    let raw = fs::read_to_string(fixtures_dir().join(name)).expect("fixture readable");
+
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// Re-serialises so two structures compare as text with a canonical key order,
+/// independent of the order the fixture file happens to use.
+fn canonical(value: &Value) -> String {
+    stable_stringify(value)
+}
+
+/// Fails if this run did not exercise every case in the shared manifest.
+///
+/// libtest has no after-all hook and no cross-test state a final check could
+/// read, so the manifest DRIVES the run rather than auditing it afterwards:
+/// every name in `protocol/conformance-cases.json` is dispatched to the function
+/// that asserts it, and a name with no arm fails here. The cases below are plain
+/// functions rather than `#[test]`s for that reason — this is the only entry
+/// point, so a case cannot be silently detached from its manifest name. The cost
+/// is that the first failing case ends the run; the panic names the assertion.
+#[test]
+fn conformance_manifest_is_covered() {
+    let manifest: Value = {
+        let path = fixtures_dir().parent().expect("protocol dir").join("conformance-cases.json");
+        let raw = fs::read_to_string(&path).unwrap_or_else(|error| panic!("{} unreadable: {error}", path.display()));
+
+        serde_json::from_str(&raw).expect("manifest parses")
+    };
+
+    let required = manifest["required"].as_array().expect("required");
+
+    assert!(!required.is_empty(), "the manifest must list at least one required case");
+
+    for name in required {
+        match name.as_str().expect("case name is a string") {
+            "wire_codec_round_trip" => wire_codec_round_trip(),
+            "undefined_is_distinct_from_null" => undefined_is_distinct_from_null(),
+            "over_long_bigint_rejected" => over_long_bigint_rejected(),
+            "depth_cap_enforced" => depth_cap_enforced(),
+            "stable_wire_key_fixtures" => stable_wire_key_fixtures(),
+            "format_number_matches_ecmascript" => format_number_matches_ecmascript(),
+            "key_order_matches_utf16" => key_order_matches_utf16(),
+            "string_escaping_matches_json_stringify" => string_escaping_matches_json_stringify(),
+            "rpc_request_bodies" => rpc_request_bodies(),
+            "rpc_responses" => rpc_responses(),
+            "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
+            "client_frame_builders" => client_frame_builders(),
+            "server_frame_consumer" => server_frame_consumer(),
+            "shape_subscribe_frame" => shape_subscribe_frame(),
+            "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
+            "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
+        }
+    }
+}
+
+fn wire_codec_round_trip() {
+    let document = fixture("wire-codec.json");
+    let cases = document["cases"].as_array().expect("cases");
+
+    assert!(cases.len() > 10, "fixture should carry the full case set");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let encoded = &case["encoded"];
+        let round_tripped = encode_wire(&decode_wire(encoded).expect("decode")).expect("encode");
+
+        assert_eq!(canonical(&round_tripped), canonical(encoded), "round-trip mismatch for {name}");
+    }
+}
+
+fn undefined_is_distinct_from_null() {
+    let encoded = encode_wire(&WireValue::Object(vec![
+        ("dropped".into(), WireValue::Undefined),
+        ("kept".into(), WireValue::Null),
+    ]))
+    .expect("encode");
+
+    assert!(
+        encoded.get("dropped").is_none(),
+        "an undefined object field must be dropped, matching JSON.stringify"
+    );
+    assert_eq!(encoded.get("kept"), Some(&Value::Null), "a null object field must be kept");
+
+    // In an array position the slot must survive, or every later element shifts.
+    let in_array = encode_wire(&WireValue::Array(vec![WireValue::Undefined, WireValue::Number(1.0)])).expect("encode");
+
+    assert_eq!(in_array[0], json!([TAG, "undefined"]));
+}
+
+fn over_long_bigint_rejected() {
+    let over_long = "9".repeat(MAX_BIGINT_DIGITS + 1);
+
+    assert!(decode_wire(&json!([TAG, "bigint", over_long])).is_err());
+    assert!(decode_wire(&json!([TAG, "bigint", "12x4"])).is_err());
+    assert_eq!(decode_wire(&json!([TAG, "bigint", "-42"])).expect("decode"), WireValue::BigInt("-42".into()));
+}
+
+fn depth_cap_enforced() {
+    let mut nested = json!("leaf");
+
+    for _ in 0..(MAX_DEPTH + 2) {
+        nested = json!([nested]);
+    }
+
+    assert!(decode_wire(&nested).is_err());
+}
+
+fn stable_wire_key_fixtures() {
+    let document = fixture("stable-wire-key.json");
+
+    for case in document["cases"].as_array().expect("cases") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let decoded = decode_wire(&case["args"]).expect("decode");
+
+        assert_eq!(stable_wire_key(&decoded).expect("key"), case["key"].as_str().unwrap(), "{name}");
+    }
+
+    for case in document["typed"].as_array().expect("typed") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let decoded = decode_wire(&case["wireArgs"]).expect("decode");
+
+        assert_eq!(stable_wire_key(&decoded).expect("key"), case["key"].as_str().unwrap(), "{name}");
+    }
+}
+
+/// Expected spellings captured from a real JS engine, not derived from the spec
+/// — the two disagreed for the Go and Ruby ports before this test existed.
+fn format_number_matches_ecmascript() {
+    for (value, want) in [
+        (0.0, "0"),
+        (3.0, "3"),
+        (1.5, "1.5"),
+        (-2.5, "-2.5"),
+        (1e-5, "0.00001"),
+        (1e-6, "0.000001"),
+        (1e-7, "1e-7"),
+        (1.5e-7, "1.5e-7"),
+        (1e-21, "1e-21"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+    ] {
+        assert_eq!(stable_stringify(&json!(value)), want, "formatting {value}");
+    }
+}
+
+/// JavaScript sorts by UTF-16 code unit, so an astral character is its high
+/// surrogate (0xD83D) and sorts after U+2028 but before U+FFFD. Rust's UTF-8
+/// byte-wise `Ord` puts it last — a different dedup key for identical args.
+fn key_order_matches_utf16() {
+    let rendered = stable_stringify(&json!({ "A": 1, "\u{2028}": 2, "\u{1F600}": 3, "\u{FFFD}": 4 }));
+
+    assert_eq!(rendered, "{\"A\":1,\"\u{2028}\":2,\"\u{1F600}\":3,\"\u{FFFD}\":4}");
+}
+
+fn string_escaping_matches_json_stringify() {
+    // JSON.stringify leaves <, > and & raw and does not escape U+2028/U+2029.
+    assert_eq!(stable_stringify(&json!("a<b>&c")), "\"a<b>&c\"");
+    assert_eq!(stable_stringify(&json!("\u{2028}\u{2029}")), "\"\u{2028}\u{2029}\"");
+    assert_eq!(stable_stringify(&json!("tab\there")), "\"tab\\there\"");
+}
+
+fn rpc_request_bodies() {
+    let document = fixture("rpc.json");
+
+    for case in document["request"]["cases"].as_array().expect("cases") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let args = if case.get("args").is_some() {
+            decode_wire(&case["args"]).expect("decode")
+        } else {
+            decode_wire(&case["argsWire"]).expect("decode")
+        };
+
+        let body = build_rpc_body(
+            case["functionPath"].as_str().expect("functionPath"),
+            &args,
+            case.get("shardKey").and_then(Value::as_str),
+        )
+        .expect("build");
+
+        assert_eq!(canonical(&body), canonical(&case["body"]), "{name}");
+    }
+}
+
+fn rpc_responses() {
+    let document = fixture("rpc.json");
+
+    for case in document["responseOk"].as_array().expect("responseOk") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let value = parse_rpc_response(&case["response"], 200).expect("parse");
+
+        assert_eq!(
+            canonical(&encode_wire(&value).expect("encode")),
+            canonical(&case["response"]["result"]),
+            "{name}"
+        );
+    }
+
+    for case in document["responseError"].as_array().expect("responseError") {
+        let name = case["name"].as_str().unwrap_or("?");
+
+        match parse_rpc_response(&case["response"], 400) {
+            Err(ClientError::Api(error)) => {
+                assert_eq!(error.code, case["code"].as_str().unwrap(), "{name}");
+                assert_eq!(error.message, case["message"].as_str().unwrap(), "{name}");
+            }
+            other => panic!("expected an ApiError for {name}, got {other:?}"),
+        }
+    }
+}
+
+fn non_2xx_without_error_envelope_fails() {
+    // protocol/README.md §4.2. Without the status check this returned a null
+    // result and no error — the caller believes its mutation committed.
+    assert!(parse_rpc_response(&json!({ "message": "bad gateway" }), 502).is_err());
+}
+
+fn client_frame_builders() {
+    let document = fixture("ws-frames.json");
+    let frames = &document["clientFrames"];
+    let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
+
+    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None)), canonical(&frames["connect"]));
+    assert_eq!(
+        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })))),
+        canonical(&frames["connect-with-context"])
+    );
+    assert_eq!(
+        canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, None, None).expect("build")),
+        canonical(&frames["subscribe-cold"])
+    );
+    assert_eq!(
+        canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, Some(&json!(12)), Some(&json!("e1"))).expect("build")),
+        canonical(&frames["subscribe-resume"])
+    );
+    assert_eq!(canonical(&build_unsubscribe_frame("sub_1")), canonical(&frames["unsubscribe"]));
+}
+
+fn server_frame_consumer() {
+    let document = fixture("ws-frames.json");
+
+    for case in document["serverFrames"].as_array().expect("serverFrames") {
+        let name = case["name"].as_str().unwrap_or("?");
+        let mut client = Client::new("https://app.example", None);
+
+        client.attach_socket(Box::new(|_frame| {}));
+
+        // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
+        // `Send`, which is what makes `Client` itself `Send` and shareable — see
+        // `concurrent_subscribe_and_handle_frame`.
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+        let errors_handle = Arc::clone(&errors);
+
+        client.subscribe(
+            "messages:list",
+            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            Some(Box::new(move |error| errors_handle.lock().expect("errors").push(error.clone()))),
+        );
+
+        let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
+        let expect = &case["expect"];
+
+        assert_eq!(kind.as_deref(), expect["kind"].as_str(), "{name}");
+
+        if let Some(value_wire) = expect.get("valueWire") {
+            let seen = seen.lock().expect("seen");
+
+            assert_eq!(seen.len(), 1, "onData should fire once for {name}");
+            assert_eq!(canonical(&encode_wire(&seen[0]).expect("encode")), canonical(value_wire), "{name}");
+        }
+
+        if expect["kind"] == json!("error") {
+            let errors = errors.lock().expect("errors");
+
+            assert_eq!(errors.len(), 1, "{name}");
+            assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
+        }
+    }
+}
+
+fn shape_subscribe_frame() {
+    let document = fixture("ws-frames.json");
+    let args = WireValue::Object(vec![("room".into(), WireValue::String("general".into()))]);
+    let frame = build_shape_subscribe_frame("shape_1", "roomMessages", Some(&args), None, None).expect("build");
+
+    assert_eq!(canonical(&frame), canonical(&document["shape"]["shape-subscribe-cold"]));
+}
+
+fn poke_sequence_materialises_rows() {
+    let document = fixture("ws-frames.json");
+    let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::clone(&delivered);
+
+    client.subscribe_shape(
+        "roomMessages",
+        Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
+        Some(Box::new(move |rows| handle.lock().expect("delivered").push(rows.to_vec()))),
+        None,
+    );
+
+    for frame in sequence {
+        client.handle_frame(&frame.to_string()).expect("handle");
+    }
+
+    let delivered = delivered.lock().expect("delivered");
+
+    assert_eq!(delivered.len(), 1, "a poke applies atomically at pokeEnd");
+
+    let rows = WireValue::Array(delivered[0].clone());
+
+    assert_eq!(canonical(&encode_wire(&rows).expect("encode")), canonical(&document["shape"]["expectedRows"]));
+}
+
+fn poke_parts_do_not_apply_before_poke_end() {
+    let document = fixture("ws-frames.json");
+    let sequence = document["shape"]["pokeSequence"].as_array().expect("pokeSequence");
+
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let fired = Arc::new(Mutex::new(0));
+    let handle = Arc::clone(&fired);
+
+    client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.lock().expect("fired") += 1)), None);
+
+    for frame in &sequence[..sequence.len() - 1] {
+        client.handle_frame(&frame.to_string()).expect("handle");
+    }
+
+    assert_eq!(*fired.lock().expect("fired"), 0, "the view would be torn if parts applied before pokeEnd");
+}
+
+/// The topology every real consumer has: a socket read loop on one thread and
+/// application code subscribing on others.
+///
+/// Rust reaches this differently from the sibling ports. They hold an internal
+/// lock because nothing stops two threads entering the client at once; here every
+/// mutating method takes `&mut self`, so that is a COMPILE error and sharing goes
+/// through the caller's `Arc<Mutex<Client>>`. What this asserts is that the
+/// arrangement is actually available — `Client` has to be `Send` for it, and it
+/// was not until the injected callbacks gained that bound.
+///
+/// The assertion is the surviving subscription COUNT, as in the Go, Swift, Java
+/// and Kotlin suites: a lost `next_id += 1` silently forgets a live subscription.
+/// It cannot be lost here, and that is the point — the test is a standing witness
+/// that nothing has been added to `Client` (an interior-mutability field, a
+/// `static`, an `unsafe` cell) that would make the compiler stop enforcing it.
+#[test]
+fn concurrent_subscribe_and_handle_frame() {
+    const THREADS: usize = 4;
+    const PER_THREAD: usize = 250;
+
+    let client = Arc::new(Mutex::new(Client::new("https://app.example", None)));
+
+    client.lock().expect("client").attach_socket(Box::new(|_frame| {}));
+
+    let workers: Vec<_> = (0..THREADS)
+        .map(|_| {
+            let shared = Arc::clone(&client);
+
+            thread::spawn(move || {
+                for _ in 0..PER_THREAD {
+                    shared
+                        .lock()
+                        .expect("client")
+                        .subscribe("messages:list", WireValue::Object(Vec::new()), Some(Box::new(|_value| {})), None);
+                }
+            })
+        })
+        .collect();
+
+    let reader = {
+        let shared = Arc::clone(&client);
+
+        thread::spawn(move || {
+            for cursor in 0..THREADS * PER_THREAD {
+                let frame = format!(r#"{{"type":"data","id":"sub_1","data":1,"cursor":{cursor}}}"#);
+
+                shared.lock().expect("client").handle_frame(&frame).expect("handle");
+            }
+        })
+    };
+
+    for worker in workers {
+        worker.join().expect("worker");
+    }
+
+    reader.join().expect("reader");
+
+    // Attached only now, so the count below sees resend frames alone.
+    let resent = Arc::new(Mutex::new(0_usize));
+    let counter = Arc::clone(&resent);
+    let mut guard = client.lock().expect("client");
+
+    guard.attach_socket(Box::new(move |_frame| *counter.lock().expect("resent") += 1));
+    guard.resend_subscriptions().expect("resend");
+
+    assert_eq!(
+        *resent.lock().expect("resent"),
+        THREADS * PER_THREAD,
+        "every concurrent subscribe survived with a distinct id"
+    );
+}

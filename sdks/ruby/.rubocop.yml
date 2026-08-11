@@ -1,0 +1,73 @@
+# RuboCop for the hand-written Ruby transport, and — via an explicit path in
+# `lint-all.sh` — for `sdks/smoke/ruby`, which has no config of its own.
+#
+# There is no exclude for generated output because none is committed: since the
+# generator vendors the transport, its output is a self-contained tree built and
+# run from a scratch directory by `sdks/generated-check.sh`. Its models come from
+# quicktype, whose style this repo does not own, and correctness there is enforced
+# in the emitter instead — see `targets/ruby.ts`.
+AllCops:
+    NewCops: "enable"
+    TargetRubyVersion: 3.1
+
+# 160 to match the repo's Prettier `printWidth`, so two ports read the same width
+# side by side.
+Layout/LineLength:
+    Max: 160
+
+# The transport is one cohesive protocol client: splitting `Client` or the wire
+# codec to satisfy a length metric would scatter one wire format across files,
+# which is the coupling the metric is meant to prevent.
+Metrics/AbcSize:
+    Enabled: false
+Metrics/ClassLength:
+    Enabled: false
+Metrics/CyclomaticComplexity:
+    Enabled: false
+Metrics/MethodLength:
+    Enabled: false
+Metrics/ModuleLength:
+    Enabled: false
+Metrics/ParameterLists:
+    Enabled: false
+Metrics/PerceivedComplexity:
+    Enabled: false
+
+# The wire codec dispatches on tag strings and frame types; a `case` over them is
+# the clearest form even when the arm count is high.
+Style/CaseLikeIf:
+    Enabled: false
+
+# Positional booleans appear in the protocol's own frame builders, whose argument
+# order is fixed by the wire format rather than by this port.
+Style/OptionalBooleanParameter:
+    Enabled: false
+
+# Documentation lives on the public API in prose; a `# Class` banner above every
+# internal struct is noise the other six ports do not carry either.
+Style/Documentation:
+    Enabled: false
+
+# Double quotes, like every other port and like the repo's Prettier setting. The
+# transport interpolates constantly, so one quote style avoids churn between
+# "needs interpolation" and "does not yet".
+Style/StringLiterals:
+    EnforcedStyle: "double_quotes"
+Style/StringLiteralsInInterpolation:
+    EnforcedStyle: "double_quotes"
+
+# `candidate.to_f == value` is the shortest-round-trip test itself: the formatter
+# increases precision until re-parsing returns the SAME double. An epsilon
+# comparison would accept a shorter, WRONG spelling — which is precisely the class
+# of bug the stable key exists to prevent.
+Lint/FloatComparison:
+    Exclude:
+        - "lib/lunora/key.rb"
+
+# The wire codec and the frame dispatcher both fall through to a default that
+# coincides with an explicit arm ("null", or returning the frame kind unchanged).
+# Merging them would hide which inputs are handled deliberately.
+Lint/DuplicateBranch:
+    Exclude:
+        - "lib/lunora/key.rb"
+        - "lib/lunora/client.rb"

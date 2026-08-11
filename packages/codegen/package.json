@@ -71,6 +71,7 @@
         "@lunora/values": "1.0.0-alpha.25",
         "@lunora/workflow": "1.0.0-alpha.26",
         "jsonc-parser": "catalog:vite",
+        "quicktype-core": "catalog:tooling",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {

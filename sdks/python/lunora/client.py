@@ -19,8 +19,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import threading
 import urllib.request
-from typing import Any, Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable
+from functools import partial
+from typing import Any, Callable, Optional, Union
 
 from .wire import decode_wire, encode_wire, stable_wire_key
 
@@ -28,7 +31,7 @@ RPC_PATH = "/_lunora/rpc"
 WS_PATH = "/_lunora/ws"
 
 # A WS token provider: a value, a callable returning a value, or an async callable.
-WsToken = Union[None, str, Callable[[], Union[None, str, Awaitable[Optional[str]]]]]
+WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
 Callback = Callable[[Any], None]
 ErrorCallback = Callable[["SubscriptionError"], None]
@@ -68,13 +71,24 @@ def build_rpc_body(function_path: str, args: Any, shard_key: Optional[str] = Non
     return body
 
 
-def parse_rpc_response(body: dict) -> Any:
-    """Return ``decode_wire(result)`` or raise :class:`LunoraError` from an ``error`` envelope."""
+def parse_rpc_response(body: dict, status: int) -> Any:
+    """Return ``decode_wire(result)`` or raise :class:`LunoraError`.
+
+    ``status`` is required — not defaulted — for correctness: ``protocol/README.md``
+    §4.2 says a non-2xx response whose body carries no ``error`` envelope is
+    surfaced as an ``INTERNAL`` transport error. Without the check, a 502 with
+    body ``{"message": "bad gateway"}`` returns ``None`` and no exception — the
+    caller believes its mutation committed.
+    """
 
     if "error" in body:
         err = body["error"]
         data = decode_wire(err["data"]) if "data" in err and err["data"] is not None else None
         raise LunoraError(err.get("code", "INTERNAL"), err.get("message", "request failed"), data)
+
+    if not 200 <= status <= 299:
+        raise LunoraError("INTERNAL", f"HTTP {status} without an error envelope")
+
     return decode_wire(body.get("result"))
 
 
@@ -138,7 +152,7 @@ def _derive_ws_url(url: str) -> str:
 
 
 def _join(base: str, path: str) -> str:
-    return (base[:-1] if base.endswith("/") else base) + path
+    return (base.removesuffix("/")) + path
 
 
 # --- Client -----------------------------------------------------------------
@@ -194,16 +208,41 @@ class LunoraClient:
         self._next_sub_id = 0
         self._next_shape_id = 0
         self._send: Optional[Callable[[dict], None]] = None
+        # Guards the registries, the id counters, the attached sender and the
+        # per-subscription cursor/epoch. `subscribe`, `subscribe_shape`,
+        # `handle_frame` and `resend_subscriptions` are plain synchronous methods,
+        # so a real consumer calls them from different OS threads: the WS read loop
+        # dispatches frames while application code subscribes from a request
+        # handler or worker pool. A `threading.Lock` is therefore the right tool
+        # and an `asyncio.Lock` would be the wrong one — the latter only orders
+        # coroutines on a single event loop and cannot be acquired off it.
+        #
+        # The GIL is not a substitute. It makes each bytecode atomic, not each
+        # statement: `self._next_sub_id += 1` followed by a separate read of it is
+        # two operations, and a switch in between hands two threads the same id,
+        # so the second `self._subs[sub_id] = sub` silently forgets a live
+        # subscription. Walking `self._subs` while another thread inserts raises
+        # `RuntimeError: dictionary changed size during iteration` outright.
+        self._lock = threading.Lock()
 
     # --- HTTP RPC -----------------------------------------------------------
 
     async def query(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=None)
 
-    async def mutation(
-        self, function_path: str, args: Any = None, shard_key: Optional[str] = None, mutation_id: Optional[str] = None
-    ) -> Any:
+    async def mutation(self, function_path: str, args: Any = None, shard_key: Optional[str] = None, mutation_id: Optional[str] = None) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=mutation_id)
+
+    async def action(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
+        """Invoke an ``action``.
+
+        Same RPC envelope as a mutation, but no ``x-lunora-mutation-id``: an
+        action performs external side effects (it is not replayed against the
+        shard), so an idempotency key would promise a de-duplication the server
+        does not do for it.
+        """
+
+        return await self._rpc(function_path, args, shard_key, mutation_id=None)
 
     async def _rpc(self, function_path: str, args: Any, shard_key: Optional[str], mutation_id: Optional[str]) -> Any:
         headers = {"content-type": "application/json"}
@@ -212,10 +251,8 @@ class LunoraClient:
         if mutation_id is not None:
             headers["x-lunora-mutation-id"] = mutation_id
         body = json.dumps(build_rpc_body(function_path, args, shard_key)).encode("utf-8")
-        status, parsed = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body)
-        )
-        return parse_rpc_response(parsed)
+        status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body))
+        return parse_rpc_response(parsed, status)
 
     # --- WS credential ------------------------------------------------------
 
@@ -251,19 +288,28 @@ class LunoraClient:
         on_error: Optional[ErrorCallback] = None,
         shard_key: Optional[str] = None,
     ) -> Unsubscribe:
-        self._next_sub_id += 1
-        sub_id = f"sub_{self._next_sub_id}"
-        sub = _Subscription(sub_id, function_path, args, shard_key)
-        sub.callbacks.append(on_data)
-        if on_error is not None:
-            sub.error_callbacks.append(on_error)
-        self._subs[sub_id] = sub
-        self._send_subscribe(sub)
+        with self._lock:
+            self._next_sub_id += 1
+            sub_id = f"sub_{self._next_sub_id}"
+            sub = _Subscription(sub_id, function_path, args, shard_key)
+            sub.callbacks.append(on_data)
+            if on_error is not None:
+                sub.error_callbacks.append(on_error)
+            self._subs[sub_id] = sub
+            sender = self._send
+            frame = build_subscribe_frame(sub_id, function_path, args)
+
+        # Sent with the lock released: the sender writes to a socket, and holding
+        # the lock across that would serialise every subscriber behind the wire.
+        if sender is not None:
+            sender(frame)
 
         def unsubscribe() -> None:
-            self._subs.pop(sub_id, None)
-            if self._send is not None:
-                self._send(build_unsubscribe_frame(sub_id))
+            with self._lock:
+                self._subs.pop(sub_id, None)
+                sender = self._send
+            if sender is not None:
+                sender(build_unsubscribe_frame(sub_id))
 
         return unsubscribe
 
@@ -275,35 +321,79 @@ class LunoraClient:
         on_error: Optional[ErrorCallback] = None,
         shard_key: Optional[str] = None,
     ) -> Unsubscribe:
-        self._next_shape_id += 1
-        shape_id = f"shape_{self._next_shape_id}"
-        shape = _ShapeSubscription(shape_id, name, args, shard_key)
-        shape.callbacks.append(on_rows)
-        if on_error is not None:
-            shape.error_callbacks.append(on_error)
-        self._shapes[shape_id] = shape
-        if self._send is not None:
-            self._send(build_shape_subscribe_frame(shape_id, name, args))
+        with self._lock:
+            self._next_shape_id += 1
+            shape_id = f"shape_{self._next_shape_id}"
+            shape = _ShapeSubscription(shape_id, name, args, shard_key)
+            shape.callbacks.append(on_rows)
+            if on_error is not None:
+                shape.error_callbacks.append(on_error)
+            self._shapes[shape_id] = shape
+            sender = self._send
+            frame = build_shape_subscribe_frame(shape_id, name, args)
+
+        if sender is not None:
+            sender(frame)
 
         def unsubscribe() -> None:
-            self._shapes.pop(shape_id, None)
-            if self._send is not None:
-                self._send({"id": shape_id, "type": "shape_unsubscribe"})
+            with self._lock:
+                self._shapes.pop(shape_id, None)
+                sender = self._send
+            if sender is not None:
+                sender({"id": shape_id, "type": "shape_unsubscribe"})
 
         return unsubscribe
 
-    def _send_subscribe(self, sub: _Subscription) -> None:
-        if self._send is None:
-            return
-        frame = build_subscribe_frame(
-            sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch
-        )
-        self._send(frame)
+    def resend_subscriptions(self) -> None:
+        """Re-subscribe everything after a reconnect, carrying each resume cursor.
+
+        Without this the cursor/epoch tracked on every ``data`` frame would be
+        write-only state and a reconnect would silently re-seed from scratch.
+
+        The frames are BUILT under the lock, not merely collected: each one carries
+        a cursor :meth:`handle_frame` writes, so snapshotting the subscriptions and
+        reading their cursors afterwards resends a torn frame.
+        """
+
+        with self._lock:
+            sender = self._send
+            if sender is None:
+                return
+            frames = [
+                build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
+                for sub in self._subs.values()
+            ]
+            frames += [
+                build_shape_subscribe_frame(shape.id, shape.name, shape.args, since_checkpoint=shape.server_cursor, since_epoch=shape.server_epoch)
+                for shape in self._shapes.values()
+            ]
+
+        for frame in frames:
+            sender(frame)
 
     # --- Inbound frame dispatch (fixture-tested) ---------------------------
 
     def handle_frame(self, frame: dict) -> dict:
         """Apply one server frame; invoke callbacks. Returns a descriptor for testing."""
+
+        deferred: list[Callable[[], None]] = []
+        with self._lock:
+            descriptor = self._dispatch(frame, deferred)
+
+        # User callbacks run with the lock released. Holding it would let a callback
+        # that subscribes deadlock the read loop, and would run arbitrary
+        # application code inside the client's critical section.
+        for call in deferred:
+            call()
+
+        return descriptor
+
+    def _dispatch(self, frame: dict, deferred: list) -> dict:
+        """Apply one frame to the guarded state. Runs with the lock held.
+
+        Anything that calls back into user code is appended to ``deferred`` for
+        :meth:`handle_frame` to run once it has released the lock.
+        """
 
         kind = frame.get("type")
         if kind == "ack":
@@ -313,10 +403,10 @@ class LunoraClient:
             return {"kind": "ack", "id": frame.get("id")}
 
         if kind in ("data", "delta"):
-            return self._handle_data(frame)
+            return self._handle_data(frame, deferred)
 
         if kind == "error":
-            return self._handle_error(frame)
+            return self._handle_error(frame, deferred)
 
         if kind == "resume":
             return self._advance(frame, "resume")
@@ -342,7 +432,7 @@ class LunoraClient:
             return {"kind": "pokePart", "pokeId": frame["pokeId"], "shapeId": frame.get("shapeId")}
 
         if kind == "pokeEnd":
-            return self._handle_poke_end(frame)
+            return self._handle_poke_end(frame, deferred)
 
         if kind == "complete":
             self._subs.pop(frame.get("id"), None)
@@ -350,23 +440,20 @@ class LunoraClient:
 
         return {"kind": "ignored", "type": kind}
 
-    def _handle_data(self, frame: dict) -> dict:
+    def _handle_data(self, frame: dict, deferred: list) -> dict:
         sub = self._subs.get(frame.get("id"))
-        if "data" in frame and frame["data"] is not None:
-            value = decode_wire(frame["data"])
-        else:
-            # Minimal delta handling: replace wholesale (the full protocol merges
-            # a mutation-delta into the server base; a wholesale replace is a
-            # correct fallback and keeps the SDK dependency-free).
-            value = decode_wire(frame.get("delta"))
+        # Minimal delta handling: replace wholesale (the full protocol merges a
+        # mutation-delta into the server base; a wholesale replace is a correct
+        # fallback and keeps the SDK dependency-free).
+        has_data = "data" in frame and frame["data"] is not None
+        value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
         if sub is not None:
             sub.last_value = value
             if "cursor" in frame:
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:
                 sub.server_epoch = frame["epoch"]
-            for cb in list(sub.callbacks):
-                cb(value)
+            deferred.extend(partial(cb, value) for cb in sub.callbacks)
         desc = {"kind": "data", "id": frame.get("id"), "value": value}
         if "cursor" in frame:
             desc["cursor"] = frame["cursor"]
@@ -374,7 +461,7 @@ class LunoraClient:
             desc["epoch"] = frame["epoch"]
         return desc
 
-    def _handle_error(self, frame: dict) -> dict:
+    def _handle_error(self, frame: dict, deferred: list) -> dict:
         env = frame.get("error") or {}
         code = env.get("code") if isinstance(env, dict) else None
         message = frame.get("message") or (env.get("message") if isinstance(env, dict) else None) or "subscription error"
@@ -382,12 +469,10 @@ class LunoraClient:
         sub_id = frame.get("id")
         sub = self._subs.get(sub_id) if sub_id is not None else None
         if sub is not None:
-            for cb in list(sub.error_callbacks):
-                cb(error)
+            deferred.extend(partial(cb, error) for cb in sub.error_callbacks)
         shape = self._shapes.get(sub_id) if sub_id is not None else None
         if shape is not None:
-            for cb in list(shape.error_callbacks):
-                cb(error)
+            deferred.extend(partial(cb, error) for cb in shape.error_callbacks)
         return {"kind": "error", "id": sub_id, "code": code, "message": message}
 
     def _advance(self, frame: dict, kind: str) -> dict:
@@ -403,7 +488,7 @@ class LunoraClient:
             desc["cursor"] = frame["cursor"]
         return desc
 
-    def _handle_poke_end(self, frame: dict) -> dict:
+    def _handle_poke_end(self, frame: dict, deferred: list) -> dict:
         buf = self._poke_buffers.pop(frame["pokeId"], None)
         touched: list[str] = []
         if buf is not None:
@@ -421,8 +506,7 @@ class LunoraClient:
                 if "epoch" in frame:
                     shape.server_epoch = frame["epoch"]
                 rows = list(shape.rows.values())
-                for cb in list(shape.callbacks):
-                    cb(rows)
+                deferred.extend(partial(cb, rows) for cb in shape.callbacks)
                 touched.append(shape_id)
         return {"kind": "pokeEnd", "pokeId": frame["pokeId"], "shapes": touched}
 
@@ -446,12 +530,10 @@ class LunoraClient:
             def send(frame: dict) -> None:
                 queue.append(frame)
 
-            self._send = send
+            with self._lock:
+                self._send = send
             send(build_connect_frame(self.client_id, context))
-            for sub in self._subs.values():
-                send(build_subscribe_frame(sub.id, sub.function_path, sub.args))
-            for shape in self._shapes.values():
-                send(build_shape_subscribe_frame(shape.id, shape.name, shape.args))
+            self.resend_subscriptions()
 
             async def flush() -> None:
                 while queue:
@@ -478,7 +560,7 @@ def _percent(value: str) -> str:
 def _urllib_post(url: str, headers: dict, body: bytes) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request) as response:  # noqa: S310 - user-provided origin
+        with urllib.request.urlopen(request) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
         raw = exc.read().decode("utf-8")

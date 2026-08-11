@@ -136,8 +136,17 @@ const resolveRemoteRef = async (options: AddCommandOptions): Promise<string> => 
 /**
  * Resolve a single item's directory: straight from `--from` (offline) or by
  * fetching it via giget. Returns the directory + a cleanup callback.
+ *
+ * `defaultBase` exists because `lunora sdk generate` fetches the same way from a
+ * sibling root (`gh:anolilab/lunora/sdks`) — one fetch/staging/`--from` path for
+ * both, rather than a second copy that would drift from this one's `--source`
+ * gate and ref pinning.
  */
-const resolveItemDirectory = async (name: string, options: AddCommandOptions): Promise<{ cleanup: () => void; directory: string }> => {
+const resolveItemDirectory = async (
+    name: string,
+    options: AddCommandOptions,
+    defaultBase: string = DEFAULT_SOURCE_BASE,
+): Promise<{ cleanup: () => void; directory: string }> => {
     assertSafeItemName(name);
 
     if (options.from !== undefined) {
@@ -150,7 +159,7 @@ const resolveItemDirectory = async (name: string, options: AddCommandOptions): P
         return { cleanup: () => {}, directory };
     }
 
-    const base = options.source ?? DEFAULT_SOURCE_BASE;
+    const base = options.source ?? defaultBase;
 
     return fetchToStaging(`${base}/${name}#${await resolveRemoteRef(options)}`, "item", options.logger);
 };

@@ -101,6 +101,32 @@ worker_size:
     # `test-required-check` passes on skipped jobs.
     - ".github/file-filters.yml"
 
+# The non-JS SDK conformance suites. `protocol/**` is listed because the golden
+# frames under `protocol/fixtures/` ARE the contract those SDKs are tested
+# against — a wire change lands there first, and this is the only gate that
+# catches a non-JS port drifting off it. The workflow and this file are listed
+# for the same anti-hole reason as `worker_size` above.
+sdks:
+    - "sdks/**"
+    - "protocol/**"
+    - "shared/wire-codec.ts"
+    - "shared/stable-key.ts"
+    # The generator too: a target template hardcodes the runtime's call
+    # signatures (`lunora.Call[T](client, verb, path, args, shardKey)`), so an
+    # edit here can break every generated SDK while every other gate stays green.
+    - "packages/codegen/src/sdk/**"
+    # And the CLI the job actually invokes — the generate-and-build step runs
+    # `node packages/cli/dist/bin.mjs sdk generate`, so a change to that command
+    # can break every leg while matching no filter.
+    - "packages/cli/src/commands/sdk/**"
+    # `shared/base64.ts` is the base64 the normative codec uses and
+    # `shared/wire-key.ts` the composition `protocol/README.md` §3 defines, so a
+    # change to either is a wire change every port must mirror.
+    - "shared/base64.ts"
+    - "shared/wire-key.ts"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 templates:
     - "templates/**"
     - "registry/**"

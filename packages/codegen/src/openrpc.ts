@@ -3,7 +3,7 @@ import type { JsonSchema } from "@lunora/values";
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR } from "./ir";
 import sanitizeNamespace from "./paths";
-import { LUNORA_ERROR_CODES, objectSchema } from "./schema-ir";
+import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────
 //
@@ -66,7 +66,12 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
         ],
         result: {
             name: "result",
-            schema: inferredResultSchema,
+            // `.output()` is the only declared return shape; without it the type
+            // is TS-inferred and absent from the IR, so the schema stays the
+            // permissive placeholder. Downstream generators (`lunora sdk
+            // generate`) key off exactly this: a described-but-untyped schema
+            // becomes an untyped return rather than an empty model.
+            schema: definition.output ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,

@@ -1,0 +1,20 @@
+# ktlint reads its configuration from .editorconfig, resolved by walking up from
+# each FILE. The Kotlin smoke lives here rather than under `sdks/kotlin/`, so it
+# would otherwise inherit the repo root's `.editorconfig` — which sets no Kotlin
+# style, leaving ktlint on its own `ktlint_official` default. That is a different
+# rule set from the one the transport is written against, and the smoke would fail
+# on rules no other Kotlin file in this repo is held to.
+#
+# So this mirrors the `[*.kt]` block of `sdks/kotlin/.editorconfig`, which is the
+# source of truth and carries the reasoning for each setting. Not `root = true`:
+# only the Kotlin keys need overriding, and the other languages' smoke programs
+# should keep inheriting the repo root.
+#
+# `--editorconfig` on the ktlint command line is NOT an alternative — it supplies a
+# default used only when no `.editorconfig` is found, and the repo root's is.
+[*.kt]
+ktlint_code_style = intellij_idea
+max_line_length = 160
+indent_size = 4
+indent_style = space
+insert_final_newline = true

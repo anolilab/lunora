@@ -1,0 +1,43 @@
+{
+    "$comment": [
+        "The case list every SDK's conformance suite must exercise.",
+        "",
+        "The assertion CODE cannot be shared across seven languages, but the case",
+        "LIST is data, and its absence is what let coverage drift: the four later",
+        "ports gained six hardening cases the first three never got, so MAX_DEPTH",
+        "and MAX_BIGINT_DIGITS - both justified as defences against a hostile peer -",
+        "went unasserted in Python and Go for several commits with every gate green.",
+        "",
+        "Each suite READS this file at run time and fails if the run did not cover",
+        "it, so adding a case here turns every language red until it is covered,",
+        "which is the point. The evidence is produced by the case executing — a",
+        "suite cannot satisfy the check by listing names it claims to cover.",
+        "",
+        "The mechanism is per runner, not one shape forced onto seven: python has a",
+        "last-sorted module, go a TestMain, ruby Minitest.after_run, java and kotlin",
+        "the end of main. Rust's libtest and Swift's XCTest have no after-all hook",
+        "that can fail, so there the manifest DRIVES the run — a required name with",
+        "no dispatch arm fails. sdks/README.md records the mapping.",
+        "",
+        "This paragraph was once false: nothing read the file, and the coverage it",
+        "was created to hold could drift again unnoticed. It was, in two ports."
+    ],
+    "required": [
+        "wire_codec_round_trip",
+        "undefined_is_distinct_from_null",
+        "over_long_bigint_rejected",
+        "depth_cap_enforced",
+        "stable_wire_key_fixtures",
+        "format_number_matches_ecmascript",
+        "key_order_matches_utf16",
+        "string_escaping_matches_json_stringify",
+        "rpc_request_bodies",
+        "rpc_responses",
+        "non_2xx_without_error_envelope_fails",
+        "client_frame_builders",
+        "server_frame_consumer",
+        "shape_subscribe_frame",
+        "poke_sequence_materialises_rows",
+        "poke_parts_do_not_apply_before_poke_end"
+    ]
+}

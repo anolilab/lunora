@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.wire import (  # noqa: E402
+from lunora.wire import (
     TAG,
     UNDEFINED,
     WireBigInt,

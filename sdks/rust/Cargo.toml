@@ -1,0 +1,16 @@
+# The Lunora Rust client.
+#
+# `serde_json` is the one dependency and it is unavoidable: Rust has no JSON in
+# its standard library, and the generated models are `serde` types regardless.
+# Everything else follows the other ports — the HTTP poster and the socket frame
+# sender are injected, so the conformance suite runs offline and a consumer
+# keeps its own HTTP stack, timeouts and socket library.
+[package]
+name = "lunora"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Protocol-conformant client for a Lunora deployment"
+
+[dependencies]
+serde_json = "1"

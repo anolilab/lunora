@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import (  # noqa: E402
+from lunora.client import (
     LunoraClient,
     LunoraError,
     build_connect_frame,
@@ -20,12 +20,15 @@ from lunora.client import (  # noqa: E402
     build_unsubscribe_frame,
     parse_rpc_response,
 )
-from lunora.wire import decode_wire, encode_wire, stable_wire_key  # noqa: E402
-from tests._fixtures import load  # noqa: E402
+from lunora.wire import decode_wire, encode_wire, stable_wire_key
+from tests._fixtures import load
+from tests._manifest import covers
 
 
 class TestWireCodecFixtures(unittest.TestCase):
     def test_round_trip_stability(self):
+        covers("wire_codec_round_trip")
+
         cases = load("wire-codec.json")["cases"]
         self.assertGreater(len(cases), 10)
         for case in cases:
@@ -36,12 +39,16 @@ class TestWireCodecFixtures(unittest.TestCase):
 
 class TestStableKeyFixtures(unittest.TestCase):
     def test_pure_json_cases(self):
+        covers("stable_wire_key_fixtures")
+
         data = load("stable-wire-key.json")
         for case in data["cases"]:
             with self.subTest(case=case["name"]):
                 self.assertEqual(stable_wire_key(case["args"]), case["key"])
 
     def test_typed_cases(self):
+        covers("stable_wire_key_fixtures")
+
         data = load("stable-wire-key.json")
         for case in data["typed"]:
             with self.subTest(case=case["name"]):
@@ -50,6 +57,8 @@ class TestStableKeyFixtures(unittest.TestCase):
 
 class TestRpcFixtures(unittest.TestCase):
     def test_request_bodies(self):
+        covers("rpc_request_bodies")
+
         rpc = load("rpc.json")["request"]
         for case in rpc["cases"]:
             with self.subTest(case=case["name"]):
@@ -58,16 +67,20 @@ class TestRpcFixtures(unittest.TestCase):
                 self.assertEqual(body, case["body"])
 
     def test_response_ok(self):
+        covers("rpc_responses")
+
         for case in load("rpc.json")["responseOk"]:
             with self.subTest(case=case["name"]):
-                value = parse_rpc_response(case["response"])
+                value = parse_rpc_response(case["response"], 200)
                 self.assertEqual(encode_wire(value), case["response"]["result"])
 
     def test_response_error(self):
+        covers("rpc_responses")
+
         for case in load("rpc.json")["responseError"]:
             with self.subTest(case=case["name"]):
                 with self.assertRaises(LunoraError) as ctx:
-                    parse_rpc_response(case["response"])
+                    parse_rpc_response(case["response"], 400)
                 self.assertEqual(ctx.exception.code, case["code"])
                 self.assertEqual(ctx.exception.message, case["message"])
                 if "dataWire" in case:
@@ -76,12 +89,12 @@ class TestRpcFixtures(unittest.TestCase):
 
 class TestWsFrameBuilders(unittest.TestCase):
     def test_client_frames(self):
+        covers("client_frame_builders")
+
         frames = load("ws-frames.json")["clientFrames"]
         self.assertEqual(build_connect_frame("client-test"), frames["connect"])
         self.assertEqual(build_connect_frame("client-test", {"roomId": "general"}), frames["connect-with-context"])
-        self.assertEqual(
-            build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}), frames["subscribe-cold"]
-        )
+        self.assertEqual(build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}), frames["subscribe-cold"])
         self.assertEqual(
             build_subscribe_frame("sub_1", "messages:list", {"channel": "general"}, since_seq=12, since_epoch="e1"),
             frames["subscribe-resume"],
@@ -89,14 +102,16 @@ class TestWsFrameBuilders(unittest.TestCase):
         self.assertEqual(build_unsubscribe_frame("sub_1"), frames["unsubscribe"])
 
     def test_shape_subscribe_frame(self):
+        covers("shape_subscribe_frame")
+
         shape = load("ws-frames.json")["shape"]
-        self.assertEqual(
-            build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"]
-        )
+        self.assertEqual(build_shape_subscribe_frame("shape_1", "roomMessages", {"room": "general"}), shape["shape-subscribe-cold"])
 
 
 class TestWsFrameConsumer(unittest.TestCase):
     def test_server_frames(self):
+        covers("server_frame_consumer")
+
         for case in load("ws-frames.json")["serverFrames"]:
             with self.subTest(case=case["name"]):
                 client = LunoraClient("https://app.example")
@@ -125,6 +140,8 @@ class TestWsFrameConsumer(unittest.TestCase):
                     self.assertEqual(errors[0].code, expect["code"])
 
     def test_poke_sequence_materialises_rows(self):
+        covers("poke_sequence_materialises_rows")
+
         shape = load("ws-frames.json")["shape"]
         client = LunoraClient("https://app.example")
         client._send = lambda _frame: None

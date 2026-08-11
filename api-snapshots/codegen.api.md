@@ -477,12 +477,42 @@ interface OpenApiEmitInput {
 }
 ```
 
+### `OpenRpcDocument` (interface)
+
+```ts
+interface OpenRpcDocument {
+    info?: {
+        title?: string;
+        version?: string;
+    };
+    methods: ReadonlyArray<OpenRpcMethod>;
+}
+```
+
 ### `OpenRpcEmitInput` (interface)
 
 ```ts
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     version?: string;
+}
+```
+
+### `OpenRpcMethod` (interface)
+
+```ts
+interface OpenRpcMethod {
+    name: string;
+    params?: ReadonlyArray<{
+        name: string;
+        schema?: Record<string, unknown>;
+    }>;
+    result?: {
+        name: string;
+        schema?: Record<string, unknown>;
+    };
+    summary?: string;
+    "x-lunora-function-kind"?: string;
 }
 ```
 
@@ -615,6 +645,12 @@ interface RlsRoleIR {
 }
 ```
 
+### `RuntimeVerb` (type)
+
+```ts
+type RuntimeVerb = "action" | "mutation" | "query";
+```
+
 ### `SCHEMA_SNAPSHOT_FILENAME` (const)
 
 ```ts
@@ -625,6 +661,18 @@ const SCHEMA_SNAPSHOT_FILENAME = ".lunora-schema.json";
 
 ```ts
 const SCHEMA_SNAPSHOT_VERSION: 1;
+```
+
+### `SDK_LANGUAGES` (const)
+
+```ts
+const SDK_LANGUAGES: ReadonlyArray<string>;
+```
+
+### `SDK_TARGETS` (const)
+
+```ts
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
 ```
 
 ### `SHAPES_FILENAME` (const)
@@ -688,6 +736,70 @@ interface SchemaSnapshot {
 ```ts
 class SchemaSnapshotParseError extends LunoraError {
     constructor(message: string);
+}
+```
+
+### `SdkFiles` (type)
+
+```ts
+type SdkFiles = Record<string, string>;
+```
+
+### `SdkMethod` (interface)
+
+```ts
+interface SdkMethod {
+    argsType: string | undefined;
+    functionName: string;
+    functionPath: string;
+    namespace: string;
+    resultType: string | undefined;
+    summary: string;
+    verb: RuntimeVerb;
+}
+```
+
+### `SdkNamespace` (interface)
+
+```ts
+interface SdkNamespace {
+    methods: ReadonlyArray<SdkMethod>;
+    name: string;
+}
+```
+
+### `SdkRenderInput` (interface)
+
+```ts
+interface SdkRenderInput {
+    models: string;
+    namespaces: ReadonlyArray<SdkNamespace>;
+}
+```
+
+### `SdkResult` (interface)
+
+```ts
+interface SdkResult {
+    files: SdkFiles;
+    undeclared: ReadonlyArray<string>;
+    unrepresentable: ReadonlyArray<string>;
+}
+```
+
+### `SdkTarget` (interface)
+
+```ts
+interface SdkTarget {
+    id: string;
+    quicktype?: {
+        lang: LanguageName;
+        rendererOptions?: Record<string, string>;
+    };
+    render: (input: SdkRenderInput) => Record<string, string>;
+    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
+    requires: ReadonlyArray<string>;
+    vendor: ReadonlyArray<SdkVendorEntry>;
 }
 ```
 
@@ -1160,6 +1272,18 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ```ts
 const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
+```
+
+### `generateSdk` (const)
+
+```ts
+const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
+```
+
+### `isTypedSchema` (const)
+
+```ts
+const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
 ```
 
 ### `lintSchema` (const)

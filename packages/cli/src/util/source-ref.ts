@@ -246,6 +246,22 @@ const resolvePinnedSourceRef = async (ref: string | undefined, logger: Logger): 
     return sha;
 };
 
+/**
+ * The immutable git tag the release tooling cuts for the running CLI's own
+ * version (`@lunora/cli@1.0.0-alpha.157`).
+ *
+ * `lunora sdk generate` fetches the vendored transport at this ref rather than at
+ * a release branch. The transport implements the wire protocol the CLI's emitter
+ * generates calls against, so pinning them to one commit is what makes a
+ * regeneration an upgrade: a newer CLI brings a newer transport, and the pair is
+ * always the vintage that was released together. A branch would instead hand a
+ * six-month-old CLI whatever the protocol looks like today.
+ *
+ * `version` is injectable so a test can assert the tag shape without being
+ * pinned to whatever version the checkout happens to carry.
+ */
+const resolveCliVersionRef = (version: string = resolveCliVersion()): string => `@lunora/cli@${version}`;
+
 /** npm dist-tag a stable CLI pins sibling `@lunora/*` deps to. */
 const STABLE_DIST_TAG = "latest";
 
@@ -337,4 +353,14 @@ const resolveTagVersions = async (names: Iterable<string>, tag: string): Promise
     return resolved;
 };
 
-export { isImmutableRef, resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersion, resolveTagVersions, resolveVersionRef };
+export {
+    isImmutableRef,
+    resolveCliVersion,
+    resolveCliVersionRef,
+    resolveDistTag,
+    resolvePinnedSourceRef,
+    resolveSourceRef,
+    resolveTagVersion,
+    resolveTagVersions,
+    resolveVersionRef,
+};

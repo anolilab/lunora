@@ -359,4 +359,20 @@ describe("emitOpenApi — opt-in public REST surface (plan 167)", () => {
 
         expect(paths["/_lunora/rest/messages/list"]?.get?.responses["200"]?.headers).toBeUndefined();
     });
+
+    it("types an RPC operation's 200 from `.output()`, like the httpRouter operations", () => {
+        expect.assertions(2);
+
+        const document = JSON.parse(
+            emitOpenApi({
+                functions: [makeFunction({ output: { kind: "object", shape: { count: { kind: "number" } } } })],
+                httpRoutes: [],
+            }),
+        );
+
+        const { schema } = document.paths["/_lunora/rpc#messages:list"].post.responses["200"].content["application/json"];
+
+        expect(schema).toMatchObject({ properties: { count: { type: "number" } }, type: "object" });
+        expect(schema.description).toBeUndefined();
+    });
 });

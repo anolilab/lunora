@@ -32,9 +32,9 @@ MAX_BIGINT_DIGITS = 1024
 class _Undefined:
     """Singleton sentinel for JS ``undefined`` (distinct from ``None``/``null``)."""
 
-    _instance: "_Undefined | None" = None
+    _instance: _Undefined | None = None
 
-    def __new__(cls) -> "_Undefined":
+    def __new__(cls) -> _Undefined:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
@@ -60,7 +60,7 @@ class WireDate:
     epoch_ms: float
 
     @classmethod
-    def from_datetime(cls, dt: Any) -> "WireDate":
+    def from_datetime(cls, dt: Any) -> WireDate:
         return cls(int(dt.timestamp() * 1000))
 
     def to_datetime(self) -> Any:
@@ -195,8 +195,7 @@ def encode_wire(value: Any, depth: int = 0) -> Any:
         return result
 
     raise TypeError(
-        f"wire-codec: cannot encode a {type(value).__name__} over the Lunora wire — "
-        "only plain values, dict/list, bytes, and the Wire* wrappers round-trip"
+        f"wire-codec: cannot encode a {type(value).__name__} over the Lunora wire — only plain values, dict/list, bytes, and the Wire* wrappers round-trip"
     )
 
 
@@ -256,7 +255,7 @@ def decode_wire(value: Any, depth: int = 0) -> Any:
 
 
 def _is_bigint_literal(raw: str) -> bool:
-    body = raw[1:] if raw.startswith("-") else raw
+    body = raw.removeprefix("-")
     return len(body) > 0 and body.isdigit()
 
 
@@ -264,14 +263,83 @@ def _is_bigint_literal(raw: str) -> bool:
 
 
 def _format_number(value: Any) -> str:
+    """Render a number exactly as ``String(v)`` does in JavaScript.
+
+    Python's ``repr`` switches to exponent notation below 1e-4 and spells it
+    ``1e-05``; ECMAScript stays positional down to 1e-7 and never pads the
+    exponent (``0.00001``, ``1e-7``). The stable key is compared verbatim
+    against one produced by the reference TypeScript client, so a different
+    spelling here silently splits one subscription into two.
+    """
+
     if isinstance(value, bool):  # pragma: no cover - handled before this is reached
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
-    # float: match JS ``JSON.stringify`` — integral floats drop the decimal.
-    if math.isfinite(value) and value.is_integer():
+    if not math.isfinite(value):  # pragma: no cover - tagged before this is reached
+        return "null"
+    if value.is_integer() and abs(value) < 1e21:
         return str(int(value))
-    return repr(value)
+
+    magnitude = abs(value)
+
+    if 1e-6 <= magnitude < 1e21:
+        return _trim_zeros(f"{value:.17f}", value)
+
+    return _exponential(value)
+
+
+def _trim_zeros(text: str, value: float) -> str:
+    """Shortest positional spelling that still parses back to ``value``."""
+
+    for precision in range(21):
+        candidate = f"{value:.{precision}f}"
+        if float(candidate) == value:
+            text = candidate
+            break
+
+    if "." not in text:
+        return text
+
+    return text.rstrip("0").rstrip(".")
+
+
+def _exponential(value: float) -> str:
+    """Exponent spelling without ECMAScript's absent zero padding."""
+
+    rendered = repr(value)
+
+    for precision in range(18):
+        candidate = f"{value:.{precision}e}"
+        if float(candidate) == value:
+            rendered = candidate
+            break
+
+    if "e" not in rendered:
+        return rendered
+
+    mantissa, _, exponent = rendered.partition("e")
+
+    if "." in mantissa:
+        mantissa = mantissa.rstrip("0").rstrip(".")
+
+    sign = "-" if exponent.startswith("-") else "+"
+    digits = exponent.lstrip("+-").lstrip("0") or "0"
+
+    return f"{mantissa}e{sign}{digits}"
+
+
+def _utf16_sort_key(value: str) -> tuple:
+    """Order a string the way JavaScript's ``<`` does: by UTF-16 code unit.
+
+    Python's ``sorted`` compares code points, which agrees inside the BMP but
+    not above it: an astral character is its high surrogate (0xD83D) as UTF-16
+    yet 0x1F600 as a code point, so it sorts before U+FFFD in JavaScript and
+    after it here. A key set mixing the two would produce a different dedup key
+    than the reference client for identical arguments.
+    """
+
+    return tuple(value.encode("utf-16-be"))
 
 
 def _json_string(text: str) -> str:
@@ -302,7 +370,7 @@ def stable_stringify(value: Any) -> str:
         return "[" + ",".join(stable_stringify(item) for item in value) + "]"
     if isinstance(value, dict):
         parts = []
-        for key in sorted(value.keys()):
+        for key in sorted(value.keys(), key=_utf16_sort_key):
             item = value[key]
             if item is UNDEFINED:
                 continue

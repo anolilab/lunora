@@ -28,3 +28,31 @@ packages = ["lunora"]
 #   python -m pytest            (if pytest is installed)
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Lint + format with ruff (`ruff check`, `ruff format --check`). One binary, no
+# plugin resolution, and the same tool covers both jobs.
+[tool.ruff]
+line-length = 160
+# The transport supports 3.9, so ruff must not suggest syntax newer than that —
+# `str | None` in an annotation is a runtime TypeError before 3.10 without
+# `from __future__ import annotations`, which this package deliberately avoids so
+# the modules stay readable as plain 3.9.
+target-version = "py39"
+# No exclude for generated output, because none is committed any more: since the
+# generator vendors the transport, its output is a self-contained tree built and
+# run from a scratch directory by `sdks/generated-check.sh`. Correctness in that
+# output is enforced in the emitter (see `narrowBareExcept` in
+# `packages/codegen/src/sdk/targets/python.ts`), never by formatting it here.
+
+[tool.ruff.lint]
+select = ["ARG", "B", "C4", "E", "F", "FURB", "I", "N", "PERF", "PIE", "RET", "RUF", "SIM", "UP", "W"]
+ignore = [
+    # `Optional[X]` → `X | None` is a 3.10 runtime construct, and this package
+    # supports 3.9 without `from __future__ import annotations`.
+    "UP045",
+    # Em dashes and arrows in comments and docstrings are deliberate; the rule
+    # cannot tell prose from an identifier that means to be ASCII.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
