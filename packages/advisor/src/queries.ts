@@ -1,8 +1,9 @@
 /**
  * One query read discovered in a function body — the input the
- * `filter_without_index` lint consumes. Produced by the codegen feeder (which
- * parses `ctx.db.query("table")…` chains from the AST); runtime callers don't
- * supply it, so the lint simply finds nothing there.
+ * `filter_without_index` / `filter_on_primary_key` / `unbounded_collect` lints
+ * consume. Produced by the codegen feeder (which parses `ctx.db.query("table")…`
+ * chains from the AST); runtime callers don't supply it, so those lints simply
+ * find nothing there.
  */
 export interface AdvisorQueryRead {
     /**
@@ -33,4 +34,17 @@ export interface AdvisorQueryRead {
     line: number;
     /** The queried table; empty when the `query(...)` argument is not a string literal. */
     table: string;
+
+    /**
+     * The materializing call the chain ends in — `"collect"`, `"take"`,
+     * `"paginate"`, `"first"`, `"unique"`, … — i.e. how much of the narrowed set
+     * the read actually loads.
+     *
+     * `undefined` when the chain reaches no recognised terminal (a reader passed
+     * on, a bare `query(...)`) AND when a feeder predating this field produced
+     * the read. The two are deliberately not distinguished: no consumer could act
+     * on the difference, so the terminal-shaped lints skip the read either way
+     * rather than guessing a terminal.
+     */
+    terminal?: string;
 }

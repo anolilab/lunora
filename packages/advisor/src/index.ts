@@ -101,6 +101,7 @@ import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upl
 import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
 import ttlFieldNotTimestamp from "./lints/static/ttl-field-not-timestamp";
+import unboundedCollect from "./lints/static/unbounded-collect";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
@@ -325,6 +326,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     queueWithoutDlq,
     filterOnPrimaryKey,
     filterWithoutIndex,
+    unboundedCollect,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
     nondeterministicQueryMutation,
