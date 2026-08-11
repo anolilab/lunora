@@ -180,13 +180,38 @@ const checkPluginManifestLockstep = () => {
     const manifests = {};
 
     for (const [host, path] of Object.entries(paths)) {
+        const relative = path.slice(rootDir.length + 1);
+        let parsed;
+
         try {
-            manifests[host] = JSON.parse(readFileSync(path, "utf8"));
+            parsed = JSON.parse(readFileSync(path, "utf8"));
         } catch (error) {
-            fail(`${path.slice(rootDir.length + 1)} is missing or not valid JSON (${error.message})`);
+            fail(`${relative} is missing or not valid JSON (${error.message})`);
 
             return;
         }
+
+        // `JSON.parse` happily returns `null`, an array, or a string. Each one
+        // defeats the comparison below in its own way: `null` throws a raw
+        // TypeError out of this script — and because it runs from `postinstall`,
+        // that reads as every CI job failing in its setup step — while an array,
+        // a string, or `{}` makes every compared field `undefined` on BOTH sides,
+        // so a malformed manifest passes a check whose whole job is to catch one.
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            fail(`${relative} must be a JSON object describing the plugin`);
+
+            return;
+        }
+
+        const missing = [...LOCKSTEP_FIELDS, "author"].filter((field) => parsed[field] === undefined);
+
+        if (missing.length > 0) {
+            fail(`${relative} is missing required field(s): ${missing.join(", ")}`);
+
+            return;
+        }
+
+        manifests[host] = parsed;
     }
 
     for (const field of LOCKSTEP_FIELDS) {
@@ -209,7 +234,7 @@ const mirrorList = MIRRORS.map(({ dir }) => dir.slice(rootDir.length + 1)).join(
 
 if (hasFailure) {
     console.error(
-        `\ncheck-skill-mirrors: fix the problems above — the mirrors (${mirrorList}) and the plugin manifests must agree with packages/cli/skills.\n`,
+        `\ncheck-skill-mirrors: fix the problems above — the mirrors (${mirrorList}) must agree with packages/cli/skills, and the two plugin manifests must agree with each other.\n`,
     );
     process.exit(1);
 }
