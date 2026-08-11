@@ -47,8 +47,13 @@ export const captureEmailReplyRef = (email: InboundEmail): EmailReplyRef | undef
 };
 
 /** RFC 5322 threading: append the replied-to id to any existing `References` chain. */
-export const buildReferences = (replyRef: EmailReplyRef): string =>
-    (replyRef.references === undefined ? replyRef.messageId : `${replyRef.references} ${replyRef.messageId}`);
+export const buildReferences = (replyRef: EmailReplyRef): string => {
+    if (replyRef.references === undefined) {
+        return replyRef.messageId;
+    }
+
+    return `${replyRef.references} ${replyRef.messageId}`;
+};
 
 /** Subject + body of a reply. */
 export interface ReplyBody {

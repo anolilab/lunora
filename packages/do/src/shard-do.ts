@@ -744,14 +744,16 @@ const streamFrames = (
     chunk: (data: unknown, seq?: number) => boolean;
     complete: () => boolean;
     fail: (failure: { code: string; message: string }) => boolean;
-} => {return {
-    ack: () => {
-        ws.send(JSON.stringify({ id, type: "ack" }));
-    },
-    chunk: (data, seq) => trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, id, seq, type: "chunk" })),
-    complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
-    fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
-}};
+} => {
+    return {
+        ack: () => {
+            ws.send(JSON.stringify({ id, type: "ack" }));
+        },
+        chunk: (data, seq) => trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, id, seq, type: "chunk" })),
+        complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
+        fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
+    };
+};
 
 /**
  * Reserved shard name for the fallback Durable Object that hosts every
