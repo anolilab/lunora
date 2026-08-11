@@ -184,8 +184,15 @@ for (const entry of packageEntries) {
 }
 
 const scriptExceptionsGone = [...KNOWN_SCRIPT_EXCEPTIONS.keys()].filter((path) => !packageManifests.includes(path));
+// `scriptsByPath` only gets an entry once a package.json's JSON.parse
+// succeeds (see the loop above); a KNOWN_SCRIPT_EXCEPTIONS entry whose
+// package.json exists but fails to parse is still in `packageManifests`
+// (pushed before the parse), so without the `!packageMalformed.has(path)`
+// guard `scriptsByPath.get(path)` returns `undefined` and `name in undefined`
+// throws — masking the already-collected, already-reported parse error
+// (below) behind an uncaught TypeError instead.
 const scriptExceptionsStale = [...KNOWN_SCRIPT_EXCEPTIONS.entries()]
-    .filter(([path]) => packageManifests.includes(path))
+    .filter(([path]) => packageManifests.includes(path) && !packageMalformed.has(path))
     .map(([path, { missing }]) => ({ nowPresent: missing.filter((name) => name in scriptsByPath.get(path)), path }))
     .filter(({ nowPresent }) => nowPresent.length > 0);
 
