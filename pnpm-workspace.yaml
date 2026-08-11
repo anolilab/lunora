@@ -143,6 +143,37 @@ overrides:
   # range to the patched 8.21.0 — already resolved elsewhere in the tree (@solana/kit,
   # @lunora/vite) — while leaving the legacy ws@1.x/4.x transitive pins untouched.
   ws@>=8.0.0 <8.21.0: ^8.21.0
+  '@hono/node-server@<2.0.5': ^2.0.5
+  '@nuxt/devtools@<3.3.1': ^3.3.1
+  brace-expansion@<1.1.17: ^1.1.17
+  brace-expansion@<1.1.18: ^1.1.18
+  brace-expansion@>=2.0.0 <2.1.3: ^2.1.3
+  brace-expansion@>=2.0.0 <2.1.4: ^2.1.4
+  brace-expansion@>=4.0.0 <5.0.8: ^5.0.8
+  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
+  fast-uri@>=3.0.0 <3.1.3: ^3.1.3
+  fast-uri@>=3.0.0 <3.1.5: ^3.1.5
+  fast-uri@>=3.0.0 <=3.1.3: ^3.1.4
+  fast-xml-parser@<5.7.0: ^5.7.0
+  h3@>=2.0.0 <=2.0.1-rc.14: ^2.0.1
+  h3@>=2.0.0-0 <2.0.1-rc.15: ^2.0.1-rc.15
+  h3@>=2.0.0-beta.0 <=2.0.1-rc.16: ^2.0.1
+  h3@>=2.0.0-beta.4 <2.0.1-rc.18: ^2.0.1-rc.18
+  hono@<4.12.34: ^4.12.34
+  hono@>=3.8.0 <4.12.34: ^4.12.34
+  hono@>=4.12.0 <4.12.34: ^4.12.34
+  hono@>=4.7.0 <4.12.34: ^4.12.34
+  ip-address@<=10.3.0: ^10.3.1
+  ip-address@>=10.1.1 <=10.2.0: ^10.2.1
+  ip-address@>=10.1.1 <=10.2.1: ^10.2.2
+  next@>=16.0.0 <16.2.11: ^16.2.11
+  nuxt@>=4.0.0 <4.5.1: ^4.5.1
+  nuxt@>=4.4.0 <=4.5.0: ^4.5.1
+  nuxt@>=4.4.7 <4.5.1: ^4.5.1
+  sharp@<0.35.0: ^0.35.0
+  svgo@>=4.0.0 <4.0.2: ^4.0.2
+  tar@<=7.5.20: ^7.5.21
+  undici@>=7.0.0 <7.29.0: ^7.29.0
 
 catalogs:
   ai:
@@ -158,49 +189,49 @@ catalogs:
     # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
     # patch that is NOT excluded and would then be gated. To bump: update the
     # version here AND its matching exclude entry together.
-    ai: 7.0.37
+    ai: 7.0.59
     workers-ai-provider: 4.0.0
-    "@ai-sdk/anthropic": 4.0.20
-    "@ai-sdk/openai": 4.0.20
+    "@ai-sdk/anthropic": 4.0.37
+    "@ai-sdk/openai": 4.0.37
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
-    "@visulima/packem": 2.0.0-alpha.96
+    "@visulima/packem": 2.0.0
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.12
-    esbuild: ^0.28.1
+    esbuild: ^0.28.2
     "rollup-plugin-svelte": ^7.2.3
     "unplugin-vue": ^7.2.0
   dev:
-    "@anolilab/semantic-release-pnpm": ^8.1.17
-    "@anolilab/semantic-release-preset": ^13.4.18
+    "@anolilab/semantic-release-pnpm": ^8.1.18
+    "@anolilab/semantic-release-preset": ^13.4.19
     "@semantic-release/exec": ^7.1.0
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node24": ^24.0.4
-    conventional-changelog-conventionalcommits: 10.2.1
+    conventional-changelog-conventionalcommits: 10.3.0
     cross-env: ^10.1.0
   lint:
-    "@anolilab/eslint-config": 28.0.1
-    "@anolilab/prettier-config": 10.0.2
-    "@typescript-eslint/parser": 8.65.0
-    "@eslint-react/eslint-plugin": 5.18.0
+    "@anolilab/eslint-config": 28.1.3
+    "@anolilab/prettier-config": 10.0.3
+    "@typescript-eslint/parser": 8.67.0
+    "@eslint-react/eslint-plugin": 5.18.3
     "@ospm/eslint-plugin-react-unhookify": ^1.0.2
-    eslint: 10.7.0
+    eslint: 10.8.1
     eslint-plugin-jsx-a11y: ^6.10.2
     eslint-plugin-react: ^7.37.5
     eslint-plugin-react-compiler: ^19.1.0-rc.2
     eslint-plugin-react-hooks: 7.1.1
     eslint-plugin-react-perf: ^3.3.3
-    eslint-plugin-react-refresh: 0.5.3
-    eslint-plugin-svelte: ^3.14.0
-    eslint-plugin-vue: ^10.6.0
-    svelte-eslint-parser: ^1.4.0
-    vue-eslint-parser: ^10.2.0
-    "@tanstack/eslint-plugin-query": 5.101.2
+    eslint-plugin-react-refresh: 0.5.4
+    eslint-plugin-svelte: ^3.22.0
+    eslint-plugin-vue: ^10.10.0
+    svelte-eslint-parser: ^1.8.0
+    vue-eslint-parser: ^10.4.1
+    "@tanstack/eslint-plugin-query": 5.101.4
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
-    fallow: 3.9.1
+    fallow: 3.14.0
     husky: ^9.1.7
     prettier: 3.9.6
     prettier-plugin-svelte: 4.1.1
@@ -209,16 +240,16 @@ catalogs:
     rimraf: 6.1.3
   prod:
     adm-zip: 0.6.0
-    csv-parse: 6.1.0
+    csv-parse: 7.0.2
     "@anolilab/commitlint-config": 10.1.0
-    "@anolilab/multi-semantic-release": ^4.4.6
-    "@anolilab/textlint-config": 13.0.5
+    "@anolilab/multi-semantic-release": ^4.4.7
+    "@anolilab/textlint-config": 13.0.6
     "@commitlint/cli": ^21.2.1
     "@commitlint/config-conventional": ^21.2.0
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.5
-    "@visulima/tabular": 4.0.0
-    "@visulima/error": 6.0.0
+    "@visulima/vis": 3.0.0
+    "@visulima/tabular": 4.1.0
+    "@visulima/error": 6.1.0
   test:
     "@codspeed/vitest-plugin": 5.7.1
     "@vitest/coverage-v8": 4.1.10
@@ -226,31 +257,31 @@ catalogs:
     fake-indexeddb: 6.2.5
     vitest: 4.1.10
   tsc:
-    typescript: 6.0.3
+    typescript: 7.0.2
   types:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
-    "@types/node": 26.1.1
+    "@types/node": 26.2.0
   cloudflare:
     "@cloudflare/containers": ^0.3.7
     # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
-    "@cloudflare/playwright": 1.3.0
-    "@cloudflare/vitest-pool-workers": ^0.18.8
-    "@cloudflare/workers-types": ^5.20260724.1
-    miniflare: ^4.20260722.0
-    wrangler: ^4.114.0
+    "@cloudflare/playwright": 1.3.5
+    "@cloudflare/vitest-pool-workers": ^0.21.0
+    "@cloudflare/workers-types": ^5.20260811.1
+    miniflare: ^4.20260730.0
+    wrangler: ^4.120.1
   e2e:
-    "@playwright/test": ^1.61.1
-    playwright: ^1.61.1
+    "@playwright/test": ^1.62.1
+    playwright: ^1.62.1
   flags:
     # Feature flags (@lunora/flags). OpenFeature is the base abstraction; the
     # Cloudflare Flagship provider is the first-class default. server-sdk is the
     # only required peer for the core; flagship + web-sdk gate the optional
     # provider/browser subpaths.
-    "@cloudflare/flagship": ^0.4.2
-    "@openfeature/server-sdk": ^1.22.0
-    "@openfeature/web-sdk": ^1.9.0
+    "@cloudflare/flagship": ^0.5.0
+    "@openfeature/server-sdk": ^1.23.0
+    "@openfeature/web-sdk": ^1.10.0
   otel:
     # The OpenTelemetry API surface only — no SDK. `@lunora/server` takes it as an
     # OPTIONAL peer (for the `@lunora/server/otel` subpath) so an app that already
@@ -261,11 +292,11 @@ catalogs:
   tooling:
     # Sqlite driver shared by @lunora/auth (Kysely test adapter) and
     # @lunora/platform-node (the Node host's durable storage).
-    "@types/better-sqlite3": ^7.6.13
-    "better-sqlite3": ^12.11.1
+    "@types/better-sqlite3": ^9.6.0
+    "better-sqlite3": ^13.0.3
     # Cron expression parsing shared by @lunora/scheduler and
     # @lunora/platform-node's scheduler host.
-    "cron-parser": 5.6.2
+    "cron-parser": 5.8.1
     dockerode: ^5.0.1
     # Model-layer renderer for `lunora sdk generate`: JSON Schema -> dataclasses
     # in 19 languages. Only the generated SDK's *models* come from quicktype —
@@ -284,15 +315,15 @@ catalogs:
     # locally, run a `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the
     # dev runner boots without the getWorkerEntryExportTypes crash AND that its transitive
     # wrangler/miniflare/workerd are past the release-age window, then update this pin.
-    "@cloudflare/vite-plugin": 1.47.0
+    "@cloudflare/vite-plugin": 1.51.2
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
-    "@visulima/vite-overlay": 2.0.5
+    "@visulima/vite-overlay": 2.0.12
     es-module-lexer: ^2.3.1
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.3
     tw-animate-css: ^1.4.0
-    vite: ^8.1.5
+    vite: ^8.2.1
   data:
     "@faker-js/faker": ^10.5.0
   content:
@@ -313,66 +344,66 @@ catalogs:
     "@lingui/core": ^6.6.0
     "@lingui/message-utils": ^6.6.0
   ui:
-    "@base-ui/react": 1.6.0
+    "@base-ui/react": 1.7.0
     "@fontsource-variable/geist": ^5.3.0
     "@hugeicons/core-free-icons": ^4.2.3
     "@hugeicons/react": ^1.1.9
     class-variance-authority: ^0.7.1
     clsx: ^2.1.1
-    shadcn: ^4.14.1
+    shadcn: ^4.16.2
     tailwind-merge: ^3.6.0
   frontend:
     html-to-image: ^1.11.13
-    motion: ^12.42.2
-    recharts: ^3.10.0
+    motion: ^13.1.0
+    recharts: ^3.10.1
     "@solidjs/testing-library": ^0.8.10
-    "@tanstack/db": ^0.6.16
-    "@tanstack/offline-transactions": ^1.0.41
-    "@tanstack/react-db": ^0.1.94
+    "@tanstack/db": ^0.6.17
+    "@tanstack/offline-transactions": ^1.0.42
+    "@tanstack/react-db": ^0.1.95
     "@tanstack/react-query": ^5.101.4
-    "@tanstack/react-router": ^1.170.18
-    "@tanstack/react-start": ^1.168.25
-    "@tanstack/react-table": ^8.21.3
-    "@tanstack/react-virtual": ^3.14.8
-    "@sveltejs/vite-plugin-svelte": ^7.2.0
-    svelte-check: ^4.7.3
+    "@tanstack/react-router": ^1.170.25
+    "@tanstack/react-start": ^1.168.42
+    "@tanstack/react-table": ^9.1.2
+    "@tanstack/react-virtual": ^3.14.9
+    "@sveltejs/vite-plugin-svelte": ^7.3.0
+    svelte-check: ^4.7.5
     "@testing-library/dom": ^10.4.1
-    "@testing-library/jest-dom": ^7.0.0
+    "@testing-library/jest-dom": ^7.0.1
     "@testing-library/react": ^16.3.2
     "@testing-library/svelte": ^5.4.2
     "@testing-library/vue": ^8.1.0
     "@vitejs/plugin-vue": ^6.0.8
-    vue-tsc: ^3.3.8
-    "@types/react": ^19.2.17
-    "@types/react-dom": ^19.2.3
+    vue-tsc: ^3.3.9
+    "@types/react": ^19.2.18
+    "@types/react-dom": ^19.2.4
     "@xyflow/react": ^12.11.2
-    jsdom: ^29.1.1
+    jsdom: ^30.0.1
     react: ^19.2.8
     react-dom: ^19.2.8
     solid-js: ^1.9.14
-    svelte: ^5.56.7
-    vite-plugin-solid: ^2.11.13
-    vue: ^3.5.40
+    svelte: ^5.56.8
+    vite-plugin-solid: ^2.11.14
+    vue: ^3.5.41
   # Angular toolchain shared by @lunora/angular (the runtime adapter) and
   # @lunora/auth-ui (the registry source of truth synced into
   # registry/auth-ui-angular/). Pinned at the higher of the two versions that
   # had drifted apart before this catalog existed.
   angular:
-    "@angular/common": ^22.0.8
-    "@angular/compiler": ^22.0.8
-    "@angular/compiler-cli": ^22.0.8
-    "@angular/core": ^22.0.8
-    "@angular/platform-browser": ^22.0.8
+    "@angular/common": ^22.1.1
+    "@angular/compiler": ^22.1.1
+    "@angular/compiler-cli": ^22.1.1
+    "@angular/core": ^22.1.1
+    "@angular/platform-browser": ^22.1.1
     rxjs: ^7.8.2
     zone.js: ^0.16.2
   mail:
-    "@visulima/email": 2.1.2
+    "@visulima/email": 2.1.8
     "@react-email/render": 2.1.0
-    "postal-mime": 2.7.5
+    "postal-mime": 2.7.6
   notify:
-    "@visulima/notification": 1.0.5
+    "@visulima/notification": 1.0.12
   mcp:
-    "@modelcontextprotocol/sdk": ^1.29.0
+    "@modelcontextprotocol/sdk": ^1.30.0
   # Client-side upload SDK (@lunora/storage /upload handler + framework upload
   # hooks). `@visulima/storage` is the server-side resumable upload handler
   # (TUS / chunked-REST / multipart over R2 via its aws-light provider);
@@ -380,8 +411,8 @@ catalogs:
   # adapters (React/Vue/Solid/Svelte) with progress, pause/resume and per-part
   # retry. Both follow the repo's exact-pinned `@visulima/*` convention.
   storage:
-    "@visulima/storage": 1.0.5
-    "@visulima/storage-client": 1.0.0
+    "@visulima/storage": 2.0.0
+    "@visulima/storage-client": 1.0.2
     # aws4fetch is @visulima/storage's Workers-friendly S3 signer, an optional
     # peer pulled in by the `aws-light` provider that backs `createR2UploadStorage`.
     aws4fetch: 1.0.20
@@ -391,7 +422,7 @@ catalogs:
   # the node workflow binding adapts into the `@lunora/workflow` binding shape.
   # Exact-pinned per the `@visulima/*` convention.
   workflow:
-    "@visulima/workflow": 2.0.0
+    "@visulima/workflow": 3.0.0
   # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
   # (Apache-2.0) plus chain signers. EXACT-pinned (saveExact); all versions are
   # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s
@@ -404,51 +435,51 @@ catalogs:
   # helper — both optional peer + devDep (mirrors @cloudflare/playwright on
   # @lunora/browser), loaded lazily so neither is required for raw-key custody.
   web3:
-    "@coinbase/cdp-sdk": 1.54.0
+    "@coinbase/cdp-sdk": 1.55.0
     "@solana/kit": 7.0.0
-    "@x402/core": 2.19.0
-    "@x402/evm": 2.19.0
-    "@x402/fetch": 2.19.0
-    "@x402/svm": 2.19.0
+    "@x402/core": 2.21.0
+    "@x402/evm": 2.21.0
+    "@x402/fetch": 2.21.0
+    "@x402/svm": 2.21.0
     "@coinbase/x402": 2.1.0
-    viem: 2.55.8
+    viem: 2.55.13
   # Docs site (apps/docs) — TanStack Start + Vite + fumadocs marketing/docs app.
   # Isolated catalog so the heavy web stack (three.js, fumadocs 17, radix, …)
   # never perturbs the framework packages' version pins.
   web:
-    "@anolilab/eslint-config": 28.0.1
-    "@anolilab/prettier-config": 10.0.2
+    "@anolilab/eslint-config": 28.1.3
+    "@anolilab/prettier-config": 10.0.3
     "@babel/core": 8.0.1
-    "@c15t/react": 2.1.0
-    "@eslint-react/eslint-plugin": 5.18.0
+    "@c15t/react": 2.2.0
+    "@eslint-react/eslint-plugin": 5.18.3
     "@eslint/css": 1.4.0
-    "@fuma-comment/react": 1.5.0
+    "@fuma-comment/react": 1.5.1
     "@fumadocs/mdx-remote": 1.5.1
     "@icons-pack/react-simple-icons": 13.13.0
     "@netlify/vite-plugin-tanstack-start": 1.3.17
     "@radix-ui/react-icons": 1.3.2
-    "@radix-ui/react-presence": ^1.1.9
-    "@radix-ui/react-slot": ^1.3.2
-    "@react-three/fiber": 9.6.1
+    "@radix-ui/react-presence": ^1.1.10
+    "@radix-ui/react-slot": ^1.3.3
+    "@react-three/fiber": 9.7.0
     "@rolldown/plugin-babel": 0.2.3
     "@secretlint/secretlint-rule-preset-recommend": 13.0.4
     "@tailwindcss/vite": 4.3.3
     "@tanstack/eslint-plugin-router": 1.162.0
-    "@tanstack/react-router": 1.170.18
-    "@tanstack/react-router-devtools": 1.167.0
-    "@tanstack/react-start": 1.168.32
-    "@tanstack/react-virtual": 3.14.8
-    "@testing-library/jest-dom": 7.0.0
+    "@tanstack/react-router": 1.170.25
+    "@tanstack/react-router-devtools": 1.167.1
+    "@tanstack/react-start": 1.168.42
+    "@tanstack/react-virtual": 3.14.9
+    "@testing-library/jest-dom": 7.0.1
     "@testing-library/react": 16.3.2
     "@types/babel__core": ^7.20.5
     "@types/mdx": ^2.0.14
-    "@types/node": 26.1.1
-    "@types/react": 19.2.17
-    "@types/react-dom": 19.2.3
-    "@types/three": 0.185.1
+    "@types/node": 26.2.0
+    "@types/react": 19.2.18
+    "@types/react-dom": 19.2.4
+    "@types/three": 0.185.4
     "@unpic/react": 1.0.2
     "@vidstack/react": 1.12.13
-    "@vitejs/plugin-react": 6.0.4
+    "@vitejs/plugin-react": 6.0.5
     "@vitest/ui": 4.1.10
     babel-plugin-react-compiler: 1.0.0
     class-variance-authority: 0.7.1
@@ -456,32 +487,32 @@ catalogs:
     cmdk: ^1.1.1
     date-fns: ^4.4.0
     embla-carousel-react: 8.6.0
-    eslint: 10.7.0
+    eslint: 10.8.1
     eslint-plugin-jsx-a11y: ^6.10.2
     eslint-plugin-react: ^7.37.5
     eslint-plugin-react-compiler: 19.1.0-rc.2
     eslint-plugin-react-hooks: ^7.1.1
     eslint-plugin-react-perf: ^3.3.3
-    eslint-plugin-react-refresh: 0.5.3
+    eslint-plugin-react-refresh: 0.5.4
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
-    eslint-plugin-zod: 4.8.0
+    eslint-plugin-zod: 4.9.1
     fast-glob: ^3.3.3
-    fumadocs-core: 16.12.1
-    fumadocs-mdx: 15.2.0
+    fumadocs-core: 16.14.3
+    fumadocs-mdx: 15.2.3
     fumadocs-twoslash: 3.3.0
-    fumadocs-ui: 16.12.1
+    fumadocs-ui: 16.14.3
     gray-matter: ^4.0.3
-    happy-dom: 20.11.1
-    lucide-react: 1.26.0
-    lucide-static: 1.26.0
+    happy-dom: 20.11.2
+    lucide-react: 1.31.0
+    lucide-static: 1.31.0
     media-icons: 1.1.5
-    motion: 12.42.2
+    motion: 13.1.0
     next-themes: ^0.4.6
-    posthog-js: 1.407.2
+    posthog-js: 1.415.1
     prettier: 3.9.6
-    radix-ui: ^1.6.6
+    radix-ui: ^1.6.7
     react: 19.2.8
     react-dom: 19.2.8
     react-hook-inview: 4.5.1
@@ -489,18 +520,18 @@ catalogs:
     react-remove-scroll: 2.7.2
     rimraf: 6.1.3
     secretlint: 13.0.4
-    semantic-release: 25.0.8
-    shiki: ^4.3.1
+    semantic-release: 25.0.9
+    shiki: ^4.4.3
     tailwind-csstree: 0.3.3
     tailwind-merge: 3.6.0
     tailwindcss: 4.3.3
     tailwindcss-animate: 1.0.7
     three: 0.185.1
-    typescript: 6.0.3
+    typescript: 7.0.2
     unplugin-fonts: 2.0.0
     use-count-up: 3.0.1
-    vite: 8.1.5
-    vite-imagetools: 10.0.1
+    vite: 8.2.1
+    vite-imagetools: 12.0.0
     vite-plugin-svgr: 5.2.0
     vitest: 4.1.10
     zod: 4.4.3
@@ -542,17 +573,17 @@ catalogs:
     "@better-auth/scim": 1.7.0-rc.2
     "@better-auth/sso": 1.7.0-rc.2
     "better-auth": 1.7.0-rc.2
-    jose: ^6.2.4
+    jose: ^6.2.8
   drizzle:
     drizzle-orm: ^0.45.2
   http:
-    hono: ^4.12.32
+    hono: ^4.13.1
   redact:
-    "@visulima/redact": 3.0.0
+    "@visulima/redact": 4.0.0
   email:
-    "@visulima/disposable-email-domains": 1.0.1
-    "@visulima/free-email-domains": 1.0.0
-    "@visulima/email-verifier": 1.0.1
+    "@visulima/disposable-email-domains": 1.1.0
+    "@visulima/free-email-domains": 1.0.1
+    "@visulima/email-verifier": 1.0.2
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
@@ -705,7 +736,7 @@ minimumReleaseAgeExclude:
   - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
   - 'fumadocs-mdx@15.0.11'
   - 'miniflare@4.20260601.0'
-  - 'next@16.2.9'
+  - next@16.2.9 || 16.2.11
   - 'oxlint-plugin-react-doctor@0.5.1'
   - 'react@19.2.7'
   - 'react-doctor@0.5.1'
@@ -713,12 +744,10 @@ minimumReleaseAgeExclude:
   - 'tsx@4.22.4'
   - 'vite@8.0.16'
   - 'wrangler@4.97.0'
-  - tmp@0.2.4
-  - lodash@4.17.24
+  - tmp@0.2.4 || 0.2.6
+  - lodash@4.17.23 || 4.17.24
   # Renovate security update: postcss@8.5.26
   - postcss@8.5.10 || 8.5.26
-  - tmp@0.2.6
-  - lodash@4.17.23
   - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43'
   - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.43'
   - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.43'
@@ -737,12 +766,22 @@ minimumReleaseAgeExclude:
   - astro@6.4.6
   # Renovate security update: dompurify@3.4.13
   - dompurify@3.4.11 || 3.4.13
-  # Renovate security update: undici@6.28.0
-  - undici@6.27.0 || 6.28.0
+  - undici@6.27.0 || 6.28.0 || 7.29.0
   # Renovate security update: hono@4.12.34
   - hono@4.12.34
-  # Renovate security update: nuxt@4.0.3
-  - nuxt@4.0.3
+  - nuxt@4.0.3 || 4.5.1
+  - ip@2.0.2
+  - h3@2.0.1-rc.15 || 2.0.1-rc.18 || 2.0.1
+  - fast-xml-parser@5.7.0
+  - '@hono/node-server@2.0.5'
+  - svgo@4.0.2
+  - fast-uri@3.1.3 || 3.1.4 || 3.1.5
+  - sharp@0.35.0
+  - tar@7.5.21
+  - brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9
+  - ip-address@10.2.1 || 10.2.2 || 10.3.1
+  - '@nuxt/devtools@3.3.1'
+  - image-size@2.0.3
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is

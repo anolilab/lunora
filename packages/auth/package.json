@@ -137,7 +137,7 @@
         "better-sqlite3": "catalog:tooling",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
-        "kysely": "^0.28.17",
+        "kysely": "^0.29.5",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
