@@ -950,7 +950,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             changeListener!(join(workdir, "tsconfig.json"));
             await vi.runAllTimersAsync();
 
-            expect(findTsconfigCalls).toHaveBeenCalled();
+            expect(findTsconfigCalls).toHaveBeenCalledWith(join(workdir, "lunora"));
         });
     });
 });

@@ -106,7 +106,12 @@ describe("createDispatchRunner", () => {
         const controller = new AbortController();
         const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 
-        return { abort: (reason: Error) => controller.abort(reason), spy };
+        return {
+            abort: (reason: Error) => {
+                controller.abort(reason);
+            },
+            spy,
+        };
     };
 
     // A fetchImpl that hangs until its signal aborts, rejecting with the
