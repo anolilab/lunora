@@ -207,13 +207,13 @@ describe("shardDO: plain data frame carries the per-client lastMutationId (plan 
 
 /**
  * Thermos H1 — the snapshot-only stamp above left the DELTA path (the
- * `{type:"delta"}` frames `sendDeltaFrames` emits) unstamped, and a
+ * `{type:"delta"}` frames `subscriptionFrames` renders) unstamped, and a
  * `@lunora/db` list collection is exactly the id-keyed, order-preserving
  * shape `subscriptionListDeltas` accepts — so after the first snapshot,
  * EVERY subsequent write for it goes out as deltas. Growing the row set by
- * one ID each write (keeping every prior row as a survivor) is what makes
- * `subscriptionListDeltas` accept the change instead of falling back to a
- * full snapshot (see its "near-total change" guard).
+ * one id per write (keeping every prior row as a survivor) keeps the change
+ * both expressible as deltas and cheaper than a snapshot, which is what puts
+ * a delta frame on the wire for the assertions to read.
  */
 class GrowingListShard extends ShardDO {
     private readonly rows: { _id: string; text: string }[] = [];
@@ -222,9 +222,8 @@ class GrowingListShard extends ShardDO {
 
     public override handleRpc(functionPath: string): Promise<unknown> {
         return this.runInTransaction(() => {
-            this.nextRow += 1;
-            this.rows.push({ _id: `m${String(this.nextRow)}`, text: `row ${String(this.nextRow)}` });
-            this.recordChangedTable("messages");
+            this.appendRow();
+            this.recordChangedTable("messages"); // GrowingListShard
 
             const result = { ok: true, path: functionPath };
 
@@ -243,6 +242,25 @@ class GrowingListShard extends ShardDO {
         return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
     }
 
+    /**
+     * Lengthen the list WITHOUT going through a write.
+     *
+     * `subscriptionFrames` chooses deltas over a snapshot by measuring both, so a
+     * one-row insert only takes the delta path against a list-sized baseline —
+     * and this test needs the delta path to have a frame to assert on. Seeding
+     * through `pushMutatorWrite` under a second `clientId` would also produce the
+     * rows, but it would make the setup depend on per-client watermark
+     * isolation, which is the very property the assertions verify: a regression
+     * in it would poison the fixture, and the test could no longer tell "the
+     * watermark leaked" from "the seeding leaked". Writing straight to the
+     * fixture keeps the subject out of the setup.
+     */
+    public seedRows(count: number): void {
+        for (let index = 0; index < count; index += 1) {
+            this.appendRow();
+        }
+    }
+
     // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
     protected override isCustomMutator(functionPath: string): boolean {
         return functionPath === "messages:sendMutator";
@@ -253,6 +271,12 @@ class GrowingListShard extends ShardDO {
         // not by reference, but a fresh array also matches how a real query
         // re-run would produce a fresh result object.
         return Promise.resolve({ result: [...this.rows], tables: new Set(["messages"]) });
+    }
+
+    /** Append one row to the in-memory list `executeSubscription` reports. */
+    private appendRow(): void {
+        this.nextRow += 1;
+        this.rows.push({ _id: `m${String(this.nextRow)}`, text: `row ${String(this.nextRow)}` });
     }
 }
 
@@ -278,6 +302,12 @@ describe("shardDO: delta frames also carry the per-client lastMutationId (thermo
             const ws = createFakeWebSocket();
 
             shard.registerSocket(ws, { clientId: "client-A", subs: {}, userId: "" });
+
+            // Deepen the list so the single-row change below is genuinely cheaper
+            // as a delta than as a snapshot — see `seedRows`, which deliberately
+            // bypasses the write path so the setup does not lean on the watermark
+            // isolation these assertions exist to check.
+            shard.seedRows(16);
 
             // Seed row + subscribe: the FIRST frame is always a snapshot
             // (nothing to diff against yet).
