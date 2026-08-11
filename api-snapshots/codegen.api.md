@@ -1269,6 +1269,12 @@ const evaluateSchemaDrift: (options: {
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `findTsconfig` (const)
+
+```ts
+const findTsconfig: (startPath: string) => string | undefined;
+```
+
 ### `formatAdvisories` (const)
 
 ```ts

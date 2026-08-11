@@ -175,6 +175,12 @@ const isTimingEnabled = (): boolean => {
 /**
  * Walk up from `startPath` until we find a `tsconfig.json` or hit the file
  * system root. Returns the absolute path to the tsconfig, or `undefined`.
+ *
+ * Exported (see the bottom-of-file `export { findTsconfig }`) so a long-lived
+ * caller (the Vite dev-loop's cached-Project invalidation) can ask "which
+ * tsconfig would {@link createCodegenProject} resolve right now?" without
+ * duplicating the walk — recomputing it per call is a handful of `existsSync`
+ * checks, negligible next to a Project rebuild.
  */
 const findTsconfig = (startPath: string): string | undefined => {
     let directory = existsSync(startPath) ? startPath : dirname(startPath);
@@ -351,9 +357,16 @@ export const createCodegenProject = (lunoraDirectory: string): Project => {
  * removes Project source files under `lunoraDirectory` that no longer exist on
  * disk (the classic stale-deleted-file cache bug).
  *
- * Files outside `lunoraDirectory` (e.g. those pulled in by the user's tsconfig)
- * are left untouched — they back type resolution and rarely change in the
- * dev-loop; a tsconfig change invalidates the whole cached Project upstream.
+ * Files outside `lunoraDirectory` — e.g. a shared validator or type pulled in
+ * via the user's tsconfig — are also `refreshFromFileSystemSync()`ed, but only
+ * the ones already loaded into the Project; none are added. `resolveValidatorAlias`
+ * (parse-validator.ts) follows `getAliasedSymbol()` across module boundaries, so a
+ * validator defined outside `lunoraDirectory` is genuinely read from whatever
+ * source the Project currently holds — leaving those files stale made a reused
+ * Project (the Vite dev loop) silently disagree with a fresh one (`lunora
+ * codegen`) about the same source. `node_modules` is excluded: its `.d.ts` set
+ * dominates the file count and never changes mid dev-loop, so refreshing it would
+ * reinstate close to the full re-parse cost this cache exists to avoid.
  */
 export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
     // The exact set discovery reads: every non-`schema.ts` source file (the
@@ -390,6 +403,28 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
         const filePath = sourceFile.getFilePath();
 
         if ((filePath === lunoraRoot || filePath.startsWith(lunoraPrefix)) && !onDisk.has(filePath)) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
+
+    // Second pass: resync everything else the Project already has loaded (type
+    // resolution reached past `lunoraDirectory` — a shared validator, a type
+    // alias, whatever the user's tsconfig program pulled in). `node_modules` is
+    // skipped on purpose (see docblock); a file under it never changes here.
+    for (const sourceFile of project.getSourceFiles()) {
+        const filePath = sourceFile.getFilePath();
+
+        if (filePath === lunoraRoot || filePath.startsWith(lunoraPrefix) || filePath.includes("/node_modules/")) {
+            continue;
+        }
+
+        try {
+            sourceFile.refreshFromFileSystemSync();
+        } catch {
+            // Deleted (or unreadable) since it was loaded — drop it rather than
+            // let a throw here wedge the dev loop. `refreshFromFileSystemSync`
+            // already forgets a genuinely-deleted file on its own; this guard is
+            // for the rarer I/O-error case (e.g. a permission change).
             project.removeSourceFile(sourceFile);
         }
     }
@@ -1091,4 +1126,4 @@ export interface CodegenResult {
 }
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.
-export { SCHEMA_SNAPSHOT_FILENAME };
+export { findTsconfig, SCHEMA_SNAPSHOT_FILENAME };
