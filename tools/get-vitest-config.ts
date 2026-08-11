@@ -76,6 +76,10 @@ export const getVitestConfig = (options: ViteUserConfig = {}, coverageThresholds
                 : ["default"],
             sequence: {
                 seed: VITEST_SEQUENCE_SEED,
+                // `seed` is inert without `shuffle` — Vitest only consumes the seed when it
+                // is randomizing. File-level only: within-file order is legitimately
+                // load-bearing in some suites.
+                ...(process.env.LUNORA_SHUFFLE === "1" ? { shuffle: { files: true, tests: false } } : {}),
             },
             silent: process.env.CI ? "passed-only" : false,
             typecheck: {
