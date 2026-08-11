@@ -5,10 +5,12 @@
  * arg validation, the body, result validation, rollback wiring, and
  * non-retryable-error conversion — is unit-testable with plain doubles.
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { parseValidatorMap } from "@lunora/values";
 
 import type { NativeNonRetryableErrorConstructor } from "./errors";
-import { convertNonRetryableError, NonRetryableError } from "./errors";
+import { convertNonRetryableError, raiseNonRetryable } from "./errors";
 import type {
     InferStepArgs,
     RunStepOptions,
@@ -82,8 +84,18 @@ const createRunStep =
                 result = await step.handler(stepContext, validatedArgs);
             } catch (error: unknown) {
                 // The step BODY threw — that may be a transient failure (network
-                // blip, a contended write), so it stays retryable: only a portable
-                // NonRetryableError is converted, everything else rethrown as-is.
+                // blip, a contended write), so it stays retryable by default: only
+                // a portable NonRetryableError is converted, everything else
+                // rethrown as-is. The one exception is a `ctx.run` dispatch that
+                // failed deterministically (a 400/403/404/422 from the dispatched
+                // function) — that's the same failure on every retry, so wrap it
+                // into a portable NonRetryableError (preserving message + cause)
+                // before the existing native-conversion boundary below, rather than
+                // burning the step's retry budget re-running its side effects.
+                if (isDeterministicDispatchFailure(error)) {
+                    return raiseNonRetryable(error.message, error, deps.nonRetryableErrorClass);
+                }
+
                 return convertNonRetryableError(error, deps.nonRetryableErrorClass);
             }
 
@@ -100,13 +112,8 @@ const createRunStep =
                 return step.returns.parse(result);
             } catch (error: unknown) {
                 const message = error instanceof Error ? error.message : String(error);
-                const nonRetryable = new NonRetryableError(`step "${step.name}" returns validation failed: ${message}`);
 
-                if (error !== undefined) {
-                    nonRetryable.cause = error;
-                }
-
-                return convertNonRetryableError(nonRetryable, deps.nonRetryableErrorClass);
+                return raiseNonRetryable(`step "${step.name}" returns validation failed: ${message}`, error, deps.nonRetryableErrorClass);
             }
         };
 

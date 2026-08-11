@@ -147,6 +147,8 @@ import {
     DEFAULT_MAX_RELAYS,
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
+    deleteShapePokeCursor,
+    deleteShapePokeCursorsForConnection,
     diffGlobalMembership,
     DurableStreamRunner,
     ensureAuditTable,
@@ -181,6 +183,7 @@ import {
     readMigrationStatus,
     readQueueMessageById,
     readQueueMessages,
+    readShapePokeCursor,
     readTablePage,
     recordCapturedMail,
     recordChangedKeys,
@@ -205,6 +208,7 @@ import {
     trySendFrame,
     writeGlobalShapeSnapshot,
     writeIdempotent,
+    writeShapePokeCursor,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
@@ -1281,9 +1285,17 @@ abstract class ShardDO {
      * Per-socket poke baseline for shape subscriptions: maps each shape's
      * subscription id to the `__cdc_log` cursor it has been poked through.
      * `pokeShapeSubscribers` reads each op page since this cursor and advances
-     * it to the flush watermark. In-memory only (like {@link ShardDO.subMemos});
-     * a cold memo on a reconnected/hibernated socket re-seeds from the client's
-     * `sinceCheckpoint`.
+     * it to the flush watermark.
+     *
+     * This is a hot in-memory **cache** over the durable `__shape_poke_cursor`
+     * table (keyed by the socket's `connectionId` + subId), mirroring
+     * {@link ShardDO.globalShapeSnapshots}: a hibernation eviction clears the
+     * WeakMap, so on the next wake {@link ShardDO.readShapeMemoCursor} misses
+     * and falls back to the stored cursor, then the shape's subscribe-time
+     * `sinceSeq` off the attachment, and finally `0` — without the durable
+     * fallback, every wake's first write would rescan the entire retained
+     * `__cdc_log` for that table from `0` instead of resuming where the
+     * socket left off.
      */
     private readonly shapeMemos = new WeakMap<ShardSocketLike, Map<string, ShapeMemo>>();
 
@@ -1717,12 +1729,19 @@ abstract class ShardDO {
         this.shapeMemos.delete(ws);
         this.globalShapeSnapshots.delete(ws);
 
-        // Drop the durable global-shape baselines for this socket too — leaving
-        // them would orphan rows under a `connectionId` that can never reconnect
-        // (a fresh upgrade mints a new id), slowly leaking the snapshot table.
+        // Drop the durable global-shape and shape-poke-cursor baselines for
+        // this socket too — leaving them would orphan rows under a
+        // `connectionId` that can never reconnect (a fresh upgrade mints a
+        // new id), slowly leaking both tables.
         if (attachment.connectionId !== undefined) {
             try {
                 deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+
+            try {
+                deleteShapePokeCursorsForConnection(this.sql as SqlExec, attachment.connectionId);
             } catch {
                 /* stub sql / missing table — nothing durable to clean up */
             }
@@ -3165,12 +3184,18 @@ abstract class ShardDO {
         this.shapeMemos.get(ws)?.delete(subId);
         this.globalShapeSnapshots.get(ws)?.delete(subId);
 
-        // Drop the durable baseline for this shape too (no-op for poke-live shapes
-        // / connection-id-less sockets), so an unsubscribe doesn't leave a stale
-        // snapshot a later resubscribe would diff against.
+        // Drop the durable baselines for this shape too (no-op for a
+        // connection-id-less socket), so an unsubscribe doesn't leave a stale
+        // snapshot/cursor a later resubscribe would diff/resume against.
         if (attachment.connectionId !== undefined) {
             try {
                 deleteGlobalShapeSnapshot(this.sql as SqlExec, attachment.connectionId, subId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+
+            try {
+                deleteShapePokeCursor(this.sql as SqlExec, attachment.connectionId, subId);
             } catch {
                 /* stub sql / missing table — nothing durable to clean up */
             }
@@ -8313,7 +8338,7 @@ abstract class ShardDO {
                 return await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
             }
 
-            return await this.seedOpLogShape(ws, subId, shape, resolved);
+            return await this.seedOpLogShape(ws, attachment.connectionId ?? "", subId, shape, resolved);
         } catch (error) {
             this.recordShapeError(`shape:seed:${subId}`, error);
 
@@ -8332,7 +8357,13 @@ abstract class ShardDO {
      * throw (a stub `sql` handle, a membership probe failure); the caller converts
      * it to a structured `shape_subscribe` error.
      */
-    private async seedOpLogShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+    private async seedOpLogShape(
+        ws: ShardSocketLike,
+        connectionId: string,
+        subId: string,
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): Promise<"ok"> {
         const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
@@ -8340,7 +8371,7 @@ abstract class ShardDO {
         await awaitWsDrain(ws);
 
         if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
-            this.recordShapeMemo(ws, subId, cursor);
+            this.recordShapeMemo(ws, connectionId, subId, cursor);
         }
 
         return "ok";
@@ -8418,14 +8449,25 @@ abstract class ShardDO {
                 return;
             }
 
+            const connectionId = attachment.connectionId ?? "";
+
             try {
                 const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql, opRangeCache);
+                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(
+                    ws,
+                    connectionId,
+                    shapes,
+                    identity,
+                    changed,
+                    checkpoint,
+                    sql,
+                    opRangeCache,
+                );
 
                 // Empty-diff shapes advance regardless (nothing to deliver for them),
                 // so the next flush doesn't re-scan the same op range.
                 for (const subId of emptyAdvanced) {
-                    this.recordShapeMemo(ws, subId, checkpoint);
+                    this.recordShapeMemo(ws, connectionId, subId, checkpoint);
                 }
 
                 // Await drain before the (potentially large) poke so a slow consumer
@@ -8440,7 +8482,7 @@ abstract class ShardDO {
                         delivered += 1;
 
                         for (const subId of partAdvanced) {
-                            this.recordShapeMemo(ws, subId, checkpoint);
+                            this.recordShapeMemo(ws, connectionId, subId, checkpoint);
                         }
                     }
                 }
@@ -8485,6 +8527,7 @@ abstract class ShardDO {
      */
     private collectShapePokeParts(
         ws: ShardSocketLike,
+        connectionId: string,
         shapes: Record<string, ShapeSubscriptionQuery>,
         identity: SubscriptionIdentity,
         changed: Set<string>,
@@ -8504,7 +8547,7 @@ abstract class ShardDO {
                     continue;
                 }
 
-                const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
+                const memoCursor = this.readShapeMemoCursor(ws, connectionId, subId, shape.sinceSeq);
                 const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint, opRangeCache);
 
                 if (rowsPatch.length > 0) {
@@ -9047,9 +9090,89 @@ abstract class ShardDO {
         }
     }
 
-    /** Record a shape's poke baseline cursor on a socket (creating the per-socket map lazily). */
-    private recordShapeMemo(ws: ShardSocketLike, subId: string, cursor: number): void {
+    /**
+     * Record a shape's poke baseline cursor on a socket (creating the
+     * per-socket map lazily), and write it through to the durable
+     * `__shape_poke_cursor` table so it survives hibernation. Called only on
+     * a delivered/advanced poke (never on a computed-but-unsent diff) — see
+     * the call sites in {@link ShardDO.pokeShapeSubscribers}. Takes
+     * `connectionId` from the caller rather than re-deserializing the
+     * attachment (`deserializeAttachment()` is a structured-clone read) —
+     * every caller already holds it from resolving the socket's shapes.
+     */
+    private recordShapeMemo(ws: ShardSocketLike, connectionId: string, subId: string, cursor: number): void {
         socketMap(this.shapeMemos, ws).set(subId, { cursor });
+        this.saveShapePokeCursor(connectionId, subId, cursor);
+    }
+
+    /**
+     * Read a socket's poke baseline cursor for a shape: the hot in-memory
+     * {@link ShardDO.shapeMemos} cache, falling back to the durable
+     * `__shape_poke_cursor` row on a miss (a cold socket after a hibernation
+     * eviction), then the shape's subscribe-time `sinceSeq` (passed in by the
+     * caller, which already holds the attachment this came from — see
+     * {@link ShardDO.recordShapeMemo}), and finally `0`. Every fallback
+     * degrades DOWNWARD only — a baseline that is too high would silently
+     * skip rows a client never saw, while too low is merely a wasted rescan
+     * of a range the client already has. The `sinceSeq` rung is a raw
+     * client-supplied wire value (unlike `stored`, which this shard wrote
+     * itself), so it is clamped against the current high-watermark: after a
+     * PITR restore — the same rollback {@link ShardDO.evaluateResume} guards
+     * against — a `sinceSeq` above the cursor must degrade to `0`, not be
+     * trusted as a baseline. A durable/`sinceSeq` hit repopulates the
+     * in-memory cache so later reads this wake hit memory.
+     */
+    private readShapeMemoCursor(ws: ShardSocketLike, connectionId: string, subId: string, sinceSeq: number | undefined): number {
+        const cached = this.shapeMemos.get(ws)?.get(subId)?.cursor;
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const stored = this.loadShapePokeCursor(connectionId, subId);
+        const fallback = stored ?? sinceSeq ?? 0;
+        const baseline = fallback > (this.currentCdcCursor() ?? 0) ? 0 : fallback;
+
+        socketMap(this.shapeMemos, ws).set(subId, { cursor: baseline });
+
+        return baseline;
+    }
+
+    /**
+     * Load a durable shape poke-baseline cursor from SQLite, or `undefined`
+     * when none is stored / the durable path is unavailable. A stub `sql`
+     * handle (unit harness), a missing table, or a connection-id-less socket
+     * degrades to "nothing stored" rather than throwing.
+     */
+    private loadShapePokeCursor(connectionId: string, subId: string): number | undefined {
+        if (connectionId === "") {
+            return undefined;
+        }
+
+        try {
+            return readShapePokeCursor(this.sql as SqlExec, connectionId, subId);
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Persist a socket's shape poke-baseline cursor to SQLite so it survives
+     * hibernation. A no-op for a connection-id-less socket (never went
+     * through the lifecycle-aware upgrade, e.g. a unit harness) or a stub
+     * `sql` handle / missing table — degrades to in-memory-only behavior
+     * rather than failing the poke.
+     */
+    private saveShapePokeCursor(connectionId: string, subId: string, cursor: number): void {
+        if (connectionId === "") {
+            return;
+        }
+
+        try {
+            writeShapePokeCursor(this.sql as SqlExec, connectionId, subId, cursor);
+        } catch {
+            /* stub sql / missing table — degrade to in-memory cache only */
+        }
     }
 
     /**

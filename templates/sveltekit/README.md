@@ -41,9 +41,10 @@ development"` / `"ShardDO…not exported"` warning. That's the adapter's own emp
 
 - `lunora/schema.ts` + `lunora/messages.ts` — a sharded `messages` table with a
   sample `list` query and `send` mutation.
-- `src/worker.ts` — the **single-worker entry**: wraps SvelteKit's
-  Cloudflare-adapter handler with `withLunora` (see below) and re-exports the
-  generated `ShardDO`.
+- `src/worker.ts` — the **single-worker entry**: folds SvelteKit's
+  Cloudflare-adapter handler into the generated `defineApp()` builder via
+  `.buildFrameworkWorker(...)` (see below) and re-exports the generated
+  `ShardDO`.
 - `src/routes/+layout.svelte` — publishes the `LunoraClient` on Svelte context
   with `setLunoraClient` (the provider), pointed at the **same origin**.
 - `src/routes/+page.ts` — a universal `load` that calls `preloadQuery` through a
@@ -58,7 +59,6 @@ development"` / `"ShardDO…not exported"` warning. That's the adapter's own emp
 - `@sveltejs/kit` — the meta-framework (file-based routing + load functions)
 - `svelte` (5) — runes/stores UI runtime
 - `@lunora/svelte` — live stores, optimistic mutations, `hydratePreloaded`
-- `@lunora/svelte/worker` — `withLunora` single-worker composition
 - `@lunora/*` — the realtime backend on Cloudflare Workers + Durable Objects
 
 ---
@@ -75,20 +75,20 @@ How it's wired here:
 
 - **`svelte.config.js`** uses `@sveltejs/adapter-cloudflare`, which builds
   SvelteKit's SSR into `.svelte-kit/cloudflare/_worker.js`.
-- **`src/worker.ts`** imports that emitted handler and wraps it with
-  `withLunora` from `@lunora/svelte/worker`:
+- **`src/worker.ts`** imports that emitted handler and folds it into the
+  generated `defineApp()` builder via `.buildFrameworkWorker(...)`:
 
     ```ts
-    import { withLunora } from "@lunora/svelte/worker";
     import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js";
-    import { createShardDO } from "../lunora/_generated/shard.js";
 
-    export const ShardDO = createShardDO();
+    import { defineApp } from "../lunora/_generated/app.js";
 
-    export default withLunora(svelteKitWorker, (env) => ({
-        shardDO: env.SHARD,
-        // …auth, routes, functions, openApiSpec
-    }));
+    const app = defineApp<Env>()
+        .shard((env) => env.SHARD)
+        .buildFrameworkWorker(svelteKitWorker);
+
+    export const ShardDO = app.ShardDO;
+    export default app;
     ```
 
 - **`wrangler.jsonc`**'s `main` points at `src/worker.ts` (not at SvelteKit's
@@ -108,8 +108,8 @@ cookie-based identity on the same origin — no separate worker, one deploy. Set
 `VITE_LUNORA_URL` only if you deliberately split Lunora out to a standalone
 worker.
 
-> Status: the `withLunora` composition is unit/contract-proven in
-> `@lunora/svelte` (`packages/svelte/__tests__/worker.test.ts`). The
-> `@sveltejs/adapter-cloudflare` build itself isn't exercised in this repo, so
-> the `src/worker.ts` / `wrangler.jsonc` wiring above is a scaffold to run
-> against a real `vite build` + `wrangler deploy`.
+> Status: `buildFrameworkWorker` (backed by `withFrameworkWorker` in
+> `@lunora/runtime`) is the same composition primitive every Class-B framework
+> template uses. The `@sveltejs/adapter-cloudflare` build itself isn't
+> exercised in this repo, so the `src/worker.ts` / `wrangler.jsonc` wiring
+> above is a scaffold to run against a real `vite build` + `wrangler deploy`.

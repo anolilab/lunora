@@ -31,6 +31,7 @@ import { migrateClientWatermark } from "./ctx-db-client-watermark";
 import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { migrateSearchState } from "./ctx-db-search-state";
+import { migrateShapePokeCursor } from "./ctx-db-shape-poke-cursor";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
 import { migrateDurableStreams } from "./durable-stream";
@@ -258,6 +259,10 @@ export const runShardMigrations = (
         // same gate: it holds the monotonic `last_mutation_id` the poke protocol
         // echoes back so the client's outbox can drop confirmed pending writes.
         migrateClientWatermark(sql);
+        // An op-log-backed (poke-live) shape diffs against `__cdc_log`, so it
+        // cannot exist without CDC either — the durable poke-baseline cursor
+        // rides the same gate as the log it indexes into.
+        migrateShapePokeCursor(sql);
     }
 
     // Always present: the mutation-replay dedup table is independent of CDC and

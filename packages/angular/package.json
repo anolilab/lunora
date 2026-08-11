@@ -39,6 +39,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.mjs"
+        },
         "./upload": {
             "types": "./dist/upload.d.ts",
             "import": "./dist/upload.mjs"
@@ -65,15 +69,15 @@
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
-        "@angular/core": "^22.0.8",
+        "@angular/core": "catalog:angular",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
-        "rxjs": "^7.8.2",
+        "rxjs": "catalog:angular",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
-        "zone.js": "^0.16.2"
+        "zone.js": "catalog:angular"
     },
     "peerDependencies": {
         "@angular/core": "^19.2.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"

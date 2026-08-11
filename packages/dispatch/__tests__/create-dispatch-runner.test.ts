@@ -1,7 +1,8 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { createDispatchLogger } from "../src/create-dispatch-logger";
-import { createDispatchRunner } from "../src/create-dispatch-runner";
+import { createDispatchRunner, isDeterministicDispatchFailure } from "../src/create-dispatch-runner";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" };
 const REF = { __lunoraRef: "messages:send" };
@@ -94,6 +95,205 @@ describe("createDispatchRunner", () => {
         await expect(createDispatchRunner({ env: { LUNORA_ORIGIN_URL: "https://x" }, fetchImpl, label: "@lunora/queue" })(REF)).rejects.toThrow(
             /LUNORA_ADMIN_TOKEN/,
         );
+    });
+
+    // `AbortSignal.timeout`'s internal abort is a real native timer that
+    // `vi.useFakeTimers()` cannot advance (unlike a JS-land `setTimeout`), so
+    // these tests replace `AbortSignal.timeout` itself with a controller whose
+    // signal the test aborts directly — deterministic and instant, and it
+    // still proves the runner asked for the right duration.
+    const stubAbortSignalTimeout = (): { abort: (reason: Error) => void; spy: ReturnType<typeof vi.spyOn> } => {
+        const controller = new AbortController();
+        const spy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+
+        return {
+            abort: (reason: Error) => {
+                controller.abort(reason);
+            },
+            spy,
+        };
+    };
+
+    // A fetchImpl that hangs until its signal aborts, rejecting with the
+    // signal's `reason` — the same contract real `fetch` follows for an
+    // `AbortSignal.timeout`-bound request (rejects with the signal's reason,
+    // not a hardcoded generic error).
+    const hangingFetchImpl = (): ReturnType<typeof vi.fn<typeof fetch>> =>
+        vi.fn<typeof fetch>(
+            (_url, init) =>
+                new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(init.signal!.reason as Error);
+                    });
+                }),
+        );
+
+    // A Response double whose headers "arrive" immediately (the outer fetch
+    // resolves), but whose `.text()` hangs until `signal` aborts — the
+    // real-`fetch` contract for a body stream that stalls AFTER headers land
+    // (the deadline is still bound to the same signal the initial fetch used).
+    // Checks `signal.aborted` synchronously, not just the future event, since
+    // `.text()` is only called a microtask after the fetch resolves — by then
+    // the test's `abort()` call (issued right after kicking off the run, with
+    // no intervening `await`) may already have fired.
+    const responseWithHangingBody = (init: { ok: boolean; status: number }, signal: AbortSignal | null | undefined): Response =>
+        ({
+            ok: init.ok,
+            status: init.status,
+            text: async () =>
+                new Promise<string>((_resolve, reject) => {
+                    if (signal?.aborted === true) {
+                        reject(signal.reason as Error);
+
+                        return;
+                    }
+
+                    signal?.addEventListener("abort", () => {
+                        reject(signal.reason as Error);
+                    });
+                }),
+        }) as unknown as Response;
+
+    it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
+        expect.assertions(4);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = hangingFetchImpl();
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { status?: unknown };
+
+            expect(spy).toHaveBeenCalledWith(30_000);
+            expect(error).toBeInstanceOf(Error);
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("rethrows a non-timeout abort/network failure unchanged", async () => {
+        expect.assertions(1);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = hangingFetchImpl();
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            // Not a timeout — e.g. a DNS failure the fetch implementation
+            // surfaces on the same signal-driven rejection path.
+            abort(new TypeError("fetch failed"));
+
+            const error = (await pending) as Error;
+
+            expect(error.message).toBe("fetch failed");
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("overrides the default timeout with RunFunctionOptions.timeoutMs", async () => {
+        expect.assertions(2);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = hangingFetchImpl();
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF, undefined, { timeoutMs: 1000 }).catch(
+                (error: unknown) => error,
+            );
+
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { message?: unknown };
+
+            expect(spy).toHaveBeenCalledWith(1000);
+            expect(error.message).toMatch(/timed out after 1000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("maps a deadline that fires DURING a successful response's stalled body read to the same retryable 503 (PR review)", async () => {
+        expect.assertions(2);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: true, status: 200 }, init?.signal));
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            // Headers already "arrived" (fetchImpl resolved) by the time this
+            // fires; the pending `response.text()` read must still see it.
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { status?: unknown };
+
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it("maps a deadline that fires DURING a non-ok response's stalled error-body read to the same retryable 503 (PR review)", async () => {
+        expect.assertions(2);
+
+        const { abort, spy } = stubAbortSignalTimeout();
+
+        try {
+            const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => responseWithHangingBody({ ok: false, status: 500 }, init?.signal));
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            abort(new DOMException("The operation timed out.", "TimeoutError"));
+
+            const error = (await pending) as { status?: unknown };
+
+            // Must be the runner's own retryable timeout error, NOT toDispatchError's
+            // 500-status classification — the abort during the body read must win.
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+});
+
+describe("isDeterministicDispatchFailure", () => {
+    it("is true for the deterministic allowlist and false for 408/429/5xx and non-LunoraErrors", async () => {
+        expect.assertions(8);
+
+        const errorWithStatus = async (status: number): Promise<unknown> =>
+            createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("boom", { status }), label: "@lunora/queue" })(REF).then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+        expect(isDeterministicDispatchFailure(await errorWithStatus(400))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(403))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(404))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(422))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(408))).toBe(false);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(429))).toBe(false);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(500))).toBe(false);
+        expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
+    });
+
+    it("is false for a LunoraError that merely shares an allowlisted status but did not come from a dispatch response", () => {
+        expect.assertions(1);
+
+        // Same shape (structural code/status/type) as a real dispatch failure,
+        // but built directly by unrelated code (e.g. a storage lookup) rather
+        // than by `toDispatchError` — must not be misclassified as a
+        // dispatch failure just because its status is in the allowlist.
+        const unrelated = new LunoraError("STORAGE_OBJECT_NOT_FOUND", "not found", { status: 404 });
+
+        expect(isDeterministicDispatchFailure(unrelated)).toBe(false);
     });
 });
 

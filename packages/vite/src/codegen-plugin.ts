@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import { CodegenDiagnosticError, createCodegenProject, describeErrorLevelFindings, findTsconfig, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import { inferLunoraBindings, LUNORA_CONFIG_FILE } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
 import { collectWranglerSecretVariables, reconcileWranglerBindings, reconcileWranglerCompatibilityDate, WRANGLER_FILES } from "@lunora/config/cloudflare";
@@ -540,25 +540,49 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             const onChange = (file: string): void => {
-                // Only react to changes inside the schema dir, and ignore generated output.
                 const normalized = resolve(file);
 
+                // A tsconfig change can move path aliases / compiler options out
+                // from under a reused Project, so drop the cache and rebuild it
+                // from scratch on the next run. Checked FIRST — before the
+                // schema-directory gate below — because the tsconfig that backs
+                // cross-file type resolution (a shared validator, a path alias)
+                // sits at the project root for every shipped template, not under
+                // the schema directory; gating this on `absoluteSchemaDirectory`
+                // first meant a root tsconfig save could never reach this branch.
+                // `tsconfig.*.json` variants (e.g. a referenced
+                // `tsconfig.build.json`) match by name wherever the watcher sees
+                // them; it never triggers codegen itself — there is nothing new
+                // to emit.
+                if (TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
+
+                    return;
+                }
+
+                // Only a file literally named `tsconfig.json` can possibly be the
+                // one `findTsconfig` would resolve, so gate its (existsSync-walk)
+                // cost on that cheap basename check instead of paying it on every
+                // watcher event — every `.ts` save otherwise walked the tree just
+                // to answer a question only a tsconfig save could ever say yes to.
+                // Recomputed here rather than captured once, so a tsconfig created
+                // AFTER the cached Project was first built — nothing was found
+                // walking up from the schema directory that time, so the Project
+                // fell back to an isolated one — still invalidates the moment it
+                // appears on disk.
+                if (normalized.endsWith(`${sep}tsconfig.json`) && normalized === findTsconfig(absoluteSchemaDirectory)) {
+                    cachedProject = undefined;
+
+                    return;
+                }
+
+                // Only react to changes inside the schema dir from here on, and
+                // ignore generated output.
                 if (!isInside(normalized, absoluteSchemaDirectory)) {
                     return;
                 }
 
                 if (isInside(normalized, absoluteGeneratedDirectory)) {
-                    return;
-                }
-
-                // A tsconfig change can move path aliases / compiler options out
-                // from under a reused Project, so drop the cache and rebuild it
-                // from scratch on the next run. Checked before the `.ts` gate so
-                // a `tsconfig*.json` save still invalidates (it never triggers
-                // codegen itself — there is nothing new to emit).
-                if (normalized.endsWith(`${sep}tsconfig.json`) || TSCONFIG_VARIANT_RE.test(normalized)) {
-                    cachedProject = undefined;
-
                     return;
                 }
 
@@ -622,9 +646,29 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }, DEBOUNCE_MS);
             };
 
+            // A tsconfig DELETION can't be caught by the `normalized === findTsconfig(...)`
+            // check inside `onChange` above: `findTsconfig` re-walks the tree at
+            // call time, and by the time this fires the file is already gone, so
+            // the live walk resolves to a DIFFERENT config (a parent's) or
+            // `undefined` — never the deleted path, so that equality never
+            // matches and a cached Project built against the now-missing
+            // tsconfig would survive stale. Basename alone is enough here
+            // (no `findTsconfig` re-walk needed): over-invalidating on an
+            // unrelated tsconfig.json's removal costs a wasted rebuild, never
+            // a wrong one — the same "degrade only toward extra work" contract
+            // `readShapeMemoCursor`-style fallbacks in this repo already lean on.
+            const onConfigFileRemoved = (file: string): void => {
+                const normalized = resolve(file);
+
+                if (normalized.endsWith(`${sep}tsconfig.json`) || TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
+                }
+            };
+
             server.watcher.on("add", onChange);
             server.watcher.on("change", onChange);
             server.watcher.on("unlink", onChange);
+            server.watcher.on("unlink", onConfigFileRemoved);
 
             // The config files whose binding-relevant drift restarts the dev server
             // in place. Both wrangler candidate names are watched (even if absent
@@ -734,6 +778,7 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 server.watcher.off("add", onChange);
                 server.watcher.off("change", onChange);
                 server.watcher.off("unlink", onChange);
+                server.watcher.off("unlink", onConfigFileRemoved);
                 server.watcher.off("add", onConfigChange);
                 server.watcher.off("change", onConfigChange);
                 server.watcher.off("unlink", onConfigChange);

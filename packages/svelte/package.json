@@ -44,10 +44,6 @@
             "types": "./dist/server.d.ts",
             "import": "./dist/server.mjs"
         },
-        "./worker": {
-            "types": "./dist/worker.d.ts",
-            "import": "./dist/worker.mjs"
-        },
         "./upload": {
             "types": "./dist/upload.d.ts",
             "import": "./dist/upload.mjs"

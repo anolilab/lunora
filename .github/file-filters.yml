@@ -135,3 +135,15 @@ templates:
     - "scripts/template-build-smoke.sh"
     - "pnpm-lock.yaml"
     - "pnpm-workspace.yaml"
+
+# packages/platform-node/docs/index.mdx's capability table vs NODE_CAPABILITIES
+# (packages/platform/src/capabilities.ts) drift guard. Listed separately from
+# `packages` for the same anti-hole reason as `worker_size`/`sdks` above: a PR
+# touching only the checker, the two files it compares, the job, or this
+# filter still runs the gate.
+node_capabilities_docs:
+    - "packages/platform/src/capabilities.ts"
+    - "packages/platform-node/docs/index.mdx"
+    - "scripts/check-node-capabilities-docs.js"
+    - ".github/workflows/lint.yml"
+    - ".github/file-filters.yml"

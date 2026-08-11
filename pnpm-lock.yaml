@@ -18,6 +18,28 @@ catalogs:
     workers-ai-provider:
       specifier: 4.0.0
       version: 4.0.0
+  angular:
+    '@angular/common':
+      specifier: ^22.0.8
+      version: 22.0.8
+    '@angular/compiler':
+      specifier: ^22.0.8
+      version: 22.0.8
+    '@angular/compiler-cli':
+      specifier: ^22.0.8
+      version: 22.0.8
+    '@angular/core':
+      specifier: ^22.0.8
+      version: 22.0.8
+    '@angular/platform-browser':
+      specifier: ^22.0.8
+      version: 22.0.8
+    rxjs:
+      specifier: ^7.8.2
+      version: 7.8.2
+    zone.js:
+      specifier: ^0.16.2
+      version: 0.16.2
   auth:
     '@better-auth/core':
       specifier: 1.7.0-rc.2
@@ -396,6 +418,15 @@ catalogs:
       specifier: 4.1.10
       version: 4.1.10
   tooling:
+    '@types/better-sqlite3':
+      specifier: ^7.6.13
+      version: 7.6.13
+    better-sqlite3:
+      specifier: ^12.11.1
+      version: 12.11.1
+    cron-parser:
+      specifier: 5.6.2
+      version: 5.6.2
     dockerode:
       specifier: ^5.0.1
       version: 5.0.1
@@ -2248,7 +2279,7 @@ importers:
         version: 1.0.0(@tanstack/react-query@5.101.4(react@19.2.8))(@tanstack/solid-query@5.101.3(solid-js@1.9.14))(@tanstack/svelte-query@6.1.37(svelte@5.56.7(@typescript-eslint/types@8.65.0)))(@tanstack/vue-query@5.101.3(vue@3.5.40(typescript@6.0.3)))(react@19.2.8)(solid-js@1.9.14)(svelte@5.56.7(@typescript-eslint/types@8.65.0))(vue@3.5.40(typescript@6.0.3))
     devDependencies:
       '@angular/core':
-        specifier: ^22.0.8
+        specifier: catalog:angular
         version: 22.0.8(@angular/compiler@22.0.8)(rxjs@7.8.2)(zone.js@0.16.2)
       '@types/node':
         specifier: catalog:types
@@ -2263,7 +2294,7 @@ importers:
         specifier: catalog:build
         version: 0.28.1
       rxjs:
-        specifier: ^7.8.2
+        specifier: catalog:angular
         version: 7.8.2
       typescript:
         specifier: 6.0.3
@@ -2272,7 +2303,7 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.11.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       zone.js:
-        specifier: ^0.16.2
+        specifier: catalog:angular
         version: 0.16.2
 
   packages/astro:
@@ -2358,7 +2389,7 @@ importers:
         specifier: catalog:cloudflare
         version: 5.20260724.1
       '@types/better-sqlite3':
-        specifier: ^7.6.13
+        specifier: catalog:tooling
         version: 7.6.13
       '@types/node':
         specifier: catalog:types
@@ -2373,7 +2404,7 @@ importers:
         specifier: catalog:auth
         version: 1.7.0-rc.2(23f5a600236b4c51e68d01671e2cb93e)
       better-sqlite3:
-        specifier: ^12.11.1
+        specifier: catalog:tooling
         version: 12.11.1
       esbuild:
         specifier: catalog:build
@@ -2410,19 +2441,19 @@ importers:
         version: 1.7.0-rc.2(60b4d39889f27ebc5bbdb7f3dbcb14b9)
     devDependencies:
       '@angular/common':
-        specifier: ^22.0.7
+        specifier: catalog:angular
         version: 22.0.8(@angular/core@22.0.8(@angular/compiler@22.0.8)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2)
       '@angular/compiler':
-        specifier: ^22.0.7
+        specifier: catalog:angular
         version: 22.0.8
       '@angular/compiler-cli':
-        specifier: ^22.0.7
+        specifier: catalog:angular
         version: 22.0.8(@angular/compiler@22.0.8)(supports-color@10.2.2)(typescript@6.0.3)
       '@angular/core':
-        specifier: ^22.0.7
+        specifier: catalog:angular
         version: 22.0.8(@angular/compiler@22.0.8)(rxjs@7.8.2)(zone.js@0.16.2)
       '@angular/platform-browser':
-        specifier: ^22.0.7
+        specifier: catalog:angular
         version: 22.0.8(@angular/common@22.0.8(@angular/core@22.0.8(@angular/compiler@22.0.8)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.0.8(@angular/compiler@22.0.8)(rxjs@7.8.2)(zone.js@0.16.2))
       '@solidjs/testing-library':
         specifier: catalog:frontend
@@ -2482,7 +2513,7 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
       rxjs:
-        specifier: ^7.8.2
+        specifier: catalog:angular
         version: 7.8.2
       solid-js:
         specifier: catalog:frontend
@@ -2515,7 +2546,7 @@ importers:
         specifier: catalog:frontend
         version: 3.3.8(typescript@6.0.3)
       zone.js:
-        specifier: ^0.16.2
+        specifier: catalog:angular
         version: 0.16.2
 
   packages/bindings:
@@ -3274,9 +3305,6 @@ importers:
 
   packages/hyperdrive:
     dependencies:
-      '@lunora/errors':
-        specifier: workspace:*
-        version: link:../errors
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3296,6 +3324,9 @@ importers:
       '@electric-sql/pglite-socket':
         specifier: 0.2.7
         version: 0.2.7(@electric-sql/pglite-age@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_hashids@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_ivm@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_textsearch@0.0.6(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_uuidv7@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgtap@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgvector@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite@0.5.4)
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@types/node':
         specifier: catalog:types
         version: 26.1.1
@@ -3740,10 +3771,10 @@ importers:
         specifier: catalog:workflow
         version: 2.0.0(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.4)(better-sqlite3@12.11.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260724.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@7.6.13)(@types/pg@8.20.0)(better-sqlite3@12.11.1)(kysely@0.28.17)(mysql2@3.23.1(@types/node@26.1.1))(pg@8.22.0)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.23.1(@types/node@26.1.1)))(ioredis@5.11.1(supports-color@10.2.2)))
       better-sqlite3:
-        specifier: ^12.11.1
+        specifier: catalog:tooling
         version: 12.11.1
       cron-parser:
-        specifier: 5.6.2
+        specifier: catalog:tooling
         version: 5.6.2
     devDependencies:
       '@codspeed/vitest-plugin':
@@ -3765,7 +3796,7 @@ importers:
         specifier: workspace:*
         version: link:../storage
       '@types/better-sqlite3':
-        specifier: ^7.6.13
+        specifier: catalog:tooling
         version: 7.6.13
       '@types/node':
         specifier: catalog:types
@@ -4119,7 +4150,7 @@ importers:
         specifier: workspace:*
         version: link:../platform
       cron-parser:
-        specifier: 5.6.2
+        specifier: catalog:tooling
         version: 5.6.2
     devDependencies:
       '@cloudflare/vitest-pool-workers':
@@ -4754,9 +4785,6 @@ importers:
       '@visulima/vite-overlay':
         specifier: catalog:vite
         version: 2.0.5(ai@7.0.37(zod@4.4.3))(vite@8.1.5(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      jsonc-parser:
-        specifier: catalog:vite
-        version: 3.3.1
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -4776,6 +4804,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.9.1
+      jsonc-parser:
+        specifier: catalog:vite
+        version: 3.3.1
       typescript:
         specifier: 6.0.3
         version: 6.0.3

@@ -18,11 +18,18 @@ export interface CoverageThresholds {
  *
  * Thresholds only apply when coverage is enabled (`vitest run --coverage`, the
  * `test:coverage` scripts); plain `vitest run` is unaffected. The workerd-gated
- * packages (client, d1, do, runtime, scheduler, storage) use inline
- * `defineConfig` configs — not this helper — and stay threshold-free: their
- * workerd projects run without coverage (v8/`node:inspector` is unsupported in
- * `@cloudflare/vitest-pool-workers`), so a floor there would gate on a
- * structurally incomplete number.
+ * packages (client, container, d1, dispatch, do, queue, runtime, scheduler,
+ * storage, workflow, x402) use inline `defineConfig` configs — not this
+ * helper — because their `workerd` project runs without coverage (v8/
+ * `node:inspector` is unsupported in `@cloudflare/vitest-pool-workers`), so a
+ * floor keyed to THIS default would gate on a structurally incomplete number.
+ * That does not make every workerd-gated package threshold-free: a package
+ * whose non-workers project has stable, measured coverage may still pin its
+ * own floor inline — `client`'s `vitest.config.ts` does exactly this for its
+ * `mocks` project, with numbers measured against that project alone (see its
+ * file-level comment). The exemption is "don't inherit this default", not
+ * "no threshold anywhere"; a package that moves off this helper for any
+ * other reason needs its own justification, not this comment.
  */
 export const DEFAULT_COVERAGE_THRESHOLDS: Required<CoverageThresholds> = {
     branches: 70,
@@ -76,6 +83,10 @@ export const getVitestConfig = (options: ViteUserConfig = {}, coverageThresholds
                 : ["default"],
             sequence: {
                 seed: VITEST_SEQUENCE_SEED,
+                // `seed` is inert without `shuffle` — Vitest only consumes the seed when it
+                // is randomizing. File-level only: within-file order is legitimately
+                // load-bearing in some suites.
+                ...(process.env.LUNORA_SHUFFLE === "1" ? { shuffle: { files: true, tests: false } } : {}),
             },
             silent: process.env.CI ? "passed-only" : false,
             typecheck: {

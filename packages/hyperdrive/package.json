@@ -64,7 +64,6 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.21",
         "@lunora/shard-engine": "1.0.0-alpha.26",
         "@lunora/sql-store": "1.0.0-alpha.78",
         "drizzle-orm": "catalog:drizzle"
@@ -73,6 +72,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@electric-sql/pglite": "0.5.4",
         "@electric-sql/pglite-socket": "0.2.7",
+        "@lunora/errors": "1.0.0-alpha.21",
         "@types/node": "catalog:types",
         "@types/pg": "^8.20.0",
         "@visulima/packem": "catalog:build",

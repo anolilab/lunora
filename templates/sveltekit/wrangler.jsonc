@@ -6,10 +6,11 @@
     // `@sveltejs/adapter-cloudflare` emits during `vite build`. The adapter
     // overwrites whatever `main` points at, so it MUST be the adapter's own
     // output path (its default) — NOT `src/worker.ts`, which the adapter would
-    // clobber. `src/worker.ts` imports that emitted handler, wraps it with
-    // `withLunora` (mounting Lunora realtime under `/_lunora/*`), and re-exports
-    // `ShardDO`. `lunora deploy` bundles `src/worker.ts` as the deploy entry
-    // (overriding `main`), so the one deployed Worker carries both planes.
+    // clobber. `src/worker.ts` imports that emitted handler and folds it into
+    // the generated `defineApp()` builder via `.buildFrameworkWorker(...)`
+    // (mounting Lunora realtime under `/_lunora/*`), and re-exports `ShardDO`.
+    // `lunora deploy` bundles `src/worker.ts` as the deploy entry (overriding
+    // `main`), so the one deployed Worker carries both planes.
     "name": "{{name}}",
     "main": ".svelte-kit/cloudflare/_worker.js",
     "compatibility_date": "2026-06-10",
