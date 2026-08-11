@@ -228,29 +228,16 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## `@lunora/svelte/worker`
+## Single-worker composition
 
-Single-worker composition for SvelteKit (class-B — "own CF adapter,
-hook-injection"). SvelteKit owns its Cloudflare build via
-`@sveltejs/adapter-cloudflare`, so Lunora cannot own the worker entry; instead it
-**injects** its realtime plane into the worker SvelteKit emits. Re-exports
-`withLunora` (`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)),
-which wraps the SvelteKit handler as Lunora's fallback `httpRouter` — the reserved
-`/_lunora/*` endpoints hit Lunora and everything else delegates to SvelteKit. One
-worker, one deploy.
-
-This entry is socket-free and runs on the worker — keep it out of client code.
-
-```ts
-// src/worker.ts (your CF Worker entry)
-import { withLunora } from "@lunora/svelte/worker";
-import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js"; // adapter output
-
-import { auth } from "./lunora/auth";
-
-// `shardDO` lives on `env` (per request), so pass a factory:
-export default withLunora(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
-```
+SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`, so
+Lunora cannot own the worker entry; instead it **injects** its realtime plane
+into the worker SvelteKit emits, via `buildFrameworkWorker` on the generated
+app (`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)
+under the hood) — the reserved `/_lunora/*` endpoints hit Lunora and
+everything else delegates to SvelteKit. One worker, one deploy. See
+[Bring your framework](/docs/frameworks/bring-your-framework) for the full
+composition and a working example.
 
 ## Additional stores
 

@@ -883,33 +883,3 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `useUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
-
-## `@lunora/vue/worker`
-
-### `ComposedWorker` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `ExecutionContextLike` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `FrameworkWorkerOptionsInput` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `NitroCloudflareHandler` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `ScheduledControllerLike` (interface)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `WithLunoraOptions` (type)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.
-
-### `withLunora` (const)
-
-Re-exported from `@lunora/runtime` — signature tracked at its source.

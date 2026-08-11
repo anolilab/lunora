@@ -15,9 +15,9 @@ export { hydratePreloaded } from "./hydrate-preloaded";
  * - `hydratePreloaded` — seed a `ref` synchronously from an SSR `Preloaded` token (no loading flash), then attach the live subscription.
  *
  * Server-side preload helpers live in the socket-free `@lunora/vue/server`
- * entry (`createServerClient`, `preloadQuery`). Single-worker composition for
- * Nuxt (Class-B: inject Lunora realtime into Nitro's emitted Worker) lives in
- * the Vue-free `@lunora/vue/worker` entry (`withLunora`).
+ * entry (`createServerClient`, `preloadQuery`). Nuxt's single-worker
+ * composition (Lunora mounted inside Nitro) is `@lunora/nuxt`, not this
+ * package — see [Bring your framework](/docs/frameworks/bring-your-framework).
  */
 export { createLunora, LUNORA_INJECTION_KEY, provideLunora, useLunora } from "./lunora-provider";
 export type {

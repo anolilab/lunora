@@ -79,8 +79,8 @@ withLunora(host, optionsInput);
 - `optionsInput` — Lunora worker options minus `httpRouter`, or an `(env) => options` factory so per-request bindings like `env.SHARD` wire in. Returns a `{ fetch, scheduled, serverQuery }` worker.
 
 <Callout type="info">
-    `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime` — the same composer behind `@lunora/svelte/worker` and
-    `@lunora/vue/worker`.
+    `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime` — the same composer codegen's `buildFrameworkWorker` uses
+    for SvelteKit.
 </Callout>
 
 ### `lunora(options)`
