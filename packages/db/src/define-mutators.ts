@@ -267,10 +267,26 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
     // hard error rather than an infinite loop.
     const maxReissues = 32;
     let counter = 0;
+    let counterIdentity = client.currentIdentity();
+
+    // The server's watermark is keyed per identity, so a signed-in-user switch
+    // resets the sequence space on the server too; carrying this closure's
+    // `counter` forward across that switch would claim a gap the shard rejects
+    // as OUT_OF_ORDER, permanently (see plan 316). Reset both together whenever
+    // the client's identity has moved since the counter was last derived.
+    const resetCounterForIdentity = (): void => {
+        const identity = client.currentIdentity();
+
+        if (identity !== counterIdentity) {
+            counter = 0;
+            counterIdentity = identity;
+        }
+    };
 
     // Seed `counter` from the highest watermark the server has confirmed for this
     // shard, then claim the next sequence — keeping issuance monotonic across reloads.
     const nextClientSeq = (): number => {
+        resetCounterForIdentity();
         counter = Math.max(counter, client.confirmedMutationWatermark(context.shardKey)) + 1;
 
         return counter;
@@ -307,7 +323,10 @@ export const bindMutators = <M extends AnyMutatorMap, TCollections extends Colle
                     // it back to the watermark here — not to `clientSeq - 1` — is what lets
                     // the NEXT push's `Math.max(counter, watermark) + 1` re-derive the same
                     // `watermark + 1` instead of leaving a permanent gap the DO would
-                    // reject as OUT_OF_ORDER.
+                    // reject as OUT_OF_ORDER. Re-check identity first (same reset the
+                    // claim side applies) so a rejection that raced an identity switch
+                    // doesn't re-pin the counter to the previous user's watermark.
+                    resetCounterForIdentity();
                     counter = client.confirmedMutationWatermark(context.shardKey);
 
                     throw error;
