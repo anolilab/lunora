@@ -39,7 +39,7 @@
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
-import { commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
+import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
 const GENERATED_HEADER = `${generatedHeaderLines("go")
@@ -69,10 +69,14 @@ const GO_DIRECTIVE = "1.22";
  */
 const memberName = (raw: string): string => toPascalCase(raw);
 
+// A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
+// a shape this backend could not name) still TAKES arguments — wire-shaped ones.
+// Dropping the parameter made those functions uncallable with arguments, which is
+// what the JVM targets already got right.
 /** One function as an exported method posting the RPC envelope. */
 const renderCall = (namespaceType: string, method: SdkMethod): string => {
-    const argument = method.argsType === undefined ? "" : `args ${method.argsType}, `;
-    const payload = method.argsType === undefined ? "nil" : "args";
+    const argument = argsChoice(method, { none: "", typed: (type) => `args ${type}, `, untyped: "args any, " });
+    const payload = argsChoice(method, { none: "nil", typed: () => "args", untyped: "args" });
     const returns = method.resultType ?? "any";
     // The verb crosses into the runtime as a typed constant, not a string: a
     // typo here would otherwise compile and route a read over the write path.
@@ -92,8 +96,8 @@ const renderCall = (namespaceType: string, method: SdkMethod): string => {
  * frame names a query the server re-runs on every write to the tables it read.
  */
 const renderSubscribe = (namespaceType: string, method: SdkMethod): string => {
-    const argument = method.argsType === undefined ? "" : `args ${method.argsType}, `;
-    const payload = method.argsType === undefined ? "nil" : "args";
+    const argument = argsChoice(method, { none: "", typed: (type) => `args ${type}, `, untyped: "args any, " });
+    const payload = argsChoice(method, { none: "nil", typed: () => "args", untyped: "args" });
     const name = `Subscribe${memberName(method.functionName)}`;
 
     return [

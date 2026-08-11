@@ -373,6 +373,55 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         expect(sources).not.toContain(String.raw`"messages:co"unt"`);
     });
 
+    // A schema no model can express still TAKES arguments. Five languages used to
+    // drop the parameter entirely, so a `v.bigint()` function was uncallable with
+    // arguments at all — while the CLI advised passing wire values "directly",
+    // through a parameter that did not exist. The JVM targets always kept one.
+    it("still accepts arguments when no model can be named for them", async () => {
+        expect.assertions(2);
+
+        const unrepresentable: OpenRpcDocument = {
+            methods: [
+                {
+                    name: "wallet:credit",
+                    params: [
+                        {
+                            name: "args",
+                            // v.bigint() — deliberately gets no model, because a typed
+                            // field would send a plain number where the wire needs the
+                            // tagged form.
+                            schema: { properties: { amount: { format: "int64", type: "integer" } }, required: ["amount"], type: "object" },
+                        },
+                    ],
+                    "x-lunora-function-kind": "mutation",
+                },
+            ],
+        };
+
+        const { files, unrepresentable: reported } = await generateSdk(unrepresentable, target);
+        const surface = Object.entries(files)
+            .filter(([path]) => !path.toLowerCase().includes("models"))
+            .map(([, contents]) => contents)
+            .join("\n");
+
+        // The function is reported as carrying an unrepresentable type...
+        expect(reported).toContain("wallet:credit");
+
+        // ...and the call site FORWARDS that argument. Asserted positively rather
+        // than by listing empty-payload spellings: the first version of this test
+        // enumerated `{}` and `nil` and so missed Rust, which accepted `args` and
+        // sent `&WireValue::Object(Vec::new())` — a parameter silently discarded,
+        // which is worse than the missing parameter it replaced, because passing
+        // arguments then compiles and does nothing.
+        const forwarded = surface
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.includes('"wallet:credit"'))
+            .filter((line) => /\bargs\b/u.test(line));
+
+        expect(forwarded.length).toBeGreaterThan(0);
+    });
+
     it("reports the result types its backend could not name", async () => {
         expect.assertions(1);
 
