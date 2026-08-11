@@ -254,6 +254,32 @@ const memoryRuntime = (options?: {
         return undefined;
     };
 
+    /**
+     * The completion mutation: terminal patch + queue handoff. This double keeps
+     * no queue (see `run-queue.test.ts` for those semantics), so it ends the run
+     * exactly as the real one does with an empty queue — including the ownership
+     * guard that makes a replayed completion a no-op.
+     */
+    const completeRun = (args?: Record<string, unknown>): unknown => {
+        const thread = threads.get(args?.["key"] as string);
+
+        if (!args || !thread || thread.instanceId !== args["instanceId"]) {
+            return {};
+        }
+
+        thread.status = args["status"] as string;
+
+        if (args["error"] !== undefined) {
+            thread.error = args["error"] as string;
+        }
+
+        if (args["usage"] !== undefined) {
+            thread.usage = args["usage"] as StoredThread["usage"];
+        }
+
+        return {};
+    };
+
     const memoryHandler = (args?: Record<string, unknown>): unknown => {
         const result = options?.memory?.result;
 
@@ -262,6 +288,7 @@ const memoryRuntime = (options?: {
 
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
@@ -764,10 +791,10 @@ describe(runAgentLoop, () => {
         const journal = new DurableStepJournal();
         const params = { input: "hi", owner: "user-a", threadKey: "thread-1" };
 
-        // First attempt crashes AFTER the final turn + extraction, on the terminal patch dispatch.
+        // First attempt crashes AFTER the final turn + extraction, on the run-completion dispatch.
         let failPatch = true;
         const crashingRun: AgentRunFunction = async (reference, args) => {
-            if (failPatch && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.patchThread && args?.["status"] === "idle") {
+            if (failPatch && reference["__lunoraRef"] === DEFAULT_AGENT_FUNCTION_PATHS.completeRun && args?.["status"] === "idle") {
                 failPatch = false;
                 throw new Error("crash after extract");
             }

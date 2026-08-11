@@ -501,6 +501,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Nested transaction";
     };
+    readonly NETWORK_IN_MUTATION: {
+        readonly status: 500;
+        readonly title: "Network call inside a mutation";
+    };
     readonly OUT_OF_ORDER: {
         readonly status: 409;
         readonly title: "Out-of-order mutation";
@@ -517,6 +521,10 @@ const ERROR_CATALOG: {
         readonly internal: true;
         readonly status: 500;
         readonly title: "SQL storage unavailable";
+    };
+    readonly STREAM_INTERRUPTED: {
+        readonly status: 503;
+        readonly title: "Durable stream interrupted";
     };
     readonly TOKEN_EXPIRED: {
         readonly status: 401;

@@ -254,6 +254,7 @@ interface PlatformCapabilities {
         browser?: Capability;
         containers?: Capability;
         crossShardFanout?: Capability;
+        durableStreams?: Capability;
         globalTables?: Capability;
         hyperdrive?: Capability;
         keyValueStore?: Capability;

@@ -128,12 +128,14 @@ import {
     ADMIN_FUNCTIONS,
     advanceClientWatermark,
     appendAuditEntry,
+    appendStreamChunk,
     armRestore,
     awaitWsDrain,
     buildPokeFrames,
     buildSettings,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    claimStreamRun,
     clearCapturedMail,
     clearQueueMessages,
     ConflictError,
@@ -150,6 +152,7 @@ import {
     ensureAuditTable,
     facetColumn,
     findStorageReferences,
+    finishStreamRun,
     FLAGS_FUNCTION_PREFIX,
     gateReplicaDispatch,
     handleReplicaControl,
@@ -179,6 +182,8 @@ import {
     readMigrationStatus,
     readQueueMessageById,
     readQueueMessages,
+    readStreamChunks,
+    readStreamRun,
     readTablePage,
     recordCapturedMail,
     recordChangedKeys,
@@ -195,12 +200,15 @@ import {
     sendDeltaFrames,
     ShardRunner,
     stableStringify,
+    stableWireKey,
     subscriptionListDeltas,
     summarizeFanoutTopics,
     summarizeSubscriptions,
     TransactionHeadroomTracker,
     trimIdempotent,
+    trimStreamRuns,
     trySendFrame,
+    withDeterministicScope,
     writeGlobalShapeSnapshot,
     writeIdempotent,
     writeTouchesMemo,
@@ -723,6 +731,31 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
  * dispatch rather than a timer.
  */
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
+
+/**
+ * How long a durable stream's transcript is kept when the procedure does not
+ * set its own `ttlMs`. A day covers "I reloaded", "I reopened the tab this
+ * evening", and a second viewer arriving late, without keeping every
+ * transcript a chatty shard ever produced.
+ */
+const DURABLE_STREAM_DEFAULT_TTL_MS = 86_400_000;
+
+/** Minimum spacing between durable-stream TTL sweeps, amortized onto a stream start. */
+const DURABLE_STREAM_GC_INTERVAL_MS = 3_600_000;
+
+/**
+ * One socket attached to a durable stream run. The producer fans every chunk
+ * out to each attached sink and calls exactly one terminal (`complete`/`fail`);
+ * a sink that has detached is simply no longer in the set.
+ */
+interface DurableStreamSink {
+    /** Deliver one chunk. Returns `false` when the socket refused it (already closed). */
+    readonly chunk: (chunk: { data: unknown; seq: number }) => boolean;
+    /** The run finished successfully — send `complete` and release the socket's stream slot. */
+    readonly complete: () => void;
+    /** The run failed — send the (already redacted) error and release the socket's stream slot. */
+    readonly fail: (failure: { code: string; message: string }) => void;
+}
 
 /**
  * Reserved shard name for the fallback Durable Object that hosts every
@@ -1257,6 +1290,18 @@ abstract class ShardDO {
      * pumping into it would have nowhere to write.
      */
     private readonly streamCancellers = new WeakMap<ShardSocketLike, Map<string, AbortController>>();
+
+    /**
+     * Live producers for durable streams, keyed by run key. In-memory on
+     * purpose: it tracks who is *currently* producing, while the transcript
+     * itself lives in SQLite. A run whose entry is missing but whose row still
+     * says `running` was interrupted by an eviction — see
+     * {@link ShardDO.attachDurableStream}.
+     */
+    private readonly durableStreamRuns = new Map<string, { sinks: Set<DurableStreamSink> }>();
+
+    /** Throttle for the durable-stream TTL sweep — at most one pass per {@link DURABLE_STREAM_GC_INTERVAL_MS}. */
+    private lastDurableStreamTrimAt = 0;
 
     /**
      * Lifetime request counters surfaced by the `__lunora_admin__:getMetrics`
@@ -1961,15 +2006,24 @@ abstract class ShardDO {
         //
         // Only the depth bookkeeping stays here: it is `ShardDO` state, and the
         // nested-transaction error above reads it.
-        return this.runner.runInTransaction(async () => {
-            this.transactionDepth = 1;
+        // The mutation body runs in a deterministic scope: `Date.now()` frozen,
+        // `Math.random()` seeded, `fetch` refused. Sound here and nowhere else —
+        // this is inside the single-writer gate, so no other dispatch can observe
+        // the swapped globals. See `withDeterministicScope`.
+        const now = Date.now();
+        const seed = `${this.runner.shardKey ?? ""}:${this.currentRequestMutationId ?? ""}:${String(now)}`;
 
-            try {
-                return await handler();
-            } finally {
-                this.transactionDepth = 0;
-            }
-        });
+        return this.runner.runInTransaction(async () =>
+            withDeterministicScope({ now, seed }, async () => {
+                this.transactionDepth = 1;
+
+                try {
+                    return await handler();
+                } finally {
+                    this.transactionDepth = 0;
+                }
+            }),
+        );
     }
 
     /**
@@ -3412,7 +3466,10 @@ abstract class ShardDO {
      * the wire-frame loop in `handleStream`.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+    protected executeStream(
+        _functionPath: string,
+        _args: Record<string, unknown>,
+    ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
         return null;
     }
@@ -4312,7 +4369,13 @@ abstract class ShardDO {
             // surface as an unhandled rejection.
             // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
             // before handing them to the stream handler — mirrors the `/rpc` path.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
+            this.handleStream(
+                ws,
+                envelope.id,
+                envelope.query.functionPath,
+                decodeWire(envelope.query.args ?? {}) as Record<string, unknown>,
+                typeof envelope.sinceChunk === "number" ? envelope.sinceChunk : 0,
+            ).catch(() => {
                 /* socket already gone; nothing to report */
             });
 
@@ -7489,7 +7552,7 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
+    private async handleStream(ws: ShardSocketLike, id: string, functionPath: string, args: Record<string, unknown>, sinceSeq = 0): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
         if (!iterable) {
@@ -7516,6 +7579,12 @@ abstract class ShardDO {
             } catch {
                 /* socket may be closed */
             }
+
+            return;
+        }
+
+        if (iterable.durable) {
+            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq);
 
             return;
         }
@@ -7572,6 +7641,223 @@ abstract class ShardDO {
             if (cancellers.size === 0) {
                 this.streamCancellers.delete(ws);
             }
+        }
+    }
+
+    /**
+     * Attach a socket to a **durable** stream run, starting the run if this is
+     * the first attach.
+     *
+     * The run is keyed by `(functionPath, args)`, which is what makes the
+     * feature work: a reload sends the same start frame with the `seq` it last
+     * saw, lands on the same run, replays the gap out of SQLite, and continues
+     * live. A second tab asking the same question watches the same transcript
+     * instead of paying for a second generation.
+     *
+     * Four states, all reachable on a first frame. **No run:** claim it and
+     * start the producer, detached from this socket. **Running with a live
+     * producer:** replay the gap, then attach a sink. **Finished
+     * (`complete`/`error`):** replay the transcript and send the recorded
+     * terminal frame, with no producer. **Running with no live producer:** the
+     * DO was evicted mid-run — replay what survived, then fail with
+     * `STREAM_INTERRUPTED` rather than silently re-running the handler, which
+     * would bill a model call twice and duplicate the tail.
+     *
+     * **Known ceiling:** fan-out does not apply socket backpressure the way the
+     * ephemeral path does. A sink whose `send` throws is dropped, and the client
+     * resumes from its last `seq` on reconnect — the transcript is durable, so
+     * dropping a slow socket loses nothing.
+     */
+    private async attachDurableStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
+        sinceSeq: number,
+    ): Promise<void> {
+        const sql = this.sql as SqlExec;
+        const runKey = `${functionPath}:${stableWireKey(args)}`;
+        const cancellers = socketMap(this.streamCancellers, ws);
+        const controller = new AbortController();
+
+        cancellers.set(id, controller);
+        ws.send(JSON.stringify({ id, type: "ack" }));
+
+        // Everything below runs without awaiting: a DO handles one event at a
+        // time, so replay-then-attach cannot interleave with the producer and
+        // there is no window in which a chunk is neither replayed nor delivered.
+        let delivered = sinceSeq;
+
+        const sendChunk = (chunk: { data: unknown; seq: number }): boolean => {
+            if (chunk.seq <= delivered) {
+                return true;
+            }
+
+            delivered = chunk.seq;
+
+            return trySendFrame(ws, JSON.stringify({ data: chunk.data, id, seq: chunk.seq, type: "chunk" }));
+        };
+
+        for (const chunk of readStreamChunks(sql, runKey, sinceSeq)) {
+            if (controller.signal.aborted || !sendChunk({ data: JSON.parse(chunk.dataJson) as unknown, seq: chunk.seq })) {
+                cancellers.delete(id);
+
+                return;
+            }
+        }
+
+        const run = readStreamRun(sql, runKey);
+
+        if (run?.status === "complete") {
+            trySendFrame(ws, JSON.stringify({ id, type: "complete" }));
+            cancellers.delete(id);
+
+            return;
+        }
+
+        if (run?.status === "error") {
+            trySendFrame(
+                ws,
+                JSON.stringify({ error: { code: run.errorCode ?? "INTERNAL_SERVER_ERROR", message: run.error ?? "stream failed" }, id, type: "error" }),
+            );
+            cancellers.delete(id);
+
+            return;
+        }
+
+        const live = this.durableStreamRuns.get(runKey);
+
+        if (run !== undefined && live === undefined) {
+            trySendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "STREAM_INTERRUPTED", message: "the producer for this durable stream did not survive; start a new run" },
+                    id,
+                    type: "error",
+                }),
+            );
+            cancellers.delete(id);
+
+            return;
+        }
+
+        const sink: DurableStreamSink = {
+            chunk: sendChunk,
+            complete: () => {
+                trySendFrame(ws, JSON.stringify({ id, type: "complete" }));
+                cancellers.delete(id);
+            },
+            fail: (failure) => {
+                trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" }));
+                cancellers.delete(id);
+            },
+        };
+
+        // A consumer cancelling a durable stream detaches it; the producer keeps
+        // going so the transcript completes for whoever attaches next. That is
+        // the whole point of declaring it durable.
+        controller.signal.addEventListener("abort", () => {
+            this.durableStreamRuns.get(runKey)?.sinks.delete(sink);
+        });
+
+        if (live) {
+            live.sinks.add(sink);
+
+            return;
+        }
+
+        this.trimDurableStreams(sql, registration.durable.ttlMs);
+        claimStreamRun(sql, runKey, Date.now());
+
+        const state = { sinks: new Set<DurableStreamSink>([sink]) };
+
+        this.durableStreamRuns.set(runKey, state);
+
+        // Detached from the socket, and handed to `waitUntil` where the host
+        // exposes one so the run isn't cut short the moment the last socket
+        // closes — a durable stream that dies with its opener is just an
+        // ephemeral stream with extra writes.
+        const producing = this.produceDurableStream(runKey, registration.iterator, state);
+
+        this.shardHost.waitUntil?.(producing);
+
+        await producing;
+    }
+
+    /**
+     * Drive a durable run's producer: persist each chunk under the next `seq`,
+     * then fan it out to whichever sockets are attached right now (possibly
+     * none — a run whose viewers all left still finishes and is still there for
+     * the next attach).
+     */
+    private async produceDurableStream(
+        runKey: string,
+        iterator: (signal: AbortSignal) => AsyncIterable<unknown>,
+        state: { sinks: Set<DurableStreamSink> },
+    ): Promise<void> {
+        const sql = this.sql as SqlExec;
+        // Not wired to any consumer's cancel: see `attachDurableStream`. The
+        // controller exists only to satisfy the handler's signature.
+        const controller = new AbortController();
+        // The producer owns the sequence: it is the only writer, and every
+        // attach reads the persisted transcript rather than this counter.
+        let seq = 0;
+
+        try {
+            for await (const chunk of iterator(controller.signal)) {
+                const data = encodeWire(chunk);
+
+                seq += 1;
+                appendStreamChunk(sql, runKey, seq, JSON.stringify(data));
+
+                for (const sink of state.sinks) {
+                    sink.chunk({ data, seq });
+                }
+            }
+
+            finishStreamRun(sql, runKey, "complete");
+
+            for (const sink of state.sinks) {
+                sink.complete();
+            }
+        } catch (error: unknown) {
+            // Same redaction invariant as the ephemeral path: an intentional
+            // `LunoraError` keeps its message, anything else is redacted before
+            // it is persisted — the transcript is replayed to every later
+            // attach, so a leaked internal message would leak repeatedly.
+            const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "internal error" });
+
+            if (redacted) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled stream error
+                console.error("[@lunora/do] unhandled durable stream error:", error);
+            }
+
+            finishStreamRun(sql, runKey, "error", { code: body.code, message: body.message });
+
+            for (const sink of state.sinks) {
+                sink.fail({ code: body.code, message: body.message });
+            }
+        } finally {
+            this.durableStreamRuns.delete(runKey);
+        }
+    }
+
+    /** Throttled TTL sweep for durable-stream transcripts, amortized onto a run start. */
+    private trimDurableStreams(sql: SqlExec, ttlMs?: number): void {
+        const now = Date.now();
+
+        if (now - this.lastDurableStreamTrimAt <= DURABLE_STREAM_GC_INTERVAL_MS) {
+            return;
+        }
+
+        this.lastDurableStreamTrimAt = now;
+
+        try {
+            trimStreamRuns(sql, now - (ttlMs ?? DURABLE_STREAM_DEFAULT_TTL_MS));
+        } catch {
+            // Best-effort GC (missing table on a pre-migration shard / stub sql
+            // handle) must never fail the stream that triggered it.
         }
     }
 

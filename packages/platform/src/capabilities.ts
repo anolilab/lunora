@@ -36,6 +36,13 @@ export interface PlatformCapabilities {
         containers?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
+
+        /**
+         * Durable streams: a `.stream()` run whose chunks are persisted and
+         * whose producer outlives the socket that opened it, so a reconnecting
+         * or second client resumes the same transcript.
+         */
+        durableStreams?: Capability;
         /** Global (replicated) tables backed by a SQL store. */
         globalTables?: Capability;
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
@@ -46,6 +53,7 @@ export interface PlatformCapabilities {
         localSql?: Capability;
         /** Email sending (Resend / SES / etc). */
         mail?: Capability;
+
         /** Object storage (R2 / S3 / MinIO). */
         objectStorage?: Capability;
 
@@ -104,6 +112,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
         globalTables: { level: "native", note: "D1 with Sessions API" },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
+        durableStreams: {
+            level: "emulated",
+            note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming",
+        },
         localSql: { level: "native", note: "state.storage.sql (SQLite)" },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
         shardPlacement: {
@@ -194,6 +206,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: {
             level: "emulated",
             note: "Socket registry with attachments/tags persisted to SQLite, so subscription state survives a process restart; nothing is ever actually evicted from memory, so this is durability without hibernation's memory saving",
+        },
+        durableStreams: {
+            level: "emulated",
+            note: "Same shape as the Cloudflare host — chunks persisted per run in the shard's SQLite, producer detached from the socket. One process, so a restart mid-run ends it as STREAM_INTERRUPTED",
         },
         localSql: { level: "native", note: "better-sqlite3 (synchronous, embedded)" },
         shardAlarms: {

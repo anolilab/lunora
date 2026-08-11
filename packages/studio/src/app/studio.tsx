@@ -146,6 +146,7 @@ const SqlEditorPanel = lazyNamed(() => import("../features/sql/sql-editor-panel"
 const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), "FileBrowser");
 const StorageRulesPanel = lazy(() => import("../features/storage/storage-rules-panel"));
 const TracesPanel = lazy(() => import("../features/traces/traces-panel"));
+const EvalsPanel = lazy(() => import("../features/evals/evals-panel"));
 const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
@@ -296,6 +297,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     files: <path d="M4 7a2 2 0 0 1 2-2h3l2 2.5h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" />,
     flags: <path d="M6 21V4m0 0h11l-2 3 2 3H6" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
+    evals: <path d="M4 19V5m0 14h16M8 15l3-4 3 3 4-6M8 15v.01" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
@@ -346,7 +348,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     {
         key: "observability",
-        tabs: ["issues", "logs", "traces", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
+        tabs: ["issues", "logs", "traces", "evals", "audit", "realtime", "fanout", "containers", "metrics", "analytics", "health", "deploymentHealth"],
     },
     { key: "advisors", tabs: ["advisorHealth", "security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags"] },
@@ -455,6 +457,7 @@ const TABS = exhaustiveRouteTabs([
     "issues",
     "logs",
     "traces",
+    "evals",
     "realtime",
     "fanout",
     "mail",
@@ -1001,6 +1004,7 @@ const buildRouter = ({
         issues: <IssuesPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         traces: <TracesPanel initialShardKey={initialShardKey} />,
+        evals: <EvalsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsRoutePanel initialShardKey={initialShardKey} />,
         notifications: <NotificationsPanel />,

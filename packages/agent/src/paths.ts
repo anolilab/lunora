@@ -29,6 +29,7 @@ export const SANDBOX_INVOKE_PATH: "sandbox:invoke" = `${SANDBOX_MODULE}:invoke`;
  */
 export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     appendMessage: `${AGENT_MODULE}:agentAppendMessage`,
+    completeRun: `${AGENT_MODULE}:agentCompleteRun`,
     ensureThread: `${AGENT_MODULE}:agentEnsureThread`,
     episodeRecall: `${AGENT_MODULE}:agentEpisodeRecall`,
     episodeUpsert: `${AGENT_MODULE}:agentEpisodeUpsert`,

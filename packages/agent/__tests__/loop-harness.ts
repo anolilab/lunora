@@ -148,8 +148,32 @@ export const memoryRuntime = (): {
         return undefined;
     };
 
+    /**
+     * The completion mutation: terminal patch plus the queue handoff. The double
+     * keeps no queue (the queue's own semantics are covered in
+     * `run-queue.test.ts`), so it only has to end the run the way the real one
+     * does for an empty queue — including the ownership guard, which is what
+     * makes a replayed completion a no-op.
+     */
+    const completeRun = (args?: Record<string, unknown>): unknown => {
+        const thread = threads.get(args?.["key"] as string);
+
+        if (!args || !thread || thread.instanceId !== args["instanceId"]) {
+            return {};
+        }
+
+        thread.status = args["status"] as string;
+
+        if (args["error"] !== undefined) {
+            thread.error = args["error"] as string;
+        }
+
+        return {};
+    };
+
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],

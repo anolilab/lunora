@@ -33,6 +33,7 @@ const useNavLabels = (): NavLabels => {
         return {
             advisorHealth: t("Health score"),
             agents: t("Agents"),
+            evals: t("Evals"),
             analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
@@ -95,6 +96,7 @@ const useNavLabels = (): NavLabels => {
     const tabDescription = {
         advisorHealth: t("Score your app's advisor findings: a grade, the coverage split, and every procedure ranked worst-first."),
         agents: t("Inspect agent threads, message timelines, tool calls, and token usage."),
+        evals: t("Scores recorded by recordEvaluation — the latest verdict per eval, its trend, and the graded runs behind it."),
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
         audit: t("A durable log of admin state-changing operations."),

@@ -661,6 +661,33 @@ interface DeployInfo {
 }
 ```
 
+### `DurableStreamChunk` (interface)
+
+```ts
+interface DurableStreamChunk {
+    dataJson: string;
+    seq: number;
+}
+```
+
+### `DurableStreamRun` (interface)
+
+```ts
+interface DurableStreamRun {
+    error?: string;
+    errorCode?: string;
+    lastSeq: number;
+    startedAt: number;
+    status: DurableStreamStatus;
+}
+```
+
+### `DurableStreamStatus` (type)
+
+```ts
+type DurableStreamStatus = "complete" | "error" | "running";
+```
+
 ### `ExportRow` (interface)
 
 ```ts
@@ -2079,6 +2106,18 @@ const SCHEMA_HISTORY_MAX_VERSIONS = 50;
 const SEARCH_STATE_TABLE = "__lunora_search_state";
 ```
 
+### `STREAM_CHUNKS_TABLE` (const)
+
+```ts
+const STREAM_CHUNKS_TABLE = "__stream_chunks";
+```
+
+### `STREAM_RUNS_TABLE` (const)
+
+```ts
+const STREAM_RUNS_TABLE = "__stream_runs";
+```
+
 ### `SchedulableWorkflowReferenceLike` (interface)
 
 ```ts
@@ -2497,6 +2536,7 @@ interface SubscriptionEnvelope {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceChunk?: number;
     sinceEpoch?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
@@ -2952,6 +2992,12 @@ const appendAuditEntry: (sql: SqlExec, entry: AppendAuditEntry) => void;
 const appendCdcChange: (sql: SqlExec, ts: number, table: string, id: string, op: CdcChange["op"], doc: Record<string, unknown> | undefined) => void;
 ```
 
+### `appendStreamChunk` (const)
+
+```ts
+const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: string) => void;
+```
+
 ### `applyCdcChanges` (const)
 
 ```ts
@@ -3086,6 +3132,12 @@ const buildSettings: (rawEnv: unknown) => SettingsResult;
 
 ```ts
 const bumpCdcEpoch: (sql: SqlExec) => string;
+```
+
+### `claimStreamRun` (const)
+
+```ts
+const claimStreamRun: (sql: SqlExec, runKey: string, startedAt: number) => boolean;
 ```
 
 ### `clampPromotionThresholds` (const)
@@ -3323,6 +3375,15 @@ const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => P
 const findStorageReferences: (sql: SqlExec, storageColumns: Record<string, string[]>, keys: string[]) => StorageReferenceResult;
 ```
 
+### `finishStreamRun` (const)
+
+```ts
+const finishStreamRun: (sql: SqlExec, runKey: string, status: "complete" | "error", failure?: {
+    code: string;
+    message: string;
+}) => void;
+```
+
 ### `foldAggregateTally` (const)
 
 ```ts
@@ -3528,6 +3589,12 @@ const migrateCdcMeta: (sql: SqlExec) => void;
 const migrateClientWatermark: (sql: SqlExec) => void;
 ```
 
+### `migrateDurableStreams` (const)
+
+```ts
+const migrateDurableStreams: (sql: SqlExec) => void;
+```
+
 ### `migrateGlobalShapeSnapshot` (const)
 
 ```ts
@@ -3550,6 +3617,12 @@ const migrateSearchState: (sql: SqlExec) => void;
 
 ```ts
 const minCdcSeq: (sql: SqlExec) => number | undefined;
+```
+
+### `mulberry32` (const)
+
+```ts
+const mulberry32: (seed: number) => (() => number);
 ```
 
 ### `nextPromotionState` (const)
@@ -3799,6 +3872,18 @@ const readSchemaVersion: (sql: SqlExec, hash: string) => SchemaVersionRow | unde
 const readSearchBackfillState: (sql: SqlExec, companion: string) => SearchBackfillState;
 ```
 
+### `readStreamChunks` (const)
+
+```ts
+const readStreamChunks: (sql: SqlExec, runKey: string, sinceSeq: number) => DurableStreamChunk[];
+```
+
+### `readStreamRun` (const)
+
+```ts
+const readStreamRun: (sql: SqlExec, runKey: string) => DurableStreamRun | undefined;
+```
+
 ### `readTablePage` (const)
 
 ```ts
@@ -3960,6 +4045,12 @@ const runSql: <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...pa
 
 ```ts
 const runTriggers: (options: RunTriggersOptions) => Promise<void>;
+```
+
+### `seedFrom` (const)
+
+```ts
+const seedFrom: (text: string) => number;
 ```
 
 ### `selectExpiredIds` (const)
@@ -4130,6 +4221,12 @@ const trimCdcChanges: (sql: SqlExec, throughSeq: number) => void;
 const trimIdempotent: (sql: SqlExec, olderThanTs: number) => void;
 ```
 
+### `trimStreamRuns` (const)
+
+```ts
+const trimStreamRuns: (sql: SqlExec, olderThanTs: number) => void;
+```
+
 ### `tryRowToDocument` (const)
 
 ```ts
@@ -4152,6 +4249,15 @@ const unionAll: (branches: ReadonlyArray<SQL>) => SQL;
 
 ```ts
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
+```
+
+### `withDeterministicScope` (const)
+
+```ts
+const withDeterministicScope: <T>(options: {
+    now: number;
+    seed: string;
+}, body: () => Promise<T> | T) => Promise<T>;
 ```
 
 ### `writeGlobalShapeSnapshot` (const)

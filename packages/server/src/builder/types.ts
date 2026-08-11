@@ -3,6 +3,7 @@ import type { Infer, Validator } from "@lunora/values";
 import type {
     ActionCtx as ActionContext,
     ArgsValidator,
+    DurableStreamOptions,
     ExposeConfig,
     FunctionKind,
     InferArgs,
@@ -85,9 +86,16 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
      * tripped when the client cancels — break out of the loop or check
      * `signal.aborted` between yields. `.output()` does not apply: per-chunk
      * validation is opt-in via the handler itself.
+     *
+     * Pass `{ durable: true }` to make the run outlive the socket that opened
+     * it: chunks are persisted as they are produced, so a reload resumes the
+     * same run from where it left off instead of dropping the work, and a
+     * second client with the same arguments attaches to the same transcript.
+     * That is what an LLM response wants; a progress ticker does not need it.
      */
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        options?: { durable?: boolean | DurableStreamOptions },
     ) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
 
@@ -205,6 +213,7 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     /** See {@link QueryBuilder.stream}; the internal variant routes the registration into `internal` instead of `api`. */
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        options?: { durable?: boolean | DurableStreamOptions },
     ) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }

@@ -18,6 +18,13 @@ interface UseStreamResult<T> {
 }
 
 interface UseStreamOptions {
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The hook keeps the chunks it already has and the socket re-attaches to the
+     * same run, so a dropped connection mid-generation continues instead of
+     * surfacing `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
@@ -67,7 +74,10 @@ const useStream = <F extends FunctionReference<"stream">>(
         dispatch({ type: "reset" });
         dispatch({ type: "start" });
 
-        const { cancel, cleanup } = consumeStream(client.stream(function_, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey }), dispatch);
+        const { cancel, cleanup } = consumeStream(
+            client.stream(function_, args, { durable: options.durable, maxBuffer: options.maxBuffer, shardKey: options.shardKey }),
+            dispatch,
+        );
 
         cancelRef.current = cancel;
 
@@ -76,7 +86,7 @@ const useStream = <F extends FunctionReference<"stream">>(
             cancelRef.current = undefined;
         };
         // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the stream re-opens on the query's stable `__lunoraRef` and the serialized args (a content hash) rather than the raw `function_`/`args` object identity, so a caller recreating them with the same value doesn't tear down and re-open the stream. `client` is provider-stable.
-    }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer]);
+    }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer, options.durable]);
 
     return {
         cancel: () => {

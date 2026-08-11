@@ -30,6 +30,15 @@ interface EvaluationSpanHandle {
     setAttributes: (fields: Record<string, EvaluationAttributeValue>) => void;
 }
 
+/**
+ * Structural slice of `ctx.metrics` — enough to record a score as a durable
+ * series. Declared here for the same reason as {@link EvaluationSpanHandle}: no
+ * dependency on `@lunora/server`, and the real handle is assignable.
+ */
+interface EvaluationMetrics {
+    gauge: (name: string, value: number, attributes?: Record<string, unknown>) => void;
+}
+
 /** One eval verdict to emit. */
 interface RecordEvaluationInput {
     /**
@@ -37,6 +46,16 @@ interface RecordEvaluationInput {
      * emitted as the `.label` attribute. Omitted → no label attribute.
      */
     label?: string;
+
+    /**
+     * Optional `ctx.metrics` handle. Passing it ALSO records the score as a
+     * `gen_ai.evaluation.<name>.score` gauge, which is what gives an eval a
+     * durable history: span attributes live in the shard's bounded in-memory
+     * ring and vanish on hibernation, while metrics are persisted in per-minute
+     * buckets and can be charted as a trend. Additive — the attributes are
+     * emitted either way.
+     */
+    metrics?: EvaluationMetrics;
 
     /**
      * The scorer/evaluation name — becomes the key's name segment. Any character
@@ -105,9 +124,12 @@ const recordEvaluation = (input: RecordEvaluationInput): Record<string, Evaluati
     const attributes = evaluationAttributes(input);
 
     input.span?.setAttributes(attributes);
+    // The same key as the span attribute, so the live view (trace ring) and the
+    // durable trend (metric buckets) name the eval identically.
+    input.metrics?.gauge(`gen_ai.evaluation.${sanitizeName(input.name)}.score`, input.score, input.label === undefined ? undefined : { label: input.label });
 
     return attributes;
 };
 
-export type { EvaluationAttributeValue, EvaluationSpanHandle, RecordEvaluationInput };
+export type { EvaluationAttributeValue, EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput };
 export { evaluationAttributes, recordEvaluation };

@@ -3,9 +3,12 @@ import { createMailer } from "@lunora/mail";
 import type { InboundEmail } from "@lunora/mail/inbound";
 import { describe, expect, it } from "vitest";
 
-import { buildReferences, captureEmailReplyRef, replyToEmail } from "../src/reply.prototype";
+import { runAgentLoop } from "../src/agent-loop";
+import { defineAgent } from "../src/define-agent";
+import { buildReferences, captureEmailReplyRef, replyToEmail } from "../src/reply";
+import { DurableStepJournal, finalTurn, loopDefaults, scriptedGenerate } from "./loop-harness";
 
-/** Minimal `InboundEmail` builder — fills only the fields the prototype reads. */
+/** Minimal `InboundEmail` builder — fills only the fields the helpers read. */
 const fakeInboundEmail = (overrides: Partial<InboundEmail> = {}): InboundEmail => {
     return {
         attachments: [],
@@ -33,7 +36,7 @@ const fakeMailTransport = (): { sent: SendPayload[]; transport: MailTransport } 
     };
 };
 
-describe("reply prototype (plan 242 spike)", () => {
+describe("email reply", () => {
     it("captures a reply ref from an inbound email and threads the reply's In-Reply-To/References", async () => {
         const { sent, transport } = fakeMailTransport();
         const mailer = createMailer({ from: "support@lunora.sh", transport });
@@ -103,5 +106,70 @@ describe("reply prototype (plan 242 spike)", () => {
         // The mailer's buildPayload ran (from defaulted, addresses validated) —
         // proof this went through the real @lunora/mail send path, not a stub.
         expect(sent[0]?.from).toBe("support@lunora.sh");
+    });
+
+    it("calls onReply once with the captured ref when the run was triggered", async () => {
+        expect.assertions(3);
+
+        const calls: { channel: string; text?: string; threadKey: string }[] = [];
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            onReply: ({ replyRef, result, threadKey }) => {
+                calls.push({ channel: replyRef.channel, text: result.text, threadKey });
+            },
+        });
+        const journal = new DurableStepJournal();
+        const replyRef = captureEmailReplyRef(fakeInboundEmail({ from: "customer@example.com", messageId: "<msg@example.com>" }));
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([finalTurn("the answer")]),
+                params: { input: "hi", replyRef, threadKey: "thread-1" },
+                step: journal,
+            }),
+        );
+
+        expect(calls).toStrictEqual([{ channel: "email", text: "the answer", threadKey: "thread-1" }]);
+        // Delivery is a named durable step, so a replay serves it from the memo
+        // instead of sending the answer a second time.
+        expect(journal.invoked.filter((name) => name === "agent:reply")).toHaveLength(1);
+        expect(journal.invoked).toContain("agent:reply");
+    });
+
+    it("never calls onReply for an ordinary in-app run (no replyRef)", async () => {
+        expect.assertions(1);
+
+        let called = 0;
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            onReply: () => {
+                called += 1;
+            },
+        });
+
+        await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("the answer")]) }));
+
+        expect(called).toBe(0);
+    });
+
+    it("a failing reply does not fail the run — the answer is already on the thread", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            onReply: () => {
+                throw new Error("slack is down");
+            },
+        });
+        const replyRef = captureEmailReplyRef(fakeInboundEmail({ from: "customer@example.com", messageId: "<msg@example.com>" }));
+
+        await expect(
+            runAgentLoop(
+                loopDefaults(agent, {
+                    generate: scriptedGenerate([finalTurn("the answer")]),
+                    params: { input: "hi", replyRef, threadKey: "thread-1" },
+                }),
+            ),
+        ).resolves.toMatchObject({ text: "the answer" });
     });
 });

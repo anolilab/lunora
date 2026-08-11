@@ -145,6 +145,7 @@ const ownedRuntime = (userId: string): { rows: Map<string, FakeRow[]>; run: Agen
     const { functions } = agentComponent();
     const handlers = new Map<string, { handler: (context: unknown, args: never) => unknown }>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, functions.agentAppendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, functions.agentCompleteRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, functions.agentEnsureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, functions.agentMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, functions.agentPatchThread],

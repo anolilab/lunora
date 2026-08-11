@@ -161,8 +161,16 @@ A few smaller boundaries, most of them covered in depth on
   answers: await the first, combine both into one mutation, or use
   [`@lunora/db`](/docs/packages/db) mutators, whose outbox is strictly ordered.
   See [Write ordering](/docs/concepts/offline-first#write-ordering).
-- **No runtime enforcement of query/mutation determinism yet** — it's an advisor
-  lint today, not a hard runtime guard.
+- **Determinism is enforced in mutations, linted in queries.** A mutation body
+  runs with `Date.now()` frozen to the dispatch instant, `Math.random()` seeded,
+  and `fetch` refused (`NETWORK_IN_MUTATION`) — sound because a mutation holds the
+  DO's single-writer gate, so nothing else can observe the swapped globals.
+  Queries interleave (a deferred subscription re-run lands between two awaits of
+  another query), so freezing the clock for one would hand its instant to
+  another; they keep the `nondeterministic_query_mutation` advisor lint plus the
+  `ctx.now` / `ctx.fetch` surfaces instead. The values are stable _within_ one
+  execution, not replayed across a retry — an idempotency key, not a replayed
+  clock, is what makes a retry safe.
 
 ## See also
 

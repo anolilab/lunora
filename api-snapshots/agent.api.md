@@ -45,7 +45,15 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `AgentEmailRun` (interface)
 
-_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+```ts
+interface AgentEmailRun {
+    input: string;
+    owner?: string;
+    replyRef?: AgentReplyRef;
+    threadKey: string;
+    title?: string;
+}
+```
 
 ### `AgentFunctionPaths` (interface)
 
@@ -119,6 +127,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentOnReply` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AgentOnStepFinish` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -136,6 +148,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AgentProgressEvent` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentReplyInfo` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AgentReplyRef` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -584,6 +604,45 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `voiceClassName` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+## `@lunora/agent/reply`
+
+### `EmailReplyRef` (type)
+
+```ts
+type EmailReplyRef = Extract<AgentReplyRef, {
+    channel: "email";
+}>;
+```
+
+### `ReplyBody` (interface)
+
+```ts
+interface ReplyBody {
+    subject: string;
+    text: string;
+}
+```
+
+### `buildReferences` (const)
+
+```ts
+const buildReferences: (replyRef: EmailReplyRef) => string;
+```
+
+### `captureEmailReplyRef` (const)
+
+```ts
+const captureEmailReplyRef: (email: InboundEmail) => EmailReplyRef | undefined;
+```
+
+### `replyToEmail` (const)
+
+```ts
+const replyToEmail: (mailer: Mailer, replyRef: EmailReplyRef, body: ReplyBody) => Promise<{
+    id: string;
+}>;
+```
 
 ## `@lunora/agent/sandbox`
 

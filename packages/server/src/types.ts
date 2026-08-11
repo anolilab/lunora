@@ -663,9 +663,37 @@ type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "
  */
 interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
+
+    /**
+     * Present when the stream was declared `durable`. Chunks are persisted per
+     * run before they reach a socket, the producer outlives the socket that
+     * opened it, and a reconnecting (or second) client attaches to the same run
+     * and replays what it missed. See {@link DurableStreamOptions}.
+     */
+    readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
+}
+
+/**
+ * Durability settings for a `.stream()` procedure.
+ *
+ * A run is identified by the function path plus its arguments, so two clients
+ * calling the same stream with the same arguments observe one producer and one
+ * transcript. That identity is the feature: it is what makes a reload resume
+ * rather than re-generate, and what lets a second tab watch the same answer.
+ * Give a stream that must NOT be shared a caller-unique argument (a thread id,
+ * a message id) — the argument set is the run key.
+ */
+interface DurableStreamOptions {
+    /**
+     * How long a finished transcript is kept before it is trimmed, in
+     * milliseconds. Defaults to 24 hours — long enough to survive a reload and
+     * a commute, short enough that a chatty shard doesn't accumulate
+     * transcripts forever.
+     */
+    readonly ttlMs?: number;
 }
 
 // --- Context types -----------------------------------------------------------
@@ -2233,6 +2261,7 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    DurableStreamOptions,
     ExposeConfig,
     ExternalSourceCursor,
     ExternalSourceDefinition,

@@ -956,7 +956,10 @@ class LunoraClient {
      * tells us which socket to push the cancel frame onto when the consumer
      * calls `.cancel()` or the iterator is garbage-collected.
      */
-    private readonly streams = new Map<string, { handle: StreamHandle; shardKey: string | undefined }>();
+    private readonly streams = new Map<
+        string,
+        { durable: boolean; handle: StreamHandle; lastSeq: number; message: ClientMessage; shardKey: string | undefined }
+    >();
 
     /** Live shape subscriptions (partial replication), keyed by their wire id. */
     private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
@@ -3258,7 +3261,7 @@ class LunoraClient {
     public stream<F extends FunctionReference<"stream">>(
         function_: F,
         args: ArgsOf<F>,
-        options: { maxBuffer?: number; shardKey?: string } = {},
+        options: { durable?: boolean; maxBuffer?: number; shardKey?: string } = {},
     ): StreamIterable<ReturnOf<F>> {
         this.assertOpen();
 
@@ -3287,10 +3290,6 @@ class LunoraClient {
             },
         });
 
-        // Record before sending so an immediate ack/chunk reaching the dispatch
-        // path before we return finds its target.
-        this.streams.set(id, { handle: handle as StreamHandle, shardKey });
-
         this.ensureSocket(shardKey);
 
         const conn = this.getConnection(shardKey);
@@ -3306,6 +3305,12 @@ class LunoraClient {
             },
             type: "stream",
         };
+
+        // Record before sending so an immediate ack/chunk reaching the dispatch
+        // path before we return finds its target. The start frame is kept so a
+        // durable stream can be re-sent verbatim (plus its resume watermark)
+        // when the socket comes back.
+        this.streams.set(id, { durable: options.durable === true, handle: handle as StreamHandle, lastSeq: 0, message, shardKey });
 
         // Fast path: socket is open, try to send immediately. `sendOn` can still
         // return `false` if the socket closed between the `wsState` check and the
@@ -4830,20 +4835,39 @@ class LunoraClient {
         this.emitConnectionStatus();
         this.markShardPendingAck(conn.shardKey);
 
-        // Fail every in-flight stream bound to this shard. A stream whose start
-        // frame was already sent lost its server-side iterator when the socket
-        // dropped and can't resume, so a consumer's `for await` would otherwise
-        // hang forever on a next() that never settles (streams are failed on
-        // close()/error/overflow but a socket bounce is the common termination).
+        // Settle every in-flight stream bound to this shard. An EPHEMERAL stream
+        // whose start frame was already sent lost its server-side iterator when
+        // the socket dropped and can't resume, so a consumer's `for await` would
+        // otherwise hang forever on a next() that never settles (streams are
+        // failed on close()/error/overflow but a socket bounce is the common
+        // termination). A DURABLE stream is the opposite case: the run survives
+        // the socket, so it is re-queued with a resume watermark instead.
         // Stream-start frames still queued in `pendingStreams` were never sent,
         // so they legitimately ride the next reconnect — exclude those ids.
         const pendingStreamIds = new Set((conn.pendingStreams ?? []).map((message) => (message as { id?: string }).id));
 
         for (const [id, stream] of this.streams) {
-            if (connectionKey(stream.shardKey) === connectionKey(conn.shardKey) && !pendingStreamIds.has(id)) {
-                stream.handle.fail(new LunoraError("STREAM_DISCONNECTED", "stream terminated: WebSocket disconnected"));
-                this.streams.delete(id);
+            if (connectionKey(stream.shardKey) !== connectionKey(conn.shardKey) || pendingStreamIds.has(id)) {
+                continue;
             }
+
+            if (stream.durable) {
+                // A durable run outlives the socket: the server keeps producing
+                // and persists every chunk, so re-send the start frame carrying
+                // the last seq we saw and the reconnect replays the gap. The
+                // consumer's `for await` never observes the interruption.
+                const resume = { ...(stream.message as { id: string; type: "stream" }), sinceChunk: stream.lastSeq } as ClientMessage;
+
+                stream.message = resume;
+                // Replace, don't append: repeated bounces before the socket comes
+                // back would otherwise stack one frame per attempt for the same id.
+                conn.pendingStreams = [...(conn.pendingStreams ?? []).filter((queued) => (queued as { id?: string }).id !== id), resume];
+
+                continue;
+            }
+
+            stream.handle.fail(new LunoraError("STREAM_DISCONNECTED", "stream terminated: WebSocket disconnected"));
+            this.streams.delete(id);
         }
 
         if (this.WebSocketImpl === undefined) {
@@ -5021,8 +5045,12 @@ class LunoraClient {
                 return;
             }
             case "chunk": {
-                const { data, id } = message;
+                const { data, id, seq } = message;
                 const stream = this.streams.get(id);
+
+                if (stream && typeof seq === "number") {
+                    stream.lastSeq = seq;
+                }
 
                 stream?.handle.push(decodeWire(data));
 

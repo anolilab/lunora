@@ -735,6 +735,7 @@ interface UseRateLimitResult {
 
 ```ts
 interface UseStreamOptions {
+    durable?: boolean;
     maxBuffer?: number;
     shardKey?: string;
 }

@@ -98,6 +98,18 @@ export interface SubscriptionEnvelope {
     /** Resume checkpoint on a `shape_subscribe` envelope (the `__cdc_log` cursor the client's shape view is at). */
     sinceCheckpoint?: number;
 
+    /**
+     * Resume watermark for a `stream` envelope: the highest chunk `seq` this
+     * client already has. Only meaningful for a stream declared `durable` —
+     * the run replays everything after it, then continues live. Absent or `0`
+     * asks for the whole transcript.
+     *
+     * Deliberately NOT named `sinceSeq`: that name is already taken, one level
+     * down in `query`, for the CDC cursor a live query resumes from. Two
+     * different watermarks on the same envelope need two different names.
+     */
+    sinceChunk?: number;
+
     /** CDC epoch the {@link SubscriptionEnvelope.sinceCheckpoint} belongs to. */
     sinceEpoch?: string;
 

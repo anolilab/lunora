@@ -176,6 +176,7 @@ describe(agentComponent, () => {
             "entities",
             "episodes",
             "messages",
+            "run_queue",
             "threads",
         ]);
     });

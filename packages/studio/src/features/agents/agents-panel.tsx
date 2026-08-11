@@ -21,6 +21,7 @@ interface AgentsPanelProps {
 /** The merged agent schema-extension table names the runtime reads/writes (see `@lunora/agent`'s `component.ts`). */
 const THREADS_TABLE = "agent_threads";
 const MESSAGES_TABLE = "agent_messages";
+const RUN_QUEUE_TABLE = "agent_run_queue";
 
 /** Read caps — a studio observability view, not a paginated browser (the data browser owns deep paging). */
 const THREAD_LIMIT = 100;
@@ -139,6 +140,10 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
 
     const loadedTables = tables !== undefined;
     const hasAgentTables = Array.isArray(tables) && tables.some((table) => table.name === THREADS_TABLE);
+    // The queue table arrived after the thread tables: a deployment whose schema
+    // predates it has agents but no `agent_run_queue`, so probe it separately
+    // rather than assuming the extension is all-or-nothing.
+    const hasQueueTable = Array.isArray(tables) && tables.some((table) => table.name === RUN_QUEUE_TABLE);
 
     const {
         data: threadsPage,
@@ -156,6 +161,15 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
         table: MESSAGES_TABLE,
     };
 
+    // Runs parked behind the one in flight (`onConcurrentRun: "queue"`). Without
+    // this the queue is invisible: the thread just reads "running" while other
+    // runs wait their turn, and a full queue's CONFLICT looks unexplained.
+    const { data: queuePage } = useAdminQuery<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        { limit: THREAD_LIMIT, offset: 0, orderBy: { column: "position", direction: "asc" }, skipCount: true, table: RUN_QUEUE_TABLE },
+        { enabled: hasQueueTable, live: true, shardKey: initialShardKey },
+    );
+
     const {
         data: messagesPage,
         error: messagesError,
@@ -167,6 +181,8 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
     });
 
     const threads = Array.isArray(threadsPage?.rows) ? threadsPage.rows : [];
+    const queuedRuns = Array.isArray(queuePage?.rows) ? queuePage.rows : [];
+    const queueDepth = (threadKey: string): number => queuedRuns.filter((row) => readString(row, "threadKey") === threadKey).length;
     const messages = Array.isArray(messagesPage?.rows) ? messagesPage.rows : [];
 
     const selectedThread = threads.find((row) => readString(row, "key") === selectedKey);
@@ -202,6 +218,7 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
                                     <TableHead>{t("Agent")}</TableHead>
                                     <TableHead>{t("Key")}</TableHead>
                                     <TableHead>{t("Status")}</TableHead>
+                                    <TableHead>{t("Queued")}</TableHead>
                                     <TableHead>{t("Messages")}</TableHead>
                                     <TableHead>{t("Tokens")}</TableHead>
                                     <TableHead>{t("Updated")}</TableHead>
@@ -222,6 +239,15 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
                                                 <Badge data-testid={`agents-thread-status-${key}`} variant={threadStatusVariant(status)}>
                                                     {status ?? "—"}
                                                 </Badge>
+                                            </TableCell>
+                                            <TableCell className="tabular-nums">
+                                                {queueDepth(key) === 0 ? (
+                                                    <span className="text-muted-foreground">—</span>
+                                                ) : (
+                                                    <Badge data-testid={`agents-thread-queued-${key}`} variant="warning">
+                                                        {queueDepth(key)}
+                                                    </Badge>
+                                                )}
                                             </TableCell>
                                             <TableCell className="tabular-nums">{readNumber(row, "messageCount") ?? "—"}</TableCell>
                                             <TableCell className="tabular-nums text-muted-foreground">{totalTokens ?? "—"}</TableCell>

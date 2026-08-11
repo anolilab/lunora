@@ -1162,15 +1162,44 @@ its §4 decisions are deliberately unmade pending a measurement) · **314** an
 English NLP library in every Worker (TODO, P2).
 
 Reference design docs gating unbuilt follow-on work: **052** streaming hook ·
+**333** query snapshot coherence (client-only prototype built, measured, and
+reverted — the real fix needs a `pokeStart`/`pokeEnd`-style batch boundary for
+query subscriptions; see the plan for why the microtask window was the wrong
+rung) ·
 **137** release-train rehearsal (feeds 135 Phase 3) · **162** crossTabSync relay ·
 **234** node-host findings (spike DONE; the file was re-added by `370994075` and
 is kept as the host's reference) · **237** admin-auth hooks (one-adapter
 prototype; remaining adapters open) · **238** vector reader (codegen wiring +
-`define-rag` refactor open) · **240** agent run queue · **241** in-app inbox (D1
-backend open) · **242** agent reply · **245** eval runner (CLI shipped; **Studio
-Evals panel verified NOT built**) · **247** event store (not ratified) ·
+`define-rag` refactor open) · **241** in-app inbox (D1
+backend open) · **247** event store (not ratified) ·
 `execution-status.md` (wave-18 dispatch tracker) ·
 `multi-platform-portability-assessment.md`.
+
+**245** (eval runner) SHIPPED & REMOVED: the CLI runner was already in; the
+Studio **Evals** panel now exists, and the spike's "durable trend needs a second
+emission" follow-up shipped with it — `recordEvaluation` takes an optional
+`ctx.metrics` handle and records the score as a gauge alongside the span
+attributes, so the panel charts a real trend from `getMetricHistory` instead of
+a ring that empties on hibernation. Plan file deleted; record in git history.
+
+**242** (agent reply) SHIPPED & REMOVED: the outbound half of an inbound
+trigger exists — `AgentReplyRef` (all four channels) rides the run params,
+`defineAgent({ onReply })` fires once on the final answer inside the durable
+`agent:reply` step, and `@lunora/agent/reply` ships the email capture + threaded
+send. The spike's Slack/GitHub/Discord credential gap is closed by handing
+`onReply` the worker `env` rather than inventing a token store: the framework
+knows where to reply, the app holds the credential. Prototype + plan file
+deleted; record in git history.
+
+**240** (agent run queue) SHIPPED & REMOVED: `onConcurrentRun: "queue"` is now a
+real durable FIFO queue (`agent_run_queue` + `agentCompleteRun`'s
+dequeue-in-the-same-mutation handoff, parked runs hibernating on a scoped
+`waitForEvent`), so the value no longer degrades to `"reject"`. The spike's
+open questions were closed as: depth capped at 5 with no config surface (YAGNI),
+lost-wake covered by a durable send step plus the waiter's own timeout (the
+`fan-out.ts` pattern), no client-facing queued status, and `"replace"`
+supersedes the run in flight without flushing the queue. Prototype + plan file
+deleted; record in git history.
 
 Retired since this list was last written: **235** (progressive sharding) and
 **248** (runtime lints), deleted by `7c3d3f42e`; **311** (the bigint backfill),
@@ -1562,6 +1591,122 @@ is process for its own sake. _Running the project's test suite inside `lunora
 verify`_ is YAGNI — an agent can run `pnpm test` itself; the half with real
 value (live function-spec parity against the deployed worker) is a candidate for
 a later wave.
+
+## Wave 21 — all-package sweep (baseline `70b7451b5`, 2026-08-11)
+
+First all-package sweep since Wave 18 (`071c6a29c`, ten days earlier). Five read-only
+audit agents (core runtime, security surfaces, tooling packages, tests+architecture,
+deps/DX/docs/direction), every surviving finding re-read against live code before it
+reached a plan — five subagent claims did not survive that pass and are recorded under
+"considered and rejected" below.
+
+The headline is that the two most valuable findings are both **cache-scoping** bugs of
+the same family: a client-side map keyed by less than the server keys it (316), and an
+in-memory baseline with no durable backing where its own sibling has one (326). Both
+were invisible to every existing test because both degrade rather than fail.
+
+Deliberately skipped: the uncommitted `durable-stream.ts` work in
+`packages/shard-engine` and the in-flight diffs in `packages/server/src` — another
+session is mid-feature there.
+
+| Plan | Title                                                         | Category       | Pkg                     | Pri | Effort | Risk | Status                                                       |
+| ---- | ------------------------------------------------------------- | -------------- | ----------------------- | --- | ------ | ---- | ------------------------------------------------------------ |
+| 316  | Scope the client mutation watermark by identity               | bug            | client/db               | P1  | S      | LOW  | TODO — [316](316-client-watermark-identity-scope.md)         |
+| 317  | Route every `.dev.vars` write through the atomic 0600 writer  | security       | cli                     | P1  | S      | LOW  | TODO — [317](317-dev-vars-atomic-write.md)                   |
+| 318  | Stop the Vite dev loop emitting from a stale TS program       | bug            | vite/codegen            | P1  | S      | LOW  | TODO — [318](318-vite-stale-codegen-project.md)              |
+| 319  | Bound the dispatch call; classify deterministic 4xx           | bug            | dispatch/workflow/queue | P1  | S–M    | MED  | ✅ **DONE (WS1+WS3+workflow half) — APPROVED, awaiting merge. Queue half BLOCKED by its own STOP, correctly.** Worktree `.claude/worktrees/agent-aaba9f993d37eac1d`, branch `advisor/319-dispatch-timeout-and-retry-class`, commits `bf4a23863` + `970244c04`. Reviewer re-ran both suites: dispatch 27/27, workflow 81/81. The safety invariant holds — `DETERMINISTIC_DISPATCH_STATUSES = {400,403,404,422}` with `408`/`429` excluded in the constant's own comment, and the abort error is minted at **503**, deliberately outside that set, so a timeout stays retryable. **Queue half stopped for the sanctioned reason:** `dispatchQueueBatch` unconditionally rethrows the handler's error (`if (threw) { throw handlerError; }`), `deadLettered` is post-hoc metadata rather than a mechanism, and an existing test pins the rethrow as the deliberate contract — so ack-without-retry would be a redelivery-semantics change, not a bug fix. **§9 Q1 remains unconfirmed**: this implements the docblock's contract; if the maintainer prefers today's retry-everything behaviour, drop commit `970244c04` and edit the docblock — `bf4a23863` (the timeout) stands either way. **Follow-up it surfaced:** `@lunora/queue` re-exports `RunFunctionOptions` from dispatch so it picked up `timeoutMs` automatically, but `@lunora/workflow` declares its own copy in `workflow/src/types.ts`, so `timeoutMs` is invisible on a workflow step's typed `ctx.run` even though the runtime honours it — [319](319-dispatch-timeout-and-retry-class.md) |
+| 320  | Cover the Stripe/Polar money-mutating methods                 | tests          | payment                 | P1  | S      | LOW  | ✅ **DONE — APPROVED, awaiting merge.** Worktree `.claude/worktrees/agent-a43c3ad10c64a298f`, branch `advisor/320-stripe-polar-money-tests`, commit `d9314a192`. 16 new tests (8 per provider), 195/195 pass; reviewer re-ran coverage independently: `stripe.ts` branches 43.39% → **65.09%**, `polar.ts` 33.67% → **60.2%**, aggregate 68.8%, floor raised 60 → 68. `packages/payment/src` untouched (verified). **It found three latent defects on the money path and correctly pinned current behaviour rather than fixing it** — each needs its own plan: (1) **Stripe `updateSubscription` with an empty `items.data` sends `id: undefined`**, which Stripe treats as *creating a new subscription item* rather than updating one — a silent billing split, not a crash, which is why the plan's "if it throws" STOP never fired (`providers/stripe.ts:406`); (2) **Polar's `refundPayment` never returns `partially_refunded`** — it has no `compareMoney` boundary check at all and always reports `refunded` (`providers/polar.ts:289-315`); (3) **Polar's `updateSubscription` silently drops `quantity`** — a quantity-only patch produces an empty `subscriptionUpdate: {}` no-op (`providers/polar.ts:338-342`). Also recommended: `resumeSubscription` coverage for Creem/Dodo (both at 0) — [320](320-stripe-polar-money-tests.md) |
+| 321  | Restore the coverage floor on six packages; fix the generator | tests/dx       | repo                    | P2  | S      | LOW  | TODO — [321](321-coverage-floor-gaps.md)                     |
+| 322  | Make the randomized test seed actually randomize              | tests          | repo                    | P2  | S→M    | MED  | TODO — [322](322-vitest-shuffle.md)                          |
+| 323  | Run `dist:check` on pull requests                             | dx/ci          | ci                      | P2  | S      | LOW  | ✅ **DONE — APPROVED, awaiting merge.** Worktree `.claude/worktrees/agent-a7678ba2e1d9b517e`, branch `advisor/323-dist-check-pr-gate`, commit `9c81e74d6`, one file. **The gate was proven to fail before it was wired:** `dist:check` against a development build exits **1** with **180 files** flagged (`react/jsx-dev-runtime` and `jsxDEV` markers in `@lunora/react` and `@lunora/studio` output); against a clean production build it exits **0** ("1282 shipped files across 54 packages carry no development-build markers"). So the alpha.31 defect class does reach a dev build today and currently escapes every PR job. **Accepted deviation, and it is the difference between working and decorative:** the executor also added `dist-production` to `lint-required-check`'s `needs` — reviewer verified the aggregate now lists it. Without that the job would report and never block, and this repo's branch ruleset requires only the aggregate checks. WS3 was deliberately **not** done: `CLAUDE.md:42`'s claim that both gates have CI jobs became true once the job landed, so editing it would be churn. **Unverified by construction:** the job has never been observed running in CI, and no `api-surface`-vs-`dist-production` duration comparison exists — local timings were taken under wildly different load and are not comparable — [323](323-dist-check-pr-gate.md) |
+| 324  | Test the shared client mutation path; floor `@lunora/client`  | tests          | client                  | P2  | S      | LOW  | ✅ **DONE — APPROVED, awaiting merge.** Worktree `.claude/worktrees/agent-a3e993f1a89ad1ba9`, branch `advisor/324-client-mutation-path-tests`, commit `0979c777c`. Reviewer re-ran: 38 files, 657 passed + 1 expected-fail. `mutation-runner.ts` and `snapshot-precondition.ts` both at 100% branches; floor pinned at 84/75/76/84 with `src/sw/**` excluded (§9 Q1 — a real ~11%-stmt gap, excluded with its reason in the config so later sw work doesn't inherit a floor it must fight). **Both proofs were actually performed, not asserted:** the ref-count test reds when `inFlight` is replaced with a boolean, and bumping `branches` to 99 fails the run with the threshold error. **Trap for anyone re-measuring:** the printed coverage table silently omits rows for both new files — read `coverage/lcov.info` (`BRH==BRF`), not the table. §9 Q2: `src/auth/index.ts` (0% across 95 lines of client auth surface) deserves its own plan — [324](324-client-mutation-path-tests.md) |
+| 325  | Test the native-signup email gate                             | tests/security | auth                    | P2  | S      | LOW  | TODO — [325](325-email-gate-tests.md)                        |
+| 326  | Make the shape poke baseline survive hibernation              | perf           | do/shard-engine         | P2  | M      | MED  | TODO — [326](326-shape-poke-cursor-durability.md)            |
+| 327  | Manifest hygiene: unused dep, prod-vs-dev dep, catalogs, hono | deps           | repo                    | P3  | S      | LOW  | TODO — [327](327-manifest-hygiene.md)                        |
+| 328  | Stop recording an attacker-chosen IP in the auth audit trail  | security       | auth                    | P3  | S      | LOW  | TODO — [328](328-audit-log-ip-fallback.md)                   |
+| 329  | Publish the Node host's capability matrix                     | docs           | platform-node           | P3  | S      | LOW  | TODO — [329](329-platform-node-docs.md)                      |
+| 330  | Let Angular produce the preloaded query it can consume        | direction      | angular                 | P2  | S      | LOW  | ✅ **DONE — APPROVED, awaiting merge.** Worktree `.claude/worktrees/agent-ae58d3596d59bc8a0`, branch `advisor/330-angular-preload-query`, commit `30ea1ffe4`. `packages/angular/src/server.ts` is a pure re-export of `@lunora/client/ssr` (verified against that module's live surface, not Solid's copy), `./server` added to the exports map, `dist/server.{mjs,d.ts}` emitted, 108 tests pass, key-order gate clean, `api:check` unchanged (angular is untiered). Reviewer re-ran the criteria independently. **Deviation, accepted:** the export-parity test asserts against `@lunora/client/ssr` rather than `@lunora/solid/server` — strictly stronger (it catches Solid drifting too) and avoids a first-of-its-kind adapter-to-adapter dependency edge. **`templates/analog/` was documented, not wired** — its demo still uses a hand-rolled `LunoraService` over the vanilla client, and swapping it is a separate migration. Two follow-ups opened: an API-snapshot tier decision for `@lunora/angular` now that it publishes a second entry point, and `angular.mdx`'s "Deliberately small surface" callout, which undersells an adapter that already exports `paginatedQuery`/`presence`/`subscription`/`rateLimit`/`stream`/`agent*`/`flag*` — [330](330-angular-preload-query.md) |
+| 331  | Resolve the `/worker` subpath contradiction                   | direction      | vue/svelte              | P3  | S–M    | LOW  | **PHASE 0 DONE — awaiting a maintainer decision before Phase 1A.** Evidence in §9, reviewer-verified against the live tree: the subpath has **zero** real importers (the only hit repo-wide is its own docblock example), and `withFrameworkWorker` itself is reached only by codegen's `buildFrameworkWorker` → `@lunora/runtime`, never through a framework `/worker` subpath — the Astro and SvelteKit templates both bypass it, leaving `templates/sveltekit`'s prose stale. `cb6df0762` shows the same defect was already caught and half-fixed once. Recommendation: **Option A** (delete both re-exports, promote `withFrameworkWorker` as the documented BYO-framework entry). Phase 1A removes a published surface, so it is not an executor's call — [331](331-worker-subpath-decision.md) |
+| 332  | Spike: what would a payment conformance suite assert?         | direction      | payment                 | P3  | S      | LOW  | TODO (spike) — [332](332-payment-conformance-spike.md)       |
+
+### Dependency notes
+
+- **332 depends on 320.** The shared-assertion inventory is far easier to read once all
+  six providers have comparable coverage, and 320's cases are half its input.
+- **321 before 324's floor step and before 322.** 321 owns floor policy; 324 adds one
+  package's thresholds and 322 changes what a green run means. Landing them out of
+  order produces two conflicting edits to the same configs.
+- **326 has a gating measurement (WS0).** If the cold-memo rescan turns out cheap at
+  realistic CDC retention, the plan's own STOP fires and the one-line
+  attachment-`sinceSeq` fallback is the whole fix. Do not start WS1 before WS0.
+- **331 is a decision, not an implementation.** Its Phase 0 is three greps and a
+  maintainer call; the two outcomes touch different files.
+- 316 and 324 both touch `@lunora/client` but not the same modules (`lunora-client.ts`
+  vs `mutation-runner.ts` + `vitest.config.ts`). They can run in parallel; 316 first if
+  they must be serialized.
+
+### Findings considered and rejected (Wave 21)
+
+Vetted against live code and dropped — recorded so they aren't re-audited:
+
+- **"Jurisdiction handling is duplicated across five packages and has already
+  drifted."** The duplication is real and **deliberate**, and it is guarded:
+  `packages/runtime/__tests__/jurisdiction-union-consistency.test.ts` pins all five
+  copies (`runtime`, `scheduler`, `server`, `mail`, `container`) to the canonical
+  `"eu" | "fedramp" | "us"` literal, with the decoupling rationale in its header
+  comment. The "widening union" cited as evidence of drift was `ShardJurisdiction` in
+  `@lunora/platform` — a different type. The residual sliver (five hand-rolled
+  `namespace.get(idFromName(…))` adapters that bypass `ShardDirectory`) is a real
+  portability observation, but it is a decoupling trade the repo made knowingly, not a
+  defect.
+- **"The `hono@4.12.34` pin is in the wrong YAML key."** It sits under
+  `minimumReleaseAgeExclude`, which is exactly the key that waives the release-age
+  hold; `undici`, `js-yaml` and `dompurify` are there for the same reason. Only the
+  stale lockfile is real, and that is plan 327 WS4.
+- **`applyPlanToCollections` partial-apply** (`packages/db/src/apply-plan.ts:133`). It
+  is an exported helper, its keyless-insert throw is already tested
+  (`db/__tests__/apply-plan.test.ts:88`), and the half-applied state requires calling
+  it outside a TanStack optimistic transaction. A one-line reorder if anyone is in the
+  file; not a plan.
+- **"~14 peer ranges hardcode a catalogued version."** A peer range is a _supported_
+  range, deliberately independent of the version we build against — `react ^19.2.7`
+  already admits the catalogued `19.2.8`, so nothing lies. Narrowing peers to catalog
+  values would shrink what consumers may install. `@lunora/auth` and `@lunora/vite`
+  using `catalog:` in peers is a per-case judgement, not a rule to generalise.
+- **"No watch mode in 54 of 55 packages."** MED confidence, no evidence the loop is
+  actually painful; the repo's cross-package loop goes through `vis` anyway.
+- **`pg`/`mysql2`/`postgres` `*` peer ranges in `@lunora/hyperdrive`.** Thin — the peers
+  are already `optional: true`, so a narrower range produces a warning, not a fix.
+- **Two transitive high advisories, checked and un-upgradable from this repo:**
+  `ip-address` 10.2.0 reaches `mcp`/`agent` only via
+  `@modelcontextprotocol/sdk > express-rate-limit`, and Lunora serves MCP through
+  `WebStandardStreamableHTTPServerTransport` (`packages/mcp/src/serve-stateless.ts:14`),
+  never the Express path; `image-size` 2.0.2 reaches `storage` via
+  `@visulima/storage > @netlify/blobs`, and Lunora instantiates `AwsLightStorage`
+  (`packages/storage/src/upload-handler.ts:22`), never the Netlify provider.
+- **Verified clean under direct read** (no findings): the wire codec round-trip
+  (`shared/wire-codec.ts`, `sql-projection.ts`, `serialize-sql.ts`, `index-key-codec.ts`
+  — args stay wire-tagged worker→shard and are only `encodeWire`'d on the
+  server-initiated path, so no double-encode); OCC/idempotency transaction boundaries
+  and the batch replay path; read-set/range invalidation (every uncertainty path is
+  conservative); the client socket lifecycle (superseded-socket guards, heartbeat and
+  timer cleanup); `session-do.ts`; `resolve-shard.ts`; the whole `/_lunora/admin/*`
+  plane (every extracted route cluster reaches `assertAdminAuthorized`, including the
+  clusters with no textual `isAdmin` hit, and `auth-admin-routes.ts:694` gates _before_
+  the method check so route topology does not leak); identity-header smuggling on both
+  the fetch and WS-upgrade paths; constant-time token comparison throughout; payment
+  webhook verification on both schemes; x402's fail-closed pay-side policy;
+  `@lunora/storage` signed-URL binding with CR/LF canonical-injection guards;
+  `@lunora/cloudflare-access` RS256 pinning; CLI path handling (`fileSegment`,
+  `assertSafeItemName`, registry `from`/`to` traversal rejection); no committed secrets.
+- **Not filed, noted only:** `packages/react/src/payment.tsx:6-23` hand-mirrors
+  `Subscription` with `provider: "polar" | "stripe"` while `payment/src/types.ts:31`
+  has five providers, and omits `currentPeriodStart`. Real drift, invisible to
+  `api:check` and `lint:types` because both sides compile in isolation — it motivates
+  plan 332 and is called out in that plan's out-of-scope list. Worth a two-line fix
+  next time anyone is in that file. Also: `packages/queue/src/metric-history.ts` writes
+  a `last_ts` column nothing reads (dead, not a defect), and `verifyDiscord` lacks the
+  replay-window check `verifySlack` has (thin — Discord signs the timestamp).
 
 ## Filed outside a wave
 

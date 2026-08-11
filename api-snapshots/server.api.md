@@ -325,6 +325,14 @@ interface DefineStorageRuleInput<Context = unknown> {
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 ```
 
+### `DurableStreamOptions` (interface)
+
+```ts
+interface DurableStreamOptions {
+    readonly ttlMs?: number;
+}
+```
+
 ### `EmptyArgs` (type)
 
 ```ts
@@ -814,7 +822,9 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: {
+        durable?: boolean | DurableStreamOptions;
+    }) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -1421,7 +1431,9 @@ interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> 
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: {
+        durable?: boolean | DurableStreamOptions;
+    }) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
     x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }
@@ -1573,6 +1585,7 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
 ```ts
 interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
+    readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
@@ -4309,6 +4322,14 @@ interface DatabaseWriter extends DatabaseReader {
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 ```
 
+### `DurableStreamOptions` (interface)
+
+```ts
+interface DurableStreamOptions {
+    readonly ttlMs?: number;
+}
+```
+
 ### `ExposeConfig` (interface)
 
 ```ts
@@ -4666,6 +4687,7 @@ type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "que
 ```ts
 interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
+    readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;

@@ -150,8 +150,26 @@ const memoryRuntime = (
         return undefined;
     };
 
+    /** Terminal patch + (empty-queue) handoff — see `run-queue.test.ts` for the queue itself. */
+    const completeRun = (args?: Record<string, unknown>): unknown => {
+        const thread = threads.get(args?.["key"] as string);
+
+        if (!args || !thread || thread.instanceId !== args["instanceId"]) {
+            return {};
+        }
+
+        thread.status = args["status"] as string;
+
+        if (args["error"] !== undefined) {
+            thread.error = args["error"] as string;
+        }
+
+        return {};
+    };
+
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],

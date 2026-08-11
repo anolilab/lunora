@@ -412,6 +412,40 @@ export interface AgentStepFinishInfo {
 export type AgentOnStepFinish = (info: AgentStepFinishInfo) => Promise<void> | void;
 
 /**
+ * What {@link AgentConfig.onReply} is called with when a triggered run reaches
+ * its final answer.
+ * @experimental
+ */
+export interface AgentReplyInfo {
+    /** The worker `env` — where an outbound credential (a bot token, a mailer binding) lives. */
+    env: Record<string, unknown>;
+    /** Where to reply, captured by the mapper that started this run. */
+    replyRef: AgentReplyRef;
+    /** The run's final answer. */
+    result: AgentRunResult;
+    /** The thread this run belongs to. */
+    threadKey: string;
+}
+
+/**
+ * Send a triggered run's answer back where it came from — the outbound half of
+ * an `onEmail` / `onInbound` trigger.
+ *
+ * Called once, automatically, when a run started with a `replyRef` produces a
+ * final answer; a run without one (an ordinary in-app `ctx.agents.<name>.run`)
+ * never calls it. It runs inside a named durable step, so a transient failure
+ * is retried and a workflow replay does not send the answer twice.
+ *
+ * Delivery is the app's call, because only the app has the credential: email
+ * has a home already (`replyToEmail(mailer, ref, body)` from
+ * `@lunora/agent/reply`), while Slack/GitHub/Discord bot tokens have no
+ * framework-owned store yet — read them from `info.env` and make the provider
+ * call.
+ * @experimental
+ */
+export type AgentOnReply = (info: AgentReplyInfo) => Promise<void> | void;
+
+/**
  * The input {@link AgentConfig.prepareStep} sees before a turn runs.
  * @experimental
  */
@@ -455,6 +489,25 @@ export type AgentPrepareStep = (input: AgentPrepareStepInput) => AgentPrepareSte
  * start a run from an inbound email.
  * @experimental
  */
+
+/**
+ * Where a triggered run should send its answer back to — captured by the
+ * mapper, from fields the verified inbound payload already carries, and carried
+ * through the run so {@link AgentConfig.onReply} can answer in the same place
+ * the question was asked.
+ *
+ * A discriminated union rather than an opaque blob because each channel threads
+ * differently: email by RFC 5322 `In-Reply-To`/`References`, Slack by
+ * `thread_ts`, GitHub by issue number, Discord by channel (plus the triggering
+ * message for a true reply).
+ * @experimental
+ */
+export type AgentReplyRef =
+    | { channel: "discord"; channelId: string; messageId?: string }
+    | { channel: "email"; from: string; messageId: string; references?: string; to: string[] }
+    | { channel: "github"; commentId?: number; issueNumber: number; owner: string; repo: string }
+    | { channel: "slack"; channelId: string; threadTs: string };
+
 export interface AgentEmailRun {
     /** The user message that starts (or continues) the thread — the model's prompt. */
     input: string;
@@ -466,6 +519,14 @@ export interface AgentEmailRun {
      * `email.from`.
      */
     owner?: string;
+
+    /**
+     * Where to send the answer — see {@link AgentReplyRef}. Populate it from the
+     * event the mapper already has (`captureEmailReplyRef(email)` does it for
+     * email) and the run calls {@link AgentConfig.onReply} with it once the
+     * final answer is ready. Omit it and the run simply never replies.
+     */
+    replyRef?: AgentReplyRef;
     /** The thread key — reuse to continue a conversation (e.g. a ticket id parsed from the subject). */
     threadKey: string;
     /** Optional thread title, set on first creation. */
@@ -609,7 +670,16 @@ export interface AgentConfig {
      *
      * - `"reject"` (default) — fail the new run fast with a `CONFLICT` error.
      * - `"replace"` — terminate the in-flight instance and take the thread over.
-     * - `"queue"` — reserved for a future durable queue; currently degrades to `"reject"` (no queue exists yet), tracked as a follow-up.
+     * - `"queue"` — park the new run behind the one in flight (FIFO, up to five deep) and hibernate it until the thread is handed over.
+     *
+     * Each parked run is a live workflow instance waiting on an event, so the
+     * queue's depth cap is a real resource bound: past it, a start is rejected
+     * exactly as `"reject"` would. A `"replace"` arriving later supersedes the
+     * run in FLIGHT, not the queue — parked runs still take their turn after it.
+     *
+     * A dispatch with no instance id (the inbound-email / inbound-channel
+     * paths) cannot be parked, because nothing later can tell it apart from
+     * another such dispatch to wake it; `"queue"` rejects those.
      *
      * A workflow REPLAY re-enters the bootstrap under the SAME instance id and
      * is never a concurrent run (the guard compares the stored instance id).
@@ -631,6 +701,13 @@ export interface AgentConfig {
      * signature over the raw body before calling `map`.
      */
     onInbound?: AgentInboundChannel;
+
+    /**
+     * Called with the final answer when the run was triggered from a channel
+     * that gave it a `replyRef` — see {@link AgentOnReply}. This is how an
+     * inbound-triggered agent answers where it was asked.
+     */
+    onReply?: AgentOnReply;
     /** Called after each LLM turn — see {@link AgentOnStepFinish}. */
     onStepFinish?: AgentOnStepFinish;
 
@@ -831,6 +908,8 @@ export interface AgentRunInput {
      * the first run.
      */
     owner?: string;
+    /** Where a triggered run sends its answer — see {@link AgentReplyRef}. */
+    replyRef?: AgentReplyRef;
     /** The thread key — reuse to continue a conversation. */
     threadKey: string;
     /** Optional thread title, set on first creation. */
@@ -866,6 +945,13 @@ export interface AgentRunResult {
  */
 export interface AgentFunctionPaths {
     appendMessage: string;
+
+    /**
+     * The internal `agents:agentCompleteRun` mutation the loop dispatches at the
+     * end of a run: it writes the terminal status AND hands the thread to the
+     * next queued run in the same mutation.
+     */
+    completeRun: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;

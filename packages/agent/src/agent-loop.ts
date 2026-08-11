@@ -771,6 +771,111 @@ const terminatePriorInstance = async (env: Record<string, unknown>, exportName: 
     }
 };
 
+/**
+ * How long a parked run waits to be handed the thread before giving up.
+ *
+ * The wake event is sent from a durable step, so it survives ordinary failures;
+ * the timeout covers the case it can never land — the finishing run's instance
+ * was terminated after the handoff committed, or its binding was gone. Without
+ * it a parked run hibernates forever holding a queue slot. Twelve hours is far
+ * longer than any agent run and far shorter than "never".
+ */
+const DEQUEUE_TIMEOUT = "12 hours";
+
+/**
+ * Hibernate until this run is handed the thread it queued for.
+ *
+ * The match `type` is scoped to `(threadKey, instanceId)` for the same reason
+ * the HITL approval scopes to a tool-call id: native CF Workflows matches a
+ * waiter by `type`, so a shared type would let one parked run's wake resolve a
+ * different one. A workflow replay memoizes the resolved wait, so a resumed run
+ * does not park twice.
+ */
+const awaitDequeue = async (step: AgentStepLike, threadKey: string, instanceId: string, queued: boolean | undefined): Promise<void> => {
+    if (queued !== true) {
+        return;
+    }
+
+    await step.waitForEvent<{ threadKey: string }>(`dequeue:${instanceId}`, {
+        timeout: DEQUEUE_TIMEOUT,
+        type: `agent-dequeue:${threadKey}:${instanceId}`,
+    });
+};
+
+/**
+ * Wake the run the completion mutation just handed the thread to.
+ *
+ * Wrapped in a durable step so a transient failure is retried rather than
+ * stranding a run that already owns the thread; if it can never land, the
+ * parked run's own {@link DEQUEUE_TIMEOUT} ends it instead of hibernating
+ * forever. Best-effort by design — the ownership transfer already committed,
+ * and re-running this mutation is not an option.
+ */
+const wakeDequeuedRun = async (
+    deps: { env: Record<string, unknown>; exportName: string; step: AgentStepLike },
+    threadKey: string,
+    dequeuedInstanceId: string,
+): Promise<void> => {
+    const binding = deps.env[agentBindingName(deps.exportName)] as AgentWorkflowBindingLike | undefined;
+
+    if (!binding || typeof binding.get !== "function") {
+        return;
+    }
+
+    const get = binding.get.bind(binding);
+
+    try {
+        await deps.step.do(`dequeue-wake:${dequeuedInstanceId}`, async (): Promise<string> => {
+            const instance = await get(dequeuedInstanceId);
+
+            await instance.sendEvent({ payload: { threadKey }, type: `agent-dequeue:${threadKey}:${dequeuedInstanceId}` });
+
+            return dequeuedInstanceId;
+        });
+    } catch {
+        // The dequeued instance is gone (terminated while parked), or the send
+        // kept failing. It owns the thread until its wait times out; a run that
+        // starts after that finds an ownerless thread and proceeds normally.
+    }
+};
+
+/**
+ * Hand a triggered run's final answer to the agent's `onReply`.
+ *
+ * No-op unless the run carries a `replyRef` (an ordinary in-app run does not)
+ * AND the agent declared `onReply`. Wrapped in a named durable step so the
+ * delivery is retried on a transient provider failure and, under a workflow
+ * replay, is served from the memo instead of sending the answer twice — the
+ * same guarantee `onStepFinish` gets.
+ *
+ * A reply that keeps failing must not turn a completed run into a failed one:
+ * the answer is already persisted on the thread, and re-running the loop to
+ * retry a Slack post would re-run the model. The failure is swallowed after the
+ * step's own retries, exactly as run-end memory extraction is.
+ */
+const deliverReply = async (
+    agent: AgentDefinition,
+    context: { env: Record<string, unknown>; params: AgentRunInput; step: AgentStepLike },
+    result: AgentRunResult,
+): Promise<void> => {
+    const { onReply } = agent;
+    const { replyRef } = context.params;
+
+    if (onReply === undefined || replyRef === undefined) {
+        return;
+    }
+
+    try {
+        await context.step.do("agent:reply", async (): Promise<string> => {
+            await onReply({ env: context.env, replyRef, result, threadKey: context.params.threadKey });
+
+            return replyRef.channel;
+        });
+    } catch {
+        // Delivery failed past its retries — the answer is on the thread either way.
+    }
+};
+
 /** How the loop proceeds after a turn: finish, stop on a condition, or continue. */
 type TurnOutcome = "stopCondition" | undefined | { final: AgentRunResult };
 
@@ -917,6 +1022,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
     const appendMessage = toFunctionReference(paths.appendMessage);
+    const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
     const patchThread = toFunctionReference(paths.patchThread);
@@ -929,6 +1035,20 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const patchThreadByKey = async (patch: Record<string, unknown>): Promise<void> => {
         await run(patchThread, { key: params.threadKey, ...patch });
+    };
+
+    /**
+     * End the run: write the terminal status and, in the same mutation, hand the
+     * thread to the next queued run. Only then is the dequeued run woken — it
+     * already owns the thread by that point, so there is no window in which two
+     * runs believe they may append.
+     */
+    const finishRun = async (patch: { error?: string; status: "error" | "idle"; usage?: AgentUsage }): Promise<void> => {
+        const outcome = (await run(completeRun, { instanceId, key: params.threadKey, ...patch })) as { dequeued?: string } | undefined;
+
+        if (outcome?.dequeued !== undefined) {
+            await wakeDequeuedRun({ env, exportName, step }, params.threadKey, outcome.dequeued);
+        }
     };
 
     // Synced-state closures handed to every tool ctx. They dispatch through the
@@ -958,13 +1078,19 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         ...(agent.onConcurrentRun === undefined ? {} : { onConcurrentRun: agent.onConcurrentRun }),
         ...(params.owner === undefined ? {} : { owner: params.owner }),
         ...(params.title === undefined ? {} : { title: params.title }),
-    })) as { created: boolean; priorInstanceId?: string; replaced?: boolean } | undefined;
+    })) as { created: boolean; position?: number; priorInstanceId?: string; queued?: boolean; replaced?: boolean } | undefined;
 
     // Replace policy: the thread has been taken over — terminate the run it was
     // taken from so it cannot resume and race on the shared seq counter.
     if (bootstrap?.replaced && bootstrap.priorInstanceId !== undefined) {
         await terminatePriorInstance(env, exportName, bootstrap.priorInstanceId);
     }
+
+    // Queue policy: when this run was parked behind the one in flight, hibernate
+    // until the finishing run's completion mutation hands us the thread — by
+    // which point we already own it, so the first append below lands on the
+    // shared seq counter with nobody else writing to it.
+    await awaitDequeue(step, params.threadKey, instanceId, bootstrap?.queued);
 
     await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
 
@@ -1041,7 +1167,11 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         });
 
         if (final) {
-            await run(patchThread, { key: params.threadKey, status: "idle", ...usagePatch });
+            // Answer where the question was asked, before the thread goes idle:
+            // a triggered run that never replies looks, from the channel it came
+            // from, exactly like one that never ran.
+            await deliverReply(agent, { env, params, step }, { ...final, ...usagePatch });
+            await finishRun({ status: "idle", ...usagePatch });
 
             return { ...final, ...usagePatch };
         }
@@ -1049,20 +1179,21 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         if (stoppedByCondition) {
             // A stop condition is a deliberate end, not a failure — leave the
             // thread idle so it can continue on the next run.
-            await run(patchThread, { key: params.threadKey, status: "idle", ...usagePatch });
+            await finishRun({ status: "idle", ...usagePatch });
 
             return { stopped: "stopCondition", turns: turnsRun, ...usagePatch };
         }
 
-        await run(patchThread, { error: `agent stopped: maxTurns (${String(maxTurns)}) reached`, key: params.threadKey, status: "error", ...usagePatch });
+        await finishRun({ error: `agent stopped: maxTurns (${String(maxTurns)}) reached`, status: "error", ...usagePatch });
 
         return { stopped: "maxTurns", turns: maxTurns, ...usagePatch };
     } catch (error) {
         // Surface the failure on the thread (observers see status:"error"),
-        // then rethrow so the workflow records/retries per its policy.
-        await run(patchThread, {
+        // then rethrow so the workflow records/retries per its policy. A failed
+        // run still hands the thread on: the next queued run is waiting for THIS
+        // one to end, not for it to succeed.
+        await finishRun({
             error: error instanceof Error ? error.message : String(error),
-            key: params.threadKey,
             status: "error",
             ...(usageBox.value === undefined ? {} : { usage: usageBox.value }),
         });
