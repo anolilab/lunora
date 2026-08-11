@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.105...%40lunora%2Fcodegen%401.0.0-alpha.106) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.76
+* **@lunora/agent:** upgraded to 1.0.0-alpha.52
+* **@lunora/container:** upgraded to 1.0.0-alpha.30
+* **@lunora/errors:** upgraded to 1.0.0-alpha.21
+* **@lunora/platform:** upgraded to 1.0.0-alpha.10
+* **@lunora/queue:** upgraded to 1.0.0-alpha.26
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.29
+* **@lunora/values:** upgraded to 1.0.0-alpha.26
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.27
+* **@lunora/do:** upgraded to 1.0.0-alpha.82
+* **@lunora/server:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.25
+
 ## @lunora/codegen [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.104...%40lunora%2Fcodegen%401.0.0-alpha.105) (2026-08-11)
 
 ## @lunora/codegen [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/%40lunora%2Fcodegen%401.0.0-alpha.103...%40lunora%2Fcodegen%401.0.0-alpha.104) (2026-08-11)
