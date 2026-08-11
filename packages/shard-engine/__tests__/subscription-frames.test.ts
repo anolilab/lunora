@@ -200,4 +200,59 @@ describe("subscriptionFrames — paginated results", () => {
 
         expect(typesOf(paginatedFrames(previous, paginated(page(20, 2)), true))).toStrictEqual(["data"]);
     });
+
+    it("still emits a frame when the diff comes back empty", () => {
+        expect.assertions(2);
+
+        // The caller only suppresses a push when the new snapshot is BYTE-identical
+        // to the last, but the envelope here is compared with keys sorted. So a
+        // result re-serialized in a different key order arrives with nothing to
+        // diff AND a changed snapshot — and returning zero frames would let the
+        // caller advance its baseline while this flush's cursor/epoch/watermark
+        // never reached the client, stranding its resume position.
+        const rows = page(20);
+        const previous = { continueCursor: "cursor-20", isDone: false, page: rows };
+        const next = { isDone: false, page: rows, continueCursor: "cursor-20" };
+
+        expect(JSON.stringify(previous)).not.toBe(JSON.stringify(next));
+
+        const frames = subscriptionFrames({
+            ...base,
+            cursorSuffix: `,"cursor":4242,"epoch":"e1"`,
+            nextResult: next,
+            pageDeltas: true,
+            previousJson: JSON.stringify(previous),
+            snapshotJson: JSON.stringify(next),
+        });
+
+        expect(frames).toStrictEqual([`{"type":"data","id":"sub-1","data":${JSON.stringify(next)},"cursor":4242,"epoch":"e1"}`]);
+    });
+
+    it("does not treat a non-plain object as a paginated result", () => {
+        expect.assertions(2);
+
+        // `applyDelta` re-spreads the wrapper to swap its page, which would
+        // flatten a class instance into a plain object. The shape test is the
+        // wire codec's own `isPlainObject`, so anything it rejects — which is
+        // anything that could not have crossed the wire as this shape — takes
+        // the snapshot instead.
+        class PageResult {
+            public continueCursor = "cursor-20";
+
+            public isDone = false;
+
+            public page = page(20);
+        }
+
+        const changedPage = [...page(20).slice(0, 19), row("r19", { revision: 2 })];
+        const next = new PageResult();
+
+        next.page = changedPage;
+
+        expect(
+            typesOf(paginatedFrames(new PageResult() as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>, true)),
+        ).toStrictEqual(["data"]);
+        // The same fields as a plain object ARE diffed — the prototype is the only difference.
+        expect(typesOf(paginatedFrames(paginated(page(20)), paginated(changedPage), true))).toStrictEqual(["delta"]);
+    });
 });

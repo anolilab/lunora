@@ -24,6 +24,8 @@
  * `shared/` contract.
  */
 
+import { isPlainObject } from "./wire-codec";
+
 /** Identity field every Lunora document row carries. */
 const ID_FIELD = "_id";
 
@@ -60,8 +62,14 @@ const rowListOf = (value: unknown): undefined | unknown[] => {
         return value as unknown[];
     }
 
-    if (typeof value === "object" && value !== null && Array.isArray((value as Record<string, unknown>)[PAGE_FIELD])) {
-        return (value as Record<string, unknown>)[PAGE_FIELD] as unknown[];
+    // `isPlainObject`, not a bare `typeof === "object"`: the wrapper is re-spread
+    // to swap its page, which would quietly flatten a class instance or any
+    // other exotic object into a plain one. Reusing the CODEC's definition is
+    // what makes that safe rather than merely defensive — it is exactly the set
+    // of objects that survives the wire, so anything it rejects could not have
+    // reached a client as this shape in the first place.
+    if (isPlainObject(value) && Array.isArray(value[PAGE_FIELD])) {
+        return value[PAGE_FIELD] as unknown[];
     }
 
     return undefined;

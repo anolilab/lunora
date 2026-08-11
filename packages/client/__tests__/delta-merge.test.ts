@@ -191,4 +191,25 @@ describe("applyDelta — paginated results", () => {
 
         expect(applyDelta(paginated([{ name: "x" }]), { key: "a", op: "delete", table: "m" })).toBeUndefined();
     });
+
+    it("falls back (undefined) for a non-plain wrapper rather than flattening it", () => {
+        expect.assertions(2);
+
+        // Merging re-spreads the wrapper to swap its page, which would turn a
+        // class instance into a plain object and quietly change the value's
+        // shape. The guard is the wire codec's `isPlainObject`, so the only
+        // wrappers accepted are the ones that could have crossed the wire.
+        class PageResult {
+            public isDone = false;
+
+            public page = [row("a")];
+        }
+
+        expect(applyDelta(new PageResult(), { key: "b", op: "insert", row: row("b"), table: "m" })).toBeUndefined();
+        // The same fields as a plain object merge normally — the prototype is the only difference.
+        expect(applyDelta({ isDone: false, page: [row("a")] }, { key: "b", op: "insert", row: row("b"), table: "m" })).toStrictEqual({
+            isDone: false,
+            page: [row("a"), row("b")],
+        });
+    });
 });

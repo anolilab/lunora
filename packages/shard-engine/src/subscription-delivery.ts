@@ -15,7 +15,7 @@
 
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
 import { stableStringify } from "../../../shared/stable-key";
-import { encodeWire } from "../../../shared/wire-codec";
+import { encodeWire, isPlainObject } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
 
 /**
@@ -149,9 +149,6 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
     return out;
 };
 
-/** A plain (non-array, non-null) object — the shape a `.paginate()` result is. */
-const isPlainRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
 /**
  * The two row lists to diff, or `undefined` when this pair of results is not
  * row-diffable at all.
@@ -176,7 +173,7 @@ const diffableLists = (previous: unknown, next: unknown): undefined | { next: un
         return { next: next as unknown[], previous: previous as unknown[] };
     }
 
-    if (!isPlainRecord(previous) || !isPlainRecord(next)) {
+    if (!isPlainObject(previous) || !isPlainObject(next)) {
         return undefined;
     }
 
@@ -454,7 +451,17 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     const diffable = previousJson !== undefined && (pageDeltas === true || Array.isArray(nextResult));
     const framed = diffable ? collectFramedDeltas(previousJson, nextResult, table) : undefined;
 
-    if (framed === undefined) {
+    // An EMPTY diff must still put a frame on the wire, so the two are handled
+    // together. The caller only suppresses a push when the new snapshot is
+    // BYTE-identical to the last one, but `diffableLists` compares a paginated
+    // envelope with `stableStringify` — key-order insensitive. So a result whose
+    // non-`page` fields were re-serialized in a different order reaches here
+    // with nothing to diff and yet a changed `snapshotJson`. Returning no frames
+    // would let the caller advance its baseline while the client never receives
+    // this flush's `cursor`/`epoch`/`lastMutationId`, stranding its resume
+    // position and leaving a pending optimistic layer masked until some later
+    // visible change. One snapshot in a rare case is the cheap, honest answer.
+    if (framed === undefined || framed.length === 0) {
         return [snapshot];
     }
 
