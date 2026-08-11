@@ -43,7 +43,8 @@ const pkgJson = (name: string, description: string): string => `{
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
