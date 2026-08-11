@@ -12,10 +12,16 @@
  *
  * Imports `capabilities.ts` directly via Node's built-in TypeScript type
  * stripping (no build step: the file is a plain `const` object with type
- * annotations, nothing an unflagged strip can't handle) rather than
- * regex-parsing the source text, because several notes contain quotes,
- * apostrophes and mixed quoting styles that a text-only parser would have to
- * special-case.
+ * annotations) rather than regex-parsing the source text, because several
+ * notes contain quotes, apostrophes and mixed quoting styles that a
+ * text-only parser would have to special-case.
+ *
+ * Type stripping is unflagged by default only from Node 22.18 — CI's lint
+ * jobs pin 22.15 (`.github/workflows/lint.yml`), which still needs the
+ * `--experimental-strip-types` flag or this import throws
+ * `ERR_UNKNOWN_FILE_EXTENSION`. `pnpm run lint:node-capabilities-docs`
+ * (the only way this script runs — see the CI job in lint.yml) passes it;
+ * don't invoke this file with a bare `node` on <22.18 without it.
  *
  * `pnpm run lint:node-capabilities-docs` — deliberately not wired into
  * `postinstall`: that chain fails every CI job at its setup step, and the
