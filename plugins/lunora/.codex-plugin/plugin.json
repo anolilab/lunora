@@ -1,0 +1,20 @@
+{
+    "name": "lunora",
+    "version": "0.1.0",
+    "description": "Build type-safe, real-time Lunora backends on Cloudflare Workers + Durable Objects — the first-party agent skills. Run `lunora mcp install` to add the MCP server over your dev deployment (schema, data, logs, advisories, docs search).",
+    "author": {
+        "name": "Anolilab",
+        "email": "d.bannert@anolilab.de",
+        "url": "https://github.com/anolilab"
+    },
+    "repository": "https://github.com/anolilab/lunora",
+    "license": "FSL-1.1-Apache-2.0",
+    "keywords": ["lunora", "cloudflare", "workers", "durable-objects", "realtime", "backend", "typescript", "vite"],
+    "interface": {
+        "displayName": "Lunora",
+        "shortDescription": "Type-safe real-time backends on Cloudflare.",
+        "developerName": "Anolilab",
+        "category": "Developer Tools"
+    },
+    "skills": "./skills/"
+}

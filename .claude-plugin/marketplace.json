@@ -1,0 +1,17 @@
+{
+    "name": "lunora",
+    "description": "Plugins for building on Lunora — a type-safe, real-time backend on Cloudflare Workers + Durable Objects.",
+    "owner": {
+        "name": "Anolilab",
+        "email": "d.bannert@anolilab.de",
+        "url": "https://github.com/anolilab"
+    },
+    "plugins": [
+        {
+            "name": "lunora",
+            "source": "./plugins/lunora",
+            "category": "Engineering",
+            "tags": ["backend", "cloudflare", "realtime", "typescript"]
+        }
+    ]
+}
