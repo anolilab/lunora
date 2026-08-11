@@ -1,0 +1,17 @@
+{
+    "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+    "name": "lunora",
+    "displayName": "Lunora",
+    "version": "0.1.0",
+    "description": "Build type-safe, real-time Lunora backends on Cloudflare Workers + Durable Objects — the first-party agent skills plus an end-of-turn `lunora verify` gate that hands back its own compiler errors. Run `lunora mcp install` for the MCP server.",
+    "author": {
+        "name": "Anolilab",
+        "email": "d.bannert@anolilab.de",
+        "url": "https://github.com/anolilab"
+    },
+    "homepage": "https://lunora.sh",
+    "repository": "https://github.com/anolilab/lunora",
+    "license": "FSL-1.1-Apache-2.0",
+    "keywords": ["lunora", "cloudflare", "workers", "durable-objects", "realtime", "backend", "typescript", "vite"],
+    "hooks": "./hooks/hooks.json"
+}

@@ -43,4 +43,5 @@ ln -s ../../../packages/cli/skills/<name> plugins/lunora/skills/<name>
 `scripts/check-skill-mirrors.js` (run on every `pnpm install`) fails if a mirror
 is missing, dangling, or has become a real directory — a copied directory keeps
 resolving while it silently drifts from the source, so it is treated as an
-error rather than a warning.
+error rather than a warning. Forget a hop and it prints the exact `ln -s` for
+the one you missed, so `pnpm install` is the shortest path to the right command.

@@ -2,12 +2,14 @@
  * Guards the first-party Agent Skill mirrors against silent rot.
  *
  * The source of truth is `packages/cli/skills/` (shipped in the `@lunora/cli`
- * tarball via the `files` allowlist). It is mirrored twice so agents working
- * inside this repo pick the skills up directly:
+ * tarball via the `files` allowlist). It is mirrored three times — twice so
+ * agents working inside this repo pick the skills up directly, and once as the
+ * payload of the Claude Code / Codex plugin:
  *
  *     packages/cli/skills/<name>  <-  .agents/skills/<name>  <-  .claude/skills/<name>
+ *                                 <-  plugins/lunora/skills/<name>
  *
- * Both hops are symlinks, and both are tracked in git — which is exactly why
+ * Every hop is a symlink, and every one is tracked in git — which is exactly why
  * they rot invisibly. The `cirrus` -> `lunora` rename renamed the link NAMES
  * but not their TARGETS, leaving 11 of 14 skills dangling in both mirrors for
  * over a month: `git status` stays clean, nothing typechecks a symlink, and the
@@ -32,7 +34,7 @@
  * Run on every `pnpm install` via the root `postinstall` script.
  */
 
-import { existsSync, lstatSync, readdirSync, readlinkSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -43,7 +45,7 @@ const rootDir = join(__dirname, "..");
 const sourceDir = join(rootDir, "packages", "cli", "skills");
 
 /**
- * The mirror chain, in resolution order. Each entry links to the PREVIOUS
+ * The mirror chain, in resolution order. The in-repo hops link to the PREVIOUS
  * layer, not directly to the source: `.claude/skills` -> `.agents/skills` ->
  * `packages/cli/skills`. Keeping the hops relative means a worktree checkout
  * resolves without any absolute-path rewriting.
@@ -55,6 +57,15 @@ const MIRRORS = [
         // whose name has no source directory is stale by definition.
         staleWhenDangling: false,
         targetPrefix: "../../packages/cli/skills/",
+    },
+    {
+        // The Claude Code / Codex plugin's payload. This one links straight to
+        // the source rather than through `.agents`: Claude Code dereferences a
+        // symlink when it copies the plugin into its cache, and a link through a
+        // second link is one more hop to get wrong for zero benefit.
+        dir: join(rootDir, "plugins", "lunora", "skills"),
+        staleWhenDangling: false,
+        targetPrefix: "../../../packages/cli/skills/",
     },
     {
         dir: join(rootDir, ".claude", "skills"),
@@ -149,9 +160,58 @@ function isSymlink(path) {
     }
 }
 
+/**
+ * The plugin ships one manifest per host (`.claude-plugin/plugin.json` for
+ * Claude Code, `.codex-plugin/plugin.json` for Codex) and neither host reads the
+ * other's. Their shared identity fields are therefore hand-copied, and nothing
+ * else in the repo would notice one being bumped without the other — the
+ * marketplace would then advertise two different versions of the same plugin.
+ * `description` is deliberately excluded: the two hosts describe different
+ * feature sets.
+ */
+const LOCKSTEP_FIELDS = ["name", "version", "license", "repository", "keywords"];
+
+const checkPluginManifestLockstep = () => {
+    const paths = {
+        claude: join(rootDir, "plugins", "lunora", ".claude-plugin", "plugin.json"),
+        codex: join(rootDir, "plugins", "lunora", ".codex-plugin", "plugin.json"),
+    };
+
+    const manifests = {};
+
+    for (const [host, path] of Object.entries(paths)) {
+        try {
+            manifests[host] = JSON.parse(readFileSync(path, "utf8"));
+        } catch (error) {
+            fail(`${path.slice(rootDir.length + 1)} is missing or not valid JSON (${error.message})`);
+
+            return;
+        }
+    }
+
+    for (const field of LOCKSTEP_FIELDS) {
+        const claude = JSON.stringify(manifests.claude[field]);
+        const codex = JSON.stringify(manifests.codex[field]);
+
+        if (claude !== codex) {
+            fail(`plugins/lunora: "${field}" differs between the Claude (${claude}) and Codex (${codex}) manifests — they describe one plugin`);
+        }
+    }
+
+    if (JSON.stringify(manifests.claude.author) !== JSON.stringify(manifests.codex.author)) {
+        fail(`plugins/lunora: "author" differs between the Claude and Codex manifests`);
+    }
+};
+
+checkPluginManifestLockstep();
+
+const mirrorList = MIRRORS.map(({ dir }) => dir.slice(rootDir.length + 1)).join(", ");
+
 if (hasFailure) {
-    console.error("\ncheck-skill-mirrors: the .agents/.claude skill mirrors are out of sync with packages/cli/skills.\n");
+    console.error(
+        `\ncheck-skill-mirrors: fix the problems above — the mirrors (${mirrorList}) and the plugin manifests must agree with packages/cli/skills.\n`,
+    );
     process.exit(1);
 }
 
-console.log(`check-skill-mirrors: ${skills.length} skills mirrored correctly into .agents/skills and .claude/skills`);
+console.log(`check-skill-mirrors: ${skills.length} skills mirrored correctly into ${mirrorList}; plugin manifests in lockstep`);

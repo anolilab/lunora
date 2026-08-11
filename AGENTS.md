@@ -24,6 +24,7 @@ pnpm workspaces are `apps/*`, `packages/*`, `examples/*`, `tests/*`. The rest of
 | `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                       |
 | `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package).       |
 | `protocol/`      | Wire-protocol spec + shared fixtures.                                                                                                 |
+| `plugins/*`      | The Claude Code / Codex agent plugin (`plugins/lunora`) — the `packages/cli/skills` payload + the end-of-turn `lunora verify` hook.   |
 | `plans/`         | Implementation plans handed to agents; `plans/README.md` is the index.                                                                |
 | `sdks/`          | Non-JS client SDKs (`python`, `go`, `ruby`, `rust`, `swift`, `java`, `kotlin`) + `lunora sdk generate` targets. See `sdks/README.md`. |
 | `patches/`       | pnpm patches applied to third-party deps.                                                                                             |

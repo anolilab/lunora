@@ -69,17 +69,16 @@ anything:
 
 ```bash
 lunora verify    # wrangler config + codegen dry-run + tsc --noEmit
-lunora advisor   # ~95 static + runtime lints, scored per procedure
+lunora advisor   # the static + runtime lint set, scored per procedure
 ```
 
-`lunora advisor` is the security/quality review: RLS coverage
-(`rls-procedures`, `procedure-protections`), ownership and identity checks
-(`owner-field-writes`, `normalize-id-authorization`, `identity-claim-reads`,
-`fail-open-guards`), input validators, unindexed reads, non-deterministic
-calls in queries, SQL interpolation, and leaked secrets. Use
-`--entry <file>#<export>` to inspect one procedure and `--min-score` /
-`--baseline` to gate CI. Only after it is clean is a by-hand pass over
-`lunora-functions` worth the tokens.
+`lunora advisor` is the security/quality review: RLS coverage, ownership and
+identity checks, fail-open guards, input validators, unindexed reads,
+non-deterministic calls in queries, SQL interpolation, and leaked secrets. It
+prints each finding's own lint id and category, so read its output rather than
+grepping for rule names. Use `--entry <file>#<export>` to inspect one procedure
+and `--min-score` / `--baseline` to gate CI. Only after it is clean is a by-hand
+pass over `lunora-functions` worth the tokens.
 
 If one of those clearly matches the user's goal, switch to it instead of staying
 in this skill.
