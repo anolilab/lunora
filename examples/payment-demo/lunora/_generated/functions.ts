@@ -17,6 +17,12 @@ export interface RegisteredLunoraFunction {
     kind: "action" | "mutation" | "query" | "stream";
     args: Record<string, unknown>;
     /**
+     * Present on a `"stream"` declared `durable`: its run is persisted and
+     * survives the socket that opened it. Absent on every other kind, and on an
+     * ephemeral stream.
+     */
+    durable?: { ttlMs?: number };
+    /**
      * For `"action" | "mutation" | "query"` the handler is awaited and its result returned.
      * For `"stream"` the handler returns an `AsyncIterable` synchronously and takes an
      * `AbortSignal` as a third argument — the runtime drives it frame-by-frame.
