@@ -112,4 +112,85 @@ describe("lunoraClient — mutation watermark scoped by identity (plan 316)", ()
         // User B must not see user A's still-cached watermark for "room-1".
         expect(shards.find((shard) => shard.shardKey === "room-1")?.confirmedMutationWatermark ?? 0).toBe(0);
     });
+
+    it("does not mix watermarks when the separator character appears in an identity and, separately, in a bucket (PR review)", async () => {
+        expect.assertions(2);
+
+        // The separator {@link clientWatermarks} used to join identity+bucket
+        // into one string key. Both operands are arbitrary strings (a subject
+        // supplied to `setAuthToken`; a shard key), so the SAME separator can
+        // appear in either one — these two pairs joined to the identical
+        // string under that scheme: `subj:a<SEP>x` + bucket `y`, and
+        // `subj:a` + bucket `x<SEP>y`.
+        const SEP = String.fromCodePoint(0xff_fd);
+        const identityWithSepSubject = `a${SEP}x`;
+        const bucketWithSep = `x${SEP}y`;
+
+        const fetchMock = vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(jsonResponse({ lastMutationId: 3, result: "ok" }))
+            .mockResolvedValueOnce(jsonResponse({ lastMutationId: 9, result: "ok" }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            url: "https://app.example",
+            WebSocket: NoopWebSocket as unknown as typeof WebSocket,
+        });
+
+        // Identity A: subject carries the separator; bucket does not.
+        client.setAuthToken("token-a", identityWithSepSubject);
+        await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 3, shardKey: "y" });
+
+        expect(client.confirmedMutationWatermark("y")).toBe(3);
+
+        // Identity B: plain subject; the separator is in the BUCKET instead.
+        // Under the old joined-string scheme this collides with identity A's
+        // key above and would clobber/inherit its watermark.
+        client.setAuthToken("token-b", "a");
+        await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 9, shardKey: bucketWithSep });
+
+        // B's write under the colliding bucket must not have touched A's
+        // separately-cached watermark for plain bucket "y".
+        client.setAuthToken("token-a", identityWithSepSubject);
+
+        expect(client.confirmedMutationWatermark("y")).toBe(3);
+    });
+
+    it("files the ack under the identity that issued the call, not the identity active when it resolves (PR review)", async () => {
+        expect.assertions(2);
+
+        let resolveFetch!: (response: Response) => void;
+        const fetchMock = vi.fn<typeof fetch>(
+            () =>
+                new Promise((resolve) => {
+                    resolveFetch = resolve;
+                }),
+        );
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            url: "https://app.example",
+            WebSocket: NoopWebSocket as unknown as typeof WebSocket,
+        });
+
+        client.setAuthToken("token-a", "user-a");
+
+        // Issued as A, but its RPC is deliberately left hanging.
+        const pending = client.callMutator("messages:send", { text: "hi" }, { clientSeq: 6 });
+
+        // Switch to B WHILE A's call above is still in flight.
+        client.setAuthToken("token-b", "user-b");
+
+        resolveFetch(jsonResponse({ lastMutationId: 6, result: "ok" }));
+        await pending;
+
+        // The ack belongs to A, who issued the call — not B, who was active
+        // when the response happened to land.
+        client.setAuthToken("token-a", "user-a");
+
+        expect(client.confirmedMutationWatermark()).toBe(6);
+
+        client.setAuthToken("token-b", "user-b");
+
+        expect(client.confirmedMutationWatermark()).toBe(0);
+    });
 });

@@ -139,17 +139,6 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
- * Composite-key delimiter for {@link LunoraClient.watermarkKey} and its debug/
- * restamp helpers (`identity + this + bucket`). U+FFFD (REPLACEMENT CHARACTER)
- * rather than a printable separator like `:` — an identity fingerprint or
- * bucket name is never expected to contain it, so it can't collide with a
- * real key segment. Written as an escape sequence, not the raw glyph, so it
- * stays visible in a diff/editor instead of being an invisible byte in the
- * source.
- */
-const WATERMARK_KEY_SEPARATOR = "\uFFFD";
-
-/**
  * Maximum number of stream-start frames queued per connection while the
  * socket is (re)connecting. Past this cap, the oldest queued stream is
  * evicted (its consumer is failed with `STREAM_QUEUE_OVERFLOW`) so a stuck
@@ -797,16 +786,24 @@ class LunoraClient {
 
     /**
      * Highest custom-mutator watermark the server has echoed for this client,
-     * keyed by `watermarkKey` (identity + shard bucket, `shardKey ?? ""`)
-     * since the DO tracks one `__client_watermark` per `(identity, clientId)`
-     * pair, not per bucket alone — a bucket-only key would let a user switch
-     * claim the previous identity's sequence and wedge every push on
-     * `OUT_OF_ORDER` until a reload (plan 316). `callMutator` bumps it from
-     * every ack; the `@lunora/db` mutator runtime seeds its `clientSeq`
-     * generator from it so a reload (which resets the in-memory counter) never
-     * reissues a stale sequence the server would silently swallow as a replay.
+     * nested by identity fingerprint (`identityFingerprint() ?? ""`) then shard
+     * bucket (`shardKey ?? ""`) — the DO tracks one `__client_watermark` per
+     * `(identity, clientId)` pair, not per bucket alone, so a bucket-only key
+     * would let a user switch claim the previous identity's sequence and wedge
+     * every push on `OUT_OF_ORDER` until a reload (plan 316). A nested map
+     * (rather than a single map composite-keyed by a joined string) is what a
+     * previous fix here tried and got wrong: an identity fingerprint or a
+     * `shardKey` is an arbitrary string, so any string delimiter — even one as
+     * exotic as U+FFFD — can appear in one operand and collide with the other
+     * (a fingerprint of `a<SEP>x` + bucket `y` joins to the same string as
+     * a fingerprint of `a` + bucket `x<SEP>y`), mixing two identities' watermarks.
+     * The nested map has no join step, so there is no delimiter to collide.
+     * `callMutator` bumps it from every ack; the `@lunora/db` mutator runtime
+     * seeds its `clientSeq` generator from it so a reload (which resets the
+     * in-memory counter) never reissues a stale sequence the server would
+     * silently swallow as a replay.
      */
-    private readonly clientWatermarks = new Map<string, number>();
+    private readonly clientWatermarks = new Map<string, Map<string, number>>();
 
     /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
     private outboxMutationCounter = 0;
@@ -1199,7 +1196,7 @@ class LunoraClient {
      * dropping the write).
      */
     public confirmedMutationWatermark(shardKey?: string): number {
-        return this.clientWatermarks.get(this.watermarkKey(shardKey ?? "")) ?? 0;
+        return this.clientWatermarks.get(this.identityFingerprint() ?? "")?.get(shardKey ?? "") ?? 0;
     }
 
     /**
@@ -1242,6 +1239,16 @@ class LunoraClient {
         }
 
         const bucket = options?.shardKey ?? "";
+        // Capture the watermark key for the identity in effect when this call
+        // was INITIATED, before the RPC's await — not after. `setAuthToken`
+        // can switch identity while the RPC is in flight; deriving it after the
+        // await would file the ack under the NEW identity's bucket even though
+        // the request was authenticated (and the ack earned) as the old one.
+        // `define-mutators.ts` then derives the new identity's next sequence
+        // from a watermark it never advanced, and the shard rejects it as
+        // OUT_OF_ORDER — the exact wedge plan 316 exists to fix, reintroduced
+        // through this door instead.
+        const identity = this.identityFingerprint();
         let ackWatermark: number | undefined;
 
         const result = await this.rpc(functionPath, args, options?.shardKey, {
@@ -1253,10 +1260,15 @@ class LunoraClient {
             },
         });
 
-        const bucketKey = this.watermarkKey(bucket);
+        if (ackWatermark !== undefined && ackWatermark > (this.clientWatermarks.get(identity ?? "")?.get(bucket) ?? 0)) {
+            let bucketWatermarks = this.clientWatermarks.get(identity ?? "");
 
-        if (ackWatermark !== undefined && ackWatermark > (this.clientWatermarks.get(bucketKey) ?? 0)) {
-            this.clientWatermarks.set(bucketKey, ackWatermark);
+            if (bucketWatermarks === undefined) {
+                bucketWatermarks = new Map();
+                this.clientWatermarks.set(identity ?? "", bucketWatermarks);
+            }
+
+            bucketWatermarks.set(bucket, ackWatermark);
         }
 
         // The DO echoes `lastMutationId === clientSeq` only when it ran this push
@@ -1604,26 +1616,18 @@ class LunoraClient {
      */
     public debug(): ClientDebugSnapshot {
         const shards: ClientDebugShard[] = [];
-        // `clientWatermarks` is keyed by identity + bucket (see `watermarkKey`); strip
-        // back to bare buckets and only surface the CURRENT identity's entries — a
-        // previous identity's cached watermark leaking into this snapshot would be a
-        // correctness regression, not a cosmetic one.
-        const currentIdentityPrefix = `${this.identityFingerprint() ?? ""}${WATERMARK_KEY_SEPARATOR}`;
-        const watermarkBuckets = new Set<string>();
-
-        for (const key of this.clientWatermarks.keys()) {
-            if (key.startsWith(currentIdentityPrefix)) {
-                watermarkBuckets.add(key.slice(currentIdentityPrefix.length));
-            }
-        }
-
-        const shardKeys = new Set<string>([...this.connections.keys(), ...watermarkBuckets]);
+        // `clientWatermarks` is nested by identity then bucket — only surface the
+        // CURRENT identity's bucket map, never another identity's cached
+        // watermarks (a previous identity's watermark leaking into this
+        // snapshot would be a correctness regression, not a cosmetic one).
+        const currentWatermarks = this.clientWatermarks.get(this.identityFingerprint() ?? "");
+        const shardKeys = new Set<string>([...this.connections.keys(), ...(currentWatermarks?.keys() ?? [])]);
 
         for (const key of shardKeys) {
             const conn = this.connections.get(key);
 
             shards.push({
-                confirmedMutationWatermark: this.clientWatermarks.get(this.watermarkKey(key)) ?? 0,
+                confirmedMutationWatermark: currentWatermarks?.get(key) ?? 0,
                 hasSocket: conn?.socket !== undefined,
                 shardKey: key === "" ? undefined : key,
                 wasEverConnected: conn?.wasEverConnected ?? false,
@@ -5620,18 +5624,6 @@ class LunoraClient {
     }
 
     /**
-     * Watermark cache key: the server records the watermark per
-     * `(identity, clientId)`, so the client must too — a bucket-only key lets a
-     * user switch claim the previous identity's sequence and wedge on
-     * `OUT_OF_ORDER`. Composite (rather than clearing the map on identity
-     * change) so switching back to a previous identity recovers its watermark
-     * instead of re-wedging it from 0.
-     */
-    private watermarkKey(bucket: string): string {
-        return `${this.identityFingerprint() ?? ""}${WATERMARK_KEY_SEPARATOR}${bucket}`;
-    }
-
-    /**
      * Stable token-hash fingerprint of a bearer token (the `<len>:<fnv>:<djb2>`
      * format a token-stamped queued write carries). Extracted so the replay gate
      * can recompute the hash of the current credential and recognise a write
@@ -5731,30 +5723,38 @@ class LunoraClient {
     }
 
     /**
-     * Migrate every {@link clientWatermarks} entry keyed under identity `from` to
-     * identity `to` — the {@link watermarkKey}-scoped sibling of
-     * {@link restampQueuedIdentity}, for the same same-credential-subject-resolves
-     * case. Without this, a bucket's watermark cached under the token-hash
-     * fingerprint would look unset once the fingerprint relabels to `subj:…`, so
-     * the next push re-derives `1` against a server watermark the DO already
-     * advanced — the OUT_OF_ORDER wedge this cache-keying scheme exists to fix,
-     * reintroduced by the fix itself.
+     * Migrate the {@link clientWatermarks} bucket map nested under identity
+     * `from` to identity `to` — the sibling of {@link restampQueuedIdentity},
+     * for the same same-credential-subject-resolves case. Without this, a
+     * bucket's watermark cached under the token-hash fingerprint would look
+     * unset once the fingerprint relabels to `subj:…`, so the next push
+     * re-derives `1` against a server watermark the DO already advanced — the
+     * OUT_OF_ORDER wedge this cache-keying scheme exists to fix, reintroduced
+     * by the fix itself. `to` may already hold a bucket map (switching back to
+     * an identity that has its own cached watermarks); merge into it rather
+     * than clobbering it, with `from`'s entries winning on a colliding bucket —
+     * the same overwrite a plain `Map.set` would have done before this was a
+     * nested map.
      */
     private restampWatermarks(from: string | null, to: string | null): void {
-        const fromPrefix = `${from ?? ""}${WATERMARK_KEY_SEPARATOR}`;
-        // Collect matches before mutating — deleting/setting keys on the same
-        // Map while a `for…of` is still iterating it is a live-view hazard.
-        const matches: [key: string, watermark: number][] = [];
+        const fromKey = from ?? "";
+        const fromWatermarks = this.clientWatermarks.get(fromKey);
 
-        for (const [key, watermark] of this.clientWatermarks) {
-            if (key.startsWith(fromPrefix)) {
-                matches.push([key, watermark]);
-            }
+        if (fromWatermarks === undefined) {
+            return;
         }
 
-        for (const [key, watermark] of matches) {
-            this.clientWatermarks.delete(key);
-            this.clientWatermarks.set(`${to ?? ""}${WATERMARK_KEY_SEPARATOR}${key.slice(fromPrefix.length)}`, watermark);
+        this.clientWatermarks.delete(fromKey);
+
+        const toKey = to ?? "";
+        const toWatermarks = this.clientWatermarks.get(toKey);
+
+        if (toWatermarks === undefined) {
+            this.clientWatermarks.set(toKey, fromWatermarks);
+        } else {
+            for (const [bucket, watermark] of fromWatermarks) {
+                toWatermarks.set(bucket, watermark);
+            }
         }
     }
 
