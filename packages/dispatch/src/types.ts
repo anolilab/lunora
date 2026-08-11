@@ -17,6 +17,8 @@ export type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : 
 export interface RunFunctionOptions {
     /** Route the call to a specific shard (defaults to the worker's root shard). */
     shardKey?: string;
+    /** Abort the dispatch after this many ms; the abort is retryable. Overrides the runner's default. */
+    timeoutMs?: number;
 }
 
 /** Invoke a Lunora function (query/mutation/action) by reference. The shape of `ctx.run`. */

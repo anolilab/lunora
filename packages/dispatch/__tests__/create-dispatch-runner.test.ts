@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createDispatchLogger } from "../src/create-dispatch-logger";
-import { createDispatchRunner } from "../src/create-dispatch-runner";
+import { createDispatchRunner, isDeterministicDispatchFailure } from "../src/create-dispatch-runner";
 
 const ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" };
 const REF = { __lunoraRef: "messages:send" };
@@ -94,6 +94,109 @@ describe("createDispatchRunner", () => {
         await expect(createDispatchRunner({ env: { LUNORA_ORIGIN_URL: "https://x" }, fetchImpl, label: "@lunora/queue" })(REF)).rejects.toThrow(
             /LUNORA_ADMIN_TOKEN/,
         );
+    });
+
+    it("rejects within the default timeout when the dispatch never settles, with a status outside the deterministic set", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            // A fetchImpl that hangs until its abort signal fires — stands in for an
+            // unresponsive origin. Without the runner's timeout this would hold the
+            // caller (a queue consumer, a scheduled invocation) open indefinitely.
+            const fetchImpl = vi.fn<typeof fetch>(
+                (_url, init) =>
+                    new Promise((_resolve, reject) => {
+                        init?.signal?.addEventListener("abort", () => {
+                            reject(new DOMException("Aborted", "AbortError"));
+                        });
+                    }),
+            );
+
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF).catch((error: unknown) => error);
+
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            const error = (await pending) as { status?: unknown };
+
+            expect(error).toBeInstanceOf(Error);
+            expect(error.status).toBe(503);
+            expect((error as Error).message).toMatch(/timed out after 30000ms/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("clears the timeout on a successful response so no pending timer keeps the process alive", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+        const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+
+        try {
+            await createDispatchRunner({ env: ENV, fetchImpl: async () => Response.json({ ok: 1 }, { status: 200 }), label: "@lunora/queue" })(REF);
+
+            expect(clearTimeoutSpy).toHaveBeenCalledWith(expect.anything());
+        } finally {
+            clearTimeoutSpy.mockRestore();
+            vi.useRealTimers();
+        }
+    });
+
+    it("overrides the default timeout with RunFunctionOptions.timeoutMs", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const fetchImpl = vi.fn<typeof fetch>(
+                (_url, init) =>
+                    new Promise((_resolve, reject) => {
+                        init?.signal?.addEventListener("abort", () => {
+                            reject(new DOMException("Aborted", "AbortError"));
+                        });
+                    }),
+            );
+
+            const pending = createDispatchRunner({ env: ENV, fetchImpl, label: "@lunora/queue" })(REF, undefined, { timeoutMs: 1000 }).catch(
+                (error: unknown) => error,
+            );
+
+            // Not yet aborted at the (shorter) override — still pending.
+            await vi.advanceTimersByTimeAsync(999);
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+            await vi.advanceTimersByTimeAsync(1);
+
+            const error = (await pending) as { message?: unknown };
+
+            expect(error.message).toMatch(/timed out after 1000ms/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+describe("isDeterministicDispatchFailure", () => {
+    it("is true for the deterministic allowlist and false for 408/429/5xx and non-LunoraErrors", async () => {
+        expect.assertions(8);
+
+        const errorWithStatus = async (status: number): Promise<unknown> =>
+            createDispatchRunner({ env: ENV, fetchImpl: async () => new Response("boom", { status }), label: "@lunora/queue" })(REF).then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+        expect(isDeterministicDispatchFailure(await errorWithStatus(400))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(403))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(404))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(422))).toBe(true);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(408))).toBe(false);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(429))).toBe(false);
+        expect(isDeterministicDispatchFailure(await errorWithStatus(500))).toBe(false);
+        expect(isDeterministicDispatchFailure(new Error("plain"))).toBe(false);
     });
 });
 
