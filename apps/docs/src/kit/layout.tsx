@@ -75,9 +75,13 @@ const Kicker: FC<{
 );
 
 /**
- * The numbered section header: an index in the left column, the title beside
- * it, and an optional right-aligned note. Collapses to a single column below
- * `md` — the note reads as a subtitle there rather than being dropped.
+ * The numbered section header.
+ *
+ * Left column stacks the index over a category label — the label says what
+ * kind of thing the section is, which the title itself rarely does. The copy
+ * column carries the title and an optional lead paragraph. `note` adds a
+ * right-aligned aside, used on index pages where the section needs a pointer
+ * ("Start with the adapter built for your project") more than a lead.
  *
  * `index` is a string ("01") rather than a number so the caller controls
  * zero-padding; auto-numbering would couple the header to its page order.
@@ -86,17 +90,19 @@ const SectionHeader: FC<{
     children?: ReactNode;
     className?: string;
     index?: string;
+    /** Category label under the index — "Animation library", "Add-ons". */
+    label?: string;
     note?: ReactNode;
     title: ReactNode;
-}> = ({ children, className, index, note, title }) => (
-    <header className={cn("mb-[clamp(2.5rem,1.5rem+3vw,4.5rem)] grid grid-cols-1 gap-x-col-gap gap-y-4 md:grid-cols-12", className)}>
-        {index ? (
-            <div className="md:col-span-1">
-                <Kicker tone="accent">{index}</Kicker>
-                <div className="mt-2 hidden h-px bg-hairline md:block" />
+}> = ({ children, className, index, label, note, title }) => (
+    <header className={cn("mb-[clamp(2.5rem,1.5rem+3vw,4.5rem)] grid grid-cols-1 gap-x-col-gap gap-y-5 md:grid-cols-12", className)}>
+        {index || label ? (
+            <div className="flex flex-col gap-1.5 md:col-span-2">
+                {index ? <Kicker tone="accent">{index}</Kicker> : null}
+                {label ? <Kicker tone="faint">{label}</Kicker> : null}
             </div>
         ) : null}
-        <div className={cn("flex flex-col gap-3.5", index ? "md:col-span-7" : "md:col-span-8")}>
+        <div className={cn("flex flex-col gap-3.5", index || label ? "md:col-span-6" : "md:col-span-8")}>
             <h2 className="text-h2 font-bold text-balance text-ink">{title}</h2>
             {children}
         </div>

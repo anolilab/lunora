@@ -346,7 +346,10 @@ const Navbar = (): ReactElement => {
             ticking = true;
 
             requestAnimationFrame(() => {
-                const sections = document.querySelectorAll("section[data-nav-theme]");
+                // Any element may declare the tone behind the bar, not just
+                // `section` — the page header is a `header`, and it is the one
+                // region where the bar sits over a bright field.
+                const sections = document.querySelectorAll("[data-nav-theme]");
                 let theme = "dark";
 
                 for (const section of sections) {
@@ -390,16 +393,22 @@ const Navbar = (): ReactElement => {
     };
 
     const active = menu.find((column) => column.navTitle === openMenu);
-    const onDocs = pathname.startsWith("/docs");
+    // Article pages need an opaque bar for content to scroll under. The docs
+    // hub is a landing page with its own colour field, so it keeps the
+    // transparent bar the marketing pages use.
+    const opaqueBar = pathname.startsWith("/docs/");
+    // Dark ink is only legible when the bar is transparent over a bright
+    // region. An opaque canvas bar always wants light ink, whatever is behind.
+    const lightInk = light && !opaqueBar;
 
     return (
         <header
-            className={cn("fixed inset-x-0 top-0 z-100", onDocs && "border-b border-hairline bg-canvas")}
-            data-theme={light ? "light" : "dark"}
+            className={cn("fixed inset-x-0 top-0 z-100", opaqueBar && "border-b border-hairline bg-canvas")}
+            data-theme={lightInk ? "light" : "dark"}
             onMouseLeave={scheduleClose}
         >
             <div className="relative mx-auto flex h-16 max-w-6xl items-center px-5">
-                <Logo light={light} pathname={pathname} />
+                <Logo light={lightInk} pathname={pathname} />
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
                     <div
@@ -411,7 +420,7 @@ const Navbar = (): ReactElement => {
                         <Link
                             className={cn(
                                 "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                light ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
                             )}
                             to="/docs/$"
                         >
@@ -430,7 +439,7 @@ const Navbar = (): ReactElement => {
                                 aria-expanded={openMenu === column.navTitle}
                                 className={cn(
                                     "flex w-max cursor-default items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                    light ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                    lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
                                 )}
                                 onFocus={() => {
                                     openWith(column.navTitle);
@@ -450,7 +459,7 @@ const Navbar = (): ReactElement => {
                         <Link
                             className={cn(
                                 "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                light ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
                             )}
                             to="/blog"
                         >
@@ -460,12 +469,12 @@ const Navbar = (): ReactElement => {
                 </nav>
 
                 <div className="ml-auto hidden items-center gap-2 lg:flex">
-                    <SearchButton light={light} />
+                    <SearchButton light={lightInk} />
                     <a
                         aria-label="Join the Lunora Discord"
                         className={cn(
                             "flex size-9 items-center justify-center rounded-none transition-colors",
-                            light ? "text-on-panel/60 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline hover:text-ink",
+                            lightInk ? "text-on-panel/60 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline hover:text-ink",
                         )}
                         href="https://discord.gg/eajEZvk2PG"
                         rel="noreferrer"
@@ -477,7 +486,7 @@ const Navbar = (): ReactElement => {
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
                             "flex h-9 items-center gap-1.5 rounded-none px-4 text-sm font-medium transition-colors",
-                            light ? "bg-on-panel text-panel hover:opacity-90" : "bg-panel text-on-panel hover:opacity-90",
+                            lightInk ? "bg-on-panel text-panel hover:opacity-90" : "bg-panel text-on-panel hover:opacity-90",
                         )}
                         href="https://github.com/anolilab/lunora"
                         rel="noreferrer"
@@ -498,7 +507,7 @@ const Navbar = (): ReactElement => {
                     aria-label="Open menu"
                     className={cn(
                         "ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
-                        light ? "text-on-panel/70 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline",
+                        lightInk ? "text-on-panel/70 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline",
                     )}
                     onClick={() => {
                         setIsMobileMenuOpen(true);
