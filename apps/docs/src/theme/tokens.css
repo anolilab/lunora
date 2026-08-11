@@ -1,0 +1,172 @@
+/**
+ * Site theme layer — the one file you swap to re-skin the whole site.
+ *
+ * Every visual decision the marketing + docs chrome makes reads a `--site-*`
+ * custom property from here. Nothing below this file hard-codes a colour, a
+ * font size, or a gutter. To take this app to another project, replace the
+ * `:root` block and leave the rest of `src/kit/` untouched.
+ *
+ * The `@theme inline` block republishes each token as a Tailwind v4 theme
+ * value, so `bg-canvas`, `border-hairline`, `text-h2` etc. all resolve to
+ * `var(--site-*)` at runtime rather than being inlined at build time — that is
+ * what makes a runtime theme swap (or a `[data-site-theme]` override) work.
+ *
+ * Scale note: the type scale is *capped* and the layout gutters are *fluid*.
+ * Headings stop growing at ~1200px so long-form measure stays readable on wide
+ * monitors, while gutters and section rhythm keep breathing to the viewport.
+ */
+
+@theme inline {
+    /* ── Surfaces & ink ── */
+    --color-canvas: var(--site-canvas);
+    --color-canvas-deep: var(--site-canvas-deep);
+    --color-surface: var(--site-surface);
+    --color-surface-raised: var(--site-surface-raised);
+    --color-hairline: var(--site-hairline);
+    --color-hairline-strong: var(--site-hairline-strong);
+    --color-ink: var(--site-ink);
+    --color-ink-muted: var(--site-ink-muted);
+    --color-ink-faint: var(--site-ink-faint);
+
+    /* ── Accents ── */
+    --color-accent: var(--site-accent);
+    --color-accent-2: var(--site-accent-2);
+    --color-accent-3: var(--site-accent-3);
+    --color-on-accent: var(--site-on-accent);
+    --color-positive: var(--site-positive);
+
+    /* Inverted surface — the mega-menu panel and anything else that flips
+       against the page. Named rather than `white`/`black` so it inverts with
+       the theme instead of staying light when the brand goes light. */
+    --color-panel: var(--site-panel);
+    --color-on-panel: var(--site-on-panel);
+
+    /* ── Type scale ──
+       Sizes carry their own line-height and tracking so a heading is one
+       utility (`text-h2`) instead of three that can drift apart. */
+    --text-display: var(--site-text-display);
+    --text-display--line-height: 0.95;
+    --text-display--letter-spacing: -0.04em;
+
+    --text-h1: var(--site-text-h1);
+    --text-h1--line-height: 1.05;
+    --text-h1--letter-spacing: -0.04em;
+
+    --text-h2: var(--site-text-h2);
+    --text-h2--line-height: 1.05;
+    --text-h2--letter-spacing: -0.035em;
+
+    --text-h3: var(--site-text-h3);
+    --text-h3--line-height: 1.08;
+    --text-h3--letter-spacing: -0.028em;
+
+    --text-body: var(--site-text-body);
+    --text-body--line-height: 1.55;
+    --text-body--letter-spacing: -0.01em;
+
+    --text-blurb: var(--site-text-blurb);
+    --text-blurb--line-height: 1.5;
+    --text-blurb--letter-spacing: -0.01em;
+
+    /* Mono micro-labels. `kicker` sits above headings, `micro` is the smallest
+       legible label (section indices, meta rows, table headers). */
+    --text-kicker: var(--site-text-kicker);
+    --text-kicker--line-height: 1.2;
+    --text-kicker--letter-spacing: 0.12em;
+
+    --text-micro: var(--site-text-micro);
+    --text-micro--line-height: 1.5;
+    --text-micro--letter-spacing: 0.18em;
+
+    /* ── Layout rhythm ── */
+    --spacing-gutter: var(--site-gutter);
+    --spacing-section: var(--site-section-gap);
+    --spacing-col-gap: var(--site-col-gap);
+    --container-shell: var(--site-shell);
+}
+
+:root {
+    /* ─────────────────────────────────────────────────────────────────────
+       SWAP EVERYTHING BELOW TO RE-BRAND.
+       Defaults are Lunora "Luna + Aurora" on a night canvas.
+       ───────────────────────────────────────────────────────────────────── */
+
+    /* Surfaces — a near-black canvas with two lifts above it and one below. */
+    --site-canvas: #0e0e11;
+    --site-canvas-deep: #08080a;
+    --site-surface: hsl(240 14% 8%);
+    --site-surface-raised: hsl(240 14% 11%);
+
+    /* Structure is drawn with 1px hairlines, never shadows or radii. */
+    --site-hairline: rgb(255 255 255 / 0.08);
+    --site-hairline-strong: rgb(255 255 255 / 0.16);
+
+    /* Ink — three steps is enough; a fourth always ends up unreadable. */
+    --site-ink: hsl(228 30% 96%);
+    --site-ink-muted: rgb(255 255 255 / 0.55);
+    --site-ink-faint: rgb(255 255 255 / 0.35);
+
+    /* Accents — the aurora ribbon, used as light rather than paint. */
+    --site-accent: hsl(186 84% 56%);
+    --site-accent-2: hsl(256 72% 68%);
+    --site-accent-3: hsl(330 80% 64%);
+    --site-on-accent: #0e0e11;
+    --site-ribbon: linear-gradient(100deg, var(--site-accent), var(--site-accent-2) 55%, var(--site-accent-3));
+
+    /* "Healthy / live" status. Its own role rather than an accent alias — a
+       brand may want a cool accent and still need green to read as green. */
+    --site-positive: hsl(152 62% 52%);
+
+    /* Inverted surface (see --color-panel above). */
+    --site-panel: hsl(228 32% 97%);
+    --site-on-panel: hsl(240 14% 10%);
+
+    /* Type scale — capped so headings stop growing on wide monitors. */
+    --site-text-display: clamp(2.25rem, 1.5rem + 3.2vw, 3.3rem);
+    --site-text-h1: clamp(2rem, 1.25rem + 2.4vw, 2.75rem);
+    --site-text-h2: clamp(1.75rem, 1.15rem + 1.9vw, 2.5rem);
+    --site-text-h3: clamp(1.125rem, 0.95rem + 0.55vw, 1.4375rem);
+    --site-text-body: 0.9375rem;
+    --site-text-blurb: 0.8125rem;
+    --site-text-kicker: 0.6875rem;
+    --site-text-micro: 0.625rem;
+
+    /* Layout rhythm — fluid, unlike the type scale.
+       `section-gap` is the padding ONE section applies to each of its edges,
+       so the space between two stacked sections is twice this. Sized so that
+       sum lands at ~130–150px, not the ~300px a full-gap reading would give. */
+    --site-gutter: clamp(1.25rem, 0.75rem + 4vw, 6rem);
+    --site-section-gap: clamp(2.5rem, 1.75rem + 3vw, 4.5rem);
+    --site-col-gap: clamp(1rem, 0.3rem + 1.7vw, 2.5rem);
+    --site-shell: 90rem;
+
+    /* Corners are square. Kept as a token so a softer brand can opt out in one
+       line instead of hunting `rounded-*` across the component layer. */
+    --site-radius: 0px;
+}
+
+/**
+ * Light brand override. The marketing site runs dark-only, so this exists for
+ * downstream projects: set `data-site-theme="light"` on <html> to flip.
+ */
+[data-site-theme="light"] {
+    --site-canvas: hsl(228 32% 97%);
+    --site-canvas-deep: #ffffff;
+    --site-surface: hsl(228 22% 94%);
+    --site-surface-raised: #ffffff;
+
+    --site-hairline: rgb(14 14 17 / 0.1);
+    --site-hairline-strong: rgb(14 14 17 / 0.2);
+
+    --site-ink: hsl(240 14% 10%);
+    --site-ink-muted: rgb(14 14 17 / 0.62);
+    --site-ink-faint: rgb(14 14 17 / 0.42);
+
+    --site-accent: hsl(186 84% 32%);
+    --site-accent-2: hsl(256 62% 52%);
+    --site-accent-3: hsl(330 70% 48%);
+    --site-on-accent: hsl(228 32% 97%);
+    --site-positive: hsl(152 58% 32%);
+    --site-panel: hsl(240 14% 10%);
+    --site-on-panel: hsl(228 32% 97%);
+}

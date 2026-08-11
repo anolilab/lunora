@@ -1,0 +1,107 @@
+/**
+ * Article-layout theme — binds Fumadocs' chrome to the site tokens.
+ *
+ * Fumadocs colours everything through its own `--color-fd-*` set, so the whole
+ * docs layout (sidebar, TOC, cards, code blocks, callouts) re-skins by
+ * remapping those onto `--site-*` rather than by overriding component classes.
+ * Keep it that way: a rule here that targets a Fumadocs class name is a rule
+ * that breaks on their next minor release.
+ *
+ * The structural rules below the colour map are the exceptions that cannot be
+ * expressed as a variable — square corners, and the fixed-navbar offsets.
+ */
+
+/* `.dark` (from fumadocs' neutral theme) also sets these, so the site mapping
+   is written at equal specificity and later in the cascade to win. */
+:root,
+:root.dark,
+.dark {
+    --color-fd-background: var(--site-canvas);
+    --color-fd-foreground: var(--site-ink);
+    --color-fd-muted: var(--site-surface);
+    --color-fd-muted-foreground: var(--site-ink-muted);
+    --color-fd-popover: var(--site-surface-raised);
+    --color-fd-popover-foreground: var(--site-ink);
+    --color-fd-card: var(--site-surface);
+    --color-fd-card-foreground: var(--site-ink);
+    --color-fd-border: var(--site-hairline);
+    --color-fd-primary: var(--site-accent);
+    --color-fd-primary-foreground: var(--site-on-accent);
+    --color-fd-secondary: var(--site-surface);
+    --color-fd-secondary-foreground: var(--site-ink);
+    --color-fd-accent: var(--site-hairline);
+    --color-fd-accent-foreground: var(--site-ink);
+    --color-fd-ring: var(--site-accent);
+}
+
+/* Square corners across the docs chrome. Fumadocs bakes `rounded-*` utilities
+   into its markup, so there is no variable to turn down — but pills and status
+   dots (`rounded-full`) must stay round, hence the exclusion. */
+#nd-sidebar [class*="rounded-"]:not([class*="rounded-full"]),
+#nd-page [class*="rounded-"]:not([class*="rounded-full"]),
+#nd-toc [class*="rounded-"]:not([class*="rounded-full"]),
+#nd-subnav [class*="rounded-"]:not([class*="rounded-full"]) {
+    border-radius: var(--site-radius);
+}
+
+/* Sidebar: its own surface, separated by a hairline rather than a shadow. The
+   panel is pinned to the viewport top behind the fixed h-16 navbar, so drop it
+   below the navbar or its first items sit underneath. */
+#nd-sidebar {
+    background-color: var(--site-canvas-deep);
+    border-right: 1px solid var(--site-hairline);
+    top: 4rem;
+    height: calc(100dvh - 4rem);
+}
+
+/* Sidebar section labels read as the same mono micro-label used everywhere
+   else on the site. Matched on the element rather than a class: nav entries
+   are anchors and buttons, so a bare `p` in the sidebar is a section label —
+   a selector that survives their utility-class churn. */
+#nd-sidebar p {
+    font-family: var(--font-mono);
+    font-size: var(--site-text-kicker);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--site-ink-faint);
+}
+
+/* Docs use the full page width — drop fumadocs' fixed ~1285px frame cap so the
+   sidebar, content, and TOC span edge to edge (paired with --fd-layout-width). */
+[class*="max-w-[1285px]"] {
+    max-width: none !important;
+}
+
+/* The page article starts at viewport top (under the fixed h-16 navbar); its
+   default top padding (pt-14) is less than the navbar, so the breadcrumb tucks
+   under it. Clear the navbar plus a little breathing room. */
+#nd-page {
+    padding-top: 5rem;
+}
+
+#nd-subnav > div {
+    border-bottom: 0;
+}
+
+/* Prose headings follow the site scale rather than the typography plugin's, so
+   an h2 in an article and an h2 on the landing page are the same object. */
+#nd-page h1 {
+    font-size: var(--site-text-h1);
+    line-height: 1.05;
+    letter-spacing: -0.04em;
+    font-weight: 700;
+}
+
+#nd-page h2 {
+    font-size: var(--site-text-h2);
+    line-height: 1.1;
+    letter-spacing: -0.035em;
+    font-weight: 700;
+}
+
+#nd-page h3 {
+    font-size: var(--site-text-h3);
+    line-height: 1.15;
+    letter-spacing: -0.028em;
+    font-weight: 700;
+}

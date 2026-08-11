@@ -38,32 +38,32 @@ const FUNCTION_CODE = [
 ];
 
 const ShipPanel: FC = () => (
-    <div className="flex size-full flex-col overflow-hidden border border-white/[0.08] bg-[hsl(240_22%_4%)] font-mono">
-        <div className="flex h-10 items-center justify-between border-b border-white/[0.07] px-4">
-            <span className="flex items-center gap-2 text-xs text-emerald-400">
-                <span className="size-1.5 animate-pulse rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60" />
+    <div className="flex size-full flex-col overflow-hidden border border-hairline bg-canvas-deep font-mono">
+        <div className="flex h-10 items-center justify-between border-b border-hairline px-4">
+            <span className="flex items-center gap-2 text-blurb text-positive">
+                <span className="size-1.5 animate-pulse rounded-full bg-positive shadow-[0_0_6px] shadow-positive/60" />
                 lunora · deployed
             </span>
-            <span className="text-[10px] text-white/40">my-app.lunora.app</span>
+            <span className="text-micro tracking-normal text-ink-faint">my-app.lunora.app</span>
         </div>
         <div className="flex flex-col py-2">
             {["codegen — types in sync", "advisors — 0 issues", "deployed to your Cloudflare account"].map((label) => (
-                <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-2.5 last:border-b-0" key={label}>
-                    <span className="flex size-4 shrink-0 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10">
-                        <Check className="size-2.5 text-emerald-400" />
+                <div className="flex items-center gap-3 border-b border-hairline px-4 py-2.5 last:border-b-0" key={label}>
+                    <span className="flex size-4 shrink-0 items-center justify-center rounded-full border border-positive/50 bg-positive/10">
+                        <Check className="size-2.5 text-positive" />
                     </span>
-                    <span className="text-xs text-white/55">{label}</span>
+                    <span className="text-blurb text-ink-muted">{label}</span>
                 </div>
             ))}
         </div>
-        <div className="m-4 mt-auto border border-emerald-400/15 bg-white/[0.02] p-3.5">
-            <p className="text-xs text-white/70">Live, globally · syncing to all clients</p>
+        <div className="m-4 mt-auto border border-positive/15 bg-hairline p-3.5">
+            <p className="text-blurb text-ink-muted">Live, globally · syncing to all clients</p>
             <div className="mt-2.5 flex items-center gap-2">
-                <span className="flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.07] px-2.5 py-0.5">
-                    <span className="size-1 rounded-full bg-emerald-400" />
-                    <span className="text-[10px] text-emerald-400">live</span>
+                <span className="flex items-center gap-1.5 rounded-full border border-positive/25 bg-positive/[0.07] px-2.5 py-0.5">
+                    <span className="size-1 rounded-full bg-positive" />
+                    <span className="text-micro text-positive uppercase">live</span>
                 </span>
-                <span className="text-[10px] text-white/40">edge · 300+ locations</span>
+                <span className="text-micro tracking-normal text-ink-faint">edge · 300+ locations</span>
             </div>
         </div>
     </div>
@@ -142,9 +142,9 @@ const HowItWorks: FC = () => {
     };
 
     return (
-        <div className="grid grid-cols-1 border border-white/[0.08] lg:grid-cols-2 lg:border-x-0">
+        <div className="grid grid-cols-1 border border-hairline lg:grid-cols-2 lg:border-x-0">
             {/* left — accordion */}
-            <div className="flex flex-col lg:border-r lg:border-white/[0.08]">
+            <div className="flex flex-col lg:border-r lg:border-hairline">
                 {STEPS.map((step, index) => {
                     const isActive = index === active;
 
@@ -152,8 +152,8 @@ const HowItWorks: FC = () => {
                         <button
                             aria-expanded={isActive}
                             className={cn(
-                                "relative border-b border-white/[0.08] px-8 py-7 text-left transition-colors last:border-b-0",
-                                isActive ? "bg-white/[0.02]" : "hover:bg-white/[0.015]",
+                                "relative border-b border-hairline px-8 py-7 text-left transition-colors last:border-b-0",
+                                isActive ? "bg-hairline" : "hover:bg-hairline",
                             )}
                             key={step.index}
                             onClick={() => {
@@ -161,21 +161,16 @@ const HowItWorks: FC = () => {
                             }}
                             type="button"
                         >
-                            <span className="font-mono text-xs text-white/35">Step {step.index}</span>
-                            <h3 className={cn("mt-2 text-2xl font-medium tracking-tight transition-colors", isActive ? "text-white" : "text-white/55")}>
-                                {step.title}
-                            </h3>
+                            <span className="font-mono text-kicker uppercase text-ink-faint">Step {step.index}</span>
+                            <h3 className={cn("mt-2 text-h3 font-bold transition-colors", isActive ? "text-ink" : "text-ink-muted")}>{step.title}</h3>
                             <div
                                 className={cn("grid transition-all duration-300", isActive ? "mt-3 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}
                             >
-                                <p className="overflow-hidden text-sm leading-relaxed text-white/50">{step.desc}</p>
+                                <p className="overflow-hidden text-blurb text-ink-muted">{step.desc}</p>
                             </div>
                             {isActive && !reduceMotion ? (
-                                <div className="mt-5 h-px w-full bg-white/[0.08]">
-                                    <div
-                                        className="h-px bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy"
-                                        style={{ width: `${progress.toFixed(1)}%` }}
-                                    />
+                                <div className="mt-5 h-px w-full bg-hairline">
+                                    <div className="h-px bg-gradient-to-r from-accent via-accent-2 to-accent-3" style={{ width: `${progress.toFixed(1)}%` }} />
                                 </div>
                             ) : null}
                         </button>
@@ -184,7 +179,7 @@ const HowItWorks: FC = () => {
             </div>
 
             {/* right — active panel */}
-            <div className="relative min-h-[360px] bg-[hsl(240_20%_4.5%)] p-6 lg:min-h-[440px]">
+            <div className="relative min-h-[360px] bg-canvas-deep p-6 lg:min-h-[440px]">
                 <div className="size-full" key={active}>
                     {STEPS[active].panel}
                 </div>
