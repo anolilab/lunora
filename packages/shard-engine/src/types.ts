@@ -66,6 +66,17 @@ export interface ShapeSubscriptionQuery {
 
 export interface SubscriptionEnvelope {
     /**
+     * Optional capability tokens carried by the `connect` envelope, naming wire
+     * behaviours this client can handle that older ones cannot (currently only
+     * `"pageDelta"` — see `shared/page-result.ts`). Resolved to the decisions
+     * they gate and recorded on the attachment; an unrecognised token is simply
+     * never matched, so a newer client talking to an older server degrades
+     * silently. Strictly opt-in: absent means the server keeps to the wire
+     * behaviour every client already understood.
+     */
+    caps?: string[];
+
+    /**
      * Stable per-client id carried by the `connect` envelope. Recorded on the
      * socket attachment so a shape poke can echo this client's
      * `__client_watermark` as its `lastMutationId`. Ignored on other envelope
@@ -235,6 +246,19 @@ export interface SocketAttachment {
      * hooks so they run under the connecting user.
      */
     identity?: Record<string, unknown>;
+
+    /**
+     * `true` when the socket's `connect` envelope announced the `pageDelta`
+     * capability — i.e. this client can merge a row delta into the `page` of a
+     * paginated result, so the server may diff one instead of re-sending it.
+     *
+     * The resolved DECISION, not the announced token list: `caps` is
+     * client-supplied and unbounded, and nothing ever reads an unrecognised
+     * token back. Persisted so it survives hibernation — `connect` is one-shot,
+     * so a capability lost across a wake could never be re-announced and the
+     * socket would quietly fall back to snapshots for the rest of its life.
+     */
+    pageDeltas?: boolean;
 
     /**
      * Live shape subscriptions registered on this socket, keyed by the

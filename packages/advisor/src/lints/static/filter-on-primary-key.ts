@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { queryReadLocation } from "../helpers";
 
 /**
  * Flags `ctx.db.query("t").filter((d) => d._id === x)` — a full scan for a row
@@ -33,7 +34,7 @@ const filterOnPrimaryKey: Lint = {
         (context.queries ?? [])
             .filter((read) => read.filtersPrimaryKey === true && read.table !== "")
             .map((read) => {
-                const location = read.line > 0 ? `${read.file}:${read.line.toString()}` : read.file;
+                const location = queryReadLocation(read);
 
                 return emit(filterOnPrimaryKey, {
                     cacheKey: `filter_on_primary_key:${read.file}:${read.line.toString()}:${read.table}`,

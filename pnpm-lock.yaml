@@ -2774,6 +2774,9 @@ importers:
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
+      '@lunora/shard-engine':
+        specifier: workspace:*
+        version: link:../shard-engine
       '@types/node':
         specifier: catalog:types
         version: 26.1.1

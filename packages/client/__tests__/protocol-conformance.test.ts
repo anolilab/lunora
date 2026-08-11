@@ -218,6 +218,8 @@ const makeWsClient = (): LunoraClient =>
     });
 
 interface WsServerCase {
+    /** Cached value the frame is applied ON TOP of; absent means the frame replaces wholesale. */
+    baseWire?: unknown;
     expect: { code?: string; kind: string; message?: string; valueWire?: unknown };
     frame: Record<string, unknown>;
     name: string;
@@ -225,6 +227,8 @@ interface WsServerCase {
 
 interface WsFixtures {
     clientFrames: Record<string, unknown>;
+    /** Merge cases, only for a client that announced the `pageDelta` capability. */
+    pageDeltaFrames: WsServerCase[];
     serverFrames: WsServerCase[];
     shape: {
         expectedRows: Record<string, unknown>[];
@@ -246,7 +250,11 @@ describe("ws-frames fixtures", () => {
 
         const sent = latestSocket().sent.map((raw) => JSON.parse(raw));
 
-        expect(sent[0]).toStrictEqual(ws.clientFrames.connect);
+        // The reference client implements `pageDelta`, so it emits the
+        // capability-announcing form. The plain `connect` fixture stays the
+        // conforming shape for an SDK that implements no tokens — see the
+        // fixture file's `$comment` and protocol README 5.1.1.
+        expect(sent[0]).toStrictEqual(ws.clientFrames["connect-with-caps"]);
         expect(sent[1]).toStrictEqual(ws.clientFrames["subscribe-cold"]);
     });
 
@@ -279,6 +287,27 @@ describe("ws-frames fixtures", () => {
 
         expect(values).toHaveLength(1);
         expect(encodeWire(values[0])).toStrictEqual(testCase.expect.valueWire);
+    });
+
+    // `pageDeltaFrames`, not `serverFrames`: these apply ON TOP of a cached
+    // value instead of replacing it, and every SDK iterates `serverFrames`
+    // wholesale — putting a merge case there fails all seven of them. Only an
+    // SDK that announced `pageDelta` should run these. Each seeds `baseWire`
+    // via a `data` frame, then asserts the merged result; together they pin the
+    // insert PLACEMENT the server relies on every client sharing (README 5.1.1).
+    it.each(ws.pageDeltaFrames.map((testCase) => [testCase.name, testCase] as const))("merges delta frame %s into the cached value", (_name, testCase) => {
+        expect.hasAssertions();
+
+        const client = makeWsClient();
+        const values: unknown[] = [];
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, (value) => values.push(value));
+        latestSocket().open();
+        latestSocket().receive({ data: testCase.baseWire, id: testCase.frame["id"], type: "data" });
+        latestSocket().receive(testCase.frame);
+
+        expect(values).toHaveLength(2);
+        expect(encodeWire(values[1])).toStrictEqual(testCase.expect.valueWire);
     });
 
     const errorFrames = ws.serverFrames.filter((testCase) => testCase.expect.kind === "error");

@@ -15,10 +15,17 @@
  * replaced the whole cached value with it on every message — which only made
  * sense for the rare delta payloads that already carried the full result. This
  * module lets the client recognise a structured delta and merge it into the
- * existing array (preserving order, no dup/loss), falling back to full
+ * existing list (preserving order, no dup/loss), falling back to full
  * replacement when the payload isn't a recognisable row delta or can't be
  * applied cleanly against the current cached shape.
+ *
+ * The list shape and the insert-position rule come from `shared/page-result.ts`
+ * rather than being defined here: the server runs the SAME functions to decide
+ * whether a delta is safe to send at all, and a divergence between the two
+ * would corrupt a live query silently. See that module's header.
  */
+
+import { ID_FIELD, insertionIndexFor, PAGE_FIELD, rowListOf } from "../../../shared/page-result";
 
 /**
  * One row change as emitted by `@lunora/do`'s `broadcastDelta`. Mirrors
@@ -34,12 +41,6 @@ interface MutationDelta {
     table: string;
 }
 
-/** Identity field every Lunora document row carries. */
-const ID_FIELD = "_id";
-
-/** Creation-time field used as the default sort key for inserts. */
-const CREATION_FIELD = "_creationTime";
-
 /** Read a row's `_id`, coercing to string; `undefined` when the row has none. */
 const rowId = (row: unknown): string | undefined => {
     if (typeof row !== "object" || row === null) {
@@ -49,70 +50,6 @@ const rowId = (row: unknown): string | undefined => {
     const id = (row as Record<string, unknown>)[ID_FIELD];
 
     return typeof id === "string" ? id : undefined;
-};
-
-/**
- * Detect the ordering direction of a cached list from its existing rows'
- * `_creationTime` run. Returns `true` when the list is sorted descending
- * (newest-first — the common chat/feed shape), `false` for ascending or when the
- * direction is indeterminate (0/1 numeric rows, or an all-equal run). We read the
- * FIRST strictly-ordered adjacent numeric pair, so a single out-of-order row
- * doesn't flip the verdict.
- */
-const isDescending = (list: Record<string, unknown>[]): boolean => {
-    let previous: number | undefined;
-
-    for (const existingRow of list) {
-        const existing = existingRow[CREATION_FIELD];
-
-        if (typeof existing !== "number") {
-            continue;
-        }
-
-        if (previous !== undefined) {
-            if (existing < previous) {
-                return true;
-            }
-
-            if (existing > previous) {
-                return false;
-            }
-        }
-
-        previous = existing;
-    }
-
-    return false;
-};
-
-/**
- * Decide where to insert a new row into an already-ordered list so the merge
- * preserves the cached ordering. When both the new row and the neighbours carry a
- * numeric `_creationTime` we honour the list's OWN direction — ascending (the
- * server's default sort) inserts before the first larger neighbour; descending
- * (a newest-first feed) inserts before the first smaller one, so a freshly
- * inserted newest row lands at the front instead of being appended to the end.
- * With no usable ordering we append, keeping insertion order and never reordering
- * existing rows.
- */
-const insertionIndex = (list: Record<string, unknown>[], row: Record<string, unknown>): number => {
-    const creation = row[CREATION_FIELD];
-
-    if (typeof creation !== "number") {
-        return list.length;
-    }
-
-    const descending = isDescending(list);
-
-    for (const [index, existingRow] of list.entries()) {
-        const existing = existingRow[CREATION_FIELD];
-
-        if (typeof existing === "number" && (descending ? existing < creation : existing > creation)) {
-            return index;
-        }
-    }
-
-    return list.length;
 };
 
 /**
@@ -137,37 +74,24 @@ const isMutationDelta = (value: unknown): value is MutationDelta => {
 };
 
 /**
- * Apply a structured `MutationDelta` to a cached array result, returning a new
- * array (never mutating the input). Returns `undefined` when the delta can't be
- * applied cleanly — the caller should then fall back to the existing
- * full-replacement behaviour (or trust the next snapshot to reconcile).
+ * Merge one row delta into an id-keyed row list, returning a new array.
  *
- * Mergeable shape: a plain array of id-bearing row objects, e.g. the result of
- * `db.query().collect()`.
- *
- * Insert / update / delete are matched by row `_id`:
- * - `insert`: appended (or placed by `_creationTime` order) if absent; treated
- * as an update if a row with the same id already exists (idempotent — guards
+ * Matched by `_id`:
+ * - `insert`: spliced at {@link insertionIndexFor} if absent; treated as an
+ * update when a row with the same id is already present (idempotent — guards
  * against a delta replayed after a snapshot already included it).
  * - `update`: replaces the matching row in place, preserving its position.
- * - `delete`: removes the matching row.
- *
- * Returns `undefined` when `current` isn't an array of id-keyable objects, or
- * when an `insert`/`update` delta carries no `row` to splice in.
+ * - `delete`: removes the matching row; a delete for a row this list never held
+ * is a legitimate no-op, not a failure.
+ * @returns the merged rows, or `undefined` when the list isn't id-keyable or an insert/update carries no row
  */
-const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown[] => {
-    if (!Array.isArray(current)) {
-        return undefined;
-    }
-
-    // Only merge when every element is an id-bearing object; an array of
-    // scalars (or rows without `_id`) has no stable key to splice against.
+const mergeRows = (list: ReadonlyArray<unknown>, delta: MutationDelta): undefined | unknown[] => {
+    // Only merge when every element is an id-bearing object; a list of scalars
+    // (or rows without `_id`) has no stable key to splice against.
     const rows: Record<string, unknown>[] = [];
 
-    for (const element of current) {
-        const id = rowId(element);
-
-        if (id === undefined) {
+    for (const element of list) {
+        if (rowId(element) === undefined) {
             return undefined;
         }
 
@@ -179,9 +103,6 @@ const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown
     if (op === "delete") {
         const next = rows.filter((existing) => existing[ID_FIELD] !== key);
 
-        // No row matched: the delete is a no-op for this page. Return the
-        // (copied) list unchanged rather than bailing — a delete for a row this
-        // page never held is legitimately nothing to do.
         return next.length === rows.length ? [...rows] : next;
     }
 
@@ -190,24 +111,48 @@ const applyDelta = (current: unknown, delta: MutationDelta): undefined | unknown
         return undefined;
     }
 
+    const next = [...rows];
     const existingIndex = rows.findIndex((existing) => existing[ID_FIELD] === key);
 
     if (existingIndex === -1) {
-        // Absent → insert at the order-preserving position.
-        const next = [...rows];
+        next.splice(insertionIndexFor(rows, row), 0, row);
+    } else {
+        next[existingIndex] = row;
+    }
 
-        next.splice(insertionIndex(rows, row), 0, row);
+    return next;
+};
 
+/**
+ * Apply a structured `MutationDelta` to a cached list result, returning a new
+ * value (never mutating the input). Returns `undefined` when the delta can't be
+ * applied cleanly — the caller should then fall back to the existing
+ * full-replacement behaviour (or trust the next snapshot to reconcile).
+ *
+ * Mergeable shapes: an array of id-bearing row objects, or a `.paginate()`
+ * result wrapping one in `page` (see `rowListOf`). A paginated value keeps its
+ * other fields and comes back as a new object with a new `page` — the server
+ * only sends row deltas for that shape when everything outside the page is
+ * unchanged, so the merged value matches the snapshot it chose not to send.
+ * @returns the merged value, or `undefined` when the delta cannot be applied
+ */
+const applyDelta = (current: unknown, delta: MutationDelta): Record<string, unknown> | undefined | unknown[] => {
+    const list = rowListOf(current);
+
+    if (list === undefined) {
+        return undefined;
+    }
+
+    const next = mergeRows(list, delta);
+
+    // Re-wrap the way it arrived: a bare array stays an array, a paginated
+    // result keeps `isDone`/`continueCursor` and swaps its page. One wrap point,
+    // so no merge outcome can accidentally skip it.
+    if (next === undefined || Array.isArray(current)) {
         return next;
     }
 
-    // Present → replace in place (covers `update`, and an `insert` whose row a
-    // snapshot already delivered — idempotent).
-    const next = [...rows];
-
-    next[existingIndex] = row;
-
-    return next;
+    return { ...(current as Record<string, unknown>), [PAGE_FIELD]: next };
 };
 
 export { applyDelta, isMutationDelta };

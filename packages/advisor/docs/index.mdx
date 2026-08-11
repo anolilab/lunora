@@ -138,14 +138,15 @@ Storage, AI, containers & payments:
 
 ### Performance
 
-| Lint                           | Level  | Flags                                                  |
-| ------------------------------ | ------ | ------------------------------------------------------ |
-| `filter_without_index`         | `WARN` | A query filter on a column no index covers             |
-| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table  |
-| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table |
-| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed |
-| `duplicate_index`              | `INFO` | A redundant index already covered by another           |
-| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs    |
+| Lint                           | Level  | Flags                                                                                                         |
+| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------- |
+| `filter_without_index`         | `WARN` | A query filter on a column no index covers                                                                    |
+| `unbounded_collect`            | `WARN` | A `.collect()` with no index and no filter — the whole table, re-sent to every live subscriber on every write |
+| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table                                                         |
+| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table                                                        |
+| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed                                                        |
+| `duplicate_index`              | `INFO` | A redundant index already covered by another                                                                  |
+| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs                                                           |
 
 ### Schema
 
