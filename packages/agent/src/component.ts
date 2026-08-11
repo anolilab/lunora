@@ -7,6 +7,7 @@ import type { AgentRegisteredFunction } from "./component-shared";
 import { AGENT_EXTENSION_KEY, asInternal, definedColumns } from "./component-shared";
 import { episodeTables, episodicComponent } from "./episodic-component";
 import { graphComponent, graphTables } from "./graph-component";
+import type { EnsureThreadOutcome } from "./types";
 
 /** Bare table names — auto-prefixed with the extension key at merge time. */
 const THREADS_BARE_TABLE = "threads";
@@ -185,23 +186,6 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
 const { mutation, query } = initLunora.dataModel().create();
 
 /**
- * What `agentEnsureThread` reports back to the loop: the thread was created,
- * continued, taken over from a prior instance (`replaced`), or — under
- * `onConcurrentRun: "queue"` — parked behind the run in flight (`queued`), in
- * which case the loop hibernates until the queue hands it the thread.
- * @experimental
- */
-interface EnsureThreadResult {
-    created: boolean;
-    /** FIFO position among the runs parked on this thread. Present only with `queued`. */
-    position?: number;
-    /** The instance the thread was taken over FROM. Present only with `replaced`. */
-    priorInstanceId?: string;
-    queued?: boolean;
-    replaced?: boolean;
-}
-
-/**
  * The minimal writer surface the queue helpers need. `agentEnsureThread` and
  * `agentCompleteRun` are ordinary mutations, so this is just `ctx.db` — named
  * so the helpers can be lifted out of the closures without dragging the whole
@@ -223,7 +207,7 @@ const enqueueRun = async (
     database: QueueDatabase,
     args: { agent: string; instanceId: string | undefined; key: string; priorInstanceId: string },
     now: number,
-): Promise<EnsureThreadResult> => {
+): Promise<EnsureThreadOutcome> => {
     if (args.instanceId === undefined) {
         // The id-less dispatch paths (inbound email / inbound channel) can't be
         // told apart from each other later, so they can't be parked and woken by
@@ -242,7 +226,7 @@ const enqueueRun = async (
         .first();
 
     if (alreadyQueued) {
-        return { created: false, position: alreadyQueued["position"] as number, queued: true };
+        return { outcome: "queued", position: alreadyQueued["position"] as number };
     }
 
     const queued = await database
@@ -261,7 +245,7 @@ const enqueueRun = async (
 
     await database.insert(RUN_QUEUE_TABLE, { agent: args.agent, enqueuedAt: now, instanceId, position, threadKey: args.key });
 
-    return { created: false, position, queued: true };
+    return { outcome: "queued", position };
 };
 
 /**
@@ -282,7 +266,7 @@ const applyConcurrencyPolicy = async (
         priorInstanceId: string;
     },
     now: number,
-): Promise<EnsureThreadResult> => {
+): Promise<EnsureThreadOutcome> => {
     if (args.policy === "queue") {
         return enqueueRun(database, { agent: args.agent, instanceId: args.instanceId, key: args.key, priorInstanceId: args.priorInstanceId }, now);
     }
@@ -306,7 +290,7 @@ const applyConcurrencyPolicy = async (
         ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
     });
 
-    return { created: false, priorInstanceId: args.priorInstanceId, replaced: true };
+    return { outcome: "replaced", priorInstanceId: args.priorInstanceId };
 };
 
 /**
@@ -360,7 +344,7 @@ export const agentComponent = (): AgentComponent => {
             owner: v.optional(v.string()),
             title: v.optional(v.string()),
         })
-        .mutation(async ({ args, ctx: context }): Promise<EnsureThreadResult> => {
+        .mutation(async ({ args, ctx: context }): Promise<EnsureThreadOutcome> => {
             const now = Date.now();
             const existing = await context.db
                 .query(THREADS_TABLE)
@@ -433,7 +417,7 @@ export const agentComponent = (): AgentComponent => {
                     ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
                 });
 
-                return { created: false };
+                return { outcome: "continued" };
             }
 
             await context.db.insert(THREADS_TABLE, {
@@ -446,7 +430,7 @@ export const agentComponent = (): AgentComponent => {
                 ...definedColumns({ instanceId: args.instanceId, owner: args.owner, state: args.initialState, title: args.title }),
             });
 
-            return { created: true };
+            return { outcome: "created" };
         });
 
     const agentAppendMessage = mutation

@@ -70,6 +70,7 @@ export type {
     AgentWorkflowBindingLike,
     AgentWorkflowInstanceLike,
     AnyAgentTool,
+    EnsureThreadOutcome,
     SkillConfig,
     SkillDefinition,
 } from "./types";

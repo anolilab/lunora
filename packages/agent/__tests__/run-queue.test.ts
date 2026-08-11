@@ -9,102 +9,9 @@
 import { describe, expect, it } from "vitest";
 
 import { agentComponent } from "../src/component";
-
-interface FakeRow extends Record<string, unknown> {
-    _id: string;
-}
-
-/** Collect the `.eq(...)` conditions a `withIndex` callback declares. */
-const collectConditions = (build: (q: unknown) => unknown): [string, unknown][] => {
-    const conditions: [string, unknown][] = [];
-    const builder = {
-        eq: (field: string, value: unknown) => {
-            conditions.push([field, value]);
-
-            return builder;
-        },
-    };
-
-    build(builder);
-
-    return conditions;
-};
-
-/** Filter by the `.eq(...)` conditions; insertion order stands in for index order. */
-const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
-    const conditions = collectConditions(build);
-    const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
-
-    return {
-        collect: async () => matches(),
-        first: async () => matches()[0] ?? null,
-    };
-};
-
-/**
- * An in-memory `ctx.db`. `withIndex` filters by the declared equalities and — as
- * the real index read does — returns rows in insertion order, which for the
- * `(threadKey, position)` index is position order.
- */
-const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<string, FakeRow[]> } => {
-    const rows = new Map<string, FakeRow[]>();
-    let nextId = 0;
-
-    const tableRows = (table: string): FakeRow[] => {
-        const existing = rows.get(table);
-
-        if (existing) {
-            return existing;
-        }
-
-        const created: FakeRow[] = [];
-
-        rows.set(table, created);
-
-        return created;
-    };
-
-    const database = {
-        delete: async (id: string) => {
-            for (const [table, tableContent] of rows) {
-                rows.set(
-                    table,
-                    tableContent.filter((row) => row["_id"] !== id),
-                );
-            }
-        },
-        insert: async (table: string, document: Record<string, unknown>) => {
-            const id = `id-${String(nextId)}`;
-
-            nextId += 1;
-            tableRows(table).push({ ...document, _id: id });
-
-            return id;
-        },
-        patch: async (id: string, patch: Record<string, unknown>) => {
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
-
-                if (row) {
-                    for (const [key, value] of Object.entries(patch)) {
-                        if (value === undefined) {
-                            Reflect.deleteProperty(row, key);
-                        } else {
-                            row[key] = value;
-                        }
-                    }
-                }
-            }
-        },
-        query: (table: string) => {
-            return {
-                withIndex: (_name: string, build: (q: unknown) => unknown) => makeIndexQuery(tableRows(table), build),
-            };
-        },
-    };
-
-    return { database, rows };
-};
+import type { EnsureThreadOutcome } from "../src/types";
+import type { FakeRow } from "./loop-harness";
+import { fakeDatabase } from "./loop-harness";
 
 const setup = () => {
     const { database, rows } = fakeDatabase();
@@ -121,7 +28,7 @@ const setup = () => {
                 key: "thread-1",
                 onConcurrentRun: "queue",
                 ...(instanceId === undefined ? {} : { instanceId }),
-            } as never)) as { created: boolean; position?: number; queued?: boolean },
+            } as never)) as EnsureThreadOutcome,
         thread: (): FakeRow | undefined => (rows.get("agent_threads") ?? [])[0],
     };
 };
@@ -132,9 +39,9 @@ describe("onConcurrentRun: queue", () => {
 
         const { complete, queue, start, thread } = setup();
 
-        await expect(start("wf-a")).resolves.toStrictEqual({ created: true });
-        await expect(start("wf-b")).resolves.toStrictEqual({ created: false, position: 0, queued: true });
-        await expect(start("wf-c")).resolves.toStrictEqual({ created: false, position: 1, queued: true });
+        await expect(start("wf-a")).resolves.toStrictEqual({ outcome: "created" });
+        await expect(start("wf-b")).resolves.toStrictEqual({ outcome: "queued", position: 0 });
+        await expect(start("wf-c")).resolves.toStrictEqual({ outcome: "queued", position: 1 });
         // A parked run must not take the thread from the one in flight.
         expect(thread()?.["instanceId"]).toBe("wf-a");
 
@@ -167,7 +74,7 @@ describe("onConcurrentRun: queue", () => {
         await start("wf-b");
 
         // A workflow replay re-runs the bootstrap for real (it is outside step.do).
-        await expect(start("wf-b")).resolves.toStrictEqual({ created: false, position: 0, queued: true });
+        await expect(start("wf-b")).resolves.toStrictEqual({ outcome: "queued", position: 0 });
         expect(queue()).toHaveLength(1);
     });
 
@@ -261,7 +168,7 @@ describe("onConcurrentRun: queue", () => {
         Object.assign(thread() ?? {}, { updatedAt: Date.now() - 14 * 60 * 60 * 1000 });
 
         // A new run takes it rather than CONFLICTing against a corpse forever.
-        await expect(start("wf-z")).resolves.toStrictEqual({ created: false });
+        await expect(start("wf-z")).resolves.toStrictEqual({ outcome: "continued" });
         expect(thread()?.["instanceId"]).toBe("wf-z");
     });
 

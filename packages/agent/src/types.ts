@@ -892,6 +892,20 @@ export interface AgentDefinition extends AgentConfig {
 }
 
 /**
+ * What `agentEnsureThread` reports back to the loop.
+ *
+ * A discriminated union rather than a bag of optional booleans: the four
+ * outcomes are mutually exclusive, and the data each carries only exists for its
+ * own case. `queued` has a position, `replaced` has the instance it took the
+ * thread from, and the other two have nothing — encoding that as five
+ * independent optional fields made every reader re-derive which combination was
+ * legal.
+ * @experimental
+ */
+export type EnsureThreadOutcome =
+    { outcome: "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+
+/**
  * Params of one agent run (the compiled workflow's payload).
  * @experimental
  */

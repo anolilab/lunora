@@ -185,7 +185,7 @@ const createRuntime = (
                 existing.instanceId = instanceId;
             }
 
-            return { created: false };
+            return { outcome: "continued" };
         }
 
         threads.set(key, {
@@ -198,7 +198,7 @@ const createRuntime = (
             title: args?.["title"] as string | undefined,
         });
 
-        return { created: true };
+        return { outcome: "created" };
     };
 
     const appendMessage = (args?: Record<string, unknown>): unknown => {

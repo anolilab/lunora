@@ -26,15 +26,18 @@ own directory:
 | `lunora-deploy`                  | Deploying to Cloudflare — wrangler bindings, secrets, the gate.              |
 | `lunora-performance-audit`       | `lunora insights`, scans, indexes, OCC conflicts, sharding/`.global()`.      |
 
-These are mirrored into `.agents/skills/` and `.claude/skills/` (via symlinks)
-so agents working inside this repo pick them up directly. The source of truth
-lives here so the published `@lunora/cli` tarball carries them.
+These are mirrored (via symlinks) into `.agents/skills/` and `.claude/skills/`,
+so agents working inside this repo pick them up directly, and into
+`plugins/lunora/skills/`, the payload of the Claude Code / Codex plugin. The
+source of truth lives here so the published `@lunora/cli` tarball carries them —
+`lunora rules install` copies this directory into a consumer project.
 
-**Adding a skill?** Create it here, then mirror it through both hops:
+**Adding a skill?** Create it here, then mirror it through all three hops:
 
 ```bash
 ln -s ../../packages/cli/skills/<name> .agents/skills/<name>
 ln -s ../../.agents/skills/<name> .claude/skills/<name>
+ln -s ../../../packages/cli/skills/<name> plugins/lunora/skills/<name>
 ```
 
 `scripts/check-skill-mirrors.js` (run on every `pnpm install`) fails if a mirror

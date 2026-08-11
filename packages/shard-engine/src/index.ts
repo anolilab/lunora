@@ -117,6 +117,8 @@ export {
     readStreamRun,
     trimStreamRuns,
 } from "./durable-stream";
+export type { DurableAttachDecision, DurableStreamAttach, DurableStreamSink } from "./durable-stream-runner";
+export { decideDurableAttach, DurableStreamRunner, MAX_DURABLE_STREAM_CHUNKS } from "./durable-stream-runner";
 export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export { liftSourceId, normalizeSourceDocument, normalizeSourceValue } from "./external-source-lift";

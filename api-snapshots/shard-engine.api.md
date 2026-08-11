@@ -661,6 +661,24 @@ interface DeployInfo {
 }
 ```
 
+### `DurableAttachDecision` (type)
+
+```ts
+type DurableAttachDecision = "attach" | "interrupted" | "reclaim" | "replay-terminal";
+```
+
+### `DurableStreamAttach` (interface)
+
+```ts
+interface DurableStreamAttach {
+    readonly iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
+    readonly runKey: string;
+    readonly sinceChunk: number;
+    readonly sink: DurableStreamSink;
+    readonly ttlMs?: number;
+}
+```
+
 ### `DurableStreamRun` (interface)
 
 ```ts
@@ -670,6 +688,36 @@ interface DurableStreamRun {
     lastSeq: number;
     startedAt: number;
     status: DurableStreamStatus;
+}
+```
+
+### `DurableStreamRunner` (class)
+
+```ts
+class DurableStreamRunner {
+    constructor(dependencies: {
+        sql: () => SqlExec;
+        waitUntil?: (promise: Promise<unknown>) => void;
+    });
+    attach(request: DurableStreamAttach): Promise<void>;
+    detach(runKey: string, sink: DurableStreamSink): void;
+    isLive(runKey: string): boolean;
+}
+```
+
+### `DurableStreamSink` (interface)
+
+```ts
+interface DurableStreamSink {
+    readonly chunk: (chunk: {
+        data: unknown;
+        seq: number;
+    }) => boolean;
+    readonly complete: () => void;
+    readonly fail: (failure: {
+        code: string;
+        message: string;
+    }) => void;
 }
 ```
 
@@ -1137,6 +1185,12 @@ const MAIL_RETENTION = 500;
 
 ```ts
 const MAIL_TABLE = "__lunora_mail";
+```
+
+### `MAX_DURABLE_STREAM_CHUNKS` (const)
+
+```ts
+const MAX_DURABLE_STREAM_CHUNKS = 50000;
 ```
 
 ### `MAX_PAGE_SIZE` (const)
@@ -3223,6 +3277,15 @@ const createShardCtxDb: (options: CtxDbOptions) => DatabaseWriterLike;
 
 ```ts
 const createSystemReader: (options?: SystemReaderOptions) => SystemDatabaseReader;
+```
+
+### `decideDurableAttach` (const)
+
+```ts
+const decideDurableAttach: (run: DurableStreamRun | undefined, context: {
+    live: boolean;
+    resuming: boolean;
+}) => DurableAttachDecision;
 ```
 
 ### `decodeCursor` (const)

@@ -210,8 +210,8 @@ describe(agentComponent, () => {
         const first = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", title: "Hello" });
         const second = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
 
-        expect(first).toStrictEqual({ created: true });
-        expect(second).toStrictEqual({ created: false });
+        expect(first).toStrictEqual({ outcome: "created" });
+        expect(second).toStrictEqual({ outcome: "continued" });
 
         const appended = await callMutation(functions.agentAppendMessage, ctx, { content: "hi", messageKey: "wf-1:user", role: "user", threadKey: "t-1" });
         const replayed = await callMutation(functions.agentAppendMessage, ctx, { content: "hi", messageKey: "wf-1:user", role: "user", threadKey: "t-1" });
@@ -317,7 +317,7 @@ describe("thread ownership", () => {
 
         // Same owner (or no owner) continues; a different owner is refused.
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", owner: "user-a" })).resolves.toStrictEqual({
-            created: false,
+            outcome: "continued",
         });
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", owner: "user-b" })).rejects.toThrow(ANOTHER_OWNER_PATTERN);
     });
@@ -1077,7 +1077,7 @@ describe("concurrency guard", () => {
 
         const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-new", key: "t-1", onConcurrentRun: "replace" });
 
-        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        expect(result).toStrictEqual({ outcome: "replaced", priorInstanceId: "wf-old" });
         expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-new");
         expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
     });
@@ -1090,9 +1090,7 @@ describe("concurrency guard", () => {
 
         await expect(
             callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1", onConcurrentRun: "reject" }),
-        ).resolves.toStrictEqual({
-            created: false,
-        });
+        ).resolves.toStrictEqual({ outcome: "continued" });
 
         expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
         expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-a");
@@ -1107,7 +1105,7 @@ describe("concurrency guard", () => {
         await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
 
         await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
-            created: false,
+            outcome: "continued",
         });
     });
 
@@ -1143,7 +1141,7 @@ describe("concurrency guard", () => {
 
         const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", onConcurrentRun: "replace" });
 
-        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        expect(result).toStrictEqual({ outcome: "replaced", priorInstanceId: "wf-old" });
         // No new instance id was supplied to record — the column is left as-is
         // rather than explicitly cleared (which the validators would reject).
         expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-old");
@@ -1158,7 +1156,7 @@ describe("concurrency guard", () => {
 
         const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-new", key: "t-1", onConcurrentRun: "replace" });
 
-        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        expect(result).toStrictEqual({ outcome: "replaced", priorInstanceId: "wf-old" });
         expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-new");
         expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
     });

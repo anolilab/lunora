@@ -32,6 +32,7 @@ import type {
     AgentUsage,
     AgentWorkflowBindingLike,
     AnyAgentTool,
+    EnsureThreadOutcome,
 } from "./types";
 
 /**
@@ -791,11 +792,7 @@ const DEQUEUE_TIMEOUT = "12 hours";
  * different one. A workflow replay memoizes the resolved wait, so a resumed run
  * does not park twice.
  */
-const awaitDequeue = async (step: AgentStepLike, threadKey: string, instanceId: string, queued: boolean | undefined): Promise<void> => {
-    if (queued !== true) {
-        return;
-    }
-
+const awaitDequeue = async (step: AgentStepLike, threadKey: string, instanceId: string): Promise<void> => {
     await step.waitForEvent<{ threadKey: string }>(`dequeue:${instanceId}`, {
         timeout: DEQUEUE_TIMEOUT,
         type: `agent-dequeue:${threadKey}:${instanceId}`,
@@ -1083,11 +1080,11 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         ...(agent.onConcurrentRun === undefined ? {} : { onConcurrentRun: agent.onConcurrentRun }),
         ...(params.owner === undefined ? {} : { owner: params.owner }),
         ...(params.title === undefined ? {} : { title: params.title }),
-    })) as { created: boolean; position?: number; priorInstanceId?: string; queued?: boolean; replaced?: boolean } | undefined;
+    })) as EnsureThreadOutcome | undefined;
 
     // Replace policy: the thread has been taken over — terminate the run it was
     // taken from so it cannot resume and race on the shared seq counter.
-    if (bootstrap?.replaced && bootstrap.priorInstanceId !== undefined) {
+    if (bootstrap?.outcome === "replaced") {
         await terminatePriorInstance(env, exportName, bootstrap.priorInstanceId);
     }
 
@@ -1139,7 +1136,10 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         // escaped without running `finishRun` — leaving this run's queue row
         // behind forever. Five of those exhaust the depth cap and every later
         // start on the thread is refused.
-        await awaitDequeue(step, params.threadKey, instanceId, bootstrap?.queued);
+        if (bootstrap?.outcome === "queued") {
+            await awaitDequeue(step, params.threadKey, instanceId);
+        }
+
         await persistUserTurn();
 
         const { final, stoppedByCondition, turnsRun } = await runTurns(turnContext, maxTurns, stopConditions, usageBox);

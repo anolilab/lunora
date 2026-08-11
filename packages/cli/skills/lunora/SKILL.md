@@ -63,6 +63,24 @@ After codegen is green, use the most specific Lunora skill for the task:
 - Investigating performance, scan, or write-conflict issues:
   `lunora-performance-audit`
 
+**Reviewing or auditing existing `lunora/` code** has no skill of its own,
+because two commands do the work mechanically — run them before reading
+anything:
+
+```bash
+lunora verify    # wrangler config + codegen dry-run + tsc --noEmit
+lunora advisor   # ~95 static + runtime lints, scored per procedure
+```
+
+`lunora advisor` is the security/quality review: RLS coverage
+(`rls-procedures`, `procedure-protections`), ownership and identity checks
+(`owner-field-writes`, `normalize-id-authorization`, `identity-claim-reads`,
+`fail-open-guards`), input validators, unindexed reads, non-deterministic
+calls in queries, SQL interpolation, and leaked secrets. Use
+`--entry <file>#<export>` to inspect one procedure and `--min-score` /
+`--baseline` to gate CI. Only after it is clean is a by-hand pass over
+`lunora-functions` worth the tokens.
+
 If one of those clearly matches the user's goal, switch to it instead of staying
 in this skill.
 

@@ -267,6 +267,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `EnsureThreadOutcome` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `FsToolInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
