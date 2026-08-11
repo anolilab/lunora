@@ -139,7 +139,7 @@ describe(bindMutators, () => {
         >(async () => {
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => 0, currentIdentity: () => null } as never;
         const { collection, inserted } = mockCollection();
 
         const mutators = {
@@ -181,6 +181,7 @@ describe(bindMutators, () => {
                 return { applied: true, result: "ok" };
             },
             confirmedMutationWatermark: () => 0,
+            currentIdentity: () => null,
         } as never;
         const { collection } = mockCollection();
         const { acknowledged, awaited, registry } = stubCheckpoints();
@@ -210,6 +211,7 @@ describe(bindMutators, () => {
                 return { applied: true, result: "ok" };
             },
             confirmedMutationWatermark: () => 0,
+            currentIdentity: () => null,
         } as never;
         const { collection } = mockCollection();
 
@@ -238,6 +240,7 @@ describe(bindMutators, () => {
                 return { applied: true, result: "ok" };
             },
             confirmedMutationWatermark: () => 0,
+            currentIdentity: () => null,
         } as never;
         const { collection } = mockCollection();
 
@@ -263,6 +266,7 @@ describe(bindMutators, () => {
                     return { applied: true, result: "ok" };
                 },
                 confirmedMutationWatermark: () => 0,
+                currentIdentity: () => null,
             } as never;
             const { collection } = mockCollection();
             const fallbacks: unknown[] = [];
@@ -310,7 +314,7 @@ describe(bindMutators, () => {
         >(async () => {
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => 0, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         // Shape of a codegen `api.mutators.*` entry — the phantom marker is type-only,
@@ -339,7 +343,7 @@ describe(bindMutators, () => {
         >(async () => {
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => 0, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         // Exactly what `@lunora/codegen` emits for a `defineMutator` in
@@ -395,6 +399,7 @@ describe(bindMutators, () => {
                 return { applied: true, result: "ok" };
             },
             confirmedMutationWatermark: () => 0,
+            currentIdentity: () => null,
         } as never;
         const { collection } = mockCollection();
 
@@ -454,7 +459,7 @@ describe(bindMutators, () => {
         >(async () => {
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => 5 } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => 5, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -468,6 +473,56 @@ describe(bindMutators, () => {
 
         // The first post-reload push starts at watermark + 1, not 1.
         expect(callMutator).toHaveBeenCalledWith("messages:send", { text: "after reload" }, { clientSeq: 6, shardKey: "room-1" });
+    });
+
+    it("resets the client-mutator sequence counter on an identity switch (plan 316)", async () => {
+        configs.length = 0;
+
+        // The server's watermark is keyed per identity (not per shard bucket
+        // alone), so a signed-in-user switch resets the sequence space on the
+        // server too. `currentIdentity` here stands in for `LunoraClient`'s own
+        // identity-scoped `clientWatermarks` cache.
+        let identity: string | null = "user-a";
+        const watermarksByIdentity = new Map<string, number>([["user-a", 3]]);
+        const calls: number[] = [];
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            calls.push(options.clientSeq);
+            watermarksByIdentity.set(identity ?? "", options.clientSeq);
+
+            return { applied: true, result: "ok" };
+        });
+        const client = {
+            callMutator,
+            confirmedMutationWatermark: () => watermarksByIdentity.get(identity ?? "") ?? 0,
+            currentIdentity: () => identity,
+        } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "first" });
+        await configs[0]?.mutationFn();
+
+        // Seeded from user-a's already-acked watermark (3): claims 4.
+        expect(calls).toStrictEqual([4]);
+
+        // Switch identity — user-b's server-side watermark starts at 0, not
+        // user-a's 3.
+        identity = "user-b";
+
+        bound.send({ text: "second" });
+        await configs[1]?.mutationFn();
+
+        // Without the reset, the stale in-memory `counter` (4) carries forward
+        // and claims 5 — a gap the shard would reject as OUT_OF_ORDER against
+        // user-b's real watermark of 0. The fix reclaims 1.
+        expect(calls).toStrictEqual([4, 1]);
     });
 
     it("reissues above the echoed watermark when the server swallows a stale push as a replay", async () => {
@@ -493,7 +548,7 @@ describe(bindMutators, () => {
 
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => watermark, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -521,7 +576,7 @@ describe(bindMutators, () => {
 
             return { applied: false, result: null };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => watermark, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -560,7 +615,7 @@ describe(bindMutators, () => {
 
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => watermark, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -618,7 +673,7 @@ describe(bindMutators, () => {
 
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => watermark, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -667,7 +722,7 @@ describe(bindMutators, () => {
 
             return { applied: true, result: "ok" };
         });
-        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const client = { callMutator, confirmedMutationWatermark: () => watermark, currentIdentity: () => null } as never;
         const { collection } = mockCollection();
 
         const bound = bindMutators(
@@ -712,6 +767,7 @@ describe(bindMutators, () => {
                     throw failure;
                 },
                 confirmedMutationWatermark: () => 0,
+                currentIdentity: () => null,
             } as never;
             const { collection } = mockCollection();
 
@@ -753,6 +809,7 @@ describe(bindMutators, () => {
                     throw new Error("nope");
                 },
                 confirmedMutationWatermark: () => 0,
+                currentIdentity: () => null,
             } as never;
             const { collection } = mockCollection();
 
@@ -787,6 +844,7 @@ describe(bindMutators, () => {
                     throw new Error("nope");
                 },
                 confirmedMutationWatermark: () => 0,
+                currentIdentity: () => null,
             } as never;
             const { collection } = mockCollection();
 
@@ -852,7 +910,11 @@ describe(bindMutators, () => {
             const callMutator = vi.fn<() => Promise<{ applied: boolean; result: unknown }>>(async () => {
                 return { applied: true, result: undefined };
             });
-            const bound = bindTyped({ callMutator, confirmedMutationWatermark: () => 0 } as never, { checkpoints: false, collections: { nodes } }, { setText });
+            const bound = bindTyped(
+                { callMutator, confirmedMutationWatermark: () => 0, currentIdentity: () => null } as never,
+                { checkpoints: false, collections: { nodes } },
+                { setText },
+            );
 
             bound.setText({ id: "n1", text: "hello" });
             await configs[0]?.mutationFn();
