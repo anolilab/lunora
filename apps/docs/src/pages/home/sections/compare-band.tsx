@@ -50,7 +50,7 @@ const CompareBand: FC = () => {
         <Section id="compare">
             <Shell>
                 <SectionHeader
-                    index="06"
+                    index="07"
                     label="Compare"
                     note="The full matrix, including where they win, is on the comparison pages."
                     title="Where Lunora differs"

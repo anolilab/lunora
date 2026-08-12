@@ -25,6 +25,7 @@ import CompareBand from "@/pages/home/sections/compare-band";
 import Faq from "@/pages/home/sections/faq";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
+import Studio from "@/pages/home/sections/studio";
 import SupportSection from "@/pages/home/sections/support";
 import siteConfig from "~/site.config";
 
@@ -167,11 +168,13 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <Studio />
+
         <Capabilities />
 
         <Section id="docs">
             <Shell>
-                <SectionHeader action={{ label: "Browse all docs", to: "/docs" }} index="05" label="Documentation" title="Choose your runtime">
+                <SectionHeader action={{ label: "Browse all docs", to: "/docs" }} index="06" label="Documentation" title="Choose your runtime">
                     <p className="text-body text-ink-muted">Start with the adapter built for your project.</p>
                 </SectionHeader>
 
