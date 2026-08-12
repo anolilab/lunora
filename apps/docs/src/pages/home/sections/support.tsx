@@ -41,7 +41,7 @@ const paths: { desc: string; href: string; icon: ReactNode; title: string }[] = 
 const SupportSection: FC = () => (
     <Section id="support">
         <Shell>
-            <SectionHeader index="09" label="Open source" note="Every contribution keeps it moving." title="Open source, built together">
+            <SectionHeader index="08" label="Open source" note="Every contribution keeps it moving." title="Open source, built together">
                 <p className="text-body text-ink-muted">Lunora is built in the open. Star the repo, file an issue, or send a pull request.</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2.5">
                     <Action href="https://github.com/anolilab/lunora" variant="primary">

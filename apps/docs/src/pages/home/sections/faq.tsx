@@ -36,7 +36,7 @@ const FAQS = [
         q: "Which frontends are supported?",
     },
     {
-        a: "Cloudflare's, not ours. The framework adds no bill of its own. Durable Objects idle at roughly nothing and nothing forces a project to pause, so an unvisited project costs about what it did last month.",
+        a: "Self-hosted, you pay Cloudflare directly at their published rates and nothing else. Durable Objects idle at roughly nothing and nothing forces a project to pause, so an unvisited project costs about what it did last month.",
         q: "What does it cost to run?",
     },
 ];
@@ -44,7 +44,7 @@ const FAQS = [
 const Faq: FC = () => (
     <Section id="faq" tone="deep">
         <Shell>
-            <SectionHeader index="08" label="Questions" title="Answered plainly.">
+            <SectionHeader index="07" label="Questions" title="Answered plainly.">
                 <p className="text-body text-ink-muted">Including the ones with awkward answers.</p>
             </SectionHeader>
 

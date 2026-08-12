@@ -73,7 +73,7 @@ const Hero: FC = () => (
         </p>
 
         <PageHeader>
-            <div className="mb-7 flex items-center justify-between gap-4">
+            <div className="mb-5 flex items-center justify-between gap-4">
                 <Kicker>Open source / FSL-1.1-Apache-2.0</Kicker>
                 <Kicker>Alpha</Kicker>
             </div>
@@ -84,12 +84,12 @@ const Hero: FC = () => (
                 Realtime backends, in a few lines of code.
             </h1>
 
-            <p className="mt-5 text-body text-ink-muted">
+            <p className="mt-4 text-body text-ink-muted">
                 Define a schema, write a function — Lunora gives you a typed, live-syncing API on Cloudflare&apos;s edge. No glue code, no infrastructure to
                 manage.
             </p>
 
-            <div className="mt-7 flex flex-wrap items-center gap-2.5">
+            <div className="mt-6 flex flex-wrap items-center gap-2.5">
                 <Action to={siteConfig.cta.primary.to} variant="primary">
                     {siteConfig.cta.primary.label}
                     <ChevronRight className="size-4" />
@@ -97,11 +97,11 @@ const Hero: FC = () => (
                 <Action href={siteConfig.cta.secondary.href}>{siteConfig.cta.secondary.label}</Action>
             </div>
 
-            <p className="mt-6">
+            <p className="mt-5">
                 <Kicker size="micro">Available for React · Vue · Svelte · Solid</Kicker>
             </p>
 
-            <div className="mt-4">
+            <div className="mt-3">
                 <InstallCommand />
             </div>
         </PageHeader>
