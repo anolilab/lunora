@@ -154,9 +154,11 @@ const Home: FC = () => (
                     <p className="text-body text-ink-muted">A schema, a function, and a component — the whole round trip in one screen.</p>
                 </SectionHeader>
             </Shell>
-            <Reveal>
-                <AgentPanel />
-            </Reveal>
+            <Shell>
+                <Reveal>
+                    <AgentPanel />
+                </Reveal>
+            </Shell>
         </Section>
 
         <Section id="how-it-works">
