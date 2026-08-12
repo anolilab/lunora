@@ -24,7 +24,9 @@
         "timeout-minutes": 5
         "outputs":
             "api_surface": "${{ steps.changes.outputs.api_surface }}"
+            "dependency_manifests": "${{ steps.changes.outputs.dependency_manifests }}"
             "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
+            "generated_files": "${{ steps.changes.outputs.generated_files }}"
             "node_capabilities_docs": "${{ steps.changes.outputs.node_capabilities_docs }}"
             "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
             "registry_sync": "${{ steps.changes.outputs.registry_sync }}"
@@ -439,6 +441,82 @@
                   "file_or_dir": "."
                   "strict": true
 
+    # Two manifest guards that nothing else covers. `check-catalog-drift` already
+    # existed with a `lint:catalog-drift` script but was wired into NOTHING — no
+    # workflow, no postinstall, no aggregate — so it never ran. Given as its own job
+    # rather than a ninth postinstall gate: a failure in the postinstall chain turns
+    # every CI job red in its setup step, with the cause invisible in the job that
+    # reports it.
+    "dependency-manifests":
+        "name": "Lint (dependency manifests)"
+        "if": "needs.files-changed.outputs.dependency_manifests == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # A dependency hand-pinned outside a catalog in two or more manifests:
+            # the copies diverge on the next bump to either one.
+            - "name": "Check catalog drift"
+              "run": "pnpm run lint:catalog-drift"
+
+            # A `catalog:` in peerDependencies publishes OUR dev pin as the range
+            # consumers must satisfy. pnpm only warns on an unmet peer, so this is
+            # invisible in this repo and lands on npm users as an ERESOLVE failure.
+            - "name": "Check peerDependencies for catalog: refs"
+              "run": "pnpm run lint:peer-catalog-refs"
+
+    # Regenerate every committed generator output and fail if the tree moved. The
+    # committed `apps/docs/src/data/packages.ts` had gone stale exactly this way —
+    # 51 packages against the generator's 52, missing @lunora/platform-node — because
+    # `apps/docs`'s build rewrote it on every run and nothing ever compared. The diff
+    # is deliberately whole-tree, not scoped to today's output paths, so a generator
+    # added later is covered without touching this job.
+    "generated-files":
+        "name": "Lint (generated files)"
+        "if": "needs.files-changed.outputs.generated_files == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Regenerate generated files and diff"
+              "run": "pnpm run lint:generated"
+
     # Single required check for the Lint workflow.
     "lint-required-check":
         "name": "Check Lint Run"
@@ -456,6 +534,8 @@
                 "registry-sync",
                 "node-capabilities-docs",
                 "yaml-lint",
+                "dependency-manifests",
+                "generated-files",
             ]
         "if": "always()"
         "runs-on": "ubuntu-latest"
