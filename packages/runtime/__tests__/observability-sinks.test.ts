@@ -98,7 +98,7 @@ interface ParsedLogRecord {
  * here rather than assuming a string body.
  */
 const bodyJson = (init: RequestInit): string =>
-    typeof init.body === "string" ? init.body : gunzipSync(Buffer.from(init.body as ArrayBuffer)).toString("utf8");
+    typeof init.body === "string" ? init.body : Buffer.from(gunzipSync(Buffer.from(init.body as ArrayBuffer))).toString("utf8");
 
 /**
  * Wait until `fetchMock` has seen `count` OTLP posts.

@@ -177,6 +177,19 @@ interface ContainerTelemetry {
 }
 
 /**
+ * The slice of `process` this module reads.
+ *
+ * Declared locally rather than leaning on the global: `@cloudflare/workers-types`
+ * ships `declare const process: any`, which wins over `@types/node`'s
+ * `NodeJS.Process` in every package that loads both type sets (this one does).
+ * Without this cast each `process.*` access is an untyped `any`.
+ */
+interface ProcessLike {
+    env: Record<string, string | undefined>;
+    pid?: number;
+}
+
+/**
  * Read an environment variable, tolerating runtimes without a `process` global
  * (e.g. Deno without node-compat) so the caller's explicit options still work.
  */
@@ -185,7 +198,7 @@ const readEnv = (name: string): string | undefined => {
         return undefined;
     }
 
-    return process.env[name];
+    return (process as ProcessLike).env[name];
 };
 
 /**
@@ -198,7 +211,7 @@ const readEnv = (name: string): string | undefined => {
  * pair from the same module, so both sides share one policy.
  */
 const detectContainerResource = (): OtlpResourceAttributes => {
-    const pid = typeof process === "undefined" || typeof process.pid !== "number" ? undefined : process.pid;
+    const pid = typeof process === "undefined" || typeof (process as ProcessLike).pid !== "number" ? undefined : (process as ProcessLike).pid;
 
     return mergeResourceAttributes(detectServiceResource(readEnv), detectHostResource(readEnv, pid));
 };

@@ -67,7 +67,7 @@
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.49",
         "@lunora/runtime": "1.0.0-alpha.62",
-        "@nuxt/kit": "^4.5.2"
+        "@nuxt/kit": "catalog:frontend"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
@@ -75,7 +75,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
-        "h3": "^2.0.0",
+        "h3": "catalog:http",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

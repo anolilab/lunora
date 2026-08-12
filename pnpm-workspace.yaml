@@ -21,13 +21,10 @@ blockExoticSubdeps: true
 onlyBuiltDependencies:
   - "@coinbase/x402"
 
-# Force a single React across the tree. @visulima/tui (a vis dependency) and its
-# react-reconciler pin react@^19.2.6 while everything else uses 19.2.8; two
-# copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
-# NOTE: `vis update` bumps the `frontend`/`web` catalogs but NOT this block, so
-# when react moves here, move it there too or the catalog silently lies about
-# what installs (the override always wins).
 overrides:
+  # ---------------------------------------------------------------------------
+  # Singleton pins — one copy of these across the whole graph
+  # ---------------------------------------------------------------------------
   # Force a single TypeScript across the whole graph. The catalog governs only
   # our workspace packages; third-party tools that range-depend on `typescript`
   # (eslint-plugin-sonarjs, ts-api-utils, the @typescript-eslint/* chain) resolve
@@ -44,26 +41,97 @@ overrides:
   # nothing and only makes the catalog lie. Keep all three on 6.0.3 until the
   # lint chain supports tsgo; lifting the pin is a migration, not a dep bump.
   typescript: 6.0.3
-  # Security (Dependabot) — force the patched version of transitive deps that a
-  # dependent pins below the fix. All are DoS-class advisories living in
-  # build/tooling / example-app graphs (nuxt/astro/docs/studio/cli), none in the
-  # shipped Cloudflare Worker runtime. A plain in-range refresh moved tar/
-  # brace-expansion; these needed a cross-range nudge. (astro's XSS fix needs a
-  # major bump to 7.0.10 — handled separately, it breaks the adapter.)
-  adm-zip: ">=0.6.0"
-  # Upper bound keeps the "whole tree on js-yaml 4" rule below intact — an open
-  # `>=4.3.1` resolves @expo/xcpretty onto js-yaml 5.
+  # Force a single React across the tree. @visulima/tui (a vis dependency) and its
+  # react-reconciler pin react@^19.2.6 while everything else uses 19.2.8; two
+  # copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
+  # NOTE: `vis update` bumps the `frontend`/`web` catalogs but NOT this block, so
+  # when react moves here, move it there too or the catalog silently lies about
+  # what installs (the override always wins).
+  react: 19.2.8
+  react-dom: 19.2.8
+  # Force a single React Native — the version Expo SDK 57 bundles (see the `expo`
+  # catalog). react-native's highest published version is `1000.0.0`, an
+  # accidentally-published placeholder Meta deprecated ("should not be used in
+  # production"), and `@react-three/fiber` / `@tanstack/offline-transactions`
+  # declare an open `react-native >=0.78` peer that `autoInstallPeers` resolves
+  # to it. That placeholder is a 70 MB 2019-era tree that drags in the legacy
+  # @react-native-community/cli and with it `ip@1.1.9` (GHSA-2p57-rm9w-gvfp, high
+  # severity, no fixed release), failing the dependency-review gate. Bump this in
+  # lockstep with `catalogs.expo`.
+  react-native: 0.86.2
+  # Force the whole tree onto js-yaml 4 (3.x is unmaintained / flagged by audits).
+  # The only 3.x consumer is gray-matter@4.0.3, which calls the removed
+  # safeLoad/safeDump — we pnpm-patch it to load/dump (safe by default in v4) so
+  # it works on 4.x. See patches/gray-matter@4.0.3.patch. The upper bound keeps
+  # this rule intact — an open `>=4.3.1` resolves @expo/xcpretty onto js-yaml 5.
   js-yaml: ">=4.3.1 <5"
-  shell-quote: ">=1.8.5"
+
+  # ---------------------------------------------------------------------------
+  # Security advisories — force a patched version where a dependent pins below
+  # the fix. Alphabetical, one rule per package (overlapping selectors are
+  # ambiguous in pnpm — widen the existing rule instead of adding a second).
+  # Almost all live in build/tooling / example-app graphs (nuxt/astro/docs/
+  # studio/cli), none in the shipped Cloudflare Worker runtime.
+  # ---------------------------------------------------------------------------
+  "@hono/node-server@<2.0.5": ^2.0.5
+  "@nuxt/devtools@<3.3.1": ^3.3.1
+  "@opentelemetry/core@<2.8.0": ^2.8.0
+  adm-zip: ">=0.6.0"
+  # astro's XSS fix needs a major bump to 7.0.10 — handled separately, it breaks
+  # the adapter.
+  astro@<6.4.6: ^6.4.6
   axios: ">=1.18.0"
-  protobufjs: ">=7.6.5"
   body-parser: ">=2.3.0"
+  brace-expansion@<1.1.18: ^1.1.18
+  brace-expansion@>=2.0.0 <2.1.4: ^2.1.4
+  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
+  dompurify@<=3.4.10: ^3.4.13
+  esbuild@>=0.27.3 <0.28.1: ^0.28.1
+  fast-uri@>=3.0.0 <3.1.5: ^3.1.5
+  fast-xml-parser@<5.7.0: ^5.7.0
+  h3@>=2.0.0-0 <2.0.1: ^2.0.1
+  hono@<4.12.34: ^4.12.34
+  # react-native's `@react-native/community-cli-plugin` declares an OPTIONAL
+  # `@react-native-community/cli: "*"` peer that `autoInstallPeers` resolves to
+  # the ancient 13.5.1 (14+ narrows its own react-native peer, so pnpm backtracks).
+  # 13.x depends on the unmaintained `ip@1.1.9` — GHSA-2p57-rm9w-gvfp, high
+  # severity, no fixed release — which fails the dependency-review gate. v20 drops
+  # it. Nothing in the repo calls this CLI; the override just keeps `ip` out.
+  "@react-native-community/cli@<20": ^20.2.0
+  ip-address@<=10.3.0: ^10.3.1
+  js-yaml@<=4.1.1: ^4.3.1
+  lodash@<=4.17.23: ^4.17.24
+  next@>=16.0.0 <16.2.11: ^16.2.11
+  nuxt@>=4.0.0 <4.5.1: ^4.5.1
+  postcss@<8.5.10: ^8.5.26
+  protobufjs: ">=7.6.5"
+  sharp@<0.35.0: ^0.35.0
+  shell-quote: ">=1.8.5"
+  svgo@>=4.0.0 <4.0.2: ^4.0.2
+  tar@<=7.5.20: ^7.5.21
+  tmp@<0.2.6: ^0.2.6
+  undici@<6.27.0: ^6.28.0
+  undici@>=7.0.0 <7.29.0: ^7.29.0
+  # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
+  # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
+  # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
+  # patched line to clear the advisory; v11 keeps the named `v4` export.
+  uuid@<11.1.0: ^11.1.0
   # @c15t/schema pins valibot to exactly 1.3.1; <=1.4.1 has a moderate flatten()
   # DoS (GHSA-5qjj-4xww-7phc), fixed in 1.4.2.
   valibot: ">=1.4.2"
+  # viem's isows@1.0.7 pulls ws@8.20.1, flagged by GHSA-96hv-2xvq-fx4p (memory-
+  # exhaustion DoS from tiny fragments, high severity). Bump the vulnerable 8.x
+  # range to the patched 8.21.0 — already resolved elsewhere in the tree (@solana/kit,
+  # @lunora/vite) — while leaving the legacy ws@1.x/4.x transitive pins untouched.
+  ws@>=8.0.0 <8.21.0: ^8.21.0
+
+  # ---------------------------------------------------------------------------
   # Internal packages → local workspace source. Lives in root overrides (NOT each
   # package's dependencies) so semantic-release-pnpm's per-package range rewrite
-  # never clobbers it; published tarballs are unaffected (overrides are install-time).
+  # never clobbers it; published tarballs are unaffected (overrides are
+  # install-time).
+  # ---------------------------------------------------------------------------
   "@lunora/advisor": "workspace:*"
   "@lunora/agent": "workspace:*"
   "@lunora/ai": "workspace:*"
@@ -114,66 +182,6 @@ overrides:
   "@lunora/workflow": "workspace:*"
   "@lunora/x402": "workspace:*"
   "lunorash": "workspace:*"
-  '@opentelemetry/core@<2.8.0': ^2.8.0
-  astro@<6.4.6: ^6.4.6
-  dompurify@<=3.4.10: ^3.4.13
-  esbuild@>=0.27.3 <0.28.1: ^0.28.1
-  # Force the whole tree onto js-yaml 4 (3.x is unmaintained / flagged by audits).
-  # The only 3.x consumer is gray-matter@4.0.3, which calls the removed
-  # safeLoad/safeDump — we pnpm-patch it to load/dump (safe by default in v4) so
-  # it works on 4.x. See patches/gray-matter@4.0.3.patch. `<=4.1.1` also folds
-  # the 4.0.0–4.1.1 security bump into this single rule.
-  js-yaml@<=4.1.1: ^4.3.1
-  lodash@<=4.17.23: ^4.17.24
-  lodash@>=4.0.0 <=4.17.22: ^4.17.23
-  lodash@>=4.0.0 <=4.17.23: ^4.17.24
-  postcss@<8.5.10: ^8.5.26
-  react: 19.2.8
-  react-dom: 19.2.8
-  tmp@<0.2.6: ^0.2.6
-  tmp@<=0.2.3: ^0.2.4
-  undici@<6.27.0: ^6.28.0
-  # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
-  # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
-  # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
-  # patched line to clear the advisory; v11 keeps the named `v4` export.
-  uuid@<11.1.0: ^11.1.0
-  # viem's isows@1.0.7 pulls ws@8.20.1, flagged by GHSA-96hv-2xvq-fx4p (memory-
-  # exhaustion DoS from tiny fragments, high severity). Bump the vulnerable 8.x
-  # range to the patched 8.21.0 — already resolved elsewhere in the tree (@solana/kit,
-  # @lunora/vite) — while leaving the legacy ws@1.x/4.x transitive pins untouched.
-  ws@>=8.0.0 <8.21.0: ^8.21.0
-  '@hono/node-server@<2.0.5': ^2.0.5
-  '@nuxt/devtools@<3.3.1': ^3.3.1
-  brace-expansion@<1.1.17: ^1.1.17
-  brace-expansion@<1.1.18: ^1.1.18
-  brace-expansion@>=2.0.0 <2.1.3: ^2.1.3
-  brace-expansion@>=2.0.0 <2.1.4: ^2.1.4
-  brace-expansion@>=4.0.0 <5.0.8: ^5.0.8
-  brace-expansion@>=4.0.0 <5.0.9: ^5.0.9
-  fast-uri@>=3.0.0 <3.1.3: ^3.1.3
-  fast-uri@>=3.0.0 <3.1.5: ^3.1.5
-  fast-uri@>=3.0.0 <=3.1.3: ^3.1.4
-  fast-xml-parser@<5.7.0: ^5.7.0
-  h3@>=2.0.0 <=2.0.1-rc.14: ^2.0.1
-  h3@>=2.0.0-0 <2.0.1-rc.15: ^2.0.1-rc.15
-  h3@>=2.0.0-beta.0 <=2.0.1-rc.16: ^2.0.1
-  h3@>=2.0.0-beta.4 <2.0.1-rc.18: ^2.0.1-rc.18
-  hono@<4.12.34: ^4.12.34
-  hono@>=3.8.0 <4.12.34: ^4.12.34
-  hono@>=4.12.0 <4.12.34: ^4.12.34
-  hono@>=4.7.0 <4.12.34: ^4.12.34
-  ip-address@<=10.3.0: ^10.3.1
-  ip-address@>=10.1.1 <=10.2.0: ^10.2.1
-  ip-address@>=10.1.1 <=10.2.1: ^10.2.2
-  next@>=16.0.0 <16.2.11: ^16.2.11
-  nuxt@>=4.0.0 <4.5.1: ^4.5.1
-  nuxt@>=4.4.0 <=4.5.0: ^4.5.1
-  nuxt@>=4.4.7 <4.5.1: ^4.5.1
-  sharp@<0.35.0: ^0.35.0
-  svgo@>=4.0.0 <4.0.2: ^4.0.2
-  tar@<=7.5.20: ^7.5.21
-  undici@>=7.0.0 <7.29.0: ^7.29.0
 
 catalogs:
   ai:
@@ -211,7 +219,11 @@ catalogs:
     conventional-changelog-conventionalcommits: 10.3.0
     cross-env: ^10.1.0
   lint:
-    "@anolilab/eslint-config": 28.1.3
+    # Held at 28.0.1: 28.1.x turns on ~20 new `unicorn/*` rules (filename-case,
+    # consistent-boolean-name, name-replacements, prefer-await, …) that report
+    # 8,194 errors across the repo, most of them renames no autofix can do.
+    # Adopting them is its own migration — bump this and the `web` copy together.
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.3
     "@typescript-eslint/parser": 8.67.0
     "@eslint-react/eslint-plugin": 5.18.3
@@ -227,7 +239,13 @@ catalogs:
     eslint-plugin-vue: ^10.10.0
     svelte-eslint-parser: ^1.8.0
     vue-eslint-parser: ^10.4.1
-    "@tanstack/eslint-plugin-query": 5.101.4
+    # Held at 5.101.2: 5.101.4's `exhaustive-deps` stopped reporting, which turns
+    # @lunora/react's and @lunora/studio's six documented `eslint-disable` comments
+    # into "unused directive" errors. The exclusions those comments justify (a
+    # non-serializable client / a fresh closure kept out of `queryKey`) are still
+    # correct, so deleting them to satisfy a quiet patch release would lose the
+    # rationale and re-error whenever the rule comes back.
+    "@tanstack/eslint-plugin-query": 5.101.2
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
@@ -235,9 +253,11 @@ catalogs:
     husky: ^9.1.7
     prettier: 3.9.6
     prettier-plugin-svelte: 4.1.1
+    react-doctor: 0.9.11
   node:
     fast-glob: ^3.3.3
     rimraf: 6.1.3
+    semver: ^7.8.5
   prod:
     adm-zip: 0.6.0
     csv-parse: 7.0.2
@@ -257,7 +277,9 @@ catalogs:
     fake-indexeddb: 6.2.5
     vitest: 4.1.10
   tsc:
-    typescript: 7.0.2
+    # Pinned to 6.0.3 — see the `typescript` override above. Bumping this to 7.x
+    # installs nothing (the override wins) and only makes the catalog lie.
+    typescript: 6.0.3
   types:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
@@ -304,17 +326,39 @@ catalogs:
     # the transport is the hand-written per-language runtime under `sdks/`.
     quicktype-core: ^26.0.0
     ts-morph: ^28.0.0
+  # Terminal runtime for the `lunora` binary (@lunora/cli) and the scaffolding it
+  # shares with @lunora/config. All @visulima/* are exact-pinned per the repo
+  # convention; react-reconciler is the custom renderer behind @visulima/tui.
+  cli:
+    "@bomb.sh/tab": 0.0.22
+    "@visulima/cerebro": 3.0.6
+    "@visulima/colorize": 2.1.1
+    "@visulima/find-ai-runner": 1.0.1
+    "@visulima/fs": 6.0.0
+    "@visulima/package": 5.0.12
+    "@visulima/pail": 4.1.1
+    "@visulima/path": 4.0.0
+    "@visulima/spinner": 1.0.1
+    # Held at v1: v4 dropped most `@visulima/tui/components/*` subpath exports
+    # (command-palette, confirm-input, select-input, spinner, text-input), which
+    # `packages/cli/src/util/tui-prompts.tsx` imports — the built CLI throws
+    # ERR_PACKAGE_PATH_NOT_EXPORTED at runtime on v4. Porting the prompts to the v4
+    # surface is a migration, not a dep bump.
+    "@visulima/tui": 1.0.5
+    cfonts: ^3.3.1
+    giget: 3.3.1
+    magic-string: ^1.1.0
+    react-reconciler: ^0.33.0
+    smol-toml: 1.7.1
   vite:
-    # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
-    # threw "Cannot read properties of undefined (reading 'string')" while evaluating the
-    # Worker entry. We've moved past it to 1.40.1, a verified-good release. Held EXACT (not a
-    # caret) for two reasons: the upstream changelog never named a fix for that crash, and
-    # 1.40.2 drags in too-fresh transitive deps (wrangler@4.100.0 → miniflare/workerd dated
-    # 2026-06-11) that trip the minimumReleaseAge gate — 1.40.1's wrangler@4.99.0 chain is
-    # aged-in and matches the catalog's `wrangler: ^4.99.0`. To bump: try the new version
-    # locally, run a `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the
-    # dev runner boots without the getWorkerEntryExportTypes crash AND that its transitive
-    # wrangler/miniflare/workerd are past the release-age window, then update this pin.
+    # Exact-pinned (no caret) — this plugin has shipped dev-runner regressions before
+    # (1.40.0: `getWorkerEntryExportTypes` threw "Cannot read properties of undefined
+    # (reading 'string')" evaluating the Worker entry, with no fix named in the changelog),
+    # and its transitive wrangler/miniflare/workerd can be fresher than the
+    # minimumReleaseAge gate allows. To bump: try the new version locally, run a
+    # `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the dev runner
+    # boots without that crash AND that its transitive wrangler/miniflare/workerd are past
+    # the release-age window, then update this pin.
     "@cloudflare/vite-plugin": 1.51.2
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3
@@ -353,6 +397,9 @@ catalogs:
     shadcn: ^4.16.2
     tailwind-merge: ^3.6.0
   frontend:
+    # Meta-frameworks the `@lunora/astro` / `@lunora/nuxt` integrations build against.
+    astro: 7.2.0
+    "@nuxt/kit": ^4.5.2
     html-to-image: ^1.11.13
     motion: ^13.1.0
     recharts: ^3.10.1
@@ -363,7 +410,11 @@ catalogs:
     "@tanstack/react-query": ^5.101.4
     "@tanstack/react-router": ^1.170.25
     "@tanstack/react-start": ^1.168.42
-    "@tanstack/react-table": ^9.1.2
+    # Held at v8: v9 rewrote the row-model API (`getCoreRowModel()` /
+    # `getSortedRowModel()` as options are gone, replaced by table-core 9 +
+    # @tanstack/react-store features). @lunora/studio's data browser is built on
+    # the v8 shape, so moving is a migration, not a dep bump.
+    "@tanstack/react-table": ^8.21.3
     "@tanstack/react-virtual": ^3.14.9
     "@sveltejs/vite-plugin-svelte": ^7.3.0
     svelte-check: ^4.7.5
@@ -396,6 +447,23 @@ catalogs:
     "@angular/platform-browser": ^22.1.1
     rxjs: ^7.8.2
     zone.js: ^0.16.2
+  # Expo SDK 57 native stack for examples/expo (the @lunora/react-native demo).
+  # react-native is pinned to the version Expo 57 bundles — expo's own peer range
+  # is a bare `*`, so a caret/latest resolve lands on the unusable
+  # react-native@1000.0.0 placeholder.
+  expo:
+    "@react-native-async-storage/async-storage": 3.1.1
+    expo: ~57.0.12
+    expo-constants: ~57.0.10
+    expo-dev-client: ~57.0.11
+    expo-linking: ~57.0.5
+    expo-modules-core: ~57.0.10
+    expo-network: ~57.0.1
+    expo-secure-store: ~57.0.1
+    expo-status-bar: ~57.0.1
+    expo-web-browser: ~57.0.2
+    react-native: 0.86.2
+    react-native-safe-area-context: ~5.8.1
   mail:
     "@visulima/email": 2.1.8
     "@react-email/render": 2.1.0
@@ -443,11 +511,23 @@ catalogs:
     "@x402/svm": 2.21.0
     "@coinbase/x402": 2.1.0
     viem: 2.55.13
+  # Payment provider SDKs (@lunora/payment). Stripe is the first-class adapter and
+  # the only one an example app installs; the rest are devDeps the provider
+  # adapters type against and take as optional peers. dinero.js is the money
+  # arithmetic in the shipped surface.
+  payment:
+    "@polar-sh/sdk": 0.49.0
+    autumn-js: 1.2.51
+    creem: 1.6.0
+    dinero.js: 2.0.2
+    dodopayments: 2.45.1
+    stripe: 22.5.0
   # Docs site (apps/docs) — TanStack Start + Vite + fumadocs marketing/docs app.
   # Isolated catalog so the heavy web stack (three.js, fumadocs 17, radix, …)
   # never perturbs the framework packages' version pins.
   web:
-    "@anolilab/eslint-config": 28.1.3
+    # Held at 28.0.1 — see the `lint` catalog above.
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.3
     "@babel/core": 8.0.1
     "@c15t/react": 2.2.0
@@ -518,6 +598,9 @@ catalogs:
     react-hook-inview: 4.5.1
     react-icon-cloud: 4.1.7
     react-remove-scroll: 2.7.2
+    # OG-image renderer: satori lays out JSX -> SVG, resvg-wasm rasterises it.
+    satori: 0.29.0
+    "@resvg/resvg-wasm": 2.6.2
     rimraf: 6.1.3
     secretlint: 13.0.4
     semantic-release: 25.0.9
@@ -527,7 +610,8 @@ catalogs:
     tailwindcss: 4.3.3
     tailwindcss-animate: 1.0.7
     three: 0.185.1
-    typescript: 7.0.2
+    # Pinned to 6.0.3 — see the `typescript` override at the top of this file.
+    typescript: 6.0.3
     unplugin-fonts: 2.0.0
     use-count-up: 3.0.1
     vite: 8.2.1
@@ -576,7 +660,28 @@ catalogs:
     jose: ^6.2.8
   drizzle:
     drizzle-orm: ^0.45.2
+  # BYO-database drivers exercised by @lunora/hyperdrive (all devDeps — the
+  # shipped adapters take them as optional peers) plus the kysely dialect
+  # @lunora/auth tests better-auth against. pglite / mysql-memory-server are the
+  # in-process servers those suites boot.
+  sql:
+    "@electric-sql/pglite": 0.5.4
+    "@electric-sql/pglite-socket": 0.2.7
+    "@types/pg": ^8.21.0
+    kysely: ^0.29.5
+    mysql-memory-server: 1.15.0
+    mysql2: ^3.23.3
+    pg: ^8.23.0
+    postgres: ^3.4.9
+  # HTTP server toolkits the framework adapters mount on: hono backs the
+  # `@lunora/runtime` router, h3 is Nitro's request layer that `@lunora/nuxt`
+  # types against.
   http:
+    # h3 stays on v1 to match @lunora/nuxt's declared `h3` peer (`^1.15.0`) — v1 is
+    # what Nuxt 4 / Nitro 2 run. `src/runtime/h3-request.ts` carries a v2 branch
+    # behind a feature check; widen the peer and this pin together when a stable
+    # h3 v2 ships (2.0.0 itself is deprecated upstream).
+    h3: ^1.15.11
     hono: ^4.13.1
   redact:
     "@visulima/redact": 4.0.0
@@ -700,6 +805,7 @@ minimumReleaseAgeExclude:
   - '@eslint-react/jsx@5.8.17'
   - '@eslint-react/shared@5.8.17'
   - '@eslint-react/var@5.8.17'
+  - '@hono/node-server@2.0.5'
   - '@lingui/babel-plugin-lingui-macro@6.3.0'
   - '@lingui/conf@6.3.0'
   - '@lingui/core@6.3.0'
@@ -709,7 +815,6 @@ minimumReleaseAgeExclude:
   # post-publish `pnpm install --lockfile-only` re-resolves versions published
   # seconds earlier; without this it fails ERR_PNPM_NO_MATURE_MATCHING_VERSION.
   - '@lunora/*'
-  - 'lunorash'
   - '@next/env@16.2.9'
   - '@next/swc-darwin-arm64@16.2.9'
   - '@next/swc-darwin-x64@16.2.9'
@@ -719,35 +824,17 @@ minimumReleaseAgeExclude:
   - '@next/swc-linux-x64-musl@16.2.9'
   - '@next/swc-win32-arm64-msvc@16.2.9'
   - '@next/swc-win32-x64-msvc@16.2.9'
+  - '@nuxt/devtools@3.3.1'
+  - '@opentelemetry/core@2.8.0'
   - '@tanstack/eslint-plugin-query@5.101.0'
   - '@tanstack/query-core@5.101.0'
   - '@tanstack/react-query@5.101.0'
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
-  - 'better-auth@1.7.0-rc.2'
-  - 'deslop-js@0.0.21'
-  - 'eslint-plugin-react-dom@5.8.17'
-  - 'eslint-plugin-react-jsx@5.8.17'
-  - 'eslint-plugin-react-naming-convention@5.8.17'
-  - 'eslint-plugin-react-rsc@5.8.17'
-  - 'eslint-plugin-react-web-api@5.8.17'
-  - 'eslint-plugin-react-x@5.8.17'
-  - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
-  - 'fumadocs-mdx@15.0.11'
-  - 'miniflare@4.20260601.0'
-  - next@16.2.9 || 16.2.11
-  - 'oxlint-plugin-react-doctor@0.5.1'
-  - 'react@19.2.7'
-  - 'react-doctor@0.5.1'
-  - 'react-dom@19.2.7'
-  - 'tsx@4.22.4'
-  - 'vite@8.0.16'
-  - 'wrangler@4.97.0'
-  - tmp@0.2.4 || 0.2.6
-  - lodash@4.17.23 || 4.17.24
-  # Renovate security update: postcss@8.5.26
-  - postcss@8.5.10 || 8.5.26
+  - '@visulima/email@1.0.0-alpha.41'
+  - '@visulima/find-ai-runner@1.0.0-alpha.9'
+  - '@visulima/vis@1.0.0-alpha.43'
   - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43'
   - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.43'
   - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.43'
@@ -756,32 +843,49 @@ minimumReleaseAgeExclude:
   - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.43'
   - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.43'
   - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43'
-  - '@visulima/vis@1.0.0-alpha.43'
-  - '@visulima/email@1.0.0-alpha.41'
-  - '@visulima/find-ai-runner@1.0.0-alpha.9'
-  - esbuild@0.28.1
-  # Renovate security update: js-yaml@4.3.1
-  - js-yaml@4.1.2 || 4.3.1
-  - '@opentelemetry/core@2.8.0'
-  - astro@6.4.6
+  - 'astro@6.4.6'
+  - 'better-auth@1.7.0-rc.2'
+  - 'brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9'
+  - 'deslop-js@0.0.21'
   # Renovate security update: dompurify@3.4.13
-  - dompurify@3.4.11 || 3.4.13
-  - undici@6.27.0 || 6.28.0 || 7.29.0
+  - 'dompurify@3.4.11 || 3.4.13'
+  - 'esbuild@0.28.1'
+  - 'eslint-plugin-react-dom@5.8.17'
+  - 'eslint-plugin-react-jsx@5.8.17'
+  - 'eslint-plugin-react-naming-convention@5.8.17'
+  - 'eslint-plugin-react-rsc@5.8.17'
+  - 'eslint-plugin-react-web-api@5.8.17'
+  - 'eslint-plugin-react-x@5.8.17'
+  - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
+  - 'fast-uri@3.1.3 || 3.1.4 || 3.1.5'
+  - 'fast-xml-parser@5.7.0'
+  - 'fumadocs-mdx@15.0.11'
+  - 'h3@2.0.1-rc.15 || 2.0.1-rc.18 || 2.0.1'
   # Renovate security update: hono@4.12.34
-  - hono@4.12.34
-  - nuxt@4.0.3 || 4.5.1
-  - ip@2.0.2
-  - h3@2.0.1-rc.15 || 2.0.1-rc.18 || 2.0.1
-  - fast-xml-parser@5.7.0
-  - '@hono/node-server@2.0.5'
-  - svgo@4.0.2
-  - fast-uri@3.1.3 || 3.1.4 || 3.1.5
-  - sharp@0.35.0
-  - tar@7.5.21
-  - brace-expansion@1.1.17 || 1.1.18 || 2.1.3 || 2.1.4 || 5.0.8 || 5.0.9
-  - ip-address@10.2.1 || 10.2.2 || 10.3.1
-  - '@nuxt/devtools@3.3.1'
-  - image-size@2.0.3
+  - 'hono@4.12.34'
+  - 'image-size@2.0.3'
+  - 'ip-address@10.2.1 || 10.2.2 || 10.3.1'
+  # Renovate security update: js-yaml@4.3.1
+  - 'js-yaml@4.1.2 || 4.3.1'
+  - 'lodash@4.17.23 || 4.17.24'
+  - 'lunorash'
+  - 'miniflare@4.20260601.0'
+  - 'next@16.2.9 || 16.2.11'
+  - 'nuxt@4.0.3 || 4.5.1'
+  - 'oxlint-plugin-react-doctor@0.5.1'
+  # Renovate security update: postcss@8.5.26
+  - 'postcss@8.5.10 || 8.5.26'
+  - 'react@19.2.7'
+  - 'react-doctor@0.5.1'
+  - 'react-dom@19.2.7'
+  - 'sharp@0.35.0'
+  - 'svgo@4.0.2'
+  - 'tar@7.5.21'
+  - 'tmp@0.2.4 || 0.2.6'
+  - 'tsx@4.22.4'
+  - 'undici@6.27.0 || 6.28.0 || 7.29.0'
+  - 'vite@8.0.16'
+  - 'wrangler@4.97.0'
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
 # hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
@@ -794,6 +898,15 @@ packageExtensions:
   recast@0.23.11:
     dependencies:
       "@babel/parser": "^7.24.1"
+  # `@visulima/fs@6` swapped its YAML backend from `yaml` to `@visulima/yaml` and
+  # declares it as an OPTIONAL peer, which pnpm does not auto-install. `readYaml`
+  # imports it unconditionally, so any consumer that reads a YAML file throws
+  # ERR_MODULE_NOT_FOUND — and one of those consumers is `@visulima/tsconfig`,
+  # reached from `@anolilab/eslint-config`, which takes down ESLint config load for
+  # every package in the repo. Promote it to a real dependency.
+  "@visulima/fs":
+    dependencies:
+      "@visulima/yaml": "1.0.0"
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
