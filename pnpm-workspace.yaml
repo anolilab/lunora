@@ -290,6 +290,14 @@ catalogs:
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
     "@cloudflare/playwright": 1.3.5
     "@cloudflare/vitest-pool-workers": ^0.21.0
+    # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
+    # is version-pinned in `patchedDependencies` — regenerate it when bumping this.
+    # Upstream declares `declare const Buffer: any` / `declare const process: any`,
+    # which win over @types/node's `BufferConstructor` / `NodeJS.Process` in every
+    # package that loads both type sets (33 of them here; none load workers-types
+    # alone). That makes every `process.*` and `Buffer.*` read an untyped `any`,
+    # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
+    # absent at runtime. The patch drops both declarations so @types/node wins.
     "@cloudflare/workers-types": ^5.20260811.1
     miniflare: ^4.20260730.0
     wrangler: ^4.120.1
@@ -910,5 +918,6 @@ packageExtensions:
 
 patchedDependencies:
   '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
+  '@cloudflare/workers-types@5.20260811.1': patches/@cloudflare__workers-types@5.20260811.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch
