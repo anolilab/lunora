@@ -21,6 +21,13 @@ export const createSeoHead = (options: SeoOptions): { links: Record<string, stri
     const url = canonical ?? (path ? `${SITE_URL}${path}` : SITE_URL);
 
     const meta: Record<string, string>[] = [
+        // The document title has to be an entry in `meta`, not a sibling of it.
+        // `HeadContent` scans the meta array for the first entry carrying a
+        // `title` key and renders that as <title>; a top-level `title` on the
+        // head object is dropped. Spreading this helper into a route's `head()`
+        // hides the mistake, because a spread is not excess-property checked, so
+        // the site shipped with no <title> on any page and nothing complained.
+        { title: fullTitle },
         { content: fullTitle, name: "title" },
         { content: description, name: "description" },
         // Open Graph
