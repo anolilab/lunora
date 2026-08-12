@@ -485,8 +485,8 @@ const Navbar = (): ReactElement => {
                     <a
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
-                            "flex h-9 items-center gap-1.5 rounded-none px-4 text-sm font-medium transition-colors",
-                            lightInk ? "bg-on-panel text-panel hover:opacity-90" : "bg-panel text-on-panel hover:opacity-90",
+                            "flex h-10 items-center gap-2 rounded-none px-3 font-mono text-kicker uppercase transition-colors",
+                            lightInk ? "text-on-panel/70 hover:text-on-panel" : "text-ink-muted hover:text-ink",
                         )}
                         href="https://github.com/anolilab/lunora"
                         rel="noreferrer"
@@ -495,7 +495,14 @@ const Navbar = (): ReactElement => {
                         <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
                         <span className="font-mono tabular-nums">{formatStars(stats.stars)}</span>
                     </a>
-                    <Button asChild className="h-9 gap-1 rounded-none px-4 text-sm font-semibold" variant="default">
+                    <Button
+                        asChild
+                        className={cn(
+                            "h-10 gap-2 rounded-none px-[18px] font-mono text-kicker uppercase",
+                            lightInk ? "bg-on-panel text-panel hover:opacity-90" : "bg-emphasis text-on-emphasis hover:opacity-90",
+                        )}
+                        variant="ghost"
+                    >
                         <Link to="/docs/$">
                             Get started
                             <ChevronRight className="size-4" />
