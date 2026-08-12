@@ -133,7 +133,7 @@ const SectionHeader: FC<{
                 {note ? <p className="text-body text-ink-muted md:text-right">{note}</p> : null}
                 {action ? (
                     <Link
-                        className="group inline-flex items-center gap-2 font-mono text-kicker uppercase text-ink transition-colors hover:text-accent"
+                        className="group inline-flex min-h-[24px] items-center gap-2 py-1 font-mono text-kicker uppercase text-ink transition-colors hover:text-accent"
                         to={action.to}
                     >
                         {action.label}

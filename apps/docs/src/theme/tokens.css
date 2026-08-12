@@ -111,10 +111,14 @@
        a distinct surface. Too faint to be a border; too subtle to be `surface`. */
     --site-wash: rgb(255 255 255 / 0.03);
 
-    /* Ink — three steps is enough; a fourth always ends up unreadable. */
+    /* Ink — three steps is enough; a fourth always ends up unreadable.
+       The faint step is pinned to the WCAG AA floor rather than to taste: at
+       0.35 it composited to ~3.1:1 on the canvas and failed 4.5:1 across every
+       label, manifest key and filename on the site. 0.47 clears it on every surface, including the darker code panels. Lowering it
+       again re-breaks 70-odd elements at once. */
     --site-ink: hsl(228 30% 96%);
     --site-ink-muted: rgb(255 255 255 / 0.55);
-    --site-ink-faint: rgb(255 255 255 / 0.35);
+    --site-ink-faint: rgb(255 255 255 / 0.47);
 
     /* Emphasis — achromatic. See --color-emphasis above. */
     --site-emphasis: hsl(228 30% 96%);

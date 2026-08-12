@@ -106,6 +106,26 @@ export default defineConfig(async ({ mode }) => {
                         url.searchParams.set("progressive", "true");
                     }
 
+                    // Product captures ship as 2880-wide PNGs and are never
+                    // displayed above ~1024 CSS pixels. Re-encoding to WebP at
+                    // 2048 still covers a 2x screen exactly and takes the hero
+                    // capture from 185K to 44K.
+                    //
+                    // Applied here rather than as import query strings so the
+                    // call sites stay plain `.png` imports and keep their types.
+                    // Every capture is 2880x1760, so 2048 always yields
+                    // 2048x1252 and the width/height attributes at the call
+                    // sites hold for all of them.
+                    if (url.pathname.endsWith(".png") && url.pathname.includes("/assets/studio/")) {
+                        if (!url.searchParams.get("format")) {
+                            url.searchParams.set("format", "webp");
+                        }
+
+                        if (!url.searchParams.get("w")) {
+                            url.searchParams.set("w", "2048");
+                        }
+                    }
+
                     return url.searchParams;
                 },
             }),
