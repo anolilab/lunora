@@ -1,6 +1,6 @@
 {
     "name": "@lunora/observability",
-    "version": "1.0.0-alpha.26",
+    "version": "1.0.0-alpha.27",
     "description": "Host-neutral telemetry storage and read models for Lunora, backing the Studio's Logs, Traces, Metrics and Issues views",
     "keywords": [
         "lunora",
