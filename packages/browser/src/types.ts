@@ -15,7 +15,7 @@
  * @experimental
  */
 export interface BrowserBindingLike {
-    readonly fetch: (...args: never[]) => unknown;
+    readonly fetch: typeof fetch;
 }
 
 /**
@@ -43,10 +43,10 @@ export interface PageLike {
     /** Return the page's serialized HTML after the navigation settles. */
     content: () => Promise<string>;
     /** Run a function in the page context and return its (serializable) result. */
-    evaluate: <T>(function_: (...args: never[]) => T) => Promise<T>;
+    evaluate: <T>(function_: () => T) => Promise<T>;
 
     /** Navigate to a URL; resolves once the configured wait condition is met. */
-    goto: (url: string, options?: { timeout?: number; waitUntil?: string }) => Promise<unknown>;
+    goto: (url: string, options?: { timeout?: number; waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle" }) => Promise<unknown>;
     /** Render the page to a PDF buffer. */
     pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
 
