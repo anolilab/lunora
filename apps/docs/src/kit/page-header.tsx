@@ -24,8 +24,13 @@ import { cn } from "@/lib/utils";
 const SIZE = {
     // Field height, then how far the panel is pulled up into it. The pull is
     // half the field so the panel's top edge lands on the field's midline.
-    full: { field: "h-[32rem] sm:h-[38rem] lg:h-[45rem]", pull: "-mt-[16rem] sm:-mt-[19rem] lg:-mt-[22.5rem]" },
-    short: { field: "h-[20rem] sm:h-[24rem] lg:h-[28rem]", pull: "-mt-[11rem] sm:-mt-[13rem] lg:-mt-[15rem]" },
+    //
+    // Keep these in step: the header's total height is the field plus whatever
+    // the panel overhangs, so growing the field without growing the pull eats
+    // the first screen. The panel should sit in the lower half of the band with
+    // colour still reading above and beside it, not fill the band.
+    full: { field: "h-[26rem] sm:h-[30rem] lg:h-[36rem]", pull: "-mt-[13rem] sm:-mt-[15rem] lg:-mt-[18rem]" },
+    short: { field: "h-[17rem] sm:h-[20rem] lg:h-[23rem]", pull: "-mt-[8.5rem] sm:-mt-[10rem] lg:-mt-[11.5rem]" },
 };
 
 const PageHeader: FC<{
@@ -74,13 +79,13 @@ const PageHeader: FC<{
                 accent and fail contrast at the top of the page. */}
             <div
                 aria-hidden="true"
-                className="absolute inset-x-0 top-0 h-32"
+                className="absolute inset-x-0 top-0 h-24"
                 style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--site-canvas) 72%, transparent), transparent)" }}
             />
             {/* Settle the field into the page rather than cutting it off. */}
             <div
                 aria-hidden="true"
-                className="absolute inset-x-0 bottom-0 h-1/3"
+                className="absolute inset-x-0 bottom-0 h-1/4"
                 style={{ background: "linear-gradient(180deg, transparent, var(--site-canvas))" }}
             />
         </div>
@@ -89,7 +94,7 @@ const PageHeader: FC<{
             <div
                 className={cn(
                     "w-full border border-hairline bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
-                    panelWidth === "wide" ? "max-w-[46rem]" : "max-w-[34rem]",
+                    panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]",
                 )}
             >
                 {children}
