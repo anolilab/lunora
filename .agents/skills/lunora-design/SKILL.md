@@ -44,6 +44,15 @@ Every screen has exactly **three layers of importance.** Not two, not five. Thre
 
 Per screen, use maximum:
 - **2 font families** (Geist Sans + Geist Mono.)
+
+**Geist is settled, including for display.** Reference sites in this space use
+wider geometric grotesques, and a display face is the first thing that looks
+"missing" when comparing side by side. It is not: Geist at 700 with the
+negative tracking in 2.10 is the tuned setting, and `--font-display` /
+`--font-heading` alias Geist deliberately rather than by omission. Do not
+propose swapping the display face as a fix for a page that looks off — measure
+the scale first (see 3.1), because a dropped size utility looks exactly like a
+wrong typeface.
 - **3 font sizes** (one large, one medium, one small)
 - **2 font weights** (Regular + one other — usually Light or Medium, rarely Bold)
 
