@@ -2,9 +2,21 @@ import type { Cell, CompareRow, CompareSlug, Comparison } from "./compare-page";
 
 /**
  * Honest comparison data. Verified against primary sources (each vendor's docs,
- * GitHub, pricing) as of 2026. Keep it fair: name where the other tool genuinely
- * wins (maturity, breadth, SQL, mobile), and only claim real Lunora differences
+ * GitHub, pricing). Keep it fair: name where the other tool genuinely wins
+ * (maturity, breadth, SQL, mobile), and only claim real Lunora differences
  * (edge-native, your own Cloudflare account, reactive queries, ≈$0 idle, types).
+ *
+ * These rows are also rendered on the landing page, so a wrong cell is a wrong
+ * claim on the homepage. Re-check against the vendor's own docs before editing,
+ * and never soften a competitor's capability with a qualifier their own
+ * documentation does not use.
+ *
+ * Last re-verified 2026-08-12, against vendor docs, for the five criteria the
+ * landing page surfaces: Supabase free-tier pausing (7 days), Supabase Docker
+ * self-hosting (official, not community), Convex Cloud regions (AWS us-east-1
+ * and eu-west-1), Convex self-host (Rust backend, SQLite default / Postgres
+ * optional), and Cloudflare SQLite-backed Durable Objects on the Workers free
+ * plan.
  */
 
 // Lunora's column, the same across every comparison.
@@ -211,10 +223,10 @@ export const COMPARISONS: Record<string, Comparison> = {
             edge: { label: "Regional Postgres + read replicas", tone: "warn" },
             idle: { label: "Free tier pauses after ~7 days idle", tone: "warn" },
             maturity: { label: "Production-ready", tone: "yes" },
-            noServers: { label: "No, Docker stack (community)", tone: "no" },
+            noServers: { label: "No, Docker Compose stack", tone: "no" },
             oss: { label: "Yes (Apache-2.0)", tone: "yes" },
             reactive: { label: "No, change-feed / broadcast API", tone: "no" },
-            selfHost: { label: "Yes, Docker (community)", tone: "yes" },
+            selfHost: { label: "Yes, official Docker stack", tone: "yes" },
             types: { label: "Generated schema types", tone: "warn" },
         }),
         slug: "supabase",
