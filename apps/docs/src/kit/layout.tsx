@@ -34,27 +34,28 @@ const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...re
 );
 
 /**
- * A full-bleed horizontal band. `tone` picks the surface; `divided` draws the
- * hairline that separates it from the band above.
+ * A full-bleed horizontal band. `tone` picks the surface.
  *
- * Vertical rhythm is owned here so pages never hand-tune `py-*` — that is how
- * a page ends up with eleven slightly different section paddings.
+ * Deliberately applies no vertical padding. The hatched spacer between bands
+ * carries the rhythm, and a band that pads itself as well doubles it: a section
+ * gap became the spacer plus twice the padding, which is what left the page
+ * with a screen of empty canvas between every two bands.
+ *
+ * If a band needs breathing room beyond the spacer, that is a property of that
+ * band's content and belongs on the content, not on every section on the site.
  */
 const Section: FC<{
     children: ReactNode;
     className?: string;
-    /** Suppress the standard vertical rhythm (for edge-to-edge visuals). */
-    flush?: boolean;
     id?: string;
     tone?: "canvas" | "deep" | "surface";
-}> = ({ children, className, flush = false, id, tone = "canvas" }) => (
+}> = ({ children, className, id, tone = "canvas" }) => (
     <section
         className={cn(
             "relative border-t border-hairline",
             tone === "canvas" && "bg-canvas",
             tone === "deep" && "bg-canvas-deep",
             tone === "surface" && "bg-surface",
-            !flush && "py-section",
             className,
         )}
         data-nav-theme="dark"
