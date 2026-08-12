@@ -456,6 +456,11 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // mock has no socket, so it reports a stable "idle" and never notifies.
         connectionStatus: () => "idle" as const,
         onConnectionStatus: (_listener: () => void) => () => {},
+        // Stable per-instance id. The deployment-health panel puts it in its query
+        // key so a rebuilt client (admin-token change) re-keys instead of serving
+        // the previous client's cached result; a mock is one instance per test, so
+        // a constant keeps that key stable across renders.
+        clientIdentifier: () => "mock-client",
         deleteKvKey,
         deleteStorageObject,
         facetGlobalColumn,
