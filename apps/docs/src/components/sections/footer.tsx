@@ -44,40 +44,42 @@ const FooterLink: FC<{ link: FooterEntry }> = ({ link }) => {
 
 const Footer: FC = () => (
     <footer className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
-        <Shell className="grid grid-cols-2 border-hairline lg:grid-cols-[1fr_1fr_1fr_1.6fr_auto] lg:border-x" flush>
-            {siteConfig.footer.columns.map((column) => (
-                <div className="flex flex-col border-b border-hairline lg:border-r lg:border-b-0" key={column.title}>
-                    {column.links.map((link) => (
-                        <FooterLink key={link.title} link={link} />
+        <Shell>
+            <div className="grid grid-cols-2 border-hairline lg:grid-cols-[1fr_1fr_1fr_1.6fr_auto] lg:border-x">
+                {siteConfig.footer.columns.map((column) => (
+                    <div className="flex flex-col border-b border-hairline lg:border-r lg:border-b-0" key={column.title}>
+                        {column.links.map((link) => (
+                            <FooterLink key={link.title} link={link} />
+                        ))}
+                    </div>
+                ))}
+
+                {/* center — brand over a particle field */}
+                <div className="relative col-span-2 flex min-h-[16rem] items-center justify-center overflow-hidden border-b border-hairline lg:col-span-1 lg:border-r lg:border-b-0">
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-40">
+                        <FlickeringGrid className="size-full" color="#6B7280" flickerChance={0.08} gridGap={3} maxOpacity={0.3} squareSize={2} />
+                    </div>
+                    <div className="relative z-10 flex items-center gap-2.5">
+                        <LunoraLogo className="h-7 w-7" title={siteConfig.brand.name} />
+                        <span className="text-h3 font-bold text-ink">{siteConfig.brand.name}</span>
+                    </div>
+                </div>
+
+                {/* socials */}
+                <div className="col-span-2 flex border-b border-hairline lg:col-span-1 lg:flex-col lg:border-b-0">
+                    {siteConfig.social.map((social) => (
+                        <a
+                            aria-label={social.label}
+                            className="flex flex-1 items-center justify-center border-hairline px-6 py-5 text-ink-faint transition-colors not-last:border-r hover:text-ink lg:not-last:border-r-0 lg:not-last:border-b"
+                            href={social.href}
+                            key={social.label}
+                            rel="noopener noreferrer"
+                            target="_blank"
+                        >
+                            {SOCIAL_ICON[social.icon]}
+                        </a>
                     ))}
                 </div>
-            ))}
-
-            {/* center — brand over a particle field */}
-            <div className="relative col-span-2 flex min-h-[16rem] items-center justify-center overflow-hidden border-b border-hairline lg:col-span-1 lg:border-r lg:border-b-0">
-                <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-40">
-                    <FlickeringGrid className="size-full" color="#6B7280" flickerChance={0.08} gridGap={3} maxOpacity={0.3} squareSize={2} />
-                </div>
-                <div className="relative z-10 flex items-center gap-2.5">
-                    <LunoraLogo className="h-7 w-7" title={siteConfig.brand.name} />
-                    <span className="text-h3 font-bold text-ink">{siteConfig.brand.name}</span>
-                </div>
-            </div>
-
-            {/* socials */}
-            <div className="col-span-2 flex border-b border-hairline lg:col-span-1 lg:flex-col lg:border-b-0">
-                {siteConfig.social.map((social) => (
-                    <a
-                        aria-label={social.label}
-                        className="flex flex-1 items-center justify-center border-hairline px-6 py-5 text-ink-faint transition-colors not-last:border-r hover:text-ink lg:not-last:border-r-0 lg:not-last:border-b"
-                        href={social.href}
-                        key={social.label}
-                        rel="noopener noreferrer"
-                        target="_blank"
-                    >
-                        {SOCIAL_ICON[social.icon]}
-                    </a>
-                ))}
             </div>
         </Shell>
 
@@ -101,7 +103,10 @@ const Footer: FC = () => (
                 <span>{siteConfig.footer.copyright}</span>
                 <span>{siteConfig.footer.legal}</span>
             </div>
-            <div className="absolute inset-0 z-10" style={{ maskImage: "radial-gradient(85% 100% at 50% 100%, white, transparent 72.5%)" }}>
+            {/* The canvas sizes itself to its own device width, not this box, so it
+                    has to be clipped here — otherwise it sets the document's scroll
+                    width and the whole page scrolls sideways on a phone. */}
+            <div className="absolute inset-0 z-10 overflow-hidden" style={{ maskImage: "radial-gradient(85% 100% at 50% 100%, white, transparent 72.5%)" }}>
                 <FlickeringGrid
                     className="absolute inset-0 h-full w-full"
                     color="#6B7280"

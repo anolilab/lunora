@@ -14,16 +14,17 @@ import { cn } from "@/lib/utils";
  */
 
 /**
- * Capped, gutter-padded container. Every band's content sits in one of these.
+ * Capped, gutter-padded container. Every band's content sits in one of these,
+ * including the navbar, so the bar and the sections under it share one edge.
  *
- * `flush` drops the gutter for bands whose own cells carry the padding — a
- * full-bleed hairline grid, for instance. Without it the outer cells sit inside
- * the gutter while the container's border sits outside it, so their dividers
- * stop short of the edge they are supposed to meet.
+ * A grid that needs edge-to-edge dividers goes *inside* a Shell rather than
+ * being one: put the padding on the Shell and the grid within it, or the outer
+ * cells sit inside the padding while the grid's own border sits outside it and
+ * their dividers stop short of the edge they should meet.
  */
-const Shell: FC<ComponentPropsWithoutRef<"div"> & { flush?: boolean }> = ({ children, className, flush = false, ...rest }) => (
+const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...rest }) => (
     // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding native div attributes
-    <div className={cn("mx-auto w-full max-w-shell", !flush && "px-gutter", className)} {...rest}>
+    <div className={cn("mx-auto w-full max-w-shell px-gutter", className)} {...rest}>
         {children}
     </div>
 );

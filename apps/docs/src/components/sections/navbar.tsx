@@ -39,6 +39,7 @@ import homeImg from "@/assets/studio/dark/home.png";
 import schemaImg from "@/assets/studio/dark/schema.png";
 import { Button } from "@/components/ui/button";
 import stats from "@/data/stats.json";
+import { Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -407,7 +408,7 @@ const Navbar = (): ReactElement => {
             data-theme={lightInk ? "light" : "dark"}
             onMouseLeave={scheduleClose}
         >
-            <div className="relative mx-auto flex h-16 max-w-6xl items-center px-5">
+            <Shell className="relative flex h-16 items-center">
                 <Logo light={lightInk} pathname={pathname} />
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
@@ -523,7 +524,7 @@ const Navbar = (): ReactElement => {
                 >
                     <Menu className="size-5" />
                 </button>
-            </div>
+            </Shell>
 
             {/* mega-menu dropdown — a single centered box that morphs size between menus */}
             <div className="absolute top-[4.25rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
