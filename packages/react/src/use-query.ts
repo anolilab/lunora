@@ -63,7 +63,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         ? undefined
         : (client.peekHydratedQuery(function_.__lunoraRef, argsRecord, shardKey) as ReturnOf<F> | undefined);
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
         enabled: !skipped && hydrated,
         initialData: cachedData,

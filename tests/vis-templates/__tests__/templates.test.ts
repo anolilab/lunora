@@ -146,11 +146,7 @@ const LATEST_MAJORS: Record<string, number> = {
  * Per-template major overrides for a dep a template intentionally pins below
  * {@link LATEST_MAJORS} — keyed by template → dep → the major it must stay on.
  */
-const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {
-    // AnalogJS rides Angular 19, whose `@angular/build` toolchain pins Vite 6 —
-    // it can't move to Vite 8 until Angular's build supports it.
-    analog: { vite: 6 },
-};
+const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {};
 
 /**
  * The Lunora client adapter each template's UI must depend on. `standalone` has

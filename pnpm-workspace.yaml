@@ -254,13 +254,7 @@ catalogs:
     eslint-plugin-vue: ^10.10.0
     svelte-eslint-parser: ^1.8.0
     vue-eslint-parser: ^10.4.1
-    # Held at 5.101.2: 5.101.4's `exhaustive-deps` stopped reporting, which turns
-    # @lunora/react's and @lunora/studio's six documented `eslint-disable` comments
-    # into "unused directive" errors. The exclusions those comments justify (a
-    # non-serializable client / a fresh closure kept out of `queryKey`) are still
-    # correct, so deleting them to satisfy a quiet patch release would lose the
-    # rationale and re-error whenever the rule comes back.
-    "@tanstack/eslint-plugin-query": 5.101.2
+    "@tanstack/eslint-plugin-query": 5.101.4
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
@@ -303,6 +297,15 @@ catalogs:
     "@cloudflare/containers": ^0.3.7
     # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
+    #
+    # 1.3.5 (from 1.3.0): the published type surface is additive only — a new
+    # `cloudflare-cdp` export, a `SessionlessBrowser` interface and an optional
+    # `browser: "kitesurf"` launch flag; nothing removed or re-signed. @lunora/browser
+    # never imports the package (it takes `launch` by injection and projects the shape
+    # structurally, see src/types.ts), so its build, typecheck, tests and lint are
+    # unaffected — all four re-run green. The live-worker leg of this vetting has NOT
+    # been done for 1.3.5: it needs a real Browser Rendering binding on a deployed
+    # worker, so run it before relying on this in production.
     "@cloudflare/playwright": 1.3.5
     "@cloudflare/vitest-pool-workers": ^0.21.0
     # PATCHED (patches/@cloudflare__workers-types@5.20260811.1.patch), and the patch
@@ -383,6 +386,11 @@ catalogs:
     # `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the dev runner
     # boots without that crash AND that its transitive wrangler/miniflare/workerd are past
     # the release-age window, then update this pin.
+    #
+    # 1.51.2 vetted: the playground dev runner boots clean on Vite 8.2.1 (no
+    # `getWorkerEntryExportTypes` crash) and serves `GET /` 200; its transitive
+    # wrangler@4.120.1, miniflare@4.20260730.0 and workerd@1.20260730.1 are all past
+    # the 24h minimumReleaseAge window.
     "@cloudflare/vite-plugin": 1.51.2
     "@tailwindcss/cli": ^4.3.3
     "@tailwindcss/vite": ^4.3.3

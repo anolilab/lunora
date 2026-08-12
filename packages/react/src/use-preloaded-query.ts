@@ -34,7 +34,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
     const functionRef: FunctionReference = { __lunoraRef: functionPath };
     const queryKey = lunoraQueryKey(functionRef, args, shardKey);
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // Client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<T>({
         // Seed the cache with the server value so the first paint doesn't
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from

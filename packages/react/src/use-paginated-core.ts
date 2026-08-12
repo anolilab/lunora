@@ -179,7 +179,7 @@ const usePaginatedCore = function <T>(
             // fresh attach guarantees a recycled key never serves that corpse —
             // the live subscription then keeps it current. The attach only fires
             // once per newly-desired page, so this stays a single fetch per page.
-            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
+            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
             const initialFetch = queryClient.fetchQuery({
                 queryFn: () =>
                     (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(

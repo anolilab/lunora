@@ -143,7 +143,7 @@ export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): Re
     // (which trips react-doctor's set-state-in-effect / stale-deps), and React
     // Query handles unmount so there's no `mountedRef`. `runProbe` is closed into
     // `queryFn`; the stable key means an injected test `probe` runs exactly once.
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `runProbe` is a stable injected/compiler-memoized fetcher, not a data input; keying the query on a function would be an anti-pattern (and would refetch on every render)
+    // `runProbe` is a stable injected/compiler-memoized fetcher, not a data input; keying the query on a function would be an anti-pattern (and would refetch on every render)
     const { data, isPending } = useQuery({
         queryFn: async (): Promise<{ live: ProbeSnapshot; ready: ProbeSnapshot }> => {
             const [liveResult, readyResult] = await Promise.all([runProbe("live"), runProbe("ready")]);

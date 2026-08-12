@@ -120,7 +120,7 @@ function useAdminAuthList<T>(
 
     const queryKey: QueryKey = [ADMIN_AUTH_KEY, identity ?? "anon", ...key, limit];
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `fetchPage` is a fresh closure supplied by each caller hook (`useAuthUsers`/`useOrganizations`/`useAuthSessions`) and is not part of the cache identity — `queryKey` (built from the caller's own filter/search/sort args plus `limit` above) already encodes every input that should invalidate the cache. Folding `fetchPage` itself into the key would defeat TanStack's dedup (a fresh closure every render is never `===` the previous one).
+    // `fetchPage` is a fresh closure supplied by each caller hook (`useAuthUsers`/`useOrganizations`/`useAuthSessions`) and is not part of the cache identity — `queryKey` (built from the caller's own filter/search/sort args plus `limit` above) already encodes every input that should invalidate the cache. Folding `fetchPage` itself into the key would defeat TanStack's dedup (a fresh closure every render is never `===` the previous one).
     const query = useTanStackQuery<AuthPage<T>>({
         enabled,
         // Keep the previously-resolved page visible (and `isLoading: false`)
