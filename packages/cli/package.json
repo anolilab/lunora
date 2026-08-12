@@ -85,6 +85,7 @@
         "@visulima/path": "catalog:cli",
         "@visulima/spinner": "catalog:cli",
         "@visulima/tui": "catalog:cli",
+        "@visulima/tui-kit": "catalog:cli",
         "adm-zip": "catalog:prod",
         "cfonts": "catalog:cli",
         "csv-parse": "catalog:prod",
