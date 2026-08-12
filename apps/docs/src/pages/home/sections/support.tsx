@@ -52,7 +52,7 @@ const SupportSection: FC = () => (
                 </div>
             </SectionHeader>
 
-            <HairlineGrid columns={3}>
+            <HairlineGrid className="border border-hairline lg:border-x-0" columns={3}>
                 {paths.map((path, index) => (
                     <a
                         className="group flex flex-col gap-5 bg-canvas p-6 transition-colors hover:bg-hairline"

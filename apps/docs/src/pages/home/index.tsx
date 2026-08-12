@@ -14,6 +14,7 @@ import schemaImg from "@/assets/studio/schema.png";
 import timeTravelImg from "@/assets/studio/time-travel.png";
 import AgentPanel from "@/components/sections/agent-panel";
 import CodeView from "@/components/sections/code-view";
+import HatchSpacer from "@/components/sections/hatch-spacer";
 import Reveal from "@/components/sections/reveal";
 import { Action } from "@/kit/action";
 import { GridCell, HairlineGrid } from "@/kit/grid";
@@ -123,8 +124,19 @@ const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature,
     );
 
 const Home: FC = () => (
-    <div className="bg-canvas" data-theme="dark">
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+        {/* Vertical guide lines at the container edges, running the whole page.
+            Sections meet them exactly (Shell drops its padding at `lg`), so a
+            full-width grid inside one drops its own side borders there rather
+            than drawing a second line on top. */}
+        <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-shell -translate-x-1/2 border-x border-hairline lg:block"
+        />
+
         <Hero />
+
+        <HatchSpacer />
 
         <Section id="features">
             <Shell>
@@ -132,7 +144,7 @@ const Home: FC = () => (
                     <p className="text-body text-ink-muted">Realtime, storage, types, and a studio — with no glue code between them.</p>
                 </SectionHeader>
 
-                <HairlineGrid className="border border-hairline" columns={3}>
+                <HairlineGrid className="border border-hairline lg:border-x-0" columns={3}>
                     {features.map((feature, index) => (
                         <GridCell
                             blurb={feature.blurb}
@@ -148,6 +160,8 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <HatchSpacer />
+
         <Section id="playground" tone="deep">
             <Shell>
                 <SectionHeader index="02" label="Playground" title="Copy, paste, ship.">
@@ -161,6 +175,8 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <HatchSpacer />
+
         <Section id="how-it-works">
             <Shell>
                 <SectionHeader index="03" label="How it works" title="Define. Write. Ship.">
@@ -170,9 +186,15 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <HatchSpacer />
+
         <Studio />
 
+        <HatchSpacer />
+
         <Capabilities />
+
+        <HatchSpacer />
 
         <Section id="docs">
             <Shell>
@@ -196,9 +218,15 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
+        <HatchSpacer />
+
         <CompareBand />
 
+        <HatchSpacer />
+
         <Faq />
+
+        <HatchSpacer />
 
         <SupportSection />
 

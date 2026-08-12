@@ -9,7 +9,7 @@ import dataImg from "@/assets/studio/dark/data.png";
 import schemaImg from "@/assets/studio/dark/schema.png";
 import sqlImg from "@/assets/studio/dark/sql-editor.png";
 import timeTravelImg from "@/assets/studio/dark/time-travel.png";
-import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
+import { Section, SectionHeader, Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -83,11 +83,11 @@ const Studio: FC = () => {
                 </SectionHeader>
             </Shell>
 
-            {/* The frame breaks out past the text column. Studio is dense, and a
-                capture of it at the measure of a paragraph is unreadable; wider
-                than the text but still contained reads as deliberate, where the
-                full viewport read as an asset someone forgot to place. */}
-            <div className="relative mx-auto w-full max-w-[80rem] px-gutter">
+            {/* The frame spans the container, meeting the page's vertical guide
+                lines. Studio is dense and unreadable at the measure of a
+                paragraph; the full viewport was the problem being fixed, and
+                breaking past the guide lines reads as a mistake now they exist. */}
+            <div className="relative mx-auto w-full max-w-shell px-5 lg:px-0">
                 {/* Depth without a shadow: the field the header uses, dimmed and
                     sitting behind the frame so it lifts off the canvas. */}
                 <div
@@ -147,9 +147,6 @@ const Studio: FC = () => {
                                 );
                             })}
                         </div>
-                        <span className="hidden shrink-0 items-center border-l border-hairline px-5 lg:flex">
-                            <Kicker size="micro">lunora studio · local</Kicker>
-                        </span>
                     </div>
 
                     {/* A fixed aspect rather than a max height: the source is 16:10,
