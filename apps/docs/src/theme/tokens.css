@@ -153,8 +153,8 @@
        `section-gap` is the padding ONE section applies to each of its edges,
        so the space between two stacked sections is twice this. Sized so that
        sum lands at ~130–150px, not the ~300px a full-gap reading would give. */
-    --site-gutter: clamp(1.25rem, 1rem + 1vw, 2rem);
-    --site-section-gap: clamp(2.5rem, 1.75rem + 3vw, 4.5rem);
+    --site-gutter: 1.25rem;
+    --site-section-gap: 6rem;
     --site-col-gap: clamp(1rem, 0.3rem + 1.7vw, 2.5rem);
     /* 72rem matches `max-w-6xl`, the width the rest of the site and the navbar
        already use. Sections wider than the bar they sit under read as

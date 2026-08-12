@@ -17,6 +17,10 @@ import { cn } from "@/lib/utils";
  * Capped, gutter-padded container. Every band's content sits in one of these,
  * including the navbar, so the bar and the sections under it share one edge.
  *
+ * Padding falls away at `lg`, where content meets the page's vertical guide
+ * lines exactly. A full-width grid inside a Shell therefore drops its own side
+ * borders at `lg` (`lg:border-x-0`) or it doubles those lines.
+ *
  * A grid that needs edge-to-edge dividers goes *inside* a Shell rather than
  * being one: put the padding on the Shell and the grid within it, or the outer
  * cells sit inside the padding while the grid's own border sits outside it and
@@ -24,7 +28,7 @@ import { cn } from "@/lib/utils";
  */
 const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...rest }) => (
     // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding native div attributes
-    <div className={cn("mx-auto w-full max-w-shell px-gutter", className)} {...rest}>
+    <div className={cn("mx-auto w-full max-w-shell px-5 lg:px-0", className)} {...rest}>
         {children}
     </div>
 );

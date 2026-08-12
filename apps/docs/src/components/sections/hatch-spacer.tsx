@@ -7,7 +7,7 @@ import type { FC } from "react";
 const HatchSpacer: FC = () => (
     <div
         aria-hidden="true"
-        className="h-16 w-full border-t border-white/[0.08] bg-[#0e0e11]"
+        className="h-16 w-full border-t border-hairline bg-canvas"
         style={{ backgroundImage: "repeating-linear-gradient(135deg, rgba(46,48,56,0.45) 0 1px, rgba(0,0,0,0) 1px 8px)" }}
     />
 );
