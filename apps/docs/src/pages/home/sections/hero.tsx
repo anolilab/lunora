@@ -1,5 +1,6 @@
 "use client";
 
+import { Link } from "@tanstack/react-router";
 import { Check, ChevronRight, Copy, MoveRight } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
@@ -86,7 +87,10 @@ const Hero: FC = () => (
                 <img
                     alt="Lunora Studio, browsing the schema of a live edge database"
                     className="absolute inset-y-0 left-0 h-full max-w-none object-cover object-left-top lg:w-[64rem]"
+                    fetchPriority="high"
+                    height={1760}
                     src={schemaImg}
+                    width={2880}
                 />
             }
         >
@@ -113,13 +117,13 @@ const Hero: FC = () => (
                     the pair reads as a single control strip and lines up with
                     the install field beneath it. */}
                 <div className="mt-8 grid grid-cols-1 border border-hairline sm:grid-cols-2">
-                    <a
+                    <Link
                         className="group flex items-center justify-between gap-3 bg-emphasis px-5 py-4 font-mono text-kicker text-on-emphasis uppercase transition-opacity hover:opacity-90"
-                        href={siteConfig.cta.primary.to}
+                        to={siteConfig.cta.primary.to}
                     >
                         {siteConfig.cta.primary.label}
                         <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-                    </a>
+                    </Link>
                     <a
                         className="group flex items-center justify-between gap-3 border-t border-hairline px-5 py-4 font-mono text-kicker text-ink uppercase transition-colors hover:bg-hairline sm:border-t-0 sm:border-l"
                         href={siteConfig.cta.secondary.href}

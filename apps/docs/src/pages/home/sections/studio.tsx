@@ -167,9 +167,11 @@ const Studio: FC = () => {
                             alt={`Lunora Studio — ${VIEWS[active].label}`}
                             animate={{ scale: 1 }}
                             className="size-full object-cover object-top"
+                            height={1760}
                             initial={reduceMotion ? false : { scale: 1.015 }}
                             src={VIEWS[active].image}
                             transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+                            width={2880}
                         />
                     </motion.div>
                 </div>
