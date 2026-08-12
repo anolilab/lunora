@@ -3,8 +3,8 @@ import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiVite from "@icons-pack/react-simple-icons/icons/SiVite.mjs";
 import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
-import { ArrowRight } from "lucide-react";
-import type { ComponentType, FC } from "react";
+import { ArrowRight, Boxes, Gauge, LayoutDashboard, Terminal } from "lucide-react";
+import type { ComponentType, FC, ReactNode } from "react";
 
 import AnalogLogo from "@/assets/frameworks/analog.svg?react";
 import AstroLogo from "@/assets/frameworks/astro.svg?react";
@@ -18,6 +18,7 @@ import Reveal from "@/components/sections/reveal";
 import { Action } from "@/kit/action";
 import { GridCell, HairlineGrid } from "@/kit/grid";
 import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
+import { LinkRow, LinkRowList } from "@/kit/link-row";
 import { cn } from "@/lib/utils";
 import Capabilities from "@/pages/home/sections/capabilities";
 import CompareBand from "@/pages/home/sections/compare-band";
@@ -102,6 +103,13 @@ const runtimes: { brand?: boolean; Icon: ComponentType<{ className?: string; col
     { brand: true, Icon: SiVite, name: "Vite", to: "/docs/frameworks/vite" },
 ];
 
+const TOOLS: { href?: string; icon: ReactNode; subtitle: string; title: string; to?: string }[] = [
+    { icon: <LayoutDashboard />, subtitle: "Schema, data, SQL, logs, and time-travel.", title: "Studio", to: "/studio" },
+    { icon: <Terminal />, subtitle: "Scaffold, migrate, seed, deploy, and inspect.", title: "CLI", to: "/packages/cli" },
+    { icon: <Gauge />, subtitle: "Schema and query lints that catch problems early.", title: "Advisor", to: "/packages/advisor" },
+    { icon: <Boxes />, subtitle: "Expose a deployment to your AI agents.", title: "MCP server", to: "/packages/mcp" },
+];
+
 const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature, highlight = false }) =>
     feature.image ? (
         <img alt={`${feature.title} — Lunora Studio`} className="block h-48 w-full object-cover object-left-top" loading="lazy" src={feature.image} />
@@ -161,25 +169,25 @@ const Home: FC = () => (
 
         <Capabilities />
 
-        <Section id="runtimes">
+        <Section id="docs">
             <Shell>
-                <SectionHeader index="05" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime">
-                    <p className="text-body text-ink-muted">One backend, every frontend — live adapters powered by a Vite-first dev experience.</p>
+                <SectionHeader action={{ label: "Browse all docs", to: "/docs" }} index="05" label="Documentation" title="Choose your runtime">
+                    <p className="text-body text-ink-muted">Start with the adapter built for your project.</p>
                 </SectionHeader>
 
-                <HairlineGrid columns={3}>
-                    {runtimes.map(({ brand, Icon, name, to }) => (
-                        <GridCell className="justify-center" key={name}>
-                            <Action className="h-auto w-full justify-between px-0 hover:bg-transparent" to={to} variant="ghost">
-                                <span className="flex items-center gap-3">
-                                    <Icon aria-hidden="true" className="size-6" color={brand ? "default" : undefined} />
-                                    <span className="text-h3 font-bold tracking-tight text-ink normal-case">{name}</span>
-                                </span>
-                                <ArrowRight className="size-4" />
-                            </Action>
-                        </GridCell>
+                <LinkRowList columns={4} layout="row">
+                    {runtimes.slice(0, 4).map(({ brand, Icon, name, to }) => (
+                        <LinkRow icon={<Icon aria-hidden="true" color={brand ? "default" : undefined} />} key={name} title={name} to={to} />
                     ))}
-                </HairlineGrid>
+                </LinkRowList>
+
+                <h3 className="mt-[clamp(2.5rem,2rem+2vw,4rem)] mb-5 text-h3 font-bold text-ink">Developer tools</h3>
+
+                <LinkRowList>
+                    {TOOLS.map((tool) => (
+                        <LinkRow href={tool.href} icon={tool.icon} key={tool.title} subtitle={tool.subtitle} title={tool.title} to={tool.to} />
+                    ))}
+                </LinkRowList>
             </Shell>
         </Section>
 
