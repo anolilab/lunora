@@ -1,3 +1,5 @@
+## @lunora/notify [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fnotify%401.0.0-alpha.19...%40lunora%2Fnotify%401.0.0-alpha.20) (2026-08-12)
+
 ## @lunora/notify [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fnotify%401.0.0-alpha.18...%40lunora%2Fnotify%401.0.0-alpha.19) (2026-08-11)
 
 
