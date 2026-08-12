@@ -117,7 +117,7 @@ const Capabilities: FC = () => (
                         <ul className="flex flex-col gap-2">
                             {cap.features.map((feature) => (
                                 <li className="flex items-center gap-2.5 text-blurb text-ink-muted" key={feature}>
-                                    <Check aria-hidden="true" className="size-3.5 shrink-0 text-accent-2" />
+                                    <Check aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
                                     {feature}
                                 </li>
                             ))}

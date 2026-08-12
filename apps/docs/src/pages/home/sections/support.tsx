@@ -21,19 +21,19 @@ const paths: { desc: string; href: string; icon: ReactNode; title: string }[] = 
     {
         desc: "Fork the repo, make your change, and open a PR — we review every contribution.",
         href: "https://github.com/anolilab/lunora",
-        icon: <GitPullRequest className="size-5 text-accent-2" />,
+        icon: <GitPullRequest className="size-5 text-ink-muted" />,
         title: "Submit a pull request",
     },
     {
         desc: "New to open source? These are a good place to start.",
         href: GOOD_FIRST_ISSUES_URL,
-        icon: <CircleDot className="size-5 text-positive" />,
+        icon: <CircleDot className="size-5 text-ink-muted" />,
         title: "Good first issues",
     },
     {
         desc: "Ask questions, share ideas, and help shape the roadmap.",
         href: "https://github.com/anolilab/lunora/discussions",
-        icon: <MessagesSquare className="size-5 text-accent" />,
+        icon: <MessagesSquare className="size-5 text-ink-muted" />,
         title: "Join the discussion",
     },
 ];

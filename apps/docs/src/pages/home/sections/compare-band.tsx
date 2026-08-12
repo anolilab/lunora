@@ -27,11 +27,20 @@ const CRITERIA = [
 
 const RIVALS = ["convex", "supabase", "firebase"] as const;
 
-const TONE_ICON: Record<string, ReactNode> = {
-    neutral: <Minus className="size-3.5 text-ink-faint" />,
-    no: <X className="size-3.5 text-ink-faint" />,
-    warn: <Minus className="size-3.5 text-ink-faint" />,
-    yes: <Check className="size-3.5 text-accent" />,
+/**
+ * Accent marks the subject column only. Colouring every vendor's "yes" the
+ * same turned the table into a field of cyan and buried whose column it is.
+ */
+const icon = (tone: string | undefined, subject: boolean): ReactNode => {
+    if (tone === "yes") {
+        return <Check className={cn("size-3.5", subject ? "text-accent" : "text-ink-muted")} />;
+    }
+
+    if (tone === "no") {
+        return <X className="size-3.5 text-ink-faint" />;
+    }
+
+    return <Minus className="size-3.5 text-ink-faint" />;
 };
 
 const CompareBand: FC = () => {
@@ -81,7 +90,7 @@ const CompareBand: FC = () => {
                                         </th>
                                         <td className="py-4 pr-6">
                                             <span className="flex items-center gap-2 text-blurb text-ink">
-                                                {TONE_ICON[lunora?.tone ?? "neutral"]}
+                                                {icon(lunora?.tone, true)}
                                                 {lunora?.label}
                                             </span>
                                         </td>
@@ -96,7 +105,7 @@ const CompareBand: FC = () => {
                                                             cell?.tone === "yes" ? "text-ink-muted" : "text-ink-faint",
                                                         )}
                                                     >
-                                                        {TONE_ICON[cell?.tone ?? "neutral"]}
+                                                        {icon(cell?.tone, false)}
                                                         {cell?.label}
                                                     </span>
                                                 </td>
