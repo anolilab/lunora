@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { MoveRight } from "lucide-react";
 import type { ComponentPropsWithoutRef, FC, ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
@@ -83,10 +85,17 @@ const Kicker: FC<{
  * right-aligned aside, used on index pages where the section needs a pointer
  * ("Start with the adapter built for your project") more than a lead.
  *
+ * `action` puts a link in the right column instead of a note: use it when the
+ * section is a sample of something larger and the reader should be able to
+ * reach the whole of it ("Browse all docs"). A section that is complete in
+ * itself takes a note, or neither.
+ *
  * `index` is a string ("01") rather than a number so the caller controls
  * zero-padding; auto-numbering would couple the header to its page order.
  */
 const SectionHeader: FC<{
+    /** Trailing link to the fuller version of what this section samples. */
+    action?: { label: string; to: string };
     children?: ReactNode;
     className?: string;
     index?: string;
@@ -94,7 +103,7 @@ const SectionHeader: FC<{
     label?: string;
     note?: ReactNode;
     title: ReactNode;
-}> = ({ children, className, index, label, note, title }) => (
+}> = ({ action, children, className, index, label, note, title }) => (
     <header className={cn("mb-[clamp(2.5rem,1.5rem+3vw,4.5rem)] grid grid-cols-1 gap-x-col-gap gap-y-5 md:grid-cols-12", className)}>
         {index || label ? (
             <div className="flex flex-col gap-1.5 md:col-span-2">
@@ -106,7 +115,20 @@ const SectionHeader: FC<{
             <h2 className="text-h2 font-bold text-balance text-ink">{title}</h2>
             {children}
         </div>
-        {note ? <p className="text-body text-ink-muted md:col-span-4 md:self-end md:text-right">{note}</p> : null}
+        {note || action ? (
+            <div className="flex flex-col items-start gap-3 md:col-span-4 md:items-end md:self-end">
+                {note ? <p className="text-body text-ink-muted md:text-right">{note}</p> : null}
+                {action ? (
+                    <Link
+                        className="group inline-flex items-center gap-2 font-mono text-kicker uppercase text-ink transition-colors hover:text-accent"
+                        to={action.to}
+                    >
+                        {action.label}
+                        <MoveRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+                    </Link>
+                ) : null}
+            </div>
+        ) : null}
     </header>
 );
 
