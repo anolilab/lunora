@@ -109,7 +109,7 @@ const Hero: FC = () => (
 
         <PlatformStrip />
 
-        <Shell className="mt-[clamp(2.5rem,1.5rem+4vw,5rem)]">
+        <Shell>
             <RuleGrid items={PROMISES} />
         </Shell>
     </>
