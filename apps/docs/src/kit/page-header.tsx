@@ -42,19 +42,19 @@ const PageHeader: FC<{
     // the top scrim below guarantees contrast instead, whatever the hue.
     <header className={cn("relative", className)} data-nav-theme="dark">
         <div className={cn("relative overflow-hidden bg-canvas-deep", SIZE[size].field)}>
-            {/* Saturated colour blocks. Stops land early so the field reads as
-                graphic colour rather than a soft blur. */}
+            {/* One brand colour with depth, not three in equal measure.
+                Violet carries the field (it is the primary glow in the brand);
+                cyan and rose are secondary blooms at the edges that give it
+                dimension without turning it into a rainbow. An even three-way
+                split reads as a stock mesh gradient and belongs to no brand. */}
             <div
                 aria-hidden="true"
                 className="absolute inset-0"
                 style={{
                     background: [
-                        "radial-gradient(58% 70% at 10% 22%, var(--site-accent) 0%, transparent 46%)",
-                        "radial-gradient(55% 65% at 44% 4%, var(--site-accent-2) 0%, transparent 44%)",
-                        "radial-gradient(62% 78% at 86% 34%, var(--site-accent-3) 0%, transparent 46%)",
-                        "radial-gradient(52% 62% at 66% 74%, var(--site-accent-2) 0%, transparent 44%)",
-                        "radial-gradient(48% 60% at 24% 82%, var(--site-accent) 0%, transparent 44%)",
-                        "linear-gradient(115deg, var(--site-accent) 0%, var(--site-accent-2) 48%, var(--site-accent-3) 100%)",
+                        "radial-gradient(46% 58% at 14% 26%, var(--site-accent) 0%, transparent 40%)",
+                        "radial-gradient(50% 60% at 84% 70%, var(--site-accent-3) 0%, transparent 40%)",
+                        "linear-gradient(125deg, var(--site-accent-2) 0%, var(--site-accent-2) 42%, color-mix(in oklch, var(--site-accent-2) 78%, var(--site-accent-3)) 100%)",
                     ].join(", "),
                 }}
             />

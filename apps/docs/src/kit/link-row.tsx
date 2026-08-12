@@ -25,15 +25,15 @@ const LinkRow: FC<{
 
     const body = (
         <>
-            {icon ? <span className="flex size-9 shrink-0 items-center justify-center bg-surface-raised text-accent [&_svg]:size-4">{icon}</span> : null}
+            {icon ? <span className="flex size-9 shrink-0 items-center justify-center bg-surface-raised text-ink-muted [&_svg]:size-4">{icon}</span> : null}
             <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="truncate text-body font-medium text-ink">{title}</span>
                 {subtitle ? <span className="truncate text-blurb text-ink-muted">{subtitle}</span> : null}
             </span>
             {external ? (
-                <ArrowUpRight className="ml-auto size-4 shrink-0 text-ink-faint transition-colors group-hover:text-accent" />
+                <ArrowUpRight className="ml-auto size-4 shrink-0 text-ink-faint transition-colors group-hover:text-ink" />
             ) : (
-                <ArrowRight className="ml-auto size-4 shrink-0 text-ink-faint transition-all group-hover:translate-x-0.5 group-hover:text-accent" />
+                <ArrowRight className="ml-auto size-4 shrink-0 text-ink-faint transition-all group-hover:translate-x-0.5 group-hover:text-ink" />
             )}
         </>
     );

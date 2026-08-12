@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 const VARIANT: Record<string, string> = {
     ghost: "text-ink-muted hover:bg-hairline hover:text-ink",
     outline: "border border-hairline-strong text-ink hover:border-ink-faint hover:bg-hairline",
-    primary: "bg-accent text-on-accent hover:opacity-90",
+    primary: "bg-emphasis text-on-emphasis hover:opacity-90",
 };
 
 type ActionProps = {

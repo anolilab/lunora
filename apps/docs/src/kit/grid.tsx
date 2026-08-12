@@ -42,7 +42,7 @@ const CellTitle: FC<{ children: ReactNode; highlight: boolean; href?: string; to
                 <ArrowUpRight
                     className={cn(
                         "size-4 shrink-0 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100",
-                        highlight ? "text-on-accent" : "text-accent",
+                        highlight ? "text-on-accent" : "text-ink",
                     )}
                 />
             ) : null}
