@@ -149,6 +149,11 @@
         "displayName": "Cloudflare Host",
         "features": ["Durable Object shard host", "Hibernated socket host", "Jurisdiction pinning"]
     },
+    "platform-node": {
+        "description": "The Node host: the platform contracts over better-sqlite3 and an in-process socket registry.",
+        "displayName": "Node Host",
+        "features": ["Durable shard, alarm & socket state", ".global() tables, workflows, fs-backed R2", "Experimental dev/test target"]
+    },
     "queue": {
         "displayName": "Queue",
         "description": "Cloudflare Queues: defineQueue producers + a generated queue() push consumer (or HTTP pull).",

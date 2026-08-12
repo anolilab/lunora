@@ -137,15 +137,15 @@
         "better-sqlite3": "catalog:tooling",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
-        "kysely": "^0.28.17",
+        "kysely": "catalog:sql",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
-        "@better-auth/core": "catalog:auth",
-        "@better-auth/sso": "catalog:auth",
-        "better-auth": "catalog:auth"
+        "@better-auth/core": ">=1.7.0-rc.2 <2.0.0-0",
+        "@better-auth/sso": ">=1.7.0-rc.2 <2.0.0-0",
+        "better-auth": ">=1.7.0-rc.2 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@better-auth/sso": {

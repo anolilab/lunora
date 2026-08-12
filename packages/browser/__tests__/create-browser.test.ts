@@ -19,9 +19,11 @@ afterEach(() => {
 });
 /* eslint-enable vitest/require-top-level-describe */
 
-// `fetch` is required on the marker type (it excludes a bare `{}`); a no-op is
-// fine because the fake `launch` chain never touches the binding.
-const binding: BrowserBindingLike = { fetch: () => undefined };
+// `fetch` is required on the marker type (it excludes a bare `{}`) and is typed
+// as the real `Fetcher.fetch` so the projections stay assignable from
+// `@cloudflare/playwright` (see __tests__/playwright-projection.test-d.ts). The
+// fake `launch` chain never calls it, so the body only has to satisfy the shape.
+const binding: BrowserBindingLike = { fetch: async () => new Response() };
 
 /**
  * A fake `@cloudflare/playwright` `launch` chain (browser → context → page) that

@@ -136,21 +136,33 @@ const ProbeTile = ({ label, level, testId, value }: { label: string; level: Leve
  */
 export const DeploymentHealthPanel = ({ probe }: DeploymentHealthPanelProps): ReactElement => {
     const t = useT();
+    const client = useLunora();
     const defaultProbe = useDefaultProbe();
     const runProbe = probe ?? defaultProbe;
 
     // Fetch both probes through the query cache — no manual effect + setState
     // (which trips react-doctor's set-state-in-effect / stale-deps), and React
     // Query handles unmount so there's no `mountedRef`. `runProbe` is closed into
-    // `queryFn`; the stable key means an injected test `probe` runs exactly once.
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `runProbe` is a stable injected/compiler-memoized fetcher, not a data input; keying the query on a function would be an anti-pattern (and would refetch on every render)
+    // `queryFn` rather than keyed on: a function is not query data, and a fresh
+    // closure per render would refetch every render.
+    //
+    // The credentials it closes over ARE data, though, so they go in the key.
+    // `defaultProbe` reads `client.url` / `client.getAuthToken()`, and the studio
+    // shell rebuilds the `LunoraClient` whenever the admin token changes
+    // (`useMemo` on the debounced token in app.tsx) WITHOUT remounting —
+    // `LunoraProvider` builds its `QueryClient` once per mount via `useState`, so
+    // the cache survives the swap. On a bare `["deployment-health"]` key that
+    // meant typing a correct token into a panel showing the 403 "missing admin
+    // token" state kept serving the cached 403 forever. `clientIdentifier()` is a
+    // stable, non-secret per-instance id, so a rebuilt client re-keys and refetches
+    // while a stable one (every test, and the steady state) still fetches once.
     const { data, isPending } = useQuery({
         queryFn: async (): Promise<{ live: ProbeSnapshot; ready: ProbeSnapshot }> => {
             const [liveResult, readyResult] = await Promise.all([runProbe("live"), runProbe("ready")]);
 
             return { live: liveResult, ready: readyResult };
         },
-        queryKey: ["deployment-health"],
+        queryKey: ["deployment-health", client.clientIdentifier()],
     });
 
     const live = data?.live ?? null;

@@ -47,6 +47,25 @@ package_json_lintable:
     - "**/package.json"
     - "package.json"
 
+# `check-catalog-drift` + `check-peer-catalog-refs` read every workspace manifest
+# and the catalogs they reference, so a `pnpm-workspace.yaml` edit matters as much
+# as a package.json one.
+dependency_manifests:
+    - "**/package.json"
+    - "package.json"
+    - "pnpm-workspace.yaml"
+    - "scripts/check-catalog-drift.js"
+    - "scripts/check-peer-catalog-refs.js"
+
+# Files a generator owns are regenerated and diffed. The generators read package
+# manifests and project metadata, so any of those can stale a committed output.
+generated_files:
+    - "**/package.json"
+    - "**/project.json"
+    - "apps/docs/src/data/packages-metadata.json"
+    - "apps/docs/scripts/generate-*.js"
+    - "scripts/generate-*.js"
+
 yaml_lintable:
     - "**/*.yml"
     - "**/*.yaml"

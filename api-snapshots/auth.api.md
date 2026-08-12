@@ -1527,56 +1527,11 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 ### `OIDCConfig` (interface)
 
-```ts
-interface OIDCConfig {
-    issuer: string;
-    pkce: boolean;
-    clientId: string;
-    clientSecret?: string;
-    authorizationEndpoint?: string | undefined;
-    discoveryEndpoint: string;
-    userInfoEndpoint?: string | undefined;
-    scopes?: string[] | undefined;
-    overrideUserInfo?: boolean | undefined;
-    tokenEndpoint?: string | undefined;
-    tokenEndpointAuthentication?: ("client_secret_post" | "client_secret_basic" | "private_key_jwt") | undefined;
-    privateKeyId?: string | undefined;
-    privateKeyAlgorithm?: string | undefined;
-    jwksEndpoint?: string | undefined;
-    mapping?: OIDCMapping | undefined;
-    allowIdpInitiated?: boolean | undefined;
-}
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `sso` (function)
 
-```ts
-function sso<O extends SSOOptions & {
-    domainVerification?: {
-        enabled: true;
-    };
-}>(options?: O | undefined): {
-    id: "sso";
-    version: string;
-    endpoints: SSOEndpoints<O> & DomainVerificationEndpoints;
-    schema: SSOProviderSchema<O>;
-    $Infer: {
-        SSOProvider: InferSSOProvider<O>;
-    };
-    options: NoInfer<O>;
-};
-
-function sso<O extends SSOOptions>(options?: O | undefined): {
-    id: "sso";
-    version: string;
-    endpoints: SSOEndpoints<O>;
-    schema: SSOProviderSchema<O>;
-    $Infer: {
-        SSOProvider: InferSSOProvider<O>;
-    };
-    options: NoInfer<O>;
-};
-```
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/auth/plugins/enterprise/client`
 
@@ -1586,7 +1541,7 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ### `ssoClient` (const)
 
-Re-exported from `@better-auth/sso` — signature tracked at its source.
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ## `@lunora/auth/schema`
 

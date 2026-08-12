@@ -45,7 +45,7 @@ export const lunoraQueryOptions = <F extends FunctionReference>(
 ): LunoraQueryOptions<F> => {
     const argsRecord = (args ?? {}) as Record<string, unknown>;
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- not a React hook: this is a plain options factory and the queryKey intentionally excludes the non-serializable, caller-stable client (a client object in the key would break cache identity).
+    // Not a React hook: this is a plain options factory and the queryKey intentionally excludes the non-serializable, caller-stable client (a client object in the key would break cache identity).
     return {
         queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey: options.shardKey }),
         queryKey: lunoraQueryKey(function_, argsRecord, options.shardKey),

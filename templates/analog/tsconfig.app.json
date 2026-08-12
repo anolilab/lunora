@@ -14,10 +14,13 @@
         "noEmit": false,
         "outDir": "./dist/out-tsc",
         "target": "ES2022",
-        // Angular's AOT compiler supplies its own ambient types; the root config's
-        // `@cloudflare/workers-types` belongs to the `lunora/` worker code, not to
-        // the browser bundle.
-        "types": [],
+        // Angular's AOT compiler supplies its own ambient types, and the root
+        // config's `@cloudflare/workers-types` belongs to the `lunora/` worker code
+        // rather than the browser bundle — so the root list is replaced, not
+        // extended. `vite/client` stays: `src/main.server.ts` reads
+        // `import.meta.env.PROD`, and without it the Angular compile fails with
+        // "Property 'env' does not exist on type 'ImportMeta'".
+        "types": ["vite/client"],
         // Required by Angular's DI: `useDefineForClassFields: true` turns
         // constructor-injected fields into `defineProperty` writes that clobber
         // the values Angular assigns.

@@ -16,6 +16,8 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format, resolveConfig } from "prettier";
+
 import { CATEGORY_COLORS, CATEGORY_TITLES, categorySlugForPackageDir, categoryTitleForSlug, humanizeSlug } from "./package-categories.js";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -228,7 +230,14 @@ addExternalPackages(packages);
 const sorted = sortPackages(packages);
 
 const outputPath = join(webRoot, "src", "data", "packages.ts");
-writeFileSync(outputPath, generateTypeScript(sorted));
+
+// Format before writing. This script emits raw `JSON.stringify` output and runs
+// as the first step of `apps/docs`'s `build`, so without this every build
+// rewrote the committed file with unformatted source — dirtying the working tree
+// and failing `lint:prettier` on a file nobody had edited.
+const prettierConfig = await resolveConfig(outputPath);
+
+writeFileSync(outputPath, await format(generateTypeScript(sorted), { ...prettierConfig, filepath: outputPath }));
 
 console.log(`Generated ${outputPath} with ${sorted.length} packages`);
 

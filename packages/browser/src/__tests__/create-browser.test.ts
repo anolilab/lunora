@@ -4,9 +4,13 @@ import { stubDohFetch } from "../../__tests__/_helpers/stub-doh";
 import { createBrowser } from "../create-browser";
 import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
 
-/** A throwaway binding marker — the helpers never touch it directly; Playwright consumes it. */
+/**
+ * A throwaway binding marker — the helpers never touch it directly; Playwright
+ * consumes it. `fetch` is typed as the real `Fetcher.fetch`, so the double has to
+ * return a `Response`; it is never invoked.
+ */
 const fakeBinding = (): BrowserBindingLike => {
-    return { fetch: () => undefined };
+    return { fetch: async () => new Response() };
 };
 
 interface PageSpy extends PageLike {

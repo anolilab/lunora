@@ -64,6 +64,11 @@
             - "name": "Clear CLA comment"
               "if": "success()"
               "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
+              # Clearing a stale comment on an already-passing check must never be
+              # able to fail it — an unreachable comment API would otherwise turn a
+              # green CLA check red. (The failure-path comment above needs no such
+              # guard: `check_cla` has already failed the job by then.)
+              "continue-on-error": true
               "with":
                   "header": "cla-check"
                   "message": |

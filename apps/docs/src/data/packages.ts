@@ -155,6 +155,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Platform Hosts"]!,
         category: "Platform Hosts",
+        description: "The Node host: the platform contracts over better-sqlite3 and an in-process socket registry.",
+        docsPath: "/docs/packages/platform-node",
+        features: ["Durable shard, alarm & socket state", ".global() tables, workflows, fs-backed R2", "Experimental dev/test target"],
+        name: "Node Host",
+        npmName: "@lunora/platform-node",
+        slug: "platform-node",
+    },
+    {
+        accentColor: categoryColors["Platform Hosts"]!,
+        category: "Platform Hosts",
         description: "Provider-neutral host contracts every Lunora deployment target implements.",
         docsPath: "/docs/packages/platform",
         features: ["ShardHost / SocketHost contracts", "Capability matrix", "Conformance TCK"],

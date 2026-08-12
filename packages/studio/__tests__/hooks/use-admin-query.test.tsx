@@ -238,4 +238,75 @@ describe("useAdminQuery", () => {
             expect(result.current.liveError).toBeUndefined();
         });
     });
+
+    it("a live push lands in the cache entry the read renders from", async () => {
+        expect.hasAssertions();
+
+        // Guards the seam in `clientScopedKey`: the read subscribes to the
+        // client-scoped key while the subscription writes with
+        // `queryClient.setQueryData`. Scope one and not the other and pushes land
+        // in an entry nothing renders — live mode goes quiet with no error.
+        const mock = createMockClient({
+            query: () => {
+                return { tick: 0 };
+            },
+        });
+        const { result } = renderHook(() => useAdminQuery<{ tick: number }>("watchThing", {}, { live: true }), { wrapper: wrapper(mock) });
+
+        await waitFor(() => {
+            expect(result.current.data).toStrictEqual({ tick: 0 });
+        });
+
+        act(() => {
+            mock.emit("watchThing", { tick: 7 });
+        });
+
+        await waitFor(() => {
+            expect(result.current.data).toStrictEqual({ tick: 7 });
+        });
+    });
+
+    it("does not serve a previous client's result after the admin token is swapped", async () => {
+        expect.hasAssertions();
+
+        // The studio shell rebuilds the LunoraClient on an admin-token change
+        // WITHOUT remounting, and LunoraProvider keeps its QueryClient for the life
+        // of the mount — so an unscoped key served the unauthorized client's result
+        // forever. Reproducing that needs the provider to stay mounted while its
+        // `client` prop changes, so the wrapper reads a mutable binding rather than
+        // closing over one client (renderHook's `rerender` takes hook props, not
+        // new render options, so the wrapper itself cannot be swapped).
+        const stale = createMockClient({
+            query: () => {
+                return { rows: [] };
+            },
+        });
+
+        Object.assign(stale.asClient, { clientIdentifier: () => "client-stale-token" });
+
+        const fresh = createMockClient({
+            query: () => {
+                return { rows: ["now-authorized"] };
+            },
+        });
+
+        Object.assign(fresh.asClient, { clientIdentifier: () => "client-valid-token" });
+
+        let active = stale;
+        const swapWrapper = ({ children }: PropsWithChildren): ReactElement => <LunoraProvider client={active.asClient}>{children}</LunoraProvider>;
+
+        const { rerender, result } = renderHook(() => useAdminQuery<{ rows: string[] }>("listRows", {}), { wrapper: swapWrapper });
+
+        await waitFor(() => {
+            expect(result.current.data).toStrictEqual({ rows: [] });
+        });
+
+        // The operator types a valid token: same mounted tree, new client instance.
+        active = fresh;
+        rerender();
+
+        await waitFor(() => {
+            expect(result.current.data).toStrictEqual({ rows: ["now-authorized"] });
+        });
+    });
 });

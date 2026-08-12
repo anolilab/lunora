@@ -16,6 +16,25 @@ import { operationLog } from "../lib/operation-log";
  */
 const adminQueryKey = (path: string, args: Record<string, unknown>, shardKey: string): QueryKey => ["lunora-admin", path, args, shardKey.trim()];
 
+/**
+ * Append the identity of the client a result was fetched with.
+ *
+ * Every read here fetches THROUGH the client, so the credentials it carries are
+ * a query input and belong in the key. They change at runtime: the studio shell
+ * rebuilds the `LunoraClient` whenever the admin token changes (a `useMemo` on
+ * the debounced token in `app/app.tsx`) and `LunoraProvider` is not keyed, so the
+ * subtree never remounts — while `LunoraProvider` builds its `QueryClient` once
+ * per mount with `useState`, so the cache outlives the swap. Without this, fixing
+ * a bad admin token left every panel serving the results the *previous*,
+ * unauthorized client fetched: 403s and empty tables that only a reload cleared.
+ *
+ * Appended LAST so it never disturbs prefix matching — `useInvalidateAdmin`
+ * deliberately builds the unscoped key, which then matches every client's
+ * entries for that path (invalidating a write's effects regardless of which
+ * client cached them).
+ */
+const clientScopedKey = (queryKey: QueryKey, clientId: string): QueryKey => [...queryKey, clientId];
+
 /** Options for {@link useAdminQuery}. */
 interface UseAdminQueryOptions {
     /**
@@ -143,7 +162,13 @@ const noteQueryFetch = (key: string): void => {
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
 function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
+    const client = useLunora();
     const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
+
+    // Scoped here rather than in each caller's key literal: this is the one place
+    // every studio read passes through, so callers keep writing plain keys
+    // (`["lunora-auth-config"]`) and still get credential-correct caching.
+    const scopedKey = clientScopedKey(queryKey, client.clientIdentifier());
 
     // Outside dev, call the caller's fetch directly — no diagnostic overhead. In
     // dev, wrap it with the request-loop counter. Either way it's a plain
@@ -163,7 +188,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
         enabled,
         queryFn: trackedQueryFunction,
         placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
-        queryKey,
+        queryKey: scopedKey,
         staleTime,
     });
 
@@ -241,7 +266,9 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
             (value) => {
                 operationLog.recordPush(seq);
                 setLiveError(undefined);
-                queryClient.setQueryData(queryKey, value);
+                // Must be the SAME key `useClientQuery` reads from, or pushes land
+                // in a cache entry nothing renders and live mode silently stops.
+                queryClient.setQueryData(clientScopedKey(queryKey, client.clientIdentifier()), value);
             },
             {
                 ...callOptions(shardKey),

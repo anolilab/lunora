@@ -88,20 +88,20 @@
         "@lunora/errors": "1.0.0-alpha.21",
         "@lunora/server": "1.0.0-alpha.72",
         "@lunora/values": "1.0.0-alpha.26",
-        "dinero.js": "2.0.2"
+        "dinero.js": "catalog:payment"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@polar-sh/sdk": "0.49.0",
+        "@polar-sh/sdk": "catalog:payment",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "autumn-js": "1.2.44",
-        "creem": "1.6.0",
-        "dodopayments": "2.43.0",
+        "autumn-js": "catalog:payment",
+        "creem": "catalog:payment",
+        "dodopayments": "catalog:payment",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
-        "stripe": "22.3.2",
+        "stripe": "catalog:payment",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

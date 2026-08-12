@@ -82,7 +82,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@playwright/test": "catalog:e2e"
+        "@playwright/test": "^1.61.1"
     },
     "peerDependenciesMeta": {
         "@playwright/test": {

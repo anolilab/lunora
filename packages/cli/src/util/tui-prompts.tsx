@@ -1,6 +1,7 @@
 /**
  * Rich, keyboard-driven prompts for the CLI's interactive surfaces (init / add),
- * rendered with `@visulima/tui` (an Ink-style React terminal runtime).
+ * rendered with `@visulima/tui` (an Ink-style React terminal runtime) and its
+ * `@visulima/tui-kit` widget set.
  *
  * These mirror the signatures of `@lunora/config`'s readline prompts exactly, so
  * a CLI handler can swap one for the other with no call-site change — the config
@@ -16,15 +17,15 @@ import type { BadgeSpec, MultiSelectOption, SelectOption } from "@lunora/config"
 import { ACCENT, BADGE_COLUMN_WIDTH, badgeLead, badgeWidth, isInteractive, LUNA_ART, LUNA_NAME, LUNA_SIGNOFF, padBadge } from "@lunora/config";
 import { render } from "@visulima/tui";
 import { Box } from "@visulima/tui/components/box";
-import { CommandPalette } from "@visulima/tui/components/command-palette";
-import { ConfirmInput } from "@visulima/tui/components/confirm-input";
-import { SelectInput } from "@visulima/tui/components/select-input";
-import { Spinner } from "@visulima/tui/components/spinner";
 import { Text } from "@visulima/tui/components/text";
-import { TextInput } from "@visulima/tui/components/text-input";
 import { useApp } from "@visulima/tui/hooks/use-app";
 import { useInput } from "@visulima/tui/hooks/use-input";
 import { useInterval } from "@visulima/tui/hooks/use-interval";
+import { CommandPalette } from "@visulima/tui-kit/command-palette";
+import { ConfirmInput } from "@visulima/tui-kit/confirm-input";
+import { SelectInput } from "@visulima/tui-kit/select-input";
+import { Spinner } from "@visulima/tui-kit/spinner";
+import { TextInput } from "@visulima/tui-kit/text-input";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { useEffect, useState } from "react";
 

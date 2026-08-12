@@ -124,4 +124,55 @@ describe("deploymentHealthPanel", () => {
 
         await expect(screen.findByTestId("deployment-health-error")).resolves.toBeDefined();
     });
+
+    it("re-probes when the client is rebuilt, instead of serving the previous client's cached verdict", async () => {
+        expect.assertions(2);
+
+        // The real regression: the studio shell rebuilds the `LunoraClient` on an
+        // admin-token change (`useMemo` on the debounced token) WITHOUT remounting,
+        // and `LunoraProvider` builds its `QueryClient` once per mount — so the
+        // cache outlives the swap. With a bare `["deployment-health"]` key, fixing a
+        // bad token left the panel serving the cached 403 forever. `rerender` (not a
+        // fresh `render`) is what reproduces it: the provider stays mounted, so the
+        // first verdict is still in the cache when the second client arrives.
+        const gated: ProbeSnapshot = { body: null, error: "forbidden", ok: false, status: 403 };
+        const healthy: ProbeSnapshot = {
+            body: {
+                appName: "chat",
+                appVersion: "1.2.3",
+                checks: [{ critical: true, name: "d1", status: "up" }],
+                status: "healthy",
+                timestamp: "2026-07-22T10:00:00.000Z",
+            },
+            ok: true,
+            status: 200,
+        };
+
+        const stale = createMockClient();
+
+        Object.assign(stale.asClient, { clientIdentifier: () => "client-stale-token", getAuthToken: () => "", url: "https://app.example.com" });
+
+        const { rerender } = render(
+            <LunoraProvider client={stale.asClient}>
+                <DeploymentHealthPanel probe={probeWith(gated, gated)} />
+            </LunoraProvider>,
+        );
+
+        await expect(screen.findByTestId("deployment-health-error")).resolves.toBeDefined();
+
+        // The operator types a valid token: a new client instance, same mounted tree.
+        const fresh = createMockClient();
+
+        Object.assign(fresh.asClient, { clientIdentifier: () => "client-valid-token", getAuthToken: () => ADMIN_SECRET, url: "https://app.example.com" });
+
+        rerender(
+            <LunoraProvider client={fresh.asClient}>
+                <DeploymentHealthPanel probe={probeWith(healthy, { body: null, ok: true, status: 200 })} />
+            </LunoraProvider>,
+        );
+
+        const status = await screen.findByTestId("dh-status");
+
+        expect(status.textContent).toBe("Healthy");
+    });
 });
