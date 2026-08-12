@@ -4,33 +4,29 @@ import { Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 
 /**
- * The full-bleed page header: a saturated colour field with a dark panel set
- * into its lower-left, overhanging the field's bottom edge.
+ * The full-bleed page header: a saturated colour field with a dark panel
+ * centred in it, aligned left to the shell gutter.
  *
- * The overhang is the composition — a panel breaking the band's edge is what
- * stops this reading as a banner with a box on it.
+ * The panel sits *inside* the field, vertically centred, with colour reading
+ * above, below and beside it. The field is a fixed height rather than a fluid
+ * one, so the header occupies the same share of the first screen at every
+ * width and the page below always starts at a predictable place.
  *
- * It is built by pulling the panel up into the field with a negative margin
- * while it stays in normal flow, rather than positioning it absolutely over
- * the field. In flow, the panel's own height decides how far it overhangs and
- * everything below is pushed down correctly for free; absolute positioning
- * would need a spacer kept manually in sync with a height that changes with
- * the content and the breakpoint.
+ * An earlier version pulled the panel up with a negative margin so it
+ * overhung the field's bottom edge. That was a misreading: measured across
+ * widths, the panel is simply centred, and the "overhang" was a taller panel
+ * spilling out of a shorter field at one breakpoint. Centring removes the
+ * pull, the spacer, and the class of bug where the two drift apart.
  *
  * The field is CSS gradients, not a canvas: it is a static backdrop on the one
  * view every visitor loads, so a renderer would be bytes spent on nothing.
  */
 
-const SIZE = {
-    // Field height, then how far the panel is pulled up into it. The pull is
-    // half the field so the panel's top edge lands on the field's midline.
-    //
-    // Keep these in step: the header's total height is the field plus whatever
-    // the panel overhangs, so growing the field without growing the pull eats
-    // the first screen. The panel should sit in the lower half of the band with
-    // colour still reading above and beside it, not fill the band.
-    full: { field: "h-[26rem] sm:h-[30rem] lg:h-[36rem]", pull: "-mt-[13rem] sm:-mt-[15rem] lg:-mt-[18rem]" },
-    short: { field: "h-[17rem] sm:h-[20rem] lg:h-[23rem]", pull: "-mt-[8.5rem] sm:-mt-[10rem] lg:-mt-[11.5rem]" },
+// Fixed field heights. The panel centres itself in whichever applies, so there
+// is nothing else to keep in step when these change.
+const FIELD = {
+    full: "h-[30rem] sm:h-[38rem] lg:h-[45rem]",
+    short: "h-[22rem] sm:h-[26rem] lg:h-[30rem]",
 };
 
 const PageHeader: FC<{
@@ -46,7 +42,7 @@ const PageHeader: FC<{
     // that is genuinely light, and the aurora accents sit mid-lightness — so
     // the top scrim below guarantees contrast instead, whatever the hue.
     <header className={cn("relative", className)} data-nav-theme="dark">
-        <div className={cn("relative overflow-hidden bg-canvas-deep", SIZE[size].field)}>
+        <div className={cn("relative overflow-hidden bg-canvas-deep", FIELD[size])}>
             {/* One brand colour with depth, not three in equal measure.
                 Violet carries the field (it is the primary glow in the brand);
                 cyan and rose are secondary blooms at the edges that give it
@@ -88,18 +84,19 @@ const PageHeader: FC<{
                 className="absolute inset-x-0 bottom-0 h-1/4"
                 style={{ background: "linear-gradient(180deg, transparent, var(--site-canvas))" }}
             />
-        </div>
 
-        <Shell className={cn("relative", SIZE[size].pull)}>
-            <div
-                className={cn(
-                    "w-full border border-hairline bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
-                    panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]",
-                )}
-            >
-                {children}
-            </div>
-        </Shell>
+            {/* The panel, centred in the field and aligned to the shell gutter. */}
+            <Shell className="absolute inset-0 flex items-center">
+                <div
+                    className={cn(
+                        "w-full border border-hairline bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
+                        panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]",
+                    )}
+                >
+                    {children}
+                </div>
+            </Shell>
+        </div>
     </header>
 );
 
