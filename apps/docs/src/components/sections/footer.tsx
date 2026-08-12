@@ -44,7 +44,7 @@ const FooterLink: FC<{ link: FooterEntry }> = ({ link }) => {
 
 const Footer: FC = () => (
     <footer className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
-        <Shell className="grid grid-cols-2 border-hairline lg:grid-cols-[1fr_1fr_1fr_1.6fr_auto] lg:border-x">
+        <Shell className="grid grid-cols-2 border-hairline lg:grid-cols-[1fr_1fr_1fr_1.6fr_auto] lg:border-x" flush>
             {siteConfig.footer.columns.map((column) => (
                 <div className="flex flex-col border-b border-hairline lg:border-r lg:border-b-0" key={column.title}>
                     {column.links.map((link) => (

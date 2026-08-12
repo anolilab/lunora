@@ -13,10 +13,17 @@ import { cn } from "@/lib/utils";
  * (they read `--site-gutter` / `--site-section-gap`); the type scale is not.
  */
 
-/** Capped, gutter-padded container. Every band's content sits in one of these. */
-const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...rest }) => (
+/**
+ * Capped, gutter-padded container. Every band's content sits in one of these.
+ *
+ * `flush` drops the gutter for bands whose own cells carry the padding — a
+ * full-bleed hairline grid, for instance. Without it the outer cells sit inside
+ * the gutter while the container's border sits outside it, so their dividers
+ * stop short of the edge they are supposed to meet.
+ */
+const Shell: FC<ComponentPropsWithoutRef<"div"> & { flush?: boolean }> = ({ children, className, flush = false, ...rest }) => (
     // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding native div attributes
-    <div className={cn("mx-auto w-full max-w-shell px-gutter", className)} {...rest}>
+    <div className={cn("mx-auto w-full max-w-shell", !flush && "px-gutter", className)} {...rest}>
         {children}
     </div>
 );
