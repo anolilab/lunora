@@ -86,8 +86,8 @@
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
-        "@ai-sdk/anthropic": "catalog:ai",
-        "@ai-sdk/openai": "catalog:ai"
+        "@ai-sdk/anthropic": "^4.0.0",
+        "@ai-sdk/openai": "^4.0.0"
     },
     "peerDependenciesMeta": {
         "@ai-sdk/anthropic": {
