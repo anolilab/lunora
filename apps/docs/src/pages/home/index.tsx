@@ -24,7 +24,6 @@ import CompareBand from "@/pages/home/sections/compare-band";
 import Faq from "@/pages/home/sections/faq";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
-import PlatformStrip from "@/pages/home/sections/platform-strip";
 import SupportSection from "@/pages/home/sections/support";
 import siteConfig from "~/site.config";
 
@@ -117,7 +116,6 @@ const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature,
 const Home: FC = () => (
     <div className="bg-canvas" data-theme="dark">
         <Hero />
-        <PlatformStrip />
 
         <Section id="features">
             <Shell>

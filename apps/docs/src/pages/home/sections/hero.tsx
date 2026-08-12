@@ -9,6 +9,7 @@ import { RuleGrid } from "@/kit/grid";
 import { Kicker, Shell } from "@/kit/layout";
 import { PageHeader } from "@/kit/page-header";
 import posthog from "@/lib/posthog";
+import PlatformStrip from "@/pages/home/sections/platform-strip";
 import siteConfig from "~/site.config";
 
 /**
@@ -105,6 +106,8 @@ const Hero: FC = () => (
                 <InstallCommand />
             </div>
         </PageHeader>
+
+        <PlatformStrip />
 
         <Shell className="mt-[clamp(2.5rem,1.5rem+4vw,5rem)]">
             <RuleGrid items={PROMISES} />
