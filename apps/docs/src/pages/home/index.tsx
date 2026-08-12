@@ -117,10 +117,10 @@ const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature,
         <img
             alt={`${feature.title} — Lunora Studio`}
             className="block h-48 w-full object-cover object-left-top"
-            height={1760}
+            height={1252}
             loading="lazy"
             src={feature.image}
-            width={2880}
+            width={2048}
         />
     ) : (
         <CodeView

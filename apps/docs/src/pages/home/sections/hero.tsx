@@ -88,9 +88,9 @@ const Hero: FC = () => (
                     alt="Lunora Studio, browsing the schema of a live edge database"
                     className="absolute inset-y-0 left-0 h-full max-w-none object-cover object-left-top lg:w-[64rem]"
                     fetchPriority="high"
-                    height={1760}
+                    height={1252}
                     src={schemaImg}
-                    width={2880}
+                    width={2048}
                 />
             }
         >
