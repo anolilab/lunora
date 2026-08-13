@@ -50,6 +50,6 @@ describe(filterTraces, () => {
     it("keeps only matching traces, preserving order", () => {
         const traces = [trace({ errorCount: 0, traceId: "a" }), trace({ errorCount: 1, traceId: "b" }), trace({ errorCount: 3, traceId: "c" })];
 
-        expect(filterTraces(traces, { errorOnly: true }).map((entry) => entry.traceId)).toEqual(["b", "c"]);
+        expect(filterTraces(traces, { errorOnly: true }).map((entry) => entry.traceId)).toStrictEqual(["b", "c"]);
     });
 });

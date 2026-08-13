@@ -43,7 +43,7 @@ describe(isSensitiveKey, () => {
 
 describe(redactRecord, () => {
     it("scrubs sensitive values but keeps ordinary ones", () => {
-        expect(redactRecord({ authorization: "Bearer sk-secret", region: "eu", user_id: "u_1" })).toEqual({
+        expect(redactRecord({ authorization: "Bearer sk-secret", region: "eu", user_id: "u_1" })).toStrictEqual({
             authorization: REDACTED,
             region: "eu",
             user_id: "u_1",
@@ -63,7 +63,7 @@ describe(redactRecord, () => {
 
 describe(redactText, () => {
     it("scrubs secret-shaped substrings from free text", () => {
-        expect(redactText("call with Authorization: Bearer sk_live_abcdefgh12345678")).toContain("Bearer [redacted]");
+        expect(redactText("call with Authorization: Bearer sk_live_abcdefgh12345678")).toContain("Bearer [redacted]"); // gitleaks:allow -- fabricated secret-shaped literal; scrubbing it is the assertion
         expect(redactText("here is my key sk-ABCDEFGHIJKLMNOP1234")).toContain(REDACTED);
         expect(redactText("token=supersecretvalue123 in the log")).toBe(`token=${REDACTED} in the log`);
     });

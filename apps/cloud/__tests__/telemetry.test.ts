@@ -318,7 +318,7 @@ describe(decodeObservations, () => {
         const observations = decodeObservations(payload("@lunora/runtime", [span({ ok: true, spanId: "a1" }), span({ ok: false, spanId: "a2" })]));
 
         expect(observations).toHaveLength(2);
-        expect(observations.map((o) => o.level)).toEqual(["info", "error"]);
+        expect(observations.map((o) => o.level)).toStrictEqual(["info", "error"]);
         expect(observations[1]?.statusMessage).toBe("boom");
     });
 
@@ -337,7 +337,7 @@ describe(decodeObservations, () => {
 
         expect(observation?.kind).toBe("container");
         expect(observation?.functionPath).toBe("container:transcoder");
-        expect(observation?.attributes).toEqual({ shard_key: "room-9" });
+        expect(observation?.attributes).toStrictEqual({ shard_key: "room-9" });
     });
 
     it("skips a span with no trace/span id (it can't be placed in a trace)", () => {
@@ -409,7 +409,7 @@ describe(decodeObservations, () => {
         );
 
         expect(observation?.sessionId).toBe("thread_42");
-        expect(observation?.evaluations).toEqual([
+        expect(observation?.evaluations).toStrictEqual([
             { label: "pass", name: "helpfulness", score: 0.92 },
             { name: "toxicity", score: 0 },
         ]);
@@ -461,7 +461,7 @@ describe(decodeLogRecords, () => {
             (severityNumber) => decodeLogRecords(logsPayload([{ body: { stringValue: "x" }, severityNumber, timeUnixNano: "1700000000000000000" }]))[0]?.level,
         );
 
-        expect(levels).toEqual(["trace", "debug", "info", "warn", "error", "fatal"]);
+        expect(levels).toStrictEqual(["trace", "debug", "info", "warn", "error", "fatal"]);
     });
 
     it("decodes body, functionPath, ids, and non-lunora attributes as fields", () => {
@@ -520,7 +520,7 @@ describe(decodeMetricPoints, () => {
             ],
         });
 
-        expect(points).toEqual([
+        expect(points).toStrictEqual([
             { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "gauge", name: "queue.depth", serviceName: "orders", value: 7 },
             { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "sum", name: "requests", serviceName: "orders", value: 12 },
             { at: 1_700_000_000_000, attributes: undefined, functionPath: undefined, kind: "histogram", name: "latency", serviceName: "orders", value: 340 },

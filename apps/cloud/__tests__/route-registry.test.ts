@@ -55,8 +55,11 @@ describe("createDeployRouter route classification", () => {
     it("404s an unknown path and a wrong method", async () => {
         const router = createDeployRouter();
 
-        expect((await router.fetch(new Request("https://cloud/v1/nope", { method: "POST" }))).status).toBe(404);
+        const unknownPath = await router.fetch(new Request("https://cloud/v1/nope", { method: "POST" }));
         // /v1/deploy exists as POST; GET must not resolve it.
-        expect((await router.fetch(new Request("https://cloud/v1/deploy", { method: "GET" }))).status).toBe(404);
+        const wrongMethod = await router.fetch(new Request("https://cloud/v1/deploy", { method: "GET" }));
+
+        expect(unknownPath.status).toBe(404);
+        expect(wrongMethod.status).toBe(404);
     });
 });
