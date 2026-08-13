@@ -3,7 +3,7 @@
 import { Check } from "lucide-react";
 import { useReducedMotion } from "motion/react";
 import type { FC, ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import CodeView from "@/components/sections/code-view";
 import { cn } from "@/lib/utils";
@@ -105,31 +105,28 @@ const HowItWorks: FC = () => {
     const [active, setActive] = useState(0);
     const [progress, setProgress] = useState(0);
 
+    // Progress is tracked here as well as in state. A `setProgress` updater is
+    // required to be pure, and the previous version advanced the step from
+    // inside one — React is free to call an updater more than once, so the step
+    // could jump by two and skip the wrap back to the first. Counting in a ref
+    // and setting both from the interval keeps the updater pure.
+    const elapsed = useRef(0);
+
     useEffect(() => {
         if (reduceMotion) {
             return undefined;
         }
 
-        // Reaching the end advances to the next step and resets the bar — done in the
-        // timer tick (the source of the change) rather than in a reactive effect on
-        // `progress`, which would chain state updates.
-        const advance = (previous: number): number => {
-            const next = previous + STEP_INCREMENT;
+        const id = setInterval(() => {
+            elapsed.current += STEP_INCREMENT;
 
-            if (next >= 100) {
+            if (elapsed.current >= 100) {
+                elapsed.current = 0;
                 setActive((current) => (current + 1) % STEPS.length);
-
-                return 0;
             }
 
-            return next;
-        };
-
-        const tick = (): void => {
-            setProgress(advance);
-        };
-
-        const id = setInterval(tick, STEP_MS);
+            setProgress(elapsed.current);
+        }, STEP_MS);
 
         return () => {
             clearInterval(id);
@@ -137,12 +134,13 @@ const HowItWorks: FC = () => {
     }, [reduceMotion]);
 
     const select = (index: number) => {
+        elapsed.current = 0;
         setActive(index);
         setProgress(0);
     };
 
     return (
-        <div className="grid grid-cols-1 border border-hairline lg:grid-cols-2 lg:border-x-0">
+        <div className="grid grid-cols-1 border border-b-0 border-hairline lg:grid-cols-2 lg:border-x-0">
             {/* left — accordion */}
             <div className="flex flex-col lg:border-r lg:border-hairline">
                 {STEPS.map((step, index) => {
