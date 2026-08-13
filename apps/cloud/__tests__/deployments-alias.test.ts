@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MutationCtx } from "../lunora/_generated/server";
 import { claimAlias } from "../lunora/deployments";
 
-type AliasRow = { _id: string; alias: string; organizationId: string; projectId: string };
+type AliasRow = { _id: string; alias: string; organizationId: string; projectId: string }; // gitleaks:allow -- a type alias; the scanner matches `projectId` as a Cypress id
 
 /**
  * Fake mutation ctx backing `aliasOwnership` with an in-memory array. `insert`
@@ -26,7 +26,7 @@ const makeCtx = (
             aliasOwnership: {
                 findMany: ({ where }: { where: { alias: string } }) => Promise.resolve({ page: store.filter((row) => row.alias === where.alias) }),
             },
-            insert: vi.fn((table: string, row: Record<string, unknown>) => {
+            insert: vi.fn<(table: string, row: Record<string, unknown>) => Promise<unknown>>((table, row) => {
                 inserts.push({ row, table });
 
                 if (insertBehavior?.throw) {

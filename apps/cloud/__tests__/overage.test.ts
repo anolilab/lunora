@@ -144,7 +144,7 @@ describe(reconcileAllOverages, () => {
     };
 
     it("fires onRecovered after a successful debit (self-heal: covered org un-suspended)", async () => {
-        const onRecovered = vi.fn(() => Promise.resolve());
+        const onRecovered = vi.fn<NonNullable<OverageFleetPorts["onRecovered"]>>(() => Promise.resolve());
         // 11M requests on pro (10M included) → 100 credits owed; balance covers it.
         const summary = await reconcileAllOverages([org("org_a", 11_000_000)], ports(500, { onRecovered }));
 
@@ -153,8 +153,8 @@ describe(reconcileAllOverages, () => {
     });
 
     it("fires onRecovered when nothing is owed (org in good standing)", async () => {
-        const onRecovered = vi.fn(() => Promise.resolve());
-        const onExhausted = vi.fn(() => Promise.resolve());
+        const onRecovered = vi.fn<NonNullable<OverageFleetPorts["onRecovered"]>>(() => Promise.resolve());
+        const onExhausted = vi.fn<OverageFleetPorts["onExhausted"]>(() => Promise.resolve());
         await reconcileAllOverages([org("org_a", 1)], ports(0, { onExhausted, onRecovered }));
 
         expect(onRecovered).toHaveBeenCalledWith("org_a");
@@ -162,8 +162,8 @@ describe(reconcileAllOverages, () => {
     });
 
     it("suspends (not recovers) when the balance can't cover the owed overage", async () => {
-        const onRecovered = vi.fn(() => Promise.resolve());
-        const onExhausted = vi.fn(() => Promise.resolve());
+        const onRecovered = vi.fn<NonNullable<OverageFleetPorts["onRecovered"]>>(() => Promise.resolve());
+        const onExhausted = vi.fn<OverageFleetPorts["onExhausted"]>(() => Promise.resolve());
         const summary = await reconcileAllOverages([org("org_a", 11_000_000)], ports(50, { onExhausted, onRecovered }));
 
         expect(summary.exhausted).toBe(1);

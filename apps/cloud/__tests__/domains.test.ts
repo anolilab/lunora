@@ -71,7 +71,7 @@ describe(createDohResolver, () => {
 describe("custom-domain dispatcher resolution", () => {
     it("caches lookups, routes scripts, and surfaces redirects", async () => {
         const { createCustomDomainResolver } = await import("../src/dispatcher/route");
-        const fetchMock = vi.fn(() => Promise.resolve(Response.json({ scriptName: "app-v3" })));
+        const fetchMock = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(Response.json({ scriptName: "app-v3" })));
         const resolve = createCustomDomainResolver({
             controlPlaneToken: "t",
             controlPlaneUrl: "https://cp",

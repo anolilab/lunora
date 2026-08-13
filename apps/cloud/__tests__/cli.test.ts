@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { deploy, link, login, status } from "../src/cli/commands";
 import type { CliConfig, ConfigStore } from "../src/cli/config";
+import type { deployToCloud } from "../src/deploy/client";
 
 const memoryStore = (initial: CliConfig = {}): ConfigStore => {
     let config = initial;
@@ -38,7 +39,7 @@ describe("cli commands", () => {
 
     it("deploy calls the deploy fn with the merged config", async () => {
         const store = memoryStore({ apiUrl: "https://cloud", deployKey: "k", projectId: "proj_1" });
-        const deployFn = vi.fn(async () => {
+        const deployFn = vi.fn<typeof deployToCloud>(async () => {
             return { status: "live" };
         });
 
