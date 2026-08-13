@@ -124,7 +124,7 @@ export const adminTarget = query
             await assertMember(context, organizationId);
 
             const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
-            const hasToken = deployment?.adminToken || (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
+            const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
             if (deployment?.organizationId !== organizationId || !hasToken || !deployment.url) {
                 return null;

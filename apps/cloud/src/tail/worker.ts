@@ -44,6 +44,7 @@ const trimTrailingSlash = (base: string): string => {
 };
 
 export default {
+    // eslint-disable-next-line @typescript-eslint/require-await -- the Cloudflare `tail` handler contract is async; this body dispatches through `waitUntil` and has nothing to await
     async tail(events: TailTraceItem[], environment: TailEnv, context: TailContext): Promise<void> {
         const batches = groupTailEvents(events);
 

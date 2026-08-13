@@ -4,7 +4,7 @@
  * the three methods they use. A neutral home (not under `deploy/`), since
  * billing, telemetry, uptime, and deploy all depend on it.
  */
-export interface ControlPlaneDb {
+export interface ControlPlaneDatabase {
     // The teardown sweep releases an alias's ownership row once its last
     // deployment is gone; `table` mirrors `patch`'s optional table qualifier.
     delete: (id: string, table?: string) => Promise<unknown>;

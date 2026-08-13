@@ -87,6 +87,7 @@ export const AddPanelForm = ({ metricNames, onAdd }: AddPanelFormProps): ReactEl
                     />
                     <datalist id="dashboard-metric-names">
                         {metricNames.map((name) => (
+                            // eslint-disable-next-line jsx-a11y/control-has-associated-label -- a <datalist> <option> is an autocomplete suggestion for the input above, not an independently labelled control
                             <option key={name} value={name} />
                         ))}
                     </datalist>

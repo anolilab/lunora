@@ -14,7 +14,7 @@ import type { SectionProps } from "./tabs";
 const formatUptime = (fraction: number): string => `${(fraction * 100).toFixed(2)}%`;
 
 /** Format a mean latency in ms, or a dash when no successful probe has landed. */
-const formatLatency = (ms: number | undefined): string => (ms === undefined ? "—" : `${Math.round(ms)}ms`);
+const formatLatency = (ms: number | undefined): string => (ms === undefined ? "—" : `${String(Math.round(ms))}ms`);
 
 /**
  * Cloud Observability "Uptime" — synthetic availability. The control plane probes
