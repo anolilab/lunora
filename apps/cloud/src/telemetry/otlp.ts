@@ -323,6 +323,7 @@ interface OtlpResourceLogs {
     scopeLogs?: OtlpScopeLogs[];
 }
 
+/* eslint-disable-next-line no-secrets/no-secrets -- the quoted identifier is an opentelemetry-proto message name, not a credential */
 /** The subset of an OTLP `ExportLogsServiceRequest` the ingest reads. */
 export interface OtlpLogsPayload {
     resourceLogs?: OtlpResourceLogs[];
@@ -396,6 +397,8 @@ const logFields = (attributes: OtlpKeyValue[] | undefined): Record<string, unkno
     return Object.keys(out).length > 0 ? out : undefined;
 };
 
+/* eslint-disable no-secrets/no-secrets -- the quoted identifier below is an opentelemetry-proto message name, not a credential */
+
 /**
  * Decode an OTLP `ExportLogsServiceRequest` into tenant-log entries — the
  * standard `/v1/logs` ingest, so any OpenTelemetry logs exporter can ship to the
@@ -447,6 +450,69 @@ const lunoraAttributes = (attributes: OtlpKeyValue[] | undefined): Record<string
 };
 
 /**
+ * The `gen_ai.*` fields for a model-call span, RETURNED rather than assigned so
+ * the caller composes one object literal — a worker/container span simply never
+ * spreads them. Session id and eval scores are decoded defensively and only
+ * included when present.
+ */
+const generationFields = (attributes: OtlpKeyValue[] | undefined, model: string): Partial<SpanObservation> => {
+    const sessionId = attributeString(attributes, "gen_ai.conversation.id");
+    const evaluations = decodeEvaluations(attributes);
+
+    return {
+        completionTokens: attributeNumber(attributes, "gen_ai.usage.output_tokens"),
+        input: truncateText(redactText(attributeString(attributes, "gen_ai.prompt"))),
+        model,
+        output: truncateText(redactText(attributeString(attributes, "gen_ai.completion"))),
+        promptTokens: attributeNumber(attributes, "gen_ai.usage.input_tokens"),
+        ...(sessionId !== undefined && sessionId !== "" ? { sessionId } : {}),
+        ...(evaluations === undefined ? {} : { evaluations }),
+    };
+};
+
+/**
+ * Decode one OTLP span into a {@link SpanObservation}, or `undefined` when it
+ * carries no trace/span identity and therefore cannot be placed in a trace.
+ *
+ * Split out of the resource→scope→span walk below so each reads as one job: the
+ * walk resolves the envelope context (service name, worker-vs-container), this
+ * turns a single span into a row.
+ */
+const decodeSpanObservation = (span: OtlpSpan, context: { kind: "container" | "worker"; serviceName: string | undefined }): SpanObservation | undefined => {
+    if (span.traceId === undefined || span.traceId === "" || span.spanId === undefined || span.spanId === "") {
+        return undefined;
+    }
+
+    const { kind, serviceName } = context;
+    const startedAt = epochMsFromNano(span.startTimeUnixNano);
+    const endedAt = epochMsFromNano(span.endTimeUnixNano);
+    const errored = span.status?.code === STATUS_ERROR;
+    const workerPath = attributeString(span.attributes, "lunora.function_path") ?? span.name;
+
+    // A model call carries `gen_ai.request.model` — promote it to a `generation`
+    // observation (container spans stay container even if they carry it).
+    const model = attributeString(span.attributes, "gen_ai.request.model");
+    const generation = kind !== "container" && model !== undefined ? generationFields(span.attributes, model) : undefined;
+
+    return {
+        attributes: redactRecord(lunoraAttributes(span.attributes)),
+        durationMs: Math.max(endedAt - startedAt, 0),
+        endedAt,
+        functionPath: kind === "container" ? `container:${serviceName ?? "container"}` : workerPath,
+        kind: generation === undefined ? kind : "generation",
+        level: errored ? "error" : "info",
+        name: span.name ?? workerPath ?? "span",
+        parentSpanId: span.parentSpanId === "" ? undefined : span.parentSpanId,
+        serviceName,
+        spanId: span.spanId,
+        startedAt,
+        statusMessage: errored ? span.status?.message : undefined,
+        traceId: span.traceId,
+        ...generation,
+    };
+};
+
+/**
  * Decode EVERY span of an OTLP trace payload into a {@link SpanObservation} — the
  * Traces store's rows. Unlike {@link decodeTelemetryEvents} (which keeps only
  * error spans for Issue grouping), this keeps all spans with full timing and
@@ -465,65 +531,11 @@ export const decodeObservations = (payload: OtlpTracePayload): SpanObservation[]
             const kind = (scopeSpans.scope?.name ?? "").includes("@lunora/container") ? "container" : "worker";
 
             for (const span of scopeSpans.spans ?? []) {
-                if (span.traceId === undefined || span.traceId === "" || span.spanId === undefined || span.spanId === "") {
-                    continue;
+                const observation = decodeSpanObservation(span, { kind, serviceName });
+
+                if (observation !== undefined) {
+                    observations.push(observation);
                 }
-
-                const startedAt = epochMsFromNano(span.startTimeUnixNano);
-                const endedAt = epochMsFromNano(span.endTimeUnixNano);
-                const errored = span.status?.code === STATUS_ERROR;
-                const workerPath = attributeString(span.attributes, "lunora.function_path") ?? span.name;
-
-                // A model call carries `gen_ai.request.model` — promote it to a
-                // `generation` observation with the model + token usage broken out
-                // (container spans stay container even if they somehow carry the
-                // attribute). Input/output only arrive when the emitter opted in.
-                const model = attributeString(span.attributes, "gen_ai.request.model");
-                const isGeneration = kind !== "container" && model !== undefined;
-
-                const observation: SpanObservation = {
-                    attributes: redactRecord(lunoraAttributes(span.attributes)),
-                    durationMs: Math.max(endedAt - startedAt, 0),
-                    endedAt,
-                    functionPath: kind === "container" ? `container:${serviceName ?? "container"}` : workerPath,
-                    kind: isGeneration ? "generation" : kind,
-                    level: errored ? "error" : "info",
-                    name: span.name ?? workerPath ?? "span",
-                    parentSpanId: span.parentSpanId === "" ? undefined : span.parentSpanId,
-                    serviceName,
-                    spanId: span.spanId,
-                    startedAt,
-                    statusMessage: errored ? span.status?.message : undefined,
-                    traceId: span.traceId,
-                };
-
-                // One decision, all its consequences in one place — the gen_ai.*
-                // extraction, kept off the base object so a worker/container span
-                // carries none of these fields.
-                if (isGeneration) {
-                    observation.model = model;
-                    observation.promptTokens = attributeNumber(span.attributes, "gen_ai.usage.input_tokens");
-                    observation.completionTokens = attributeNumber(span.attributes, "gen_ai.usage.output_tokens");
-                    observation.input = truncateText(redactText(attributeString(span.attributes, "gen_ai.prompt")));
-                    observation.output = truncateText(redactText(attributeString(span.attributes, "gen_ai.completion")));
-
-                    // Session/thread id + eval scores from the parallel framework
-                    // branch — decoded defensively (absent today), and only set when
-                    // present so a generation span without them carries neither field.
-                    const sessionId = attributeString(span.attributes, "gen_ai.conversation.id");
-
-                    if (sessionId !== undefined && sessionId !== "") {
-                        observation.sessionId = sessionId;
-                    }
-
-                    const evaluations = decodeEvaluations(span.attributes);
-
-                    if (evaluations !== undefined) {
-                        observation.evaluations = evaluations;
-                    }
-                }
-
-                observations.push(observation);
             }
         }
     }

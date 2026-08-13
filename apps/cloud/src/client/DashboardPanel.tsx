@@ -20,6 +20,9 @@ interface PanelBodyProps {
     series: MetricSeries[] | undefined;
 }
 
+/** A body that renders from the panel alone — no series read. */
+type ShortcutPanelBodyProps = Pick<PanelBodyProps, "panel">;
+
 /** A metric-trend widget — the named series' last value, trend badge, and sparkline. */
 const MetricPanelBody = ({ panel, series }: { panel: DashboardPanel; series: MetricSeries[] | undefined }): ReactElement => {
     if (series === undefined) {
@@ -68,7 +71,7 @@ const StatPanelBody = ({ panel, series }: { panel: DashboardPanel; series: Metri
  * router `Link` (was a button firing the dashboard's `onOpenTab` callback), so the
  * shortcut is an ordinary, shareable URL like every other tab link.
  */
-const ShortcutPanelBody = ({ panel }: PanelBodyProps): ReactElement => {
+const ShortcutPanelBody = ({ panel }: ShortcutPanelBodyProps): ReactElement => {
     const tab = panel.kind === "logs" ? "logs" : "traces";
     const { organizationId } = useParams({ from: "/_authed/orgs/$organizationId" });
 
@@ -96,5 +99,5 @@ export const PanelWidget = ({ panel, series }: PanelBodyProps): ReactElement => 
         return <StatPanelBody panel={panel} series={series} />;
     }
 
-    return <ShortcutPanelBody panel={panel} series={series} />;
+    return <ShortcutPanelBody panel={panel} />;
 };

@@ -771,6 +771,7 @@ const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise
 const readOtlpBody = async (request: Request, signal: "logs" | "metrics" | "traces"): Promise<unknown> => {
     const contentType = request.headers.get("content-type") ?? "";
     const gzipped = (request.headers.get("content-encoding") ?? "").includes("gzip");
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this runs on workerd, not Node: `DecompressionStream` is a baseline Workers API, and the rule is checking the repo's Node engines range
     const stream = gzipped && request.body ? request.body.pipeThrough(new DecompressionStream("gzip")) : request.body;
     const bytes = await readAllCapped(stream);
 
@@ -819,9 +820,11 @@ const MAX_OTLP_METRIC_POINTS = 500;
  * we return `partialSuccess` with the rejected count (per the OTLP spec), so an
  * exporter learns some points were dropped rather than seeing a silent success.
  */
-const otlpAccepted = (rejected: number, rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans"): Response => {
+const otlpAccepted = (rejectedCount: number, rejectedField: "rejectedDataPoints" | "rejectedLogRecords" | "rejectedSpans"): Response => {
     const body =
-        rejected > 0 ? { partialSuccess: { errorMessage: `accepted with ${String(rejected)} rejected (batch cap exceeded)`, [rejectedField]: rejected } } : {};
+        rejectedCount > 0
+            ? { partialSuccess: { errorMessage: `accepted with ${String(rejectedCount)} rejected (batch cap exceeded)`, [rejectedField]: rejectedCount } }
+            : {};
 
     return Response.json(body, { headers: { "content-type": "application/json" }, status: 200 });
 };
