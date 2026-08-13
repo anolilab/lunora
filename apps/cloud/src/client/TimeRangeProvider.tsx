@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, use, useCallback, useMemo, useState } from "react";
 
 import type { TimeRange, TimeRangePreset } from "./time-range";
 import { DEFAULT_TIME_RANGE_PRESET, rangeForPreset, TIME_RANGE_PRESETS } from "./time-range";
@@ -47,12 +47,12 @@ export const TimeRangeProvider = ({
         return { from: range.from, preset: range.preset, setPreset, to: range.to };
     }, [range, setPreset]);
 
-    return <TimeRangeContext.Provider value={value}>{children}</TimeRangeContext.Provider>;
+    return <TimeRangeContext value={value}>{children}</TimeRangeContext>;
 };
 
 /** Read the shared time-range window. Throws if used outside a {@link TimeRangeProvider}. */
 export const useTimeRange = (): TimeRangeContextValue => {
-    const value = useContext(TimeRangeContext);
+    const value = use(TimeRangeContext);
 
     if (value === null) {
         throw new Error("useTimeRange must be used within a TimeRangeProvider");

@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 import type { AnalyticsUsageReader } from "../src/metering/analytics";
-import type { ControlPlaneDb } from "../src/store";
+import type { ControlPlaneDatabase } from "../src/store";
 
-/** A fake ControlPlaneDb whose findMany answers per-table from the given pages. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+/** A fake ControlPlaneDatabase whose findMany answers per-table from the given pages. */
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}): ControlPlaneDatabase => {
     return {
         delete: () => Promise.resolve(undefined),
         findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
@@ -45,7 +45,7 @@ describe(teardownPorts, () => {
     });
 
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeDb({}, { patch }), () => Promise.resolve(), 5000);
 
         await ports.markTornDown("dep_1");
@@ -54,7 +54,7 @@ describe(teardownPorts, () => {
     });
 
     it("releaseAlias deletes the ownership ledger row(s) for the alias", async () => {
-        const deleteRow = vi.fn<ControlPlaneDb["delete"]>(() => Promise.resolve(undefined));
+        const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const database = fakeDb({ aliasOwnership: [{ _id: "ao_1", alias: "app" }] }, { delete: deleteRow });
         const ports = teardownPorts(database, () => Promise.resolve(), 1000);
 
@@ -64,7 +64,7 @@ describe(teardownPorts, () => {
     });
 
     it("releaseAlias is a no-op when no ownership row exists (pre-ledger or already released)", async () => {
-        const deleteRow = vi.fn<ControlPlaneDb["delete"]>(() => Promise.resolve(undefined));
+        const deleteRow = vi.fn<ControlPlaneDatabase["delete"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeDb({ aliasOwnership: [] }, { delete: deleteRow }), () => Promise.resolve(), 1000);
 
         await ports.releaseAlias("ghost");
@@ -92,7 +92,7 @@ describe(usageRollbackPorts, () => {
     });
 
     it("records a requests row into platformUsage with the period + attribution", async () => {
-        const insert = vi.fn<ControlPlaneDb["insert"]>(() => Promise.resolve("id"));
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { insert });
 
         const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 777 });
@@ -109,7 +109,7 @@ describe(usageRollbackPorts, () => {
     });
 
     it("advances the cell's usageReadAtMs on setCheckpoint", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeDb({ cells: [{ _id: "cell_1" }], deployments: [] }, { patch });
 
         const ports = await usageRollbackPorts(database, reader([]), { cellName: "default", now: 1000, periodStart: 0 });
@@ -119,7 +119,7 @@ describe(usageRollbackPorts, () => {
     });
 
     it("no-ops setCheckpoint when the cell row is missing (unregistered cell)", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeDb({ cells: [], deployments: [] }, { patch });
 
         const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0 });

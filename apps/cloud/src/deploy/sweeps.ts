@@ -9,7 +9,7 @@
  */
 import type { AnalyticsUsageReader } from "../metering/analytics";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
-import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
+import type { ControlPlaneDatabase } from "../store";
 import type { TeardownPorts } from "./teardown";
 
 interface TeardownRow {

@@ -35,7 +35,7 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
-import type { ControlPlaneDb as ControlPlaneDatabase } from "./store";
+import type { ControlPlaneDatabase } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
 import { runUptimeSweep } from "./uptime/sweep";
@@ -313,7 +313,7 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     return targets;
 };
 
-/** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
+/** The control-plane D1 as the structural {@link ControlPlaneDatabase} the sweeps use. */
 const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
     createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 

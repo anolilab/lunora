@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
-import type { ControlPlaneDb } from "../src/store";
+import type { ControlPlaneDatabase } from "../src/store";
 
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}): ControlPlaneDatabase => {
     return {
         delete: () => Promise.resolve(undefined),
         findMany: (table, args) => {
@@ -54,8 +54,8 @@ describe(buildOverageReconcileData, () => {
 
 describe(overageFleetPorts, () => {
     it("inserts a fresh watermark, and advances an existing one only forward", async () => {
-        const insert = vi.fn<ControlPlaneDb["insert"]>(() => Promise.resolve("id"));
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const database = fakeDb({ overageDebits: [{ _id: "w1", debitedCredits: 30, organizationId: "org_a", periodStart: 500 }] }, { insert, patch });
 
         const ports = overageFleetPorts(database, noopLedger, 1000, new Map());
@@ -72,8 +72,8 @@ describe(overageFleetPorts, () => {
     });
 
     it("suspends an unsuspended exhausted org with reason 'overage' + audit", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
-        const insert = vi.fn<ControlPlaneDb["insert"]>(() => Promise.resolve("id"));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const ports = overageFleetPorts(fakeDb({}, { insert, patch }), noopLedger, 1000, new Map([["org_a", undefined]]));
 
         await ports.onExhausted("org_a");
@@ -83,7 +83,7 @@ describe(overageFleetPorts, () => {
     });
 
     it("never overrides a non-overage suspension on exhaustion", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = overageFleetPorts(fakeDb({}, { patch }), noopLedger, 1000, new Map([["org_a", "dunning"]]));
 
         await ports.onExhausted("org_a");
@@ -92,7 +92,7 @@ describe(overageFleetPorts, () => {
     });
 
     it("lifts only an overage suspension on recovery", async () => {
-        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = overageFleetPorts(
             fakeDb({}, { patch }),
             noopLedger,
