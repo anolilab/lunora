@@ -85,14 +85,11 @@ const PageHeader: FC<{
                 style={{ background: "linear-gradient(180deg, transparent, var(--site-canvas))" }}
             />
 
-            {/* The panel, centred in the field and aligned to the shell gutter. */}
+            {/* The panel, centred in the field and aligned to the shell gutter.
+            No border: the field behind it is already a hard value change, so an
+            outline on top only draws a second edge where there is one. */}
             <Shell className="absolute inset-0 flex items-center">
-                <div
-                    className={cn(
-                        "w-full border border-hairline bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
-                        panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]",
-                    )}
-                >
+                <div className={cn("w-full bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]", panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]")}>
                     {children}
                 </div>
             </Shell>
