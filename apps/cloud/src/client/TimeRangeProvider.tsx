@@ -32,16 +32,20 @@ export const TimeRangeProvider = ({
     // the `setPreset` event handler. Render stays pure — no `Date.now()` in the
     // render path — and `from`/`to` stay referentially stable between renders, so
     // they don't re-fire the live queries.
-    const [range, setRange] = useState<{ preset: TimeRangePreset } & TimeRange>(() => ({
-        preset: initialPreset,
-        ...rangeForPreset(initialPreset, Date.now()),
-    }));
+    const [range, setRange] = useState<TimeRange & { preset: TimeRangePreset }>(() => {
+        return {
+            preset: initialPreset,
+            ...rangeForPreset(initialPreset, Date.now()),
+        };
+    });
 
     const setPreset = useCallback((preset: TimeRangePreset) => {
         setRange({ preset, ...rangeForPreset(preset, Date.now()) });
     }, []);
 
-    const value = useMemo<TimeRangeContextValue>(() => ({ from: range.from, preset: range.preset, setPreset, to: range.to }), [range, setPreset]);
+    const value = useMemo<TimeRangeContextValue>(() => {
+        return { from: range.from, preset: range.preset, setPreset, to: range.to };
+    }, [range, setPreset]);
 
     return <TimeRangeContext.Provider value={value}>{children}</TimeRangeContext.Provider>;
 };
@@ -68,7 +72,9 @@ export const TimeRangePicker = (): ReactElement => {
                     aria-pressed={spec.id === preset}
                     className={`time-range-btn${spec.id === preset ? " active" : ""}`}
                     key={spec.id}
-                    onClick={() => setPreset(spec.id)}
+                    onClick={() => {
+                        setPreset(spec.id);
+                    }}
                     type="button"
                 >
                     {spec.label}

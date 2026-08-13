@@ -12,10 +12,11 @@
  * returned alerts. The alert firing itself reuses the shared `fireCrossedRules`
  * so this path can't drift from the telemetry ingest path.
  */
+import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
 import type { AlertDelivery, FiringRule } from "../telemetry/alerts";
 import { fireCrossedRules, isSafeWebhookUrl } from "../telemetry/alerts";
-import type { ControlPlaneDb } from "../store";
-import { nextConsecutiveFailures, probeDeployment, type UptimeProbe } from "./probe";
+import type { UptimeProbe } from "./probe";
+import { nextConsecutiveFailures, probeDeployment } from "./probe";
 
 /** A live deployment the sweep probes. */
 interface LiveDeploymentRow {
@@ -89,7 +90,7 @@ const describeFailure = (probe: UptimeProbe): string => {
  * tick blows the subrequest budget (a burst that recorded everything as `down`
  * would otherwise false-alert). Smaller fleets are probed whole every minute.
  */
-const selectProbeWindow = <T extends { _id: string }>(deployments: readonly T[], now: number): T[] => {
+const selectProbeWindow = <T extends { _id: string }>(deployments: ReadonlyArray<T>, now: number): T[] => {
     if (deployments.length <= MAX_PROBES_PER_SWEEP) {
         return [...deployments];
     }
@@ -102,16 +103,23 @@ const selectProbeWindow = <T extends { _id: string }>(deployments: readonly T[],
 };
 
 /** Map `items` through `fn` with at most `concurrency` in flight, preserving order. */
-const mapPooled = async <T, R>(items: readonly T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> => {
-    const results = new Array<R>(items.length);
+const mapPooled = async <T, R>(items: ReadonlyArray<T>, concurrency: number, function_: (item: T) => Promise<R>): Promise<R[]> => {
+    // Assigned by index below, so order is preserved without pre-sizing; the
+    // annotation is what types the result, since `Array.from({ length })` alone
+    // would widen to `unknown[]`.
+    const results: R[] = [];
     let cursor = 0;
     const runWorker = async (): Promise<void> => {
         while (cursor < items.length) {
             const index = cursor;
 
             cursor += 1;
-            // eslint-disable-next-line no-await-in-loop -- a worker processes its share sequentially; `concurrency` run in parallel
-            results[index] = await fn(items[index] as T);
+            // The index is in-bounds by construction (the `while` guards it), but
+            // `noUncheckedIndexedAccess` widens the element to `T | undefined`, so
+            // the assertion is load-bearing for `tsc` even though the lint rule's
+            // view of the types disagrees.
+            // eslint-disable-next-line no-await-in-loop, @typescript-eslint/no-unnecessary-type-assertion -- a worker processes its share sequentially (`concurrency` run in parallel); the assertion is required under noUncheckedIndexedAccess
+            results[index] = await function_(items[index] as T);
         }
     };
 
@@ -121,7 +129,7 @@ const mapPooled = async <T, R>(items: readonly T[], concurrency: number, fn: (it
 };
 
 /** Record one probe result as a `uptimeChecks` row. */
-const recordCheck = (database: ControlPlaneDb, deployment: LiveDeploymentRow, result: UptimeProbe, now: number): Promise<unknown> =>
+const recordCheck = (database: ControlPlaneDatabase, deployment: LiveDeploymentRow, result: UptimeProbe, now: number): Promise<unknown> =>
     database.insert("uptimeChecks", {
         createdAt: now,
         deploymentId: deployment._id,
@@ -134,7 +142,7 @@ const recordCheck = (database: ControlPlaneDb, deployment: LiveDeploymentRow, re
 
 /** Advance (or seed) a deployment's consecutive-failure state to `failures`. */
 const advanceState = (
-    database: ControlPlaneDb,
+    database: ControlPlaneDatabase,
     deployment: LiveDeploymentRow,
     prior: UptimeStateRow | undefined,
     failures: number,
@@ -153,7 +161,7 @@ const advanceState = (
  * record each result, and fire uptime alerts on threshold crossings. Returns the
  * fired alerts for the edge to deliver.
  */
-export const runUptimeSweep = async (database: ControlPlaneDb, options: UptimeSweepOptions): Promise<UptimeSweepResult> => {
+export const runUptimeSweep = async (database: ControlPlaneDatabase, options: UptimeSweepOptions): Promise<UptimeSweepResult> => {
     const probe = options.probe ?? ((url: string) => probeDeployment({ fetch: options.fetch, timeoutMs: options.timeoutMs, url }));
 
     const { page: deploymentPage } = await database.findMany("deployments", { where: { status: "live" } });
@@ -191,7 +199,9 @@ export const runUptimeSweep = async (database: ControlPlaneDb, options: UptimeSw
 
     // Probe concurrently (bounded); DB writes below are serialized, matching how
     // the global control-plane mutations run.
-    const probed = await mapPooled(window, PROBE_CONCURRENCY, async (deployment) => ({ deployment, result: await probe(deployment.url) }));
+    const probed = await mapPooled(window, PROBE_CONCURRENCY, async (deployment) => {
+        return { deployment, result: await probe(deployment.url) };
+    });
 
     const deliveries: AlertDelivery[] = [];
 

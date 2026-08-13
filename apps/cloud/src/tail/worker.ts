@@ -16,8 +16,8 @@
  * `tail_consumers` on each tenant script (or the namespace) to point at it. The
  * control-plane URL/secret ride the tail worker's `env`.
  */
-import { groupTailEvents } from "./parse";
 import type { TailTraceItem } from "./parse";
+import { groupTailEvents } from "./parse";
 
 /** Minimal `ExecutionContext` projection — only `waitUntil`, so no `@cloudflare/workers-types` edge. */
 interface TailContext {

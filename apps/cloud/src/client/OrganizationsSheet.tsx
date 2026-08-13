@@ -177,7 +177,6 @@ export const OrganizationsSheet = ({ onOpenChange, open, organizations, orgId }:
 
                         <div className="flex-1 overflow-y-auto px-4 pb-4">
                             <FieldForm
-                                className="max-w-none"
                                 action={() => {
                                     setError(null);
 
@@ -236,6 +235,7 @@ export const OrganizationsSheet = ({ onOpenChange, open, organizations, orgId }:
                                         }
                                     })();
                                 }}
+                                className="max-w-none"
                             >
                                 <Field htmlFor="new-org-name" label="Name">
                                     <Input

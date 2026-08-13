@@ -10,10 +10,10 @@ const captureMetadata = async (input: Parameters<ReturnType<typeof createHttpClo
         accountId: "acct",
         apiToken: "token",
         fetch: (async (_url: string, init: { body: FormData }) => {
-            const metadata = (init.body as FormData).get("metadata") as Blob;
+            const metadata = init.body.get("metadata") as Blob;
             captured = JSON.parse(await metadata.text()) as Record<string, unknown>;
 
-            return new Response(JSON.stringify({ success: true }), { status: 200 });
+            return Response.json({ success: true }, { status: 200 });
         }) as unknown as typeof globalThis.fetch,
     });
 

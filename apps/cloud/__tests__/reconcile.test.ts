@@ -1,25 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ControlPlaneDb } from "../src/store";
 import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
+import type { ControlPlaneDb } from "../src/store";
 
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
-    delete: () => Promise.resolve(undefined),
-    findMany: (table, args) => {
-        const rows = pages[table] ?? [];
-        const where = args?.where;
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+    return {
+        delete: () => Promise.resolve(undefined),
+        findMany: (table, args) => {
+            const rows = pages[table] ?? [];
+            const where = args?.where;
 
-        if (!where) {
-            return Promise.resolve({ page: rows });
-        }
+            if (!where) {
+                return Promise.resolve({ page: rows });
+            }
 
-        return Promise.resolve({ page: rows.filter((row) => Object.entries(where).every(([k, val]) => (row as Record<string, unknown>)[k] === val)) });
-    },
-    insert: () => Promise.resolve("id"),
-    patch: () => Promise.resolve(undefined),
-    ...spies,
-});
+            return Promise.resolve({ page: rows.filter((row) => Object.entries(where).every(([k, val]) => (row as Record<string, unknown>)[k] === val)) });
+        },
+        insert: () => Promise.resolve("id"),
+        patch: () => Promise.resolve(undefined),
+        ...spies,
+    };
+};
 
 const noopLedger: CreditsLedgerPort = { balance: () => Promise.resolve(0), debit: () => Promise.resolve() };
 
@@ -60,10 +62,12 @@ describe(overageFleetPorts, () => {
 
         // org_a already at 30 → advancing to 50 patches forward.
         await ports.advanceWatermark("org_a", 500, 50);
+
         expect(patch).toHaveBeenCalledWith("w1", { debitedCredits: 50, updatedAt: 1000 }, "overageDebits");
 
         // org_b has no row → insert.
         await ports.advanceWatermark("org_b", 500, 10);
+
         expect(insert).toHaveBeenCalledWith("overageDebits", { debitedCredits: 10, organizationId: "org_b", periodStart: 500, updatedAt: 1000 });
     });
 
@@ -94,16 +98,18 @@ describe(overageFleetPorts, () => {
             noopLedger,
             1000,
             new Map([
-                ["org_over", "overage"],
                 ["org_dun", "dunning"],
+                ["org_over", "overage"],
             ]),
         );
 
         await ports.onRecovered?.("org_over");
+
         expect(patch).toHaveBeenCalledWith("org_over", { suspendedAt: undefined, suspendedReason: undefined }, "organizations");
 
         patch.mockClear();
         await ports.onRecovered?.("org_dun"); // dunning suspension must stay
+
         expect(patch).not.toHaveBeenCalled();
     });
 });

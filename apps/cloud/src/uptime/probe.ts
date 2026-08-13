@@ -95,7 +95,7 @@ export interface UptimeSummary {
  * return them), so the current status is `checks[0]`. Empty → treated as up at
  * 100% (a deployment with no probes yet shouldn't read as down).
  */
-export const summarizeUptime = (checks: readonly UptimeCheckSample[]): UptimeSummary => {
+export const summarizeUptime = (checks: ReadonlyArray<UptimeCheckSample>): UptimeSummary => {
     if (checks.length === 0) {
         return { ok: true, sampleCount: 0, upFraction: 1 };
     }

@@ -4,7 +4,7 @@
  * with the shape `{ source: "lunora", type: "log", … }` (see the framework's
  * `emitLogEvent` in `@lunora/do`'s `request-log.ts`). Cloudflare's tail delivers
  * that to a tail consumer as one `TraceItemLog` whose `message` is the console
- * args array — here `[<json string>]`.
+ * args array — here `[&lt;json string>]`.
  *
  * These functions turn that back into a structured {@link TailLogLine} the
  * platform ingest (`logs.ingestInternal`) stores. Kept pure and dependency-free
@@ -46,7 +46,7 @@ const asLevel = (value: unknown): LogLevel => (typeof value === "string" && LEVE
 /**
  * Decode one tail log message (the console args array) into a {@link TailLogLine},
  * or `null` when it isn't a lunora `type:"log"` event. Accepts the message either
- * as the raw `[<json string>]` args array or as the JSON string directly.
+ * as the raw `[&lt;json string>]` args array or as the JSON string directly.
  */
 export const parseLogMessage = (message: unknown): TailLogLine | null => {
     const text = Array.isArray(message) ? (message.length === 1 && typeof message[0] === "string" ? message[0] : undefined) : asString(message);
@@ -129,7 +129,7 @@ export const groupTailEvents = (events: TailTraceItem[]): TailBatch[] => {
     const byScript = new Map<string, TailLogLine[]>();
 
     for (const item of events) {
-        const scriptName = item.scriptName;
+        const { scriptName } = item;
 
         if (scriptName === null || scriptName === undefined || scriptName === "") {
             continue;
@@ -150,5 +150,7 @@ export const groupTailEvents = (events: TailTraceItem[]): TailBatch[] => {
         }
     }
 
-    return [...byScript.entries()].map(([scriptName, lines]) => ({ lines, scriptName }));
+    return [...byScript.entries()].map(([scriptName, lines]) => {
+        return { lines, scriptName };
+    });
 };

@@ -17,7 +17,7 @@
  * fake store. The edge (`src/server.ts`) supplies the real D1 and delivers the
  * returned alerts.
  */
-import type { ControlPlaneDb } from "../store";
+import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
 import { fireMetricRules } from "./alerts";
 
@@ -73,19 +73,21 @@ const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_
 const DEFAULT_SCAN_LIMIT = 2000;
 
 /** Map an `alertRules` row to the shared {@link MetricRule} the firing loop reads. */
-const toMetricRule = (row: AlertRuleRow): MetricRule => ({
-    baselineWindows: row.baselineWindows,
-    channel: row.channel,
-    comparator: row.comparator ?? "gt",
-    destination: row.destination,
-    functionPath: row.functionPath,
-    mode: row.mode,
-    name: row.name,
-    ruleId: row._id,
-    target: row.target as MetricTarget,
-    threshold: row.threshold,
-    windowMinutes: row.windowMinutes ?? 60,
-});
+const toMetricRule = (row: AlertRuleRow): MetricRule => {
+    return {
+        baselineWindows: row.baselineWindows,
+        channel: row.channel,
+        comparator: row.comparator ?? "gt",
+        destination: row.destination,
+        functionPath: row.functionPath,
+        mode: row.mode,
+        name: row.name,
+        ruleId: row._id,
+        target: row.target as MetricTarget,
+        threshold: row.threshold,
+        windowMinutes: row.windowMinutes ?? 60,
+    };
+};
 
 /**
  * Re-evaluate every enabled metric rule over its window and fire/clear as its
@@ -94,7 +96,7 @@ const toMetricRule = (row: AlertRuleRow): MetricRule => ({
  * and drives {@link fireMetricRules} against the persisted `alertRuleState`.
  * Returns the fired alerts for the edge to deliver.
  */
-export const runAlertSweep = async (database: ControlPlaneDb, options: AlertSweepOptions): Promise<AlertSweepResult> => {
+export const runAlertSweep = async (database: ControlPlaneDatabase, options: AlertSweepOptions): Promise<AlertSweepResult> => {
     const scanLimit = options.scanLimit ?? DEFAULT_SCAN_LIMIT;
 
     const { page: rulePage } = await database.findMany("alertRules", {});

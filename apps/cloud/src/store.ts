@@ -5,6 +5,9 @@
  * billing, telemetry, uptime, and deploy all depend on it.
  */
 export interface ControlPlaneDb {
+    // The teardown sweep releases an alias's ownership row once its last
+    // deployment is gone; `table` mirrors `patch`'s optional table qualifier.
+    delete: (id: string, table?: string) => Promise<unknown>;
     findMany: (
         table: string,
         // `limit`/`orderBy` are pass-throughs the underlying ctx-db already honors
@@ -14,7 +17,4 @@ export interface ControlPlaneDb {
     ) => Promise<{ page: unknown[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
     patch: (id: string, patch: Record<string, unknown>, table?: string) => Promise<unknown>;
-    // The teardown sweep releases an alias's ownership row once its last
-    // deployment is gone; `table` mirrors `patch`'s optional table qualifier.
-    delete: (id: string, table?: string) => Promise<unknown>;
 }

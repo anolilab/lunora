@@ -148,6 +148,7 @@ export interface OverageFleetPorts {
     ledger: CreditsLedgerPort;
     /** Balance can't cover the owed delta — suspend via the C1 machinery. */
     onExhausted: (organizationId: string) => Promise<void>;
+
     /**
      * The org's overage is covered this run (debited or nothing owed) — lift any
      * overage suspension. Self-healing: an org that topped up its balance is

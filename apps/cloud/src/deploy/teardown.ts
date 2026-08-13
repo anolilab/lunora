@@ -19,9 +19,10 @@ import { tenantD1Name, tenantR2Bucket } from "../provision";
 export interface TeardownTarget {
     /** The project's stable label — keys the per-project D1/R2 to delete. */
     alias: string;
+
     /**
      * Whether to also delete the per-project D1/R2. True only when this is the
-     * *last* remaining deployment of its alias (no live/superseded sibling), so a
+     * last* remaining deployment of its alias (no live/superseded sibling), so a
      * routine version prune never destroys the database the active version uses.
      */
     deleteResources: boolean;

@@ -5,24 +5,28 @@ import type { MetricObservation } from "../src/telemetry/alerts";
 import { runAlertSweep } from "../src/telemetry/sweep";
 
 /** A fake ControlPlaneDb answering findMany per-table, mirroring uptime.test.ts. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
-    delete: () => Promise.resolve(undefined),
-    findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-    insert: () => Promise.resolve("row_id"),
-    patch: () => Promise.resolve(undefined),
-    ...spies,
-});
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+    return {
+        delete: () => Promise.resolve(undefined),
+        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
+        insert: () => Promise.resolve("row_id"),
+        patch: () => Promise.resolve(undefined),
+        ...spies,
+    };
+};
 
 const now = 10 * 60_000; // 10 minutes in
 
 /** N observations, `errors` of which are error-level, in the current 5-min window. */
 const window = (total: number, errors: number): MetricObservation[] =>
-    Array.from({ length: total }, (_, index) => ({
-        durationMs: 10,
-        kind: "worker" as const,
-        level: index < errors ? ("error" as const) : ("info" as const),
-        startedAt: now - 60_000,
-    }));
+    Array.from({ length: total }, (_, index) => {
+        return {
+            durationMs: 10,
+            kind: "worker" as const,
+            level: index < errors ? ("error" as const) : ("info" as const),
+            startedAt: now - 60_000,
+        };
+    });
 
 /** One enabled `error_rate > 50` rule over a 5-minute window, delivered by webhook. */
 const errorRateRule = {

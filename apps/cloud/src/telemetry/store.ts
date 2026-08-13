@@ -35,6 +35,7 @@ const MAX_METRIC_WRITES = 500;
 export interface TelemetryStore {
     /** Archive the raw decoded events (Pipeline → R2). No-op without the binding. */
     archiveEvents: (events: ReadonlyArray<TelemetryEvent>) => Promise<void>;
+
     /**
      * Tier spans to the columnar archive (Pipeline → R2/Iceberg), so the Traces
      * store scales past D1's hot 48 h window — read back with R2 SQL (an action,
@@ -42,6 +43,15 @@ export interface TelemetryStore {
      * and carries its `organizationId` so the archive is one queryable table.
      */
     archiveSpans: (observations: ReadonlyArray<SpanObservation>, organizationId: string) => Promise<void>;
+
+    /**
+     * Read the archived spans in a `[from, to]` window (bounded by `limit`), so the
+     * Traces list can fold older traces straight out of the columnar archive when
+     * the browse window reaches past D1's hot retention. Same fail-open contract as
+     * {@link readArchivedTrace}: `[]` when R2 SQL isn't configured or on any failure.
+     */
+    readArchivedSpansInWindow: (input: { from: number; limit: number; organizationId: string; to: number }) => Promise<SpanObservation[]>;
+
     /**
      * Read one trace's spans back from the columnar archive (R2 SQL over Iceberg),
      * for traces older than D1's hot window. Returns `[]` when R2 SQL isn't
@@ -50,13 +60,6 @@ export interface TelemetryStore {
      * spans (🌐 per-cell provisioning).
      */
     readArchivedTrace: (input: { organizationId: string; traceId: string }) => Promise<SpanObservation[]>;
-    /**
-     * Read the archived spans in a `[from, to]` window (bounded by `limit`), so the
-     * Traces list can fold older traces straight out of the columnar archive when
-     * the browse window reaches past D1's hot retention. Same fail-open contract as
-     * {@link readArchivedTrace}: `[]` when R2 SQL isn't configured or on any failure.
-     */
-    readArchivedSpansInWindow: (input: { from: number; limit: number; organizationId: string; to: number }) => Promise<SpanObservation[]>;
     /** Record one ingest's issue/incident counts as an AE data point. */
     recordCounts: (counts: TelemetryCounts) => void;
     /** Write each `ctx.metrics.*` measurement to AE (`/v1/metrics`). No-op without the binding. */
@@ -64,16 +67,19 @@ export interface TelemetryStore {
 }
 
 /** Map a span observation to its flat archive record (the R2/Iceberg row shape). */
-export const spanArchiveRecord = (observation: SpanObservation, organizationId: string): Record<string, unknown> => ({
-    ...observation,
-    organizationId,
-    recordType: "span",
-});
+export const spanArchiveRecord = (observation: SpanObservation, organizationId: string): Record<string, unknown> => {
+    return {
+        ...observation,
+        organizationId,
+        recordType: "span",
+    };
+};
 
 /** The telemetry bindings + config the store reads off the worker env (all optional). */
 export interface TelemetryStoreEnv {
     /** Account id for the R2-SQL read-back endpoint. */
     CLOUDFLARE_ACCOUNT_ID?: string;
+
     /**
      * `fetch` implementation for the R2-SQL read-back. Defaults to the global
      * `fetch`; an action injects `ctx.fetch` (and tests inject a double), so the

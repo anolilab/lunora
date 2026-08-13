@@ -30,13 +30,13 @@ export interface MetricSeriesPoint {
 export interface MetricSeries {
     /** Value of the earliest bucket in the window. */
     firstValue: number;
-    /** The `<file>:<function>` the metric was emitted from, when attributed. */
+    /** The `&lt;file>:&lt;function>` the metric was emitted from, when attributed. */
     functionPath?: string;
     /** The metric kind the emitter tagged (`counter` / `gauge` / `histogram` / …). */
     kind: string;
     /** Value of the most recent bucket — the headline "last value". */
     lastValue: number;
-    /** The metric name (`ctx.metrics.<name>`). */
+    /** The metric name (`ctx.metrics.&lt;name>`). */
     name: string;
     /** Bucketed trend points, oldest→newest. */
     points: MetricSeriesPoint[];

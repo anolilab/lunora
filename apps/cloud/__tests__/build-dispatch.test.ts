@@ -4,17 +4,21 @@ import type { BuildDispatchPorts } from "../src/builds/dispatch";
 import { runBuildDispatch } from "../src/builds/dispatch";
 import type { BuildRunnerPorts, ClaimedBuild } from "../src/builds/runner";
 
-const claimed = (id: string): ClaimedBuild => ({ buildId: id, commitSha: `sha-${id}`, projectId: `proj-${id}` });
+const claimed = (id: string): ClaimedBuild => {
+    return { buildId: id, commitSha: `sha-${id}`, projectId: `proj-${id}` };
+};
 
 /** A runner-ports fake that records the lifecycle and returns a fixed execution. */
-const runnerPorts = (overrides: Partial<BuildRunnerPorts> = {}): BuildRunnerPorts => ({
-    appendLog: () => Promise.resolve(),
-    complete: () => Promise.resolve(),
-    execute: () => Promise.resolve({ bundle: "YnVuZGxl", bundleHash: "hash" }),
-    fail: () => Promise.resolve(),
-    fetchSource: () => Promise.resolve(new ArrayBuffer(8)),
-    ...overrides,
-});
+const runnerPorts = (overrides: Partial<BuildRunnerPorts> = {}): BuildRunnerPorts => {
+    return {
+        appendLog: () => Promise.resolve(),
+        complete: () => Promise.resolve(),
+        execute: () => Promise.resolve({ bundle: "YnVuZGxl", bundleHash: "hash" }),
+        fail: () => Promise.resolve(),
+        fetchSource: () => Promise.resolve(new ArrayBuffer(8)),
+        ...overrides,
+    };
+};
 
 /** A claimNext that hands out the given builds in order, then returns null (drained). */
 const queue = (builds: ClaimedBuild[]): ((runnerId: string) => Promise<ClaimedBuild | null>) => {
@@ -23,12 +27,14 @@ const queue = (builds: ClaimedBuild[]): ((runnerId: string) => Promise<ClaimedBu
     return () => Promise.resolve(index < builds.length ? builds[index++] : null);
 };
 
-const ports = (overrides: Partial<BuildDispatchPorts>): BuildDispatchPorts => ({
-    claimNext: queue([]),
-    runnerId: "runner-1",
-    runnerPorts: runnerPorts(),
-    ...overrides,
-});
+const ports = (overrides: Partial<BuildDispatchPorts>): BuildDispatchPorts => {
+    return {
+        claimNext: queue([]),
+        runnerId: "runner-1",
+        runnerPorts: runnerPorts(),
+        ...overrides,
+    };
+};
 
 describe(runBuildDispatch, () => {
     it("drains the queue, running each claimed build to a successful outcome", async () => {

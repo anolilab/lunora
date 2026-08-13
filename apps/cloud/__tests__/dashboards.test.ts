@@ -14,13 +14,15 @@ import {
     validatePanels,
 } from "../src/telemetry/dashboards";
 
-const panel = (id: string, overrides: Partial<DashboardPanel> = {}): DashboardPanel => ({
-    config: { metricName: "requests" },
-    id,
-    kind: "metric",
-    title: id,
-    ...overrides,
-});
+const panel = (id: string, overrides: Partial<DashboardPanel> = {}): DashboardPanel => {
+    return {
+        config: { metricName: "requests" },
+        id,
+        kind: "metric",
+        title: id,
+        ...overrides,
+    };
+};
 
 describe("panel reducers", () => {
     it("appends a panel immutably", () => {
@@ -57,6 +59,7 @@ describe("panel reducers", () => {
         const panels = [panel("a"), panel("b")];
 
         movePanel(panels, "a", "down");
+
         expect(panels.map((p) => p.id)).toStrictEqual(["a", "b"]);
     });
 });

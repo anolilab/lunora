@@ -48,7 +48,7 @@ export const SecretsSection = ({ organizationId, preloaded }: SecretsSectionProp
                     <Field htmlFor="secret-project" label="Project">
                         <Select
                             onValueChange={(newValue) => {
-                                setProjectId(newValue as null | ProjectId);
+                                setProjectId(newValue);
                             }}
                             value={projectId}
                         >

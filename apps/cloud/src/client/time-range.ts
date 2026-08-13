@@ -24,7 +24,7 @@ export interface TimeRangePresetSpec {
 const HOUR_MS = 60 * 60 * 1000;
 
 /** Preset specs, in the order the picker renders them. `24h` is the default. */
-export const TIME_RANGE_PRESETS: readonly TimeRangePresetSpec[] = [
+export const TIME_RANGE_PRESETS: ReadonlyArray<TimeRangePresetSpec> = [
     { id: "1h", label: "1h", ms: HOUR_MS },
     { id: "24h", label: "24h", ms: 24 * HOUR_MS },
     { id: "7d", label: "7d", ms: 7 * 24 * HOUR_MS },

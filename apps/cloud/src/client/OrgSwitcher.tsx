@@ -77,7 +77,7 @@ export const OrgSwitcher = ({ orgId, organizations }: { organizations: ReadonlyA
                     </button>
                 </div>
             </details>
-            <OrganizationsSheet onOpenChange={setSheetOpen} open={sheetOpen} orgId={orgId} organizations={organizations} />
+            <OrganizationsSheet onOpenChange={setSheetOpen} open={sheetOpen} organizations={organizations} orgId={orgId} />
         </>
     );
 };

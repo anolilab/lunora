@@ -33,6 +33,7 @@ export type RouteAuth =
 
 export interface RouteSpec {
     auth: RouteAuth;
+
     /**
      * Expose this route as an MCP tool (opt-in). Never set on token-minting /
      * auth / webhook routes — see the MCP surface's deny-list.
@@ -58,7 +59,7 @@ const VALID_AUTH: ReadonlySet<RouteAuth> = new Set<RouteAuth>(["adminToken", "de
  * `(method, path)` (a table typo that would silently shadow a route). Returns
  * the routes so callers can build their dispatch tables off the checked list.
  */
-export const assertRoutesClassified = <Handler>(routes: readonly RegisteredRoute<Handler>[]): readonly RegisteredRoute<Handler>[] => {
+export const assertRoutesClassified = <Handler>(routes: ReadonlyArray<RegisteredRoute<Handler>>): ReadonlyArray<RegisteredRoute<Handler>> => {
     const seen = new Set<string>();
 
     for (const route of routes) {

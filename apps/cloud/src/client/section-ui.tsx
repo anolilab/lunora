@@ -26,10 +26,11 @@ export const rowClassName = "flex w-full items-center gap-3 border-b border-bord
 export const interactiveRowClassName = cn(rowClassName, "cursor-pointer text-left text-foreground transition-colors hover:bg-accent");
 
 /** The list wrapper for {@link Row}s — no bullets, no gaps (rows carry their own rule). */
+
 /**
  * The label voice: Geist Mono, ALL CAPS, tight tracking, tertiary size.
  *
- * One constant rather than the same class string repeated per `<TableHead>` — the
+ * One constant rather than the same class string repeated per `&lt;TableHead>` — the
  * design system treats labels as a single role, so they should have a single
  * definition. Applies to column headers and any other structural label.
  */

@@ -46,7 +46,7 @@ describe(parseWranglerManifest, () => {
     it("drops malformed DO/cron entries rather than trusting them", () => {
         const manifest = parseWranglerManifest({
             durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }, { name: "NO_CLASS" }, { class_name: "NO_NAME" }] },
-            triggers: { crons: ["0 0 * * *", 42 as unknown as string, "", "  "] },
+            triggers: { crons: ["0 0 * * *", 42, "", "  "] },
         });
 
         expect(manifest.bindings.durableObjects).toStrictEqual([{ binding: "SHARD", className: "ShardDO" }]);

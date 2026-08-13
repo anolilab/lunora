@@ -136,5 +136,5 @@ const useAuthUI = (): ControllerContext => {
 const useAuthUILink = (): AuthUIProviderProps["Link"] | undefined => use(AuthUIContext)?.Link;
 
 export type { AuthUIProviderProps };
-// eslint-disable-next-line react-refresh/only-export-components -- hooks are colocated with the provider by convention (mirrors @lunora/react's lunora-provider).
+
 export { AuthUIProvider, useAuthUI, useAuthUILink };

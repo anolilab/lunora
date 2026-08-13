@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 
-import type { TraceRollup } from "../src/telemetry/trace-tree";
 import { filterTraces, matchesTraceFilter } from "../src/telemetry/trace-query";
+import type { TraceRollup } from "../src/telemetry/trace-tree";
 
 /** One folded trace with sensible defaults. */
-const trace = (overrides: Partial<TraceRollup> = {}): TraceRollup => ({
-    durationMs: 100,
-    endedAt: 1100,
-    errorCount: 0,
-    rootFunctionPath: "messages:send",
-    rootName: "messages:send",
-    spanCount: 3,
-    startedAt: 1000,
-    traceId: "t1",
-    ...overrides,
-});
+const trace = (overrides: Partial<TraceRollup> = {}): TraceRollup => {
+    return {
+        durationMs: 100,
+        endedAt: 1100,
+        errorCount: 0,
+        rootFunctionPath: "messages:send",
+        rootName: "messages:send",
+        spanCount: 3,
+        startedAt: 1000,
+        traceId: "t1",
+        ...overrides,
+    };
+};
 
 describe(matchesTraceFilter, () => {
     it("passes every trace when the filter is empty", () => {

@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { createDeployRouter } from "../src/deploy/router";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
 import { assertRoutesClassified } from "../src/deploy/route-registry";
+import { createDeployRouter } from "../src/deploy/router";
 
 const noop = (): Promise<Response> => Promise.resolve(new Response());
 
-const route = (over: Partial<RegisteredRoute<typeof noop>>): RegisteredRoute<typeof noop> => ({
-    handler: noop,
-    method: "POST",
-    path: "/v1/thing",
-    spec: { auth: "deployKey" },
-    ...over,
-});
+const route = (over: Partial<RegisteredRoute<typeof noop>>): RegisteredRoute<typeof noop> => {
+    return {
+        handler: noop,
+        method: "POST",
+        path: "/v1/thing",
+        spec: { auth: "deployKey" },
+        ...over,
+    };
+};
 
 describe(assertRoutesClassified, () => {
     it("accepts a fully classified table", () => {

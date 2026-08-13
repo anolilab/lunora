@@ -11,7 +11,7 @@
  *   depth under `parentSpanId` — a true span waterfall, not a log-gap timeline.
  */
 
-/** One eval score on a generation span (`gen_ai.evaluation.<name>.score`/`.label`), shown in the detail pane. */
+/** One eval score on a generation span (`gen_ai.evaluation.&lt;name>.score`/`.label`), shown in the detail pane. */
 export interface SpanEvaluation {
     label?: string;
     name: string;
@@ -57,7 +57,7 @@ export interface TraceRollup {
     endedAt: number;
     /** Spans in the trace whose status was error. */
     errorCount: number;
-    /** The `<file>:<function>` of the root span, when attributed. */
+    /** The `&lt;file>:&lt;function>` of the root span, when attributed. */
     rootFunctionPath?: string;
     /** The root (earliest) span's name — what the trace is "of". */
     rootName: string;
