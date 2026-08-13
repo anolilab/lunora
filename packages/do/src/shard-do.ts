@@ -1621,9 +1621,9 @@ abstract class ShardDO {
      * dropped and `currentStmtSamplesTruncated` is set — already-tracked
      * statements keep folding regardless.
      *
-     * `rowsWritten` is always 0 here — the ctx-db adapter doesn't expose a
-     * `changes()` count through the structural `SqlExec` surface, so we
-     * attribute only SELECT result sizes as `rowsRead`.
+     * `rowsRead`/`rowsWritten` come from the cursor's own counters — rows
+     * SCANNED and WRITTEN, which is what storage bills — falling back to the
+     * result-set size only on a host that doesn't expose them.
      */
     private currentStmtSamples: Map<string, StmtSample> | undefined;
 
@@ -2150,6 +2150,27 @@ abstract class ShardDO {
             if (cursor !== null && typeof cursor === "object") {
                 const c = cursor as Record<string, unknown>;
 
+                /**
+                 * Rows the statement SCANNED and WROTE, read off the cursor
+                 * after iteration. This is the number SQLite actually did work
+                 * for and the one storage bills — a query filtering on an
+                 * unindexed column scans the whole table to return three rows,
+                 * so the result-set size reports 3 while the real cost grows
+                 * with the table. Reading the result array instead would make
+                 * the leaderboard understate exactly the queries it exists to
+                 * surface.
+                 *
+                 * Falls back to the result-set size when the host doesn't
+                 * expose the counters (test doubles, non-workerd hosts), which
+                 * is the previous behaviour and still orders a leaderboard
+                 * sensibly — just without the scan/return distinction.
+                 */
+                const counterOf = (key: "rowsRead" | "rowsWritten"): number | undefined => {
+                    const value = c[key];
+
+                    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+                };
+
                 const wrap = (name: "one" | "toArray", rowsOf: (value: unknown) => number): boolean => {
                     const method = c[name];
 
@@ -2162,7 +2183,7 @@ abstract class ShardDO {
                     c[name] = () => {
                         const value = original();
 
-                        foldSample(query, Date.now() - start, rowsOf(value), 0);
+                        foldSample(query, Date.now() - start, counterOf("rowsRead") ?? rowsOf(value), counterOf("rowsWritten") ?? 0);
 
                         return value;
                     };
