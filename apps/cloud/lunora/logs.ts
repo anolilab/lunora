@@ -280,26 +280,26 @@ export const list = query
         const levelSet = args.levels && args.levels.length > 0 ? new Set<LogLevel>(args.levels) : undefined;
         const needle = args.search?.trim().toLowerCase();
 
-        const rows: TenantLogView[] = [];
-
-        for (const row of page as unknown as TenantLogRow[]) {
-            if (row.createdAt <= cursor) {
-                continue;
-            }
-
-            if (row.createdAt < from || row.createdAt > to) {
-                continue;
+        // One predicate for the in-memory half of the filter, so the walk below is
+        // just "take the first `limit` that pass".
+        const keep = (row: TenantLogRow): boolean => {
+            if (row.createdAt <= cursor || row.createdAt < from || row.createdAt > to) {
+                return false;
             }
 
             if (levelSet && !levelSet.has(row.level)) {
-                continue;
+                return false;
             }
 
-            if (needle !== undefined && needle !== "" && !matchesSearch(row, needle)) {
-                continue;
-            }
+            return needle === undefined || needle === "" || matchesSearch(row, needle);
+        };
 
-            rows.push(toView(row));
+        const rows: TenantLogView[] = [];
+
+        for (const row of page as unknown as TenantLogRow[]) {
+            if (keep(row)) {
+                rows.push(toView(row));
+            }
 
             if (rows.length >= limit) {
                 break;
