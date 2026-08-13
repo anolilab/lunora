@@ -167,10 +167,10 @@ const ref = (over: Partial<Parameters<ReturnType<typeof createResourceTeardown>>
 
 describe(createResourceTeardown, () => {
     it("deletes the script, then the alias-keyed D1 + R2, when deleteResources is set", async () => {
-        const deleteDispatchScript = vi.fn(() => Promise.resolve());
-        const deleteD1Database = vi.fn(() => Promise.resolve());
-        const deleteR2Bucket = vi.fn(() => Promise.resolve());
-        const findD1DatabaseByName = vi.fn((name: string) => Promise.resolve(name === "app-db" ? { uuid: "d1-uuid" } : null));
+        const deleteDispatchScript = vi.fn<CloudflareApi["deleteDispatchScript"]>(() => Promise.resolve());
+        const deleteD1Database = vi.fn<CloudflareApi["deleteD1Database"]>(() => Promise.resolve());
+        const deleteR2Bucket = vi.fn<CloudflareApi["deleteR2Bucket"]>(() => Promise.resolve());
+        const findD1DatabaseByName = vi.fn<CloudflareApi["findD1DatabaseByName"]>((name) => Promise.resolve(name === "app-db" ? { uuid: "d1-uuid" } : null));
 
         const destroy = createResourceTeardown(cloudflareApi({ deleteD1Database, deleteDispatchScript, deleteR2Bucket, findD1DatabaseByName }));
 
@@ -184,10 +184,10 @@ describe(createResourceTeardown, () => {
     });
 
     it("deletes ONLY the script when deleteResources is false (version prune keeps the shared DB)", async () => {
-        const deleteDispatchScript = vi.fn(() => Promise.resolve());
-        const findD1DatabaseByName = vi.fn(() => Promise.resolve({ uuid: "u" }));
-        const deleteD1Database = vi.fn(() => Promise.resolve());
-        const deleteR2Bucket = vi.fn(() => Promise.resolve());
+        const deleteDispatchScript = vi.fn<CloudflareApi["deleteDispatchScript"]>(() => Promise.resolve());
+        const findD1DatabaseByName = vi.fn<CloudflareApi["findD1DatabaseByName"]>(() => Promise.resolve({ uuid: "u" }));
+        const deleteD1Database = vi.fn<CloudflareApi["deleteD1Database"]>(() => Promise.resolve());
+        const deleteR2Bucket = vi.fn<CloudflareApi["deleteR2Bucket"]>(() => Promise.resolve());
 
         const destroy = createResourceTeardown(cloudflareApi({ deleteD1Database, deleteDispatchScript, deleteR2Bucket, findD1DatabaseByName }));
 
@@ -200,7 +200,7 @@ describe(createResourceTeardown, () => {
     });
 
     it("skips D1 deletion when no database exists for the alias (convention miss = no-op)", async () => {
-        const deleteD1Database = vi.fn(() => Promise.resolve());
+        const deleteD1Database = vi.fn<CloudflareApi["deleteD1Database"]>(() => Promise.resolve());
 
         const destroy = createResourceTeardown(cloudflareApi({ deleteD1Database, findD1DatabaseByName: () => Promise.resolve(null) }));
 
@@ -210,7 +210,7 @@ describe(createResourceTeardown, () => {
     });
 
     it("swallows a non-empty R2 failure (logged) so script + D1 teardown still completes", async () => {
-        const onR2Error = vi.fn();
+        const onR2Error = vi.fn<(bucket: string, error: unknown) => void>();
         const destroy = createResourceTeardown(
             cloudflareApi({ deleteR2Bucket: () => Promise.reject(new Error("bucket not empty")), findD1DatabaseByName: () => Promise.resolve({ uuid: "u" }) }),
             onR2Error,

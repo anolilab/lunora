@@ -44,7 +44,7 @@ const errorRateRule = {
 
 describe(runAlertSweep, () => {
     it("re-fires a quiet error_rate window that the ingest path missed (no latch yet)", async () => {
-        const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
+        const insert = vi.fn<ControlPlaneDb["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const database = fakeDb(
             {
                 alertRuleState: [], // never latched → wasFiring is false
@@ -65,8 +65,8 @@ describe(runAlertSweep, () => {
     });
 
     it("clears a firing rule when its window falls back under threshold — no alert, latch reset", async () => {
-        const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
-        const patch = vi.fn(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDb["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
         const database = fakeDb(
             {
                 alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
@@ -86,8 +86,8 @@ describe(runAlertSweep, () => {
     });
 
     it("does not re-fire while the rule stays firing (latched, still breaching)", async () => {
-        const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
-        const patch = vi.fn(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDb["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
         const database = fakeDb(
             {
                 alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
@@ -106,7 +106,7 @@ describe(runAlertSweep, () => {
     });
 
     it("ignores disabled rules and non-metric targets (never scans observations)", async () => {
-        const findMany = vi.fn((table: string) =>
+        const findMany = vi.fn<ControlPlaneDb["findMany"]>((table: string) =>
             Promise.resolve({
                 page:
                     table === "alertRules"
