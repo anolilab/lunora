@@ -1,7 +1,7 @@
-import { Link } from "@tanstack/react-router";
 import { MoveRight } from "lucide-react";
 import type { ComponentPropsWithoutRef, FC, ReactNode } from "react";
 
+import { Action } from "@/kit/action";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,21 +45,35 @@ const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...re
  * trailing button or caption lands hard against that divider and reads as a
  * layout bug — it did in four separate bands before this was given a value.
  */
+// `light` shares `canvas` on purpose: the tone changes what `--site-canvas`
+// resolves to rather than painting a different colour.
+const TONE_SURFACE = {
+    canvas: "bg-canvas",
+    deep: "bg-canvas-deep",
+    light: "bg-canvas",
+    surface: "bg-surface",
+};
+
 const Section: FC<{
     children: ReactNode;
     className?: string;
     id?: string;
-    tone?: "canvas" | "deep" | "surface";
+    tone?: "canvas" | "deep" | "light" | "surface";
 }> = ({ children, className, id, tone = "canvas" }) => (
+    // `light` re-scopes the whole `--site-*` palette inside the band rather than
+    // swapping a background colour: ink, hairlines, wash and accents all flip
+    // together, so nothing inside needs to know which tone it landed in. The
+    // theme layer publishes its tokens through `@theme inline`, which is what
+    // lets an attribute on a subtree override them at all — under a plain
+    // `@theme` the values are inlined at build time and this does nothing.
+    //
+    // `data-nav-theme` is separate because the navbar is fixed: it reads the
+    // band currently under it to pick its own ink, and light ink over a light
+    // band is the one combination that disappears.
     <section
-        className={cn(
-            "relative border-t border-hairline pt-section pb-section-end",
-            tone === "canvas" && "bg-canvas",
-            tone === "deep" && "bg-canvas-deep",
-            tone === "surface" && "bg-surface",
-            className,
-        )}
-        data-nav-theme="dark"
+        className={cn("relative border-t border-hairline pt-section pb-section-end", TONE_SURFACE[tone], className)}
+        data-nav-theme={tone === "light" ? "light" : "dark"}
+        data-site-theme={tone === "light" ? "light" : undefined}
         id={id}
     >
         {children}
@@ -128,13 +142,10 @@ const SectionHeader: FC<{
             <div className="flex flex-col items-start gap-3 md:col-span-4 md:items-end md:self-end">
                 {note ? <p className="text-body text-ink-muted md:text-right">{note}</p> : null}
                 {action ? (
-                    <Link
-                        className="group inline-flex min-h-[24px] items-center gap-2 py-1 font-mono text-kicker uppercase text-ink transition-colors hover:text-accent"
-                        to={action.to}
-                    >
+                    <Action to={action.to}>
                         {action.label}
-                        <MoveRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-                    </Link>
+                        <MoveRight className="size-4" />
+                    </Action>
                 ) : null}
             </div>
         ) : null}

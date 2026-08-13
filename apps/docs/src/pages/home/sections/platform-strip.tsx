@@ -45,26 +45,16 @@ const TRACK = [
 const EDGE_FADE = "linear-gradient(90deg, transparent 0, #000 6%, #000 94%, transparent 100%)";
 
 const PlatformStrip: FC = () => (
-    <div
-        className="relative z-30 animate-strip-hue border-b border-on-accent/15 motion-reduce:animate-none"
-        data-nav-theme="light"
-        // The stops are set here rather than left to the `@property` defaults so
-        // a re-brand reaches them, and so the band still paints its theme colour
-        // when the animation is off — under `prefers-reduced-motion`, or before
-        // the stylesheet lands. These are the loop's first frame, so stopping is
-        // a freeze rather than a jump to some other colour.
-        style={
-            {
-                "--strip-a": "var(--site-accent-tint)",
-                "--strip-b": "var(--site-accent-2-tint)",
-                backgroundImage: "linear-gradient(100deg, var(--strip-a), var(--strip-b))",
-            } as CSSProperties
-        }
-    >
+    // A quiet band, not a second gradient. The navbar carries the tinted hue
+    // walk now, and the two sit ~60px apart at the top of the page — one
+    // surface wearing that treatment reads as a signature, two stacked read as
+    // a mistake. The strip keeps its job (the primitives, scrolling) and gives
+    // up the colour.
+    <div className="relative z-30 border-y border-hairline bg-canvas-deep" data-nav-theme="dark">
         <Shell className="flex flex-col gap-4 py-6 lg:flex-row lg:items-center lg:gap-8">
-            <span className="flex shrink-0 items-center gap-2.5 text-on-accent">
+            <span className="flex shrink-0 items-center gap-2.5 text-ink">
                 <SiCloudflare aria-hidden="true" className="size-5" />
-                <Kicker className="text-on-accent/80">Built on the Cloudflare Developer Platform</Kicker>
+                <Kicker className="text-ink-faint">Built on the Cloudflare Developer Platform</Kicker>
             </span>
 
             {/* Under `prefers-reduced-motion` the track stops, which would strand
@@ -77,7 +67,7 @@ const PlatformStrip: FC = () => (
                             // The second copy is decoration: announcing it would
                             // read the whole platform list twice.
                             aria-hidden={item.echo}
-                            className="pe-10 font-mono text-blurb whitespace-nowrap text-on-accent/80 transition-colors hover:text-on-accent"
+                            className="pe-10 font-mono text-blurb whitespace-nowrap text-ink-faint transition-colors hover:text-ink"
                             key={item.key}
                         >
                             {item.name}

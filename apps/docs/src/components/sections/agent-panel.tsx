@@ -21,11 +21,11 @@ const SPLIT_WS = /(\s+)/;
 
 const tokenTone = (segment: string): string => {
     if (KEYWORD.test(segment)) {
-        return "text-royal-amethyst";
+        return "text-accent-2";
     }
 
     if (STRING.test(segment)) {
-        return "text-crimson-energy/80";
+        return "text-accent-3";
     }
 
     if (PUNCT.test(segment)) {

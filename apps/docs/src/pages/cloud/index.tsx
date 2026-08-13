@@ -166,11 +166,6 @@ const perks: Perk[] = [
 
 const CloudLanding: FC = () => (
     <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-        {/* vertical guide lines at the container edges, full page height */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
-        />
         {/* Hero + waitlist */}
         <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
             <div

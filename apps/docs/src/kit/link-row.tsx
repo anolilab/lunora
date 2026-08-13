@@ -42,7 +42,7 @@ const LinkRow: FC<{
         </>
     );
 
-    const classes = cn("group flex items-center gap-4 px-1 py-4 transition-colors hover:bg-hairline", className);
+    const classes = cn("group flex items-center gap-4 px-1 py-4 transition-colors hover:bg-wash", className);
 
     if (to) {
         return (

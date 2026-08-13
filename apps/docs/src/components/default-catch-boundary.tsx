@@ -1,12 +1,29 @@
+"use client";
+
 import type { ErrorComponentProps } from "@tanstack/react-router";
-import { ErrorComponent, Link, rootRouteId, useMatch, useRouter } from "@tanstack/react-router";
-import type { JSX, MouseEvent } from "react";
+import { rootRouteId, useMatch, useRouter } from "@tanstack/react-router";
+import type { JSX } from "react";
 import { useCallback } from "react";
 
-const handleGoBack = (event: MouseEvent<HTMLAnchorElement>): void => {
-    event.preventDefault();
-    globalThis.history.back();
-};
+import { Action } from "@/kit/action";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
+
+/**
+ * The page shown when a route throws.
+ *
+ * It uses the same header every other page uses rather than a bare stack trace
+ * on a white background: an error is still a page of this site, and the router
+ * renders this in place of whatever the reader asked for, so it should not look
+ * like the app fell over.
+ *
+ * The message is shown, the stack is not — in production a stack trace is a
+ * description of the server's internals handed to whoever provoked it. In dev
+ * it goes to the console, where the person who can act on it is already
+ * looking.
+ */
+
+const isError = (value: unknown): value is Error => value instanceof Error;
 
 const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
     const router = useRouter();
@@ -15,32 +32,52 @@ const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
         strict: false,
     });
 
-    // eslint-disable-next-line no-console
-    console.error("DefaultCatchBoundary Error:", error);
+    // eslint-disable-next-line no-console -- the stack is not rendered, so this is the only place a developer can see it
+    console.error("Route error:", error);
 
     const handleTryAgain = useCallback((): void => {
         router.invalidate().catch(() => {
-            // ignore invalidate errors — handled by the error boundary
+            // Ignore: a failed invalidate lands back in this boundary anyway.
         });
     }, [router]);
 
+    const goBack = useCallback((): void => {
+        router.history.back();
+    }, [router]);
+
+    const message = isError(error) ? error.message : "The page could not be rendered.";
+
     return (
-        <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-6 p-4">
-            <ErrorComponent error={error} />
-            <div className="flex flex-wrap items-center gap-2">
-                <button className="rounded bg-gray-600 px-2 py-1 font-extrabold text-ink uppercase dark:bg-gray-700" onClick={handleTryAgain} type="button">
-                    Try Again
-                </button>
-                {isRoot ? (
-                    <Link className="rounded bg-gray-600 px-2 py-1 font-extrabold text-ink uppercase dark:bg-gray-700" to="/">
-                        Home
-                    </Link>
-                ) : (
-                    <Link className="rounded bg-gray-600 px-2 py-1 font-extrabold text-ink uppercase dark:bg-gray-700" onClick={handleGoBack} to="/">
-                        Go Back
-                    </Link>
-                )}
-            </div>
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+            <ArticleHeader
+                actions={
+                    <>
+                        <Action onClick={handleTryAgain} variant="primary">
+                            Try again
+                        </Action>
+                        {isRoot ? <Action to="/">Home</Action> : <Action onClick={goBack}>Go back</Action>}
+                    </>
+                }
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Error" }]}
+                lead={message}
+                meta="Something went wrong"
+                title="This page didn’t load."
+            />
+
+            <Shell className="py-section-end">
+                <p className="max-w-2xl text-body text-ink-muted">
+                    Retrying re-runs the page’s loaders, which clears it when the cause was transient. If it keeps happening,{" "}
+                    <a
+                        className="text-accent underline underline-offset-4 hover:text-ink"
+                        href="https://github.com/anolilab/lunora/issues"
+                        rel="noopener noreferrer"
+                        target="_blank"
+                    >
+                        open an issue
+                    </a>{" "}
+                    with the address you were on.
+                </p>
+            </Shell>
         </div>
     );
 };

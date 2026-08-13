@@ -66,7 +66,7 @@ const MANIFEST: { label: string; tone?: "accent"; value: string }[] = [
 ];
 
 const SupportSection: FC = () => (
-    <Section id="support">
+    <Section id="support" tone="light">
         <Shell>
             <SectionHeader label="Open source" title="Built in the open, on purpose.">
                 <p className="text-body text-ink-muted">Nothing about Lunora is a black box. Read it, fork it, or send the fix yourself.</p>

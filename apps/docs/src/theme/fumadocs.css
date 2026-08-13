@@ -44,14 +44,18 @@
     border-radius: var(--site-radius);
 }
 
-/* Sidebar: its own surface, separated by a hairline rather than a shadow. The
-   panel is pinned to the viewport top behind the fixed h-16 navbar, so drop it
-   below the navbar or its first items sit underneath. */
+/* Sidebar: the page's own canvas, separated by a hairline rather than a shade.
+   It used to sit on `canvas-deep`, one step darker than the page, which read as
+   a panel bolted to the side of the article instead of one continuous surface —
+   the hairline already does the separating.
+
+   Pinned below the navbar, whose height it has to match or the first nav items
+   sit underneath it. */
 #nd-sidebar {
-    background-color: var(--site-canvas-deep);
+    background-color: var(--site-canvas);
     border-right: 1px solid var(--site-hairline);
-    top: 4rem;
-    height: calc(100dvh - 4rem);
+    top: var(--fd-header-height, 6rem);
+    height: calc(100dvh - var(--fd-header-height, 6rem));
 }
 
 /* Sidebar section labels read as the same mono micro-label used everywhere

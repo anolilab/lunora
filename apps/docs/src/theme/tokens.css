@@ -93,7 +93,11 @@
     --container-shell: var(--site-shell);
 }
 
-:root {
+/* `[data-site-theme="dark"]` matches the same values so the palette can be
+   re-entered: a light band may still contain a dark object (a code console),
+   and without this the tokens only ever flip one way. */
+:root,
+[data-site-theme="dark"] {
     /* ─────────────────────────────────────────────────────────────────────
        SWAP EVERYTHING BELOW TO RE-BRAND.
        Defaults are Lunora "Luna + Aurora" on a night canvas.
@@ -111,6 +115,16 @@
     /* Barely-there fill that lifts a panel off the canvas without reading as
        a distinct surface. Too faint to be a border; too subtle to be `surface`. */
     --site-wash: rgb(255 255 255 / 0.03);
+
+    /* The diagonal ruling in the band spacer. Its own token because the spacer
+       sits between two bands and has to work on either ground — it was a fixed
+       dark grey, which vanished the moment a light band appeared under it. */
+    --site-hatch: rgb(46 48 56 / 0.45);
+
+    /* Code console surface. A token rather than a literal so a console can sit
+       on either ground: on the dark half it is the deepest surface on the page,
+       on the light half it becomes paper and the listing is printed on it. */
+    --site-console: hsl(240 22% 4%);
 
     /* Ink — three steps is enough; a fourth always ends up unreadable.
        The faint step is pinned to the WCAG AA floor rather than to taste: at
@@ -190,30 +204,63 @@
 }
 
 /**
- * Light brand override. The marketing site runs dark-only, so this exists for
- * downstream projects: set `data-site-theme="light"` on <html> to flip.
+ * The light band.
+ *
+ * White and quiet, with the air doing the work rather than the drawing. Two
+ * earlier attempts are worth recording because both failed for reasons that
+ * are easy to repeat:
+ *
+ * 1. A cool near-white with every other value mirrored — that is an inversion,
+ *    not a surface, and it read exactly like the dark theme flipped.
+ * 2. Ivory with near-black rules, to stop the hairline grid evaporating. It
+ *    solved the structure but made every band heavy: a 0.82 rule is a bar, not
+ *    a line, and `bg-hairline` is used as a *fill* in ten places, so hover
+ *    states and icon tiles all turned into black slabs.
+ *
+ * What actually works on a light ground is fewer dark objects, not stronger
+ * lines. The rules go back to a whisper; the density comes down instead (see
+ * `GridCell`'s `chips`, which replace most of the code panels in a light band).
+ * A dark console is then an accent — one or two per band, deliberately placed —
+ * rather than half the band's surface area.
+ *
+ * Set `data-site-theme="light"` on any subtree to enter it; `Section tone="light"`
+ * does this for a band.
  */
 [data-site-theme="light"] {
-    --site-canvas: hsl(228 32% 97%);
-    --site-canvas-deep: #ffffff;
-    --site-surface: hsl(228 22% 94%);
+    --site-canvas: #ffffff;
+    --site-canvas-deep: #fafafa;
+    --site-surface: #f5f5f6;
     --site-surface-raised: #ffffff;
 
-    --site-hairline: rgb(14 14 17 / 0.1);
-    --site-hairline-strong: rgb(14 14 17 / 0.2);
-    --site-wash: rgb(14 14 17 / 0.04);
+    /* A whisper, matching the dark half's 8% white. Structure is present but
+       never the loudest thing in the band. */
+    --site-hairline: rgb(17 17 19 / 0.1);
+    --site-hairline-strong: rgb(17 17 19 / 0.2);
+    --site-wash: rgb(17 17 19 / 0.04);
+    --site-hatch: rgb(17 17 19 / 0.1);
+    /* The console stays dark on this ground on purpose — it is the one black
+       object in the band and it earns its weight by being rare. `CodeView`
+       re-enters the dark palette so its type stays light on it. */
+    --site-console: hsl(240 22% 4%);
 
-    --site-ink: hsl(240 14% 10%);
-    --site-ink-muted: rgb(14 14 17 / 0.62);
-    --site-ink-faint: rgb(14 14 17 / 0.42);
+    --site-ink: #111112;
+    --site-ink-muted: rgb(17 17 19 / 0.64);
+    /* Faint ink carries kickers and meta at 10–11px where AA wants 4.5:1. On
+       pure white the alpha that clears it solves to 0.573, so this is that
+       with margin — the 0.42 this palette shipped with measured 2.7:1 and had
+       never been checked against anything. */
+    --site-ink-faint: rgb(17 17 19 / 0.62);
 
-    --site-accent: hsl(186 84% 32%);
-    --site-accent-2: hsl(256 62% 52%);
-    --site-accent-3: hsl(330 70% 48%);
-    --site-on-accent: hsl(228 32% 97%);
-    --site-emphasis: hsl(240 14% 10%);
-    --site-on-emphasis: hsl(228 32% 97%);
-    --site-positive: hsl(152 58% 32%);
-    --site-panel: hsl(240 14% 10%);
-    --site-on-panel: hsl(228 32% 97%);
+    /* Darker than mirroring the dark theme would suggest. These carry text —
+       section labels, the status value in the manifest — and at 32% lightness
+       cyan measured 3.9:1 on this ground, under the 4.5:1 those sizes need. */
+    --site-accent: hsl(186 84% 24%);
+    --site-accent-2: hsl(256 62% 33%);
+    --site-accent-3: hsl(330 70% 27%);
+    --site-on-accent: #ffffff;
+    --site-emphasis: #111112;
+    --site-on-emphasis: #ffffff;
+    --site-positive: hsl(152 58% 28%);
+    --site-panel: #111112;
+    --site-on-panel: #ffffff;
 }

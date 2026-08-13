@@ -47,7 +47,7 @@ const CompareBand: FC = () => {
     const rivals = RIVALS.map((slug) => COMPARISONS[slug]).filter(Boolean);
 
     return (
-        <Section id="compare">
+        <Section id="compare" tone="light">
             <Shell>
                 <SectionHeader label="Compare" note="The full matrix, including where they win, is on the comparison pages." title="Where Lunora differs">
                     <p className="text-body text-ink-muted">

@@ -9,6 +9,8 @@ import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill, SectionHead } from "@/components/sections/langbase";
 import type { AccentColor, Category, PackageInfo } from "@/data/packages";
 import { categories, packages } from "@/data/packages";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import { cn, formatNumber } from "@/lib/utils";
 import type { DownloadStats } from "@/server/stats";
 import { getStats } from "@/server/stats";
@@ -108,21 +110,29 @@ const PackagesListing: FC = () => {
 
     return (
         <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-            {/* vertical guide lines */}
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Packages" }]}
+                lead="From the schema-first server to the live client and framework adapters — explore the full collection of Lunora packages, built to work together."
+                meta={`${String(packages.length)} packages`}
+                title="The complete toolkit"
             />
 
-            {/* hero + filters */}
-            <section className="border-t border-hairline" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 pt-32 pb-10 lg:px-0">
-                    <SectionHead
-                        eyebrow="Open source"
-                        subtitle="From the schema-first server to the live client and framework adapters — explore the full collection of Lunora packages, built to work together."
-                        title="The complete toolkit"
-                    />
-                    <div className="mt-12 flex flex-col gap-4 border-t border-hairline pt-8 sm:flex-row sm:items-center sm:justify-between">
+            {/* The filters and the grid share one section, because that section is
+                what bounds the sticky bar: a sticky element travels only within its
+                own parent, so the bar rides down the list and stops at the last row
+                instead of following the reader into the CTA and the footer.
+
+                The bar is inset to the shell, not full-bleed — it is a control
+                attached to the grid, and a full-width band reads as page chrome. It
+                still needs its own opaque ground and frame, since 55 cards scroll
+                underneath it. */}
+            <section className="pt-10" data-nav-theme="dark">
+                {/* No padding on the sticky element itself: `top` docks its border
+                    box, so any padding here would be a transparent strip with cards
+                    scrolling through it. The spacing lives on the section above and
+                    on the grid below. */}
+                <Shell className="sticky top-28 z-40">
+                    <div className="flex flex-col gap-4 border border-hairline bg-canvas px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <CategoryFilter active={activeCategory} onChange={setActiveCategory} />
                         <div className="relative">
                             <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
@@ -137,14 +147,9 @@ const PackagesListing: FC = () => {
                             />
                         </div>
                     </div>
-                </div>
-            </section>
+                </Shell>
 
-            <HatchSpacer />
-
-            {/* grid */}
-            <section className="border-t border-hairline" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 lg:px-0">
+                <Shell className="pt-6">
                     {filteredPackages.length > 0 ? (
                         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
                             {filteredPackages.map((pkg) => (
@@ -166,7 +171,7 @@ const PackagesListing: FC = () => {
                             </button>
                         </div>
                     )}
-                </div>
+                </Shell>
             </section>
 
             <HatchSpacer />

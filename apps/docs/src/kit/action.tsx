@@ -14,8 +14,8 @@ import { cn } from "@/lib/utils";
  */
 
 const VARIANT: Record<string, string> = {
-    ghost: "text-ink-muted hover:bg-hairline hover:text-ink",
-    outline: "border border-hairline-strong text-ink hover:border-ink-faint hover:bg-hairline",
+    ghost: "text-ink-muted hover:bg-wash hover:text-ink",
+    outline: "border border-hairline-strong text-ink hover:border-ink-faint hover:bg-wash",
     primary: "bg-emphasis text-on-emphasis hover:opacity-90",
 };
 

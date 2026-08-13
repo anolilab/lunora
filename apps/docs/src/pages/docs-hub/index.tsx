@@ -22,6 +22,27 @@ import siteConfig from "~/site.config";
  * same kit as the rest of the site.
  */
 
+const start: { blurb: string; command: string; step: string; title: string }[] = [
+    {
+        blurb: "Scaffolds the project, the Lunora backend folder, and a typed client already wired to it.",
+        command: siteConfig.cta.install,
+        step: "01",
+        title: "Create a project",
+    },
+    {
+        blurb: "Frontend, backend and the Studio admin UI on one server, with types regenerated on every save.",
+        command: "npx lunora dev",
+        step: "02",
+        title: "Start the dev server",
+    },
+    {
+        blurb: "Declare a table, write a query, and the client picks it up — or it stops compiling.",
+        command: "lunora/schema.ts",
+        step: "03",
+        title: "Define your first table",
+    },
+];
+
 const runtimes: { blurb: string; brand?: boolean; Icon: ComponentType<{ className?: string; color?: string }>; name: string; to: string }[] = [
     { blurb: "Hooks for live queries, mutations, and auth.", brand: true, Icon: SiReact, name: "React", to: "/docs/frameworks/react" },
     { blurb: "Composables with reactive loaders.", brand: true, Icon: SiVuedotjs, name: "Vue", to: "/docs/frameworks/vue" },
@@ -62,7 +83,7 @@ const popular = [
 ];
 
 const DocsHub: FC = () => (
-    <div className="bg-canvas" data-theme="dark">
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
         <PageHeader align="bottom" panelWidth="wide" size="short">
             <div className="mb-7 flex items-center justify-between gap-4">
                 <Kicker>Documentation</Kicker>
@@ -75,6 +96,22 @@ const DocsHub: FC = () => (
                 </p>
             </div>
         </PageHeader>
+
+        <Section className="border-t-0" id="start">
+            <Shell>
+                <SectionHeader action={{ label: "Full getting-started guide", to: "/docs/getting-started" }} label="Getting started" title="Start with Lunora">
+                    <p className="text-body text-ink-muted">
+                        Two commands to a running app. Pick your framework below once it is up — the adapter is the only part that differs.
+                    </p>
+                </SectionHeader>
+
+                <HairlineGrid className="border border-b-0 border-hairline lg:border-x-0" columns={3}>
+                    {start.map((item) => (
+                        <GridCell blurb={item.blurb} chips={[item.command]} key={item.step} readout={item.step} title={item.title} />
+                    ))}
+                </HairlineGrid>
+            </Shell>
+        </Section>
 
         <HatchSpacer />
 

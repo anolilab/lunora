@@ -185,10 +185,6 @@ const BlogPost: FC<{
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[420px] bg-[radial-gradient(60%_100%_at_50%_0,color-mix(in_oklab,var(--color-royal-amethyst)_18%,transparent),transparent)]"
             />
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
-            />
 
             <section className="relative z-10" data-nav-theme="dark">
                 <div className="mx-auto max-w-6xl px-5 pt-28 pb-24 lg:px-0">

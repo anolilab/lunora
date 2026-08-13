@@ -1,7 +1,9 @@
+import { Link } from "@tanstack/react-router";
 import type { FC, ReactNode } from "react";
+import { Fragment } from "react";
 
 import { GradientBlinds } from "@/kit/gradient-blinds";
-import { Shell } from "@/kit/layout";
+import { Kicker, Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -33,9 +35,15 @@ import { cn } from "@/lib/utils";
 //
 // A minimum plus a panel in normal flow keeps the intent — the header still
 // fills that much of the screen — and lets it grow rather than clip.
+// The fixed navbar's height. Every header has to clear it, and it is declared
+// once here because the two places that need it silently disagreed when the bar
+// grew from h-16 to h-28 — the hero panel ended up 16px underneath it.
+const NAV_CLEARANCE = "pt-28";
+
 const FIELD = {
-    full: "min-h-[30rem] sm:min-h-[38rem] lg:min-h-[45rem]",
-    short: "min-h-[15rem] sm:min-h-[17rem] lg:min-h-[19rem]",
+    article: "min-h-[max(460px,clamp(360px,38vw,500px))]",
+    full: "min-h-[34rem] sm:min-h-[42rem] lg:min-h-[49rem]",
+    short: "min-h-[19rem] sm:min-h-[21rem] lg:min-h-[24rem]",
 };
 
 // `bottom` sits the panel on the field's lower edge so the two share a line and
@@ -47,24 +55,74 @@ const PLACE = {
     center: "items-center",
 };
 
+/**
+ * Vertical padding for the header's content.
+ *
+ * `bare` is symmetric, so the field reads as an even margin around the box
+ * rather than a gap above it and nothing below; the navbar clearance sits on
+ * the field itself in that case. `panel` keeps the clearance here, and its
+ * bottom depends on where the panel is anchored.
+ */
+const contentPadding = (variant: "bare" | "panel", align: "bottom" | "center"): string => {
+    if (variant === "bare") {
+        return "py-5";
+    }
+
+    return align === "bottom" ? `${NAV_CLEARANCE} pb-0` : `${NAV_CLEARANCE} pb-12`;
+};
+
 const PageHeader: FC<{
     /** Where the panel sits in the field. */
     align?: "bottom" | "center";
 
     /**
-     * What paints the field. `gradient` is static CSS and costs nothing;
-     * `blinds` is a WebGL shader and is reserved for the landing hero, where
-     * one animated surface is the page's single moment of motion.
+     * What paints the field. `blinds` is the shader the landing hero uses and
+     * is now the default, so every page header is the same surface; `gradient`
+     * is the static CSS field, kept for anywhere the WebGL cost is not wanted.
      */
     backdrop?: "blinds" | "gradient";
     /** Panel content — meta row, title, actions. */
     children: ReactNode;
     className?: string;
+
+    /**
+     * How loud the field is. `brand` is the full-chroma aurora — the landing
+     * page's one colour moment. `muted` desaturates it to a near-black texture,
+     * which is what an article header wants: the same surface, without spending
+     * the accent on every page.
+     */
+    fieldTone?: "brand" | "muted";
     /** Panel width. `wide` suits a title that sits beside its description. */
     panelWidth?: "default" | "wide";
-    /** `full` for the landing hero, `short` for section landing pages. */
-    size?: "full" | "short";
-}> = ({ align = "center", backdrop = "gradient", children, className, panelWidth = "default", size = "full" }) => (
+
+    /** `full` for the landing hero, `article` for page headers, `short` for title bars. */
+    size?: "article" | "full" | "short";
+
+    /**
+     * Which palette the header runs in. `light` puts the panel and its type on
+     * white; the shader then paints with `multiply` instead of `lighten`,
+     * because lightening anything against white returns white and the rays
+     * disappear entirely.
+     */
+    tone?: "dark" | "light";
+
+    /**
+     * `panel` sets the content in a canvas-coloured card on the field — the
+     * landing hero. `bare` sets it directly on the field, which is what every
+     * other page uses: an article header is a title, not a stage.
+     */
+    variant?: "bare" | "panel";
+}> = ({
+    align = "center",
+    backdrop = "blinds",
+    children,
+    className,
+    fieldTone = "brand",
+    panelWidth = "default",
+    size = "full",
+    tone = "dark",
+    variant = "panel",
+}) => (
     // The bar keeps light ink over this field. Dark ink would need a field
     // that is genuinely light, and the aurora accents sit mid-lightness — so
     // the top scrim below guarantees contrast instead, whatever the hue.
@@ -74,8 +132,8 @@ const PageHeader: FC<{
     // hairlines ruled across it cut it into thirds; sitting above them leaves
     // the rails intact everywhere else. Harmless where there are no rails, and
     // below the fixed navbar's `z-100` either way.
-    <header className={cn("relative z-30", className)} data-nav-theme="dark">
-        <div className={cn("relative flex overflow-hidden bg-canvas-deep", FIELD[size], PLACE[align])}>
+    <header className={cn("relative z-30", className)} data-nav-theme={tone} data-site-theme={tone === "light" ? "light" : undefined}>
+        <div className={cn("relative flex overflow-hidden bg-canvas-deep", FIELD[size], PLACE[align], variant === "bare" && NAV_CLEARANCE)}>
             {/* One brand colour with depth, not three in equal measure.
                 Violet carries the field (it is the primary glow in the brand);
                 cyan and rose are secondary blooms at the edges that give it
@@ -86,16 +144,18 @@ const PageHeader: FC<{
                 // shows two adjacent stops and walks the window along, so it
                 // drifts violet → rose → cyan over a slow minute instead of
                 // painting the stock three-way mesh that belongs to no brand.
-                <div className="absolute inset-0">
+                <div className={cn("animate-field-in absolute inset-0 motion-reduce:animate-none", fieldTone === "muted" && "opacity-[0.22] grayscale")}>
                     <GradientBlinds
                         angle={45}
                         blindCount={32}
                         blindMinWidth={26}
+                        className={tone === "light" ? "opacity-30" : undefined}
                         cycleSeconds={54}
                         distortAmount={0}
                         gradientColors={["--site-accent-2", "--site-accent-3", "--site-accent"]}
+                        mixBlendMode={tone === "light" ? "multiply" : "lighten"}
                         mouseDampening={0.6}
-                        noise={0.18}
+                        noise={tone === "light" ? 0.08 : 0.18}
                         spotlightRadius={0.62}
                     />
                     {/* Vignette. The shader's own falloff bottoms out well above
@@ -111,7 +171,7 @@ const PageHeader: FC<{
             ) : (
                 <div
                     aria-hidden="true"
-                    className="absolute inset-0"
+                    className="animate-field-in absolute inset-0 motion-reduce:animate-none"
                     style={{
                         background: [
                             "radial-gradient(46% 58% at 14% 26%, var(--site-accent) 0%, transparent 40%)",
@@ -166,11 +226,12 @@ const PageHeader: FC<{
             `pt` clears the fixed navbar, which is why the panel cannot simply be
             centred in the raw field. `align="bottom"` keeps its lower edge flush
             with the field's, which is the whole point of that variant. */}
-            <Shell className={cn("pointer-events-none relative z-10 w-full pt-24", align === "bottom" ? "pb-0" : "pb-12")}>
+            <Shell className={cn("pointer-events-none relative z-10 w-full", contentPadding(variant, align))}>
                 <div
                     className={cn(
-                        "pointer-events-auto w-full bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
-                        panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]",
+                        "pointer-events-auto w-full",
+                        variant === "panel" && "bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]",
+                        variant === "panel" && (panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]"),
                     )}
                 >
                     {children}
@@ -180,4 +241,79 @@ const PageHeader: FC<{
     </header>
 );
 
-export { PageHeader };
+/**
+ * The header every page except the landing page uses.
+ *
+ * Opaque boxes sitting on the shared field, not type laid straight onto it: a
+ * small one for the trail, a small one for the page kind, and a large one
+ * carrying the title with the description and any action pinned to its floor.
+ * The field reads between and around them.
+ *
+ * Boxing the copy is what makes the field usable at full chroma. Type set
+ * directly on it measured 1.25:1 against the field's lightest stop, because the
+ * rays move with the cursor and a bright band can pass behind any given word —
+ * so the alternative was dimming the field to the point of being pointless.
+ */
+const MetaBox: FC<{ children: ReactNode }> = ({ children }) => <span className="flex items-center gap-2 bg-canvas px-3.5 py-2">{children}</span>;
+
+const ArticleHeader: FC<{
+    /** Bottom-right of the main box — a copy button, a link out. */
+    actions?: ReactNode;
+    /** Trail of links ending in the current page. The last entry is not a link. */
+    breadcrumb?: { label: string; to?: string }[];
+    className?: string;
+    /** One line at the foot of the main box. */
+    lead?: ReactNode;
+    /** The kind of page this is — "Package reference", "Documentation". */
+    meta?: ReactNode;
+    title: ReactNode;
+}> = ({ actions, breadcrumb, className, lead, meta, title }) => (
+    <PageHeader align="center" className={className} size="article" variant="bare">
+        {breadcrumb?.length || meta ? (
+            <div className="mb-2 flex items-start justify-between gap-4">
+                {breadcrumb?.length ? (
+                    <MetaBox>
+                        {breadcrumb.map((crumb, index) => (
+                            <Fragment key={crumb.label}>
+                                {index > 0 ? (
+                                    <span aria-hidden="true" className="font-mono text-kicker text-ink-faint">
+                                        /
+                                    </span>
+                                ) : null}
+                                {crumb.to ? (
+                                    <Link className="font-mono text-kicker uppercase text-ink-muted transition-colors hover:text-ink" to={crumb.to}>
+                                        {crumb.label}
+                                    </Link>
+                                ) : (
+                                    <Kicker tone="muted">{crumb.label}</Kicker>
+                                )}
+                            </Fragment>
+                        ))}
+                    </MetaBox>
+                ) : (
+                    <span />
+                )}
+                {meta ? (
+                    <MetaBox>
+                        <Kicker>{meta}</Kicker>
+                    </MetaBox>
+                ) : null}
+            </div>
+        ) : null}
+
+        {/* The main box. `min-h` and `justify-between` are what hold the lead on
+            the floor rather than letting it ride up under a one-line title. */}
+        <div className="flex min-h-[18rem] flex-col justify-between gap-10 bg-canvas p-[clamp(1.5rem,1rem+2vw,3.5rem)]">
+            <h1 className="max-w-[11em] text-[clamp(48px,6.8vw,88px)] leading-[0.94] font-bold tracking-[-0.045em] text-balance text-ink">{title}</h1>
+
+            {lead || actions ? (
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    {lead ? <p className="max-w-2xl text-body text-ink-muted">{lead}</p> : null}
+                    {actions ? <div className="flex shrink-0 items-center gap-4">{actions}</div> : null}
+                </div>
+            ) : null}
+        </div>
+    </PageHeader>
+);
+
+export { ArticleHeader, PageHeader };

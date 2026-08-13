@@ -121,12 +121,6 @@ const more: MoreItem[] = [
 
 const StudioLanding: FC = () => (
     <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-        {/* vertical guide lines */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
-        />
-
         {/* hero */}
         <section className="relative border-t border-hairline" data-nav-theme="dark">
             <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-40 pb-12 text-center sm:pt-44">

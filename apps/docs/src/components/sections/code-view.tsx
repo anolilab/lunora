@@ -14,11 +14,11 @@ const SPLIT_WS = /(\s+)/;
 
 const tokenTone = (segment: string): string => {
     if (KEYWORD.test(segment)) {
-        return "text-royal-amethyst";
+        return "text-accent-2";
     }
 
     if (STRING.test(segment)) {
-        return "text-crimson-energy/80";
+        return "text-accent-3";
     }
 
     if (PUNCT.test(segment)) {
@@ -51,7 +51,11 @@ const CodeText: FC<{ text: string }> = ({ text }) => {
 };
 
 const CodeView: FC<{ className?: string; filename: string; lines: string[]; numbers?: boolean }> = ({ className, filename, lines, numbers = false }) => (
-    <div className={cn("flex flex-col overflow-hidden border border-hairline bg-[hsl(240_22%_4%)]", className)}>
+    // A console is dark in either band — on a light one it is the single black
+    // object, and it earns that weight by being rare. It re-enters the dark
+    // palette so its type stays light on it; without that the surface stayed
+    // dark while the ink flipped and the listing measured 1.01:1.
+    <div className={cn("flex flex-col overflow-hidden border border-hairline bg-[var(--site-console)]", className)} data-site-theme="dark">
         <div className="flex items-center gap-2 border-b border-hairline px-4 py-2.5">
             <span className="size-2.5 rounded-full bg-hairline-strong" />
             <span className="size-2.5 rounded-full bg-hairline-strong" />

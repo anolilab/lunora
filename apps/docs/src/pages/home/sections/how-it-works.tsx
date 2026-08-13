@@ -38,7 +38,7 @@ const FUNCTION_CODE = [
 ];
 
 const ShipPanel: FC = () => (
-    <div className="flex size-full flex-col overflow-hidden border border-hairline bg-canvas-deep font-mono">
+    <div className="flex size-full flex-col overflow-hidden border border-hairline bg-[var(--site-console)] font-mono">
         <div className="flex h-10 items-center justify-between border-b border-hairline px-4">
             <span className="flex items-center gap-2 text-blurb text-positive">
                 <span className="size-1.5 animate-pulse rounded-full bg-positive shadow-[0_0_6px] shadow-positive/60" />
@@ -56,7 +56,7 @@ const ShipPanel: FC = () => (
                 </div>
             ))}
         </div>
-        <div className="m-4 mt-auto border border-positive/15 bg-hairline p-3.5">
+        <div className="m-4 mt-auto border border-positive/15 bg-wash p-3.5">
             <p className="text-blurb text-ink-muted">Live, globally · syncing to all clients</p>
             <div className="mt-2.5 flex items-center gap-2">
                 <span className="flex items-center gap-1.5 rounded-full border border-positive/25 bg-positive/[0.07] px-2.5 py-0.5">
@@ -151,7 +151,7 @@ const HowItWorks: FC = () => {
                             aria-expanded={isActive}
                             className={cn(
                                 "relative border-b border-hairline px-8 py-7 text-left transition-colors last:border-b-0",
-                                isActive ? "bg-hairline" : "hover:bg-hairline",
+                                isActive ? "bg-surface" : "hover:bg-wash",
                             )}
                             key={step.index}
                             onClick={() => {

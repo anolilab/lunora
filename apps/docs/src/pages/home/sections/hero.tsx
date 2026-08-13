@@ -32,7 +32,7 @@ const Hero: FC = () => (
             and an offline queue — types sync from server to client automatically via codegen.
         </p>
 
-        <PageHeader backdrop="blinds">
+        <PageHeader>
             <div className="mb-5 flex items-center justify-between gap-4">
                 <Kicker>Open source / FSL-1.1-Apache-2.0</Kicker>
                 <Kicker>Alpha</Kicker>

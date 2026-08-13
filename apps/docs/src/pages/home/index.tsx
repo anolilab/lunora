@@ -11,7 +11,6 @@ import AstroLogo from "@/assets/frameworks/astro.svg?react";
 import NuxtLogo from "@/assets/frameworks/nuxt.svg?react";
 import TanstackLogo from "@/assets/frameworks/tanstack.svg?react";
 import schemaImg from "@/assets/studio/schema.png";
-import timeTravelImg from "@/assets/studio/time-travel.png";
 import AgentPanel from "@/components/sections/agent-panel";
 import CodeView from "@/components/sections/code-view";
 import HatchSpacer from "@/components/sections/hatch-spacer";
@@ -20,7 +19,6 @@ import { Action } from "@/kit/action";
 import { GridCell, HairlineGrid } from "@/kit/grid";
 import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 import { LinkRow, LinkRowList } from "@/kit/link-row";
-import { cn } from "@/lib/utils";
 import Capabilities from "@/pages/home/sections/capabilities";
 import CompareBand from "@/pages/home/sections/compare-band";
 import Faq from "@/pages/home/sections/faq";
@@ -39,11 +37,18 @@ import siteConfig from "~/site.config";
 
 interface Feature {
     blurb: string;
+
+    /**
+     * Mono tags carrying the cell's API surface. A cell has either these or a
+     * panel, never both: on a light band six code panels read as six black
+     * slabs, so only two cells keep one and the rest say it in type.
+     */
+    chips?: string[];
     code?: string[];
     file?: string;
     image?: string;
-    /** Mono line pinned to the cell's bottom edge. */
-    readout: string;
+    /** Mono line pinned to the cell's bottom edge. Panel cells only. */
+    readout?: string;
     title: string;
 }
 
@@ -57,16 +62,12 @@ const features: Feature[] = [
     },
     {
         blurb: "Queries are subscriptions. Every mutation pushes live updates to all clients — with optimistic writes and an offline queue.",
-        code: ["// subscribes once, re-renders on every change", "const todos = useQuery(api.todos.list);", "const add = useMutation(api.todos.add);"],
-        file: "Todos.tsx",
-        readout: "useQuery() -> live",
+        chips: ["useQuery()", "useMutation()", "live subscriptions", "offline queue"],
         title: "Realtime by default",
     },
     {
         blurb: "State lives in SQLite-backed Durable Objects at the edge. Shard by key, or go global to replicate reads across regions.",
-        code: ["export const messages = defineTable({", "  roomId: v.string(),", "  body: v.string(),", "}).shardBy('roomId');"],
-        file: "lunora/schema.ts",
-        readout: ".shardBy('roomId')",
+        chips: [".shardBy('roomId')", ".global()", "SQLite DO"],
         title: "Edge-native & sharded",
     },
     {
@@ -77,15 +78,12 @@ const features: Feature[] = [
     },
     {
         blurb: "Types flow from server functions to the client via codegen. Rename a field and the client stops compiling.",
-        code: ["export type Todo = {", "  _id: Id<'todos'>;", "  text: string;", "  done: boolean;", "};"],
-        file: "_generated/dataModel.ts",
-        readout: "Id<'todos'> | Doc<'todos'>",
+        chips: ["Id<'todos'>", "Doc<'todos'>", "_generated/"],
         title: "End-to-end typed",
     },
     {
         blurb: "Every shard is a SQLite database you can rewind — restore to any moment in the last 30 days, with no extra infrastructure.",
-        image: timeTravelImg,
-        readout: "restore --at 30d",
+        chips: ["restore --at 30d", "point-in-time", "30-day window"],
         title: "Rewind your data",
     },
 ];
@@ -112,7 +110,7 @@ const TOOLS: { href?: string; icon: ReactNode; subtitle: string; title: string; 
     { icon: <Boxes />, subtitle: "Expose a deployment to your AI agents.", title: "MCP server", to: "/packages/mcp" },
 ];
 
-const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature, highlight = false }) =>
+const FeatureVisual: FC<{ feature: Feature }> = ({ feature }) =>
     feature.image ? (
         <img
             alt={`${feature.title} — Lunora Studio`}
@@ -123,30 +121,15 @@ const FeatureVisual: FC<{ feature: Feature; highlight?: boolean }> = ({ feature,
             width={2048}
         />
     ) : (
-        <CodeView
-            className={cn("h-48 border-0", highlight && "opacity-95 mix-blend-luminosity")}
-            filename={feature.file ?? "lunora.ts"}
-            lines={feature.code ?? []}
-        />
+        // No blend on the highlighted cell. Luminosity-blending the console into
+        // the accent behind it was a dark-theme flourish; on paper it tints the
+        // listing cyan while its two neighbours stay untinted, so the row reads
+        // as three different materials.
+        <CodeView className="h-48 border-0" filename={feature.file ?? "lunora.ts"} lines={feature.code ?? []} />
     );
 
 const Home: FC = () => (
     <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-        {/* Vertical guide lines at the container edges, running the whole page.
-            Sections meet them exactly (Shell drops its padding at `lg`), so a
-            full-width grid inside one drops its own side borders there rather
-            than drawing a second line on top.
-
-            The rails run behind the hero's colour field rather than stopping
-            above it — the field lifts itself over them (`z-30` in `PageHeader`).
-            Ending the rails below the hero instead would take them off the
-            promise grid too, which has no side borders of its own and relies on
-            these for its outer edges. */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-shell -translate-x-1/2 border-x border-hairline lg:block"
-        />
-
         <Hero />
 
         <HatchSpacer />
@@ -161,10 +144,11 @@ const Home: FC = () => (
                     {features.map((feature, index) => (
                         <GridCell
                             blurb={feature.blurb}
+                            chips={feature.chips}
                             highlight={index === 1}
                             key={feature.title}
                             readout={feature.readout}
-                            stage={<FeatureVisual feature={feature} highlight={index === 1} />}
+                            stage={feature.code || feature.image ? <FeatureVisual feature={feature} /> : undefined}
                             title={feature.title}
                         />
                     ))}
@@ -202,7 +186,7 @@ const Home: FC = () => (
 
         <Studio />
 
-        <HatchSpacer />
+        <HatchSpacer tone="light" />
 
         <Capabilities />
 
@@ -230,7 +214,7 @@ const Home: FC = () => (
             </Shell>
         </Section>
 
-        <HatchSpacer />
+        <HatchSpacer tone="light" />
 
         <CompareBand />
 
@@ -238,7 +222,7 @@ const Home: FC = () => (
 
         <Faq />
 
-        <HatchSpacer />
+        <HatchSpacer tone="light" />
 
         <SupportSection />
 

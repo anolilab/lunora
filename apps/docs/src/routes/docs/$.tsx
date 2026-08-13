@@ -7,11 +7,12 @@ import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 import { TypeTable } from "fumadocs-ui/components/type-table";
 import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import defaultMdxComponents from "fumadocs-ui/mdx";
-import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
+import { DocsBody, DocsPage } from "fumadocs-ui/page";
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 
 import JsonLd from "@/components/seo/json-ld";
+import { ArticleHeader } from "@/kit/page-header";
 import { source } from "@/lib/docs-source";
 import { createSeoHead } from "@/lib/seo";
 
@@ -84,7 +85,7 @@ const serverLoader = createServerFn({
     });
 
 const clientLoader = browserCollections.docs.createClientLoader({
-    component({ toc, frontmatter, lastModified, default: MDX }: { default: any; frontmatter: any; lastModified?: string; toc: any }) {
+    component({ toc, lastModified, default: MDX }: { default: any; lastModified?: string; toc: any }) {
         return (
             <DocsPage
                 breadcrumb={{ includePage: true, includeRoot: true }}
@@ -104,8 +105,6 @@ const clientLoader = browserCollections.docs.createClientLoader({
                 }}
                 toc={toc}
             >
-                <DocsTitle>{frontmatter.title}</DocsTitle>
-                <DocsDescription>{frontmatter.description}</DocsDescription>
                 {lastModified ? (
                     <p className="text-muted-foreground -mt-2 mb-6 text-sm">
                         Last updated:{" "}
@@ -172,22 +171,51 @@ const Page = () => {
         return items;
     }, [data.slugs]);
 
+    // "Docs / <section>". `slugs` is the path already joined ("concepts/schema"),
+    // not an array — destructuring it yields its first *character*, which is how
+    // this first rendered as "DOCS / G".
+    //
+    // The last segment is the page itself and is dropped: its title is the
+    // heading directly beneath the trail, so keeping it would say it twice.
+    const docsBreadcrumb = useMemo(() => {
+        const sections = data.slugs.split("/").filter(Boolean).slice(0, -1);
+
+        return [
+            { label: "Docs", to: "/docs" },
+            ...sections.map((section) => {
+                return { label: section.replaceAll("-", " ") };
+            }),
+        ];
+    }, [data.slugs]);
+
     return (
         <>
             <JsonLd data={articleJsonLd} />
             <JsonLd data={{ "@type": "BreadcrumbList", itemListElement: breadcrumbItems }} />
+            <ArticleHeader breadcrumb={docsBreadcrumb} lead={data.description} meta="Documentation" title={data.title} />
             <DocsLayout
                 containerProps={{
-                    // Reserve the fixed external navbar's height (h-16) as the docs
-                    // header row so content, sidebar, and TOC all sit below it.
-                    className: "bg-background",
-                    style: { "--fd-header-height": "4rem", "--fd-layout-width": "100%" } as CSSProperties,
+                    // Reserve the fixed external navbar's height (h-24) as the docs
+                    // header row so content, sidebar, and TOC all sit below it. This
+                    // has to track the navbar: at 4rem against a 6rem bar the sidebar
+                    // stuck 32px too high and its first items sat under the nav.
+                    // Page gutters: 20 / 34 / 40 / 70px as the viewport grows. Stepped rather
+                    // than a clamp so the widths are the ones asked for exactly.
+                    className: "bg-background px-5 sm:px-[34px] md:px-10 xl:px-[70px]",
+                    style: { "--fd-header-height": "6rem", "--fd-layout-width": "100%" } as CSSProperties,
                 }}
                 nav={{
                     enabled: false,
                 }}
                 searchToggle={{
                     enabled: false,
+                }}
+                sidebar={{
+                    // Hides the desktop collapse trigger. The sidebar is the only
+                    // way around a docs section, and it now shares the page's own
+                    // canvas rather than being a panel — a control for folding it
+                    // away reads as chrome on something that is not a panel.
+                    collapsible: false,
                 }}
                 tabMode="navbar"
                 themeSwitch={{

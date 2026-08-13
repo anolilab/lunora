@@ -1,6 +1,6 @@
 "use client";
 
-import { Link, useLoaderData } from "@tanstack/react-router";
+import { useLoaderData } from "@tanstack/react-router";
 import { Check, ChevronRight, Copy, Download, ExternalLink, Terminal } from "lucide-react";
 import { motion } from "motion/react";
 import type { FC } from "react";
@@ -8,10 +8,11 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill, SectionHead } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
 import JsonLd from "@/components/seo/json-ld";
 import AnimatedNumber from "@/components/ui/animated/animated-number";
 import type { AccentColor } from "@/data/packages";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import posthog from "@/lib/posthog";
 import { cn, formatNumber } from "@/lib/utils";
 import type { DownloadStats, MonthlyDataPoint } from "@/server/stats";
@@ -164,69 +165,54 @@ const PackageDetail: FC = () => {
                 }}
             />
 
-            {/* vertical guide lines */}
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-hairline lg:block"
+            <ArticleHeader
+                actions={
+                    <>
+                        <a
+                            className={cn(
+                                "inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 font-mono text-xs transition-colors hover:opacity-70",
+                                accent,
+                            )}
+                            href={`https://www.npmjs.com/package/${pkg.npmName}`}
+                            rel="noreferrer"
+                            target="_blank"
+                        >
+                            npm
+                            <ExternalLink className="size-3" />
+                        </a>
+                        <a
+                            className="inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 font-mono text-xs text-ink-muted transition-colors hover:text-ink"
+                            href={`https://github.com/anolilab/lunora/tree/alpha/packages/${pkg.slug}`}
+                            rel="noreferrer"
+                            target="_blank"
+                        >
+                            GitHub
+                            <ExternalLink className="size-3" />
+                        </a>
+                    </>
+                }
+                breadcrumb={[{ label: "Packages", to: "/packages" }, { label: pkg.category }]}
+                lead={pkg.description}
+                meta="Package reference"
+                title={pkg.name}
             />
 
-            {/* hero */}
-            <section className="relative border-t border-hairline" data-nav-theme="dark">
-                <Reveal className="mx-auto flex max-w-6xl flex-col gap-8 px-5 pt-32 pb-12 lg:px-0">
-                    <div className="flex items-center gap-2 font-mono text-xs text-ink-faint">
-                        <Link className="transition-colors hover:text-ink" to="/packages">
-                            Packages
-                        </Link>
-                        <span className="text-ink-faint">/</span>
-                        <span className="text-ink-muted">{pkg.category}</span>
-                    </div>
-
-                    <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-                        <div className="flex flex-col gap-5">
-                            <h1 className="text-5xl font-semibold tracking-tight text-balance text-ink sm:text-6xl">{pkg.name}</h1>
-                            <p className="max-w-2xl text-lg leading-relaxed text-ink-muted">{pkg.description}</p>
+            <section className="border-t border-hairline" data-nav-theme="dark">
+                <Shell className="flex flex-col gap-3 py-10 sm:flex-row sm:items-center">
+                    <div className="relative w-full sm:max-w-md">
+                        <div className="flex items-center gap-3 border border-hairline bg-[var(--site-console)] px-4 py-3 pr-12 font-mono text-sm text-ink-muted">
+                            <Terminal className={cn("size-4 shrink-0", accent)} />
+                            {installCommand}
                         </div>
-                        <div className="flex shrink-0 items-center gap-4 font-mono text-xs">
-                            <a
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 transition-colors hover:opacity-70",
-                                    accent,
-                                )}
-                                href={`https://www.npmjs.com/package/${pkg.npmName}`}
-                                rel="noreferrer"
-                                target="_blank"
-                            >
-                                npm
-                                <ExternalLink className="size-3" />
-                            </a>
-                            <a
-                                className="inline-flex items-center gap-1.5 border-b border-hairline-strong pb-0.5 text-ink-muted transition-colors hover:text-ink"
-                                href={`https://github.com/anolilab/lunora/tree/alpha/packages/${pkg.slug}`}
-                                rel="noreferrer"
-                                target="_blank"
-                            >
-                                GitHub
-                                <ExternalLink className="size-3" />
-                            </a>
-                        </div>
+                        <CopyButton text={installCommand} />
                     </div>
-
-                    <div className="flex flex-col gap-3 border-t border-hairline pt-8 sm:flex-row sm:items-center">
-                        <div className="relative w-full sm:max-w-md">
-                            <div className="flex items-center gap-3 border border-hairline bg-[hsl(240_22%_4%)] px-4 py-3 pr-12 font-mono text-sm text-ink-muted">
-                                <Terminal className={cn("size-4 shrink-0", accent)} />
-                                {installCommand}
-                            </div>
-                            <CopyButton text={installCommand} />
-                        </div>
-                        {pkg.docsPath ? (
-                            <Pill primary to={pkg.docsPath}>
-                                Get started
-                                <ChevronRight className="size-4" />
-                            </Pill>
-                        ) : null}
-                    </div>
-                </Reveal>
+                    {pkg.docsPath ? (
+                        <Pill primary to={pkg.docsPath}>
+                            Get started
+                            <ChevronRight className="size-4" />
+                        </Pill>
+                    ) : null}
+                </Shell>
             </section>
 
             {/* stats */}

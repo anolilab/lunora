@@ -5,7 +5,6 @@ import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link, useLocation } from "@tanstack/react-router";
 import { useSearchContext } from "fumadocs-ui/contexts/search";
 import {
-    Book,
     Bot,
     Boxes,
     ChevronRight,
@@ -20,7 +19,6 @@ import {
     LayoutDashboard,
     LayoutTemplate,
     Menu,
-    Rocket,
     Scale,
     ScrollText,
     Search,
@@ -29,7 +27,7 @@ import {
     X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
@@ -107,9 +105,7 @@ const menu: NavColumn[] = [
             },
         ],
         navItems: [
-            { description: "Build your first app in minutes.", href: "/docs/getting-started", icon: <Rocket />, title: "Quickstart" },
             { description: "Scaffold an app for your framework.", href: "/start", icon: <LayoutTemplate />, title: "Starter kits" },
-            { description: "The full Lunora framework reference.", href: "/docs/", icon: <Book />, title: "Documentation" },
             { description: "Auth: email/password, OAuth, passkeys.", href: "/packages/auth", icon: <KeyRound />, title: "Auth" },
             { description: "Workers AI on the Vercel AI SDK.", href: "/packages/ai", icon: <Bot />, title: "AI" },
             { description: "runAfter / runAt + Cron Triggers.", href: "/packages/scheduler", icon: <Clock />, title: "Scheduler" },
@@ -141,7 +137,7 @@ const menu: NavColumn[] = [
     },
 ];
 
-const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
+const Logo = ({ onTint = true, pathname }: { onTint?: boolean; pathname: string }) => {
     const [isOpen, setIsOpen] = useState(false);
 
     useEffect(() => {
@@ -162,8 +158,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
         };
     }, [isOpen]);
 
-    const itemClass =
-        "flex items-center gap-2 select-none p-3 text-sm leading-none text-ink-muted no-underline transition-colors hover:bg-hairline hover:text-ink";
+    const itemClass = "flex items-center gap-2 select-none p-3 text-sm leading-none text-ink-muted no-underline transition-colors hover:bg-wash hover:text-ink";
 
     return (
         <div className="relative">
@@ -176,7 +171,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
             >
                 <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs" : "/"}>
                     <LunoraLogo className="h-7 w-7" title="Lunora" />
-                    <span className={cn("text-body font-semibold tracking-tight", light ? "text-[hsl(240_14%_10%)]" : "text-ink")}>Lunora</span>
+                    <span className={cn("text-body font-semibold tracking-tight", onTint ? "text-[hsl(240_14%_10%)]" : "text-ink")}>Lunora</span>
                 </Link>
             </div>
             {isOpen && (
@@ -207,7 +202,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void }) => {
     const content = (
         <>
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-none border border-hairline bg-hairline text-ink-muted transition-colors group-hover/leaf:border-hairline-strong group-hover/leaf:text-ink [&>svg]:size-5">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none border border-hairline bg-wash text-ink-muted transition-colors group-hover/leaf:border-hairline-strong group-hover/leaf:text-ink [&>svg]:size-5">
                 {leaf.icon}
             </span>
             <span className="flex flex-col gap-0.5">
@@ -216,7 +211,7 @@ const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void
             </span>
         </>
     );
-    const className = "group/leaf flex items-start gap-3 rounded-none px-3 py-2.5 no-underline transition-colors hover:bg-hairline";
+    const className = "group/leaf flex items-start gap-3 rounded-none px-3 py-2.5 no-underline transition-colors hover:bg-wash";
 
     return leaf.href.startsWith("http") ? (
         <a className={className} href={leaf.href} onClick={onNavigate} rel="noreferrer" target="_blank">
@@ -292,7 +287,7 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
                 </div>
                 {column.featureLink ? (
                     <Link
-                        className="group/all flex items-center justify-between rounded-none border border-hairline px-4 py-3 text-sm font-medium text-ink no-underline transition-colors hover:bg-hairline"
+                        className="group/all flex items-center justify-between rounded-none border border-hairline px-4 py-3 text-sm font-medium text-ink no-underline transition-colors hover:bg-wash"
                         to={column.featureLink.href}
                     >
                         {column.featureLink.title}
@@ -304,20 +299,15 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
     );
 };
 
-const Kbd = ({ children }: { children: ReactNode }) => (
-    <kbd className="rounded-none bg-hairline px-1.5 py-0.5 font-mono text-micro text-ink-muted">{children}</kbd>
-);
+const Kbd = ({ children }: { children: ReactNode }) => <kbd className="rounded-none bg-wash px-1.5 py-0.5 font-mono text-micro text-ink-muted">{children}</kbd>;
 
-const SearchButton = ({ light }: { light: boolean }) => {
+const SearchButton = () => {
     const { setOpenSearch } = useSearchContext();
 
     return (
         <button
             aria-label="Search"
-            className={cn(
-                "flex size-9 items-center justify-center rounded-none transition-colors",
-                light ? "text-on-panel/60 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline hover:text-ink",
-            )}
+            className={cn("flex size-9 items-center justify-center rounded-none transition-colors", "text-on-panel/80 hover:bg-on-panel/[0.05]")}
             onClick={() => {
                 setOpenSearch(true);
             }}
@@ -331,48 +321,9 @@ const SearchButton = ({ light }: { light: boolean }) => {
 const Navbar = (): ReactElement => {
     const { pathname } = useLocation();
     const reduceMotion = useReducedMotion();
-    const [light, setLight] = useState(false);
     const [openMenu, setOpenMenu] = useState<string | null>(null);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        let ticking = false;
-
-        const handleScroll = () => {
-            if (ticking) {
-                return;
-            }
-
-            ticking = true;
-
-            requestAnimationFrame(() => {
-                // Any element may declare the tone behind the bar, not just
-                // `section` — the page header is a `header`, and it is the one
-                // region where the bar sits over a bright field.
-                const sections = document.querySelectorAll("[data-nav-theme]");
-                let theme = "dark";
-
-                for (const section of sections) {
-                    const rect = section.getBoundingClientRect();
-
-                    if (rect.top <= 8 && rect.bottom > 8) {
-                        theme = (section as HTMLElement).dataset.navTheme ?? "dark";
-                    }
-                }
-
-                setLight(theme === "light");
-                ticking = false;
-            });
-        };
-
-        window.addEventListener("scroll", handleScroll, { passive: true });
-        handleScroll();
-
-        return () => {
-            window.removeEventListener("scroll", handleScroll);
-        };
-    }, []);
 
     const openWith = (title: string) => {
         if (closeTimer.current) {
@@ -394,22 +345,35 @@ const Navbar = (): ReactElement => {
     };
 
     const active = menu.find((column) => column.navTitle === openMenu);
-    // Article pages need an opaque bar for content to scroll under. The docs
-    // hub is a landing page with its own colour field, so it keeps the
-    // transparent bar the marketing pages use.
-    const opaqueBar = pathname.startsWith("/docs/");
-    // Dark ink is only legible when the bar is transparent over a bright
-    // region. An opaque canvas bar always wants light ink, whatever is behind.
-    const lightInk = light && !opaqueBar;
 
     return (
-        <header
-            className={cn("fixed inset-x-0 top-0 z-100", opaqueBar && "border-b border-hairline bg-canvas")}
-            data-theme={lightInk ? "light" : "dark"}
-            onMouseLeave={scheduleClose}
-        >
-            <Shell className="relative flex h-16 items-center">
-                <Logo light={lightInk} pathname={pathname} />
+        <header className="fixed inset-x-0 top-0 z-100" data-theme="light" onMouseLeave={scheduleClose}>
+            <Shell className="relative flex h-28 items-center">
+                {/* The bar. Shell-width rather than full-bleed, so the page
+                    shows past both ends, and the CTA is exactly its height so the
+                    two read as one object rather than a button floating inside a
+                    taller strip.
+
+                    It runs the same 54s hue walk the platform strip used to —
+                    that band gave the treatment up, because two gradients 60px
+                    apart read as a mistake. Stops are set here rather than left
+                    to the `@property` defaults, which is what keeps a re-brand
+                    reaching them and what the bar paints when the animation is
+                    off under `prefers-reduced-motion`. */}
+                <div
+                    aria-hidden="true"
+                    className="animate-strip-hue pointer-events-none absolute inset-x-0 top-1/2 h-20 -translate-y-1/2 motion-reduce:animate-none"
+                    style={
+                        {
+                            "--strip-a": "var(--site-accent-tint)",
+                            "--strip-b": "var(--site-accent-2-tint)",
+                            backgroundImage: "linear-gradient(100deg, var(--strip-a), var(--strip-b))",
+                        } as CSSProperties
+                    }
+                />
+                <div className="relative pl-4">
+                    <Logo pathname={pathname} />
+                </div>
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
                     <div
@@ -421,7 +385,7 @@ const Navbar = (): ReactElement => {
                         <Link
                             className={cn(
                                 "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                "text-on-panel/80 hover:text-on-panel/80",
                             )}
                             to="/docs"
                         >
@@ -440,7 +404,7 @@ const Navbar = (): ReactElement => {
                                 aria-expanded={openMenu === column.navTitle}
                                 className={cn(
                                     "flex w-max cursor-default items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                    lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                    "text-on-panel/80 hover:text-on-panel/80",
                                 )}
                                 onFocus={() => {
                                     openWith(column.navTitle);
@@ -460,7 +424,7 @@ const Navbar = (): ReactElement => {
                         <Link
                             className={cn(
                                 "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
-                                lightInk ? "text-on-panel/80 hover:text-on-panel/60" : "text-ink hover:text-ink-muted",
+                                "text-on-panel/80 hover:text-on-panel/80",
                             )}
                             to="/blog"
                         >
@@ -469,14 +433,11 @@ const Navbar = (): ReactElement => {
                     </div>
                 </nav>
 
-                <div className="ml-auto hidden items-center gap-2 lg:flex">
-                    <SearchButton light={lightInk} />
+                <div className="relative ml-auto hidden items-center gap-2 lg:flex">
+                    <SearchButton />
                     <a
                         aria-label="Join the Lunora Discord"
-                        className={cn(
-                            "flex size-9 items-center justify-center rounded-none transition-colors",
-                            lightInk ? "text-on-panel/60 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline hover:text-ink",
-                        )}
+                        className={cn("flex size-9 items-center justify-center rounded-none transition-colors", "text-on-panel/80 hover:bg-on-panel/[0.05]")}
                         href="https://discord.gg/eajEZvk2PG"
                         rel="noreferrer"
                         target="_blank"
@@ -487,7 +448,7 @@ const Navbar = (): ReactElement => {
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
                             "flex h-10 items-center gap-2 rounded-none px-3 font-mono text-kicker uppercase transition-colors",
-                            lightInk ? "text-on-panel/70 hover:text-on-panel" : "text-ink-muted hover:text-ink",
+                            "text-on-panel/85 hover:text-on-panel",
                         )}
                         href="https://github.com/anolilab/lunora"
                         rel="noreferrer"
@@ -498,10 +459,7 @@ const Navbar = (): ReactElement => {
                     </a>
                     <Button
                         asChild
-                        className={cn(
-                            "h-10 gap-2 rounded-none px-[18px] font-mono text-kicker uppercase",
-                            lightInk ? "bg-on-panel text-panel hover:opacity-90" : "bg-emphasis text-on-emphasis hover:opacity-90",
-                        )}
+                        className={cn("h-20 gap-2 rounded-none px-6 font-mono text-kicker uppercase", "bg-on-panel text-panel hover:opacity-90")}
                         variant="ghost"
                     >
                         <Link to="/docs">
@@ -514,8 +472,8 @@ const Navbar = (): ReactElement => {
                 <button
                     aria-label="Open menu"
                     className={cn(
-                        "ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
-                        lightInk ? "text-on-panel/70 hover:bg-on-panel/[0.05]" : "text-ink-muted hover:bg-hairline",
+                        "relative ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
+                        "text-on-panel/85 hover:bg-on-panel/[0.05]",
                     )}
                     onClick={() => {
                         setIsMobileMenuOpen(true);
@@ -526,8 +484,11 @@ const Navbar = (): ReactElement => {
                 </button>
             </Shell>
 
-            {/* mega-menu dropdown — a single centered box that morphs size between menus */}
-            <div className="absolute top-[4.25rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+            {/* mega-menu dropdown — a single centered box that morphs size between
+                menus. Its offset tracks the row (`h-28`, 112px) plus a small gap,
+                so the panel clears the tinted bar instead of starting inside it;
+                it was still on the 4.25rem the old h-16 row needed. */}
+            <div className="absolute top-[7.5rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
                 <AnimatePresence>
                     {active ? (
                         <motion.div
@@ -564,10 +525,10 @@ const Navbar = (): ReactElement => {
             {isMobileMenuOpen && (
                 <div className="fixed inset-0 z-[110] overflow-y-auto bg-canvas lg:hidden" data-theme="dark">
                     <div className="flex items-center justify-between border-b border-hairline px-5 py-3.5">
-                        <Logo light={false} pathname={pathname} />
+                        <Logo onTint={false} pathname={pathname} />
                         <button
                             aria-label="Close menu"
-                            className="flex size-10 items-center justify-center rounded-none text-ink-muted transition-colors hover:bg-hairline"
+                            className="flex size-10 items-center justify-center rounded-none text-ink-muted transition-colors hover:bg-wash"
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}

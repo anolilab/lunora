@@ -60,6 +60,12 @@
     /* Matches the hero shader's 54s palette walk, so the two drift together. */
     --animate-strip-hue: strip-hue 54s linear infinite;
 
+    /* The header field arrives rather than being there. Slow enough to read as
+       a fade and not a flash, and `both` so it holds at 0 until it starts —
+       the shader needs a frame or two to paint, and without the fill the field
+       pops in at full strength before the animation begins. */
+    --animate-field-in: field-in 1600ms cubic-bezier(0.16, 1, 0.3, 1) both;
+
     @keyframes button-shine {
         from {
             background-position: 200% 0;
@@ -122,6 +128,15 @@
         }
         to {
             transform: translateX(0);
+        }
+    }
+
+    @keyframes field-in {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
         }
     }
 

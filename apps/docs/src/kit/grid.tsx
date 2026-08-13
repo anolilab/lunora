@@ -83,8 +83,18 @@ const CellTitle: FC<{ children: ReactNode; highlight: boolean; href?: string; to
  */
 const GridCell: FC<{
     blurb?: ReactNode;
+
     /** Extra content below the blurb — a feature list, a nested action. */
     children?: ReactNode;
+
+    /**
+     * Mono tags under the blurb — the API surface a cell is about, without a
+     * full code panel. On a light band this is what a cell carries instead of a
+     * console: a page of black slabs reads as heavy however it is coloured, so
+     * the technical texture moves into type and one console per band is left to
+     * do the visual work.
+     */
+    chips?: string[];
     className?: string;
     highlight?: boolean;
     href?: string;
@@ -96,13 +106,14 @@ const GridCell: FC<{
     stage?: ReactNode;
     title?: ReactNode;
     to?: string;
-}> = ({ blurb, children, className, highlight = false, href, icon, readout, stage, title, to }) => {
+}> = ({ blurb, chips, children, className, highlight = false, href, icon, readout, stage, title, to }) => {
     // Resolve the palette once. Threading `highlight ?` through every slot
     // instead puts eight independent branches in one render, which is both
     // harder to read and easy to get inconsistent when a slot is added.
     const tone = highlight
         ? {
-              blurb: "text-on-accent/75",
+              blurb: "text-on-accent/90",
+              chip: "border-on-accent/25 text-on-accent/85",
               cell: "bg-accent text-on-accent",
               edge: "border-on-accent/15",
               icon: "text-on-accent",
@@ -111,6 +122,7 @@ const GridCell: FC<{
           }
         : {
               blurb: "text-ink-muted",
+              chip: "border-hairline-strong text-ink-muted",
               cell: "bg-canvas",
               edge: "border-hairline",
               icon: "text-ink-faint",
@@ -142,6 +154,20 @@ const GridCell: FC<{
                 ) : null}
 
                 {blurb ? <p className={cn("text-blurb", tone.blurb)}>{blurb}</p> : null}
+
+                {/* Pinned to the floor like `readout`. A grid row is as tall as
+                    its tallest cell, so chips sitting straight under the blurb
+                    leave every short cell top-heavy with a pool of empty space
+                    beneath it. */}
+                {chips?.length ? (
+                    <ul className="mt-auto flex flex-wrap gap-1.5 pt-3">
+                        {chips.map((chip) => (
+                            <li className={cn("border px-2 py-1 font-mono text-micro tracking-normal", tone.chip)} key={chip}>
+                                {chip}
+                            </li>
+                        ))}
+                    </ul>
+                ) : null}
 
                 {children}
 
