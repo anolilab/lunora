@@ -45,6 +45,7 @@ describe("telemetryStore.readArchivedTrace", () => {
     });
 });
 
+// eslint-disable-next-line no-secrets/no-secrets -- a method name, flagged on character entropy alone
 describe("telemetryStore.readArchivedSpansInWindow", () => {
     it("no-ops to [] without R2-SQL config", async () => {
         await expect(

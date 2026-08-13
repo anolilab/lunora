@@ -205,6 +205,7 @@ const gatherEvidence = async (context: ActionContext, organizationId: Id<"organi
     const logs: LogRow[] = [];
 
     for (const traceId of preliminary.relatedTraceIds) {
+        // eslint-disable-next-line no-await-in-loop -- one bounded indexed read per related trace, serialized deliberately: the list is short and parallel reads would multiply the shard's concurrent query budget for no latency win
         const { page: logPage } = await context.db.tenantLogs.findMany({
             limit: EVIDENCE_LOG_SCAN_PER_TRACE,
             where: { organizationId, traceId },
