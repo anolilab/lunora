@@ -60,6 +60,38 @@ export interface SessionSummary {
  * first/last seen track min/max and token/error totals accumulate. A span with
  * no `sessionId` is skipped, so the fold is safe to hand the raw span page.
  */
+/** A new per-session summary seeded from its first span. */
+const seedSummary = (span: SessionSpan, sessionId: string, promptTokens: number, completionTokens: number): SessionSummary => {
+    return {
+        completionTokens,
+        errorCount: span.level === "error" ? 1 : 0,
+        firstSeen: span.startedAt,
+        lastSeen: span.endedAt,
+        models: span.model == null || span.model === "" ? [] : [span.model],
+        promptTokens,
+        sessionId,
+        totalTokens: promptTokens + completionTokens,
+        turnCount: 1,
+    };
+};
+
+/** Fold one more span into a session summary, returning the updated copy (no mutation of the stored value). */
+const accumulateSpan = (summary: SessionSummary, span: SessionSpan, promptTokens: number, completionTokens: number): SessionSummary => {
+    const isNewModel = span.model != null && span.model !== "" && !summary.models.includes(span.model);
+
+    return {
+        ...summary,
+        completionTokens: summary.completionTokens + completionTokens,
+        errorCount: summary.errorCount + (span.level === "error" ? 1 : 0),
+        firstSeen: Math.min(summary.firstSeen, span.startedAt),
+        lastSeen: Math.max(summary.lastSeen, span.endedAt),
+        models: isNewModel && span.model != null ? [...summary.models, span.model] : summary.models,
+        promptTokens: summary.promptTokens + promptTokens,
+        totalTokens: summary.totalTokens + promptTokens + completionTokens,
+        turnCount: summary.turnCount + 1,
+    };
+};
+
 export const foldSessions = (spans: ReadonlyArray<SessionSpan>, limit: number): SessionSummary[] => {
     const bySession = new Map<string, SessionSummary>();
 
@@ -75,31 +107,9 @@ export const foldSessions = (spans: ReadonlyArray<SessionSpan>, limit: number): 
         const existing = bySession.get(sessionId);
 
         if (existing === undefined) {
-            bySession.set(sessionId, {
-                completionTokens,
-                errorCount: span.level === "error" ? 1 : 0,
-                firstSeen: span.startedAt,
-                lastSeen: span.endedAt,
-                models: span.model == null || span.model === "" ? [] : [span.model],
-                promptTokens,
-                sessionId,
-                totalTokens: promptTokens + completionTokens,
-                turnCount: 1,
-            });
-
-            continue;
-        }
-
-        existing.firstSeen = Math.min(existing.firstSeen, span.startedAt);
-        existing.lastSeen = Math.max(existing.lastSeen, span.endedAt);
-        existing.turnCount += 1;
-        existing.errorCount += span.level === "error" ? 1 : 0;
-        existing.promptTokens += promptTokens;
-        existing.completionTokens += completionTokens;
-        existing.totalTokens += promptTokens + completionTokens;
-
-        if (span.model != null && span.model !== "" && !existing.models.includes(span.model)) {
-            existing.models.push(span.model);
+            bySession.set(sessionId, seedSummary(span, sessionId, promptTokens, completionTokens));
+        } else {
+            bySession.set(sessionId, accumulateSpan(existing, span, promptTokens, completionTokens));
         }
     }
 
