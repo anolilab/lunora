@@ -52,6 +52,10 @@ yarn add @lunora/solid
 pnpm add @lunora/solid
 ```
 
+Requires `solid-js@^1.9.0 || ^2.0.0-rc.0` as a peer. A single build serves both
+majors and the public API is identical on either; on Solid 2.0 the surrounding
+imports move (`solid-js/web` → `@solidjs/web`, `solid-js/store` → `solid-js`).
+
 ## Usage
 
 ```tsx

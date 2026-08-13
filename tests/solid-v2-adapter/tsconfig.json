@@ -1,0 +1,16 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "preserve",
+        // Solid 2.0 moved JSX typing out of core and into the renderer package;
+        // `solid-js/jsx-runtime` no longer exists. This is the 2.x spelling and
+        // is exactly what templates/solid-v2 sets.
+        "jsxImportSource": "@solidjs/web",
+        "types": ["node"],
+        "noEmit": true
+        // No `outDir`/`rootDir`: this package only type-checks.
+    },
+    "include": ["**/*.ts", "**/*.tsx"],
+    "exclude": ["node_modules"]
+}

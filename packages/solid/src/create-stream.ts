@@ -1,8 +1,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { Accessor } from "solid-js";
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 
 import { useLunora } from "./context";
+import { trackedEffect } from "./solid-compat";
 
 /** The lifecycle of a stream the primitive is observing. */
 type CreateStreamStatus = "complete" | "error" | "idle" | "streaming";
@@ -53,72 +54,70 @@ const createStream = <F extends FunctionReference<"stream">>(
         cancelCurrent?.();
     };
 
-    createEffect(
-        on(resolveArgs, (currentArgs) => {
-            // Reset for the new (or torn-down) stream.
-            setChunks(() => []);
-            setError(() => undefined);
+    trackedEffect(resolveArgs, (currentArgs) => {
+        // Reset for the new (or torn-down) stream.
+        setChunks(() => []);
+        setError(() => undefined);
 
-            if (currentArgs === "skip") {
-                setStatus("idle");
+        if (currentArgs === "skip") {
+            setStatus("idle");
 
-                return;
-            }
+            return undefined;
+        }
 
-            setStatus("streaming");
+        setStatus("streaming");
 
-            let active = true;
-            const iterable = client.stream(function_, currentArgs, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
-            const cancelIterable = (): void => {
-                iterable.cancel();
-            };
+        let active = true;
+        const iterable = client.stream(function_, currentArgs, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
+        const cancelIterable = (): void => {
+            iterable.cancel();
+        };
 
-            cancelCurrent = cancelIterable;
+        cancelCurrent = cancelIterable;
 
-            // Consume in a background async IIFE so the effect body stays
-            // synchronous; the cancel handle is what the cleanup uses. The IIFE
-            // owns its own try/catch so any error already lands in the signals; the
-            // trailing `.catch` is a belt-and-braces guard that can never fire.
-            (async () => {
-                try {
-                    for await (const chunk of iterable) {
-                        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` is flipped to `false` by the cleanup closure between awaits; TS's static flow analysis can't see the async mutation, so this guard is real, not dead.
-                        if (!active) {
-                            return;
-                        }
-
-                        // Append immutably so consumers comparing by identity see a change.
-                        setChunks((previous) => [...previous, chunk]);
-                    }
-
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
-                    if (active) {
-                        setStatus("complete");
-                    }
-                } catch (streamError: unknown) {
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
+        // Consume in a background async IIFE so the effect body stays
+        // synchronous; the cancel handle is what the cleanup uses. The IIFE
+        // owns its own try/catch so any error already lands in the signals; the
+        // trailing `.catch` is a belt-and-braces guard that can never fire.
+        (async () => {
+            try {
+                for await (const chunk of iterable) {
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` is flipped to `false` by the cleanup closure between awaits; TS's static flow analysis can't see the async mutation, so this guard is real, not dead.
                     if (!active) {
                         return;
                     }
 
-                    setError(() => (streamError instanceof Error ? streamError : new Error(String(streamError))));
-                    setStatus("error");
+                    // Append immutably so consumers comparing by identity see a change.
+                    setChunks((previous) => [...previous, chunk]);
                 }
-            })().catch(() => {
-                // Unreachable: the IIFE's own try/catch already routes errors into
-                // the signals. This satisfies no-floating-promises.
-            });
 
-            onCleanup(() => {
-                active = false;
-                cancelIterable();
-
-                if (cancelCurrent === cancelIterable) {
-                    cancelCurrent = undefined;
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
+                if (active) {
+                    setStatus("complete");
                 }
-            });
-        }),
-    );
+            } catch (streamError: unknown) {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `active` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
+                if (!active) {
+                    return;
+                }
+
+                setError(() => (streamError instanceof Error ? streamError : new Error(String(streamError))));
+                setStatus("error");
+            }
+        })().catch(() => {
+            // Unreachable: the IIFE's own try/catch already routes errors into
+            // the signals. This satisfies no-floating-promises.
+        });
+
+        return () => {
+            active = false;
+            cancelIterable();
+
+            if (cancelCurrent === cancelIterable) {
+                cancelCurrent = undefined;
+            }
+        };
+    });
 
     onCleanup(() => {
         cancel();

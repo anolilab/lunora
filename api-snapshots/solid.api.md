@@ -113,13 +113,13 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 ### `AuthLoading` (const)
 
 ```ts
-const AuthLoading: (props: AuthGateProps) => JSX.Element;
+const AuthLoading: AuthGate;
 ```
 
 ### `Authenticated` (const)
 
 ```ts
-const Authenticated: (props: AuthGateProps) => JSX.Element;
+const Authenticated: AuthGate;
 ```
 
 ### `CreateAgentApi` (interface)
@@ -466,14 +466,14 @@ const LunoraContext: Context<LunoraClient | undefined>;
 ### `LunoraProvider` (const)
 
 ```ts
-const LunoraProvider: (props: LunoraProviderProps) => JSX.Element;
+const LunoraProvider: (props: LunoraProviderProps) => SolidElement;
 ```
 
 ### `LunoraProviderProps` (interface)
 
 ```ts
 interface LunoraProviderProps {
-    children: JSX.Element;
+    children: SolidChildren;
     client: LunoraClient;
 }
 ```
@@ -544,10 +544,26 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SolidChildren` (type)
+
+```ts
+type SolidChildren = SolidChildrenArray | boolean | null | number | (object & {
+    readonly apply?: never;
+    readonly bind?: never;
+    readonly call?: never;
+}) | (string & {}) | undefined;
+```
+
+### `SolidElement` (type)
+
+```ts
+type SolidElement = any;
+```
+
 ### `Unauthenticated` (const)
 
 ```ts
-const Unauthenticated: (props: AuthGateProps) => JSX.Element;
+const Unauthenticated: AuthGate;
 ```
 
 ### `Unsubscribe` (type)

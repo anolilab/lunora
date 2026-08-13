@@ -67,6 +67,10 @@ export { default as hydratePreloaded } from "./hydrate-preloaded";
  */
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider } from "./lunora-provider";
+// The version-neutral element types this adapter's components are typed with —
+// `solid-js` exports the `JSX` namespace in 1.x only, so the public surface
+// cannot name it and stay installable on both majors. See ./solid-compat.
+export type { SolidChildren, SolidElement } from "./solid-compat";
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.
 export type { ArgsOf, FunctionReference, OptimisticUpdate, Preloaded, ReturnOf, Unsubscribe } from "@lunora/client";

@@ -467,6 +467,21 @@ catalogs:
     svelte: ^5.56.8
     vite-plugin-solid: ^2.11.14
     vue: ^3.5.41
+  # Solid 2.0 RC toolchain, deliberately kept OUT of the `frontend` catalog
+  # above so the two majors can move independently: `@lunora/solid` peers on
+  # `^1.9.0 || ^2.0.0-rc.0` and is tested against both. Consumed by
+  # tests/solid-v2-adapter (the dual-major guard) and mirrored by
+  # templates/solid-v2.
+  #
+  # Note the package split 2.0 introduced: JSX moved out of core into the
+  # renderer (`@solidjs/web`, hence `jsxImportSource: "@solidjs/web"`), and the
+  # Vite plugin's matching line is 3.x. `@solidjs/testing-library@1` is the
+  # first release that peers on Solid 2.
+  solid2:
+    "@solidjs/testing-library": ^1.0.0-beta.2
+    "@solidjs/web": ^2.0.0-rc.0
+    solid-js: ^2.0.0-rc.0
+    vite-plugin-solid: ^3.0.0-next.27
   # Angular toolchain shared by @lunora/angular (the runtime adapter) and
   # @lunora/auth-ui (the registry source of truth synced into
   # registry/auth-ui-angular/). Pinned at the higher of the two versions that
@@ -858,6 +873,12 @@ minimumReleaseAgeExclude:
   - '@next/swc-win32-x64-msvc@16.2.9'
   - '@nuxt/devtools@3.3.1'
   - '@opentelemetry/core@2.8.0'
+  # Solid 2.0 RC toolchain (see the `solid2` catalog). Published together on
+  # 2026-08-12; drop these four lines plus the `solid-js` / `vite-plugin-solid`
+  # entries below once they clear the window.
+  - '@solidjs/signals@2.0.0-rc.0'
+  - '@solidjs/vite-plugin@3.0.0-next.27'
+  - '@solidjs/web@2.0.0-rc.0'
   - '@tanstack/eslint-plugin-query@5.101.0'
   - '@tanstack/query-core@5.101.0'
   - '@tanstack/react-query@5.101.0'
@@ -910,12 +931,14 @@ minimumReleaseAgeExclude:
   - 'react-doctor@0.5.1'
   - 'react-dom@19.2.7'
   - 'sharp@0.35.0'
+  - 'solid-js@2.0.0-rc.0'
   - 'svgo@4.0.2'
   - 'tar@7.5.21'
   - 'tmp@0.2.4 || 0.2.6'
   - 'tsx@4.22.4'
   - 'undici@6.27.0 || 6.28.0 || 7.29.0'
   - 'vite@8.0.16'
+  - 'vite-plugin-solid@3.0.0-next.27'
   - 'wrangler@4.97.0'
 
 # recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm

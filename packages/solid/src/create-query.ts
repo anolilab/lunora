@@ -1,9 +1,10 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Accessor } from "solid-js";
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { useLunora } from "./context";
+import { trackedEffect } from "./solid-compat";
 
 export interface CreateQueryOptions {
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
@@ -40,33 +41,31 @@ export const createQuery = <F extends FunctionReference>(
 
     const resolveArgs = (): ArgsOf<F> | "skip" => (typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">)() : args);
 
-    // `on(resolveArgs, …)` re-runs the body whenever the args accessor changes,
-    // tearing down the previous subscription via `onCleanup` before opening the
-    // next. A static (non-accessor) `args` resolves once and never re-runs. The
-    // skip-handling, subscribe, and cleanup are owned by the shared
-    // `@lunora/client/query` state machine; this binds it to a Solid signal. The
-    // `() => …` setter forms keep Solid from mistaking a function-valued server
-    // result for an updater.
-    createEffect(
-        on(resolveArgs, (current) => {
-            const unsubscribe = createQuerySubscription<F>(
-                client,
-                function_,
-                current,
-                {
-                    onData: (next) => {
-                        setValue(() => next);
-                    },
-                    onReset: () => {
-                        setValue(() => undefined as ReturnOf<F> | undefined);
-                    },
+    // `trackedEffect(resolveArgs, …)` re-runs the body whenever the args
+    // accessor changes, tearing down the previous subscription (the returned
+    // disposer) before opening the next. A static (non-accessor) `args` resolves
+    // once and never re-runs. The skip-handling, subscribe, and cleanup are
+    // owned by the shared `@lunora/client/query` state machine; this binds it to
+    // a Solid signal. The `() => …` setter forms keep Solid from mistaking a
+    // function-valued server result for an updater.
+    trackedEffect(resolveArgs, (current) => {
+        const unsubscribe = createQuerySubscription<F>(
+            client,
+            function_,
+            current,
+            {
+                onData: (next) => {
+                    setValue(() => next);
                 },
-                { shardKey },
-            );
+                onReset: () => {
+                    setValue(() => undefined as ReturnOf<F> | undefined);
+                },
+            },
+            { shardKey },
+        );
 
-            onCleanup(unsubscribe);
-        }),
-    );
+        return unsubscribe;
+    });
 
     return value;
 };

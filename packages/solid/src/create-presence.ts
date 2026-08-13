@@ -1,8 +1,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
-import { createSignal, onCleanup, onMount } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
+import { onMounted } from "./solid-compat";
 
 /**
  * `createPresence` — collaborative-awareness primitive, the client half of the
@@ -85,7 +86,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
         sendHeartbeat();
     };
 
-    onMount(() => {
+    onMounted(() => {
         // Heartbeat immediately on mount.
         sendHeartbeat();
 
@@ -120,7 +121,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             { shardKey },
         );
 
-        onCleanup(() => {
+        return () => {
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {
@@ -129,7 +130,7 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
             releaseConnectionContext();
             unsubscribe();
-        });
+        };
     });
 
     return { present, sessionId, setData };
