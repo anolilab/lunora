@@ -245,7 +245,7 @@ describe("prompt-injection hardening", () => {
 
         // Structure is fixed; confidence stays inside the enum; no injected value leaks in.
         expect(["high", "low", "medium"]).toContain(result.confidence);
-        expect(Object.keys(result).toSorted()).toStrictEqual([
+        expect(Object.keys(result).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "by",
             "confidence",
             "evidenceNote",

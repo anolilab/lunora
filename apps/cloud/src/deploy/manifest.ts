@@ -45,7 +45,7 @@ export const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest 
     const d1Binding = asString(wrangler.d1_databases?.[0]?.binding);
     const r2Binding = asString(wrangler.r2_buckets?.[0]?.binding);
 
-    const cronSpecs = (wrangler.triggers?.crons ?? []).map(asString).filter((cron): cron is string => cron !== undefined);
+    const cronSpecs = (wrangler.triggers?.crons ?? []).map((cron) => asString(cron)).filter((cron): cron is string => cron !== undefined);
 
     return {
         bindings: {

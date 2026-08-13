@@ -84,6 +84,6 @@ describe(createHttpAnalyticsReader, () => {
         });
 
         // @lunora/bindings' analytics SQL client throws AnalyticsSqlError on a non-2xx.
-        await expect(reader.readRequestUsage(0)).rejects.toThrow();
+        await expect(reader.readRequestUsage(0)).rejects.toThrow(Error);
     });
 });

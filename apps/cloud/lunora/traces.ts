@@ -205,7 +205,7 @@ export const get = query
             where: { organizationId: args.organizationId, traceId: args.traceId },
         });
 
-        return (page as unknown as ObservationRow[]).map(toSpanView);
+        return (page as unknown as ObservationRow[]).map((row) => toSpanView(row));
     });
 
 /**
@@ -245,5 +245,5 @@ export const getArchived = action
 
         const spans = await store.readArchivedTrace({ organizationId: args.organizationId, traceId: args.traceId });
 
-        return spans.map(toSpanView);
+        return spans.map((row) => toSpanView(row));
     });
