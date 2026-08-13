@@ -5,7 +5,7 @@ import { createHttpAnalyticsReader, normalizeRoutePath, recordRequestUsage, stat
 
 describe(recordRequestUsage, () => {
     it("writes a per-request data point carrying outcome and route", () => {
-        const writeDataPoint = vi.fn();
+        const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const dataset: AnalyticsEngineDatasetLike = { writeDataPoint };
 
         recordRequestUsage(dataset, { outcome: "5xx", plan: "pro", route: "/orders/:id", scriptName: "acme-app" });
@@ -67,7 +67,9 @@ describe(statusClass, () => {
 
 describe(createHttpAnalyticsReader, () => {
     it("maps the AE SQL response into usage rows", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(Response.json({ data: [{ requests: "42", scriptName: "acme-app" }] }, { status: 200 }));
+        const fetchMock = vi
+            .fn<typeof globalThis.fetch>()
+            .mockResolvedValue(Response.json({ data: [{ requests: "42", scriptName: "acme-app" }] }, { status: 200 }));
         const reader = createHttpAnalyticsReader({ accountId: "acc", apiToken: "tok", dataset: "usage", fetch: fetchMock });
 
         await expect(reader.readRequestUsage(0)).resolves.toStrictEqual([{ requests: 42, scriptName: "acme-app" }]);
