@@ -232,11 +232,13 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 | `admin-token-missing`            | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).         |
 | `admin-token-set`                | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                 |
 | `cli-shadowed`                   | warn  | The running `lunora` is not the project's own install.                       |
+| `cpu-limit-missing`              | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                        |
 | `d1-placeholder-id`              | fail  | A D1 binding still carries a scaffold `database_id`.                         |
 | `declared-export-missing`        | fail  | A declared container / workflow / agent is not exported by the worker entry. |
 | `declared-export-ok`             | pass  | A declared container / workflow / agent is exported by the worker entry.     |
 | `dev-vars-missing-secret`        | warn  | `.dev.vars` has secret-looking keys left at placeholder values.              |
 | `email-destination-placeholder`  | warn  | A `send_email` binding has a placeholder `destination_address`.              |
+| `r2-lifecycle-unset`             | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.          |
 | `vector-metadata-index-required` | info  | A declared Vectorize metadata filter needs its metadata index created.       |
 | `vector-metadata-unfilterable`   | warn  | A metadata property has a type Vectorize cannot filter on.                   |
 | `version-counter-spread`         | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting). |
