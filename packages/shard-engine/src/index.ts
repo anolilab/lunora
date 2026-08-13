@@ -335,7 +335,7 @@ export type {
     WithInput,
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
-export { buildSettings, isDevEnvironment } from "./settings";
+export { buildSettings, isDevEnvironment, readDeployInfo } from "./settings";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";
