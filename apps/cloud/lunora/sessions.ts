@@ -93,7 +93,7 @@ export const list = query
             where: { organizationId: args.organizationId },
         });
 
-        const turns = (page as unknown as SessionObservationRow[]).filter(isSessionTurn);
+        const turns = (page as unknown as SessionObservationRow[]).filter((row) => isSessionTurn(row));
 
         // `SessionSummary` and the local `SessionSummaryView` are structurally
         // identical — the view mirror is what codegen inlines into the API types.

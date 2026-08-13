@@ -23,7 +23,8 @@ describe("secret crypto", () => {
     it("fails to decrypt under a different key", async () => {
         const encrypted = await encryptSecret(KEY, "hello");
 
-        await expect(decryptSecret("b".repeat(64), encrypted)).rejects.toThrow();
+        // WebCrypto rejects with an implementation-defined message; assert the type.
+        await expect(decryptSecret("b".repeat(64), encrypted)).rejects.toThrow(Error);
     });
 
     it("rejects a malformed master key", async () => {

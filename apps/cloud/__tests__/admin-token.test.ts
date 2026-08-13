@@ -47,7 +47,8 @@ describe("admin token at-rest sealing", () => {
     it("fails to decrypt a sealed token under the wrong key", async () => {
         const sealed = await sealAdminToken("adm_secret", KEY);
 
-        await expect(resolveAdminToken(sealed, OTHER_KEY)).rejects.toThrow();
+        // The message comes from WebCrypto and is runtime-defined; the type is the stable part.
+        await expect(resolveAdminToken(sealed, OTHER_KEY)).rejects.toThrow(Error);
     });
 
     it("resolves nothing for an empty row", async () => {
