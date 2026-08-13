@@ -1,0 +1,29 @@
+{
+    "name": "@lunora/auth-ui-solid-v2-tests",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Render tests for @lunora/auth-ui's Solid 2 port, in a package whose only Solid is 2.x.",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@lunora/auth-ui": "workspace:*",
+        "@lunora/errors": "workspace:*",
+        "@solidjs/testing-library": "catalog:solid2",
+        "@solidjs/web": "catalog:solid2",
+        "@testing-library/jest-dom": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "better-auth": "catalog:auth",
+        "jsdom": "catalog:frontend",
+        "solid-js": "catalog:solid2",
+        "typescript": "catalog:tsc",
+        "vite-plugin-solid": "catalog:solid2",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

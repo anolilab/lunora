@@ -6,8 +6,14 @@
  */
 import type { SelectOption } from "@lunora/config";
 
-/** The per-framework auth-UI registry items (`auth-ui` resolves to one of these). */
-type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-svelte" | "auth-ui-vue";
+/**
+ * The per-framework auth-UI registry items (`auth-ui` resolves to one of these).
+ *
+ * Solid has two because these are copy-in source files, not a compiled package:
+ * the 1.x and 2.0 spellings are mutually exclusive in the source itself, so the
+ * two majors get one item each and {@link detectAuthUiItem} picks.
+ */
+type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-solid-v2" | "auth-ui-svelte" | "auth-ui-vue";
 
 /** A registry item a feature can install. */
 type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
@@ -45,7 +51,8 @@ const AUTH_UI_OPTIONS: ReadonlyArray<SelectOption<AuthUiItem>> = [
     { description: "Next, react-router, TanStack Start, Astro islands", label: "React", value: "auth-ui-react" },
     { description: "Nuxt, Vue + Vite", label: "Vue", value: "auth-ui-vue" },
     { description: "SvelteKit, Svelte + Vite", label: "Svelte", value: "auth-ui-svelte" },
-    { description: "TanStack Start Solid, Solid + Vite", label: "Solid", value: "auth-ui-solid" },
+    { description: "TanStack Start Solid, Solid 1.x + Vite", label: "Solid", value: "auth-ui-solid" },
+    { description: "Solid 2.0 + Vite (@solidjs/web)", label: "Solid 2", value: "auth-ui-solid-v2" },
     { description: "Analog", label: "Angular", value: "auth-ui-angular" },
 ];
 
@@ -75,13 +82,12 @@ const leadingMajor = (range: string | undefined): number | undefined => {
 /**
  * Is this a Solid **2.x** project?
  *
- * `@lunora/solid` itself spans both Solid majors, but the `auth-ui-solid`
- * payload does not: those screens are user-owned Solid 1.x source
- * (`import type { JSX } from "solid-js"`, `onMount`, camelCase DOM attributes),
- * all of which Solid 2 removed or renamed. Copying them into a Solid 2 project
- * writes ~50 type errors into code the user now owns, so detection returns
- * `undefined` for this case and the caller explains why — the same shape as
- * {@link isReactNativeProject}.
+ * `@lunora/solid` spans both Solid majors, but the auth-UI payload cannot: those
+ * screens are user-owned *source*, and the 1.x spelling
+ * (`import type { JSX } from "solid-js"`, `onMount`, camelCase DOM attributes)
+ * is exactly what Solid 2 removed or renamed. So each major has its own item and
+ * this is the fork between them — `auth-ui-solid-v2` here, `auth-ui-solid`
+ * otherwise.
  *
  * Detected from `@solidjs/web` (a package that exists only on the 2.x line) or
  * an explicit `solid-js` major, so a project cannot land here by accident.
@@ -107,7 +113,7 @@ const detectAuthUiItem = (dependencies: Readonly<Record<string, string>>): AuthU
     // Ahead of every framework match: a Solid 2 project also has `solid-js` and
     // `@lunora/solid`, which would otherwise resolve to the Solid 1.x payload.
     if (isSolid2Project(dependencies)) {
-        return undefined;
+        return "auth-ui-solid-v2";
     }
 
     if (has("@lunora/react")) {

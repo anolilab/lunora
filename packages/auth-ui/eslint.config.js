@@ -94,6 +94,47 @@ export default createConfig(
         },
     },
     /*
+     * The Solid 2 port. Same reasoning as the Solid block above — its own
+     * program, and none of React's component rules describe it — plus its
+     * program is the one that resolves the aliased Solid 2 install
+     * (`tsconfig.solid-v2.json`), so type-aware rules have to be pointed there
+     * or every file resolves `solid-js` to the 1.x copy and reports phantom
+     * missing exports.
+     */
+    {
+        files: ["src/solid-v2/**/*.{ts,tsx}"],
+        languageOptions: { parserOptions: { project: "./tsconfig.solid-v2.json", tsconfigRootDir: import.meta.dirname } },
+        rules: {
+            "react-hooks/exhaustive-deps": "off",
+            "react-hooks/rules-of-hooks": "off",
+            "react/no-unknown-property": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-perf/jsx-no-new-object-as-prop": "off",
+            /*
+             * Solid 2's conditional-class API *is* an inline array/object —
+             * `class={["card", { active: isActive() }]}` — and the cheatsheet
+             * calls building the string by hand the React reflex to avoid. So
+             * this rule is not merely inapplicable here, it argues for the wrong
+             * code.
+             */
+            "react-perf/jsx-no-new-array-as-prop": "off",
+            // Destructuring a Solid component's props reads them once and severs
+            // reactivity. The port deliberately never does it.
+            "react/destructuring-assignment": "off",
+            // Solid spells it `for`, not `htmlFor`, so the a11y rule can't see the association.
+            "jsx-a11y/label-has-associated-control": "off",
+            // `solid-js` / `@solidjs/web` are devDependencies for the same reason
+            // `@angular/core` is: the port is copied into the user's project.
+            "import/no-extraneous-dependencies": "off",
+            // Solid's context API is its own; these rules describe React 19's.
+            "react-x/no-context-provider": "off",
+            "react-x/no-use-context": "off",
+            "react/jsx-no-constructed-context-values": "off",
+            // Solid has no Fast Refresh component/constant split.
+            "react-refresh/only-export-components": "off",
+        },
+    },
+    /*
      * Angular's class-based components conflict with rules written for plain
      * modules — not with the intent behind them. Each is off for a reason, and
      * everything else (unused vars, floating promises, unsafe `any`, import

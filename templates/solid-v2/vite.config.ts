@@ -13,10 +13,11 @@ import { defineConfig } from "vite";
  *                     That shared origin is why the client can default its
  *                     endpoint to `location.origin`.
  *
- * `vite-plugin-solid` is on its 3.x line here: Solid 2 moved the JSX runtime
- * out of core into `@solidjs/web`, and 3.x is the release that emits imports
- * against it. Pairing Solid 2 with the 2.x plugin silently emits `solid-js/web`
- * imports that no longer resolve.
+ * `vite-plugin-solid` is on its 3.x line here: Solid 2 moved the JSX runtime out
+ * of core into `@solidjs/web`, and 3.x is the release that emits imports against
+ * it. The 2.x plugin still emits `solid-js/web` — a subpath Solid 2 no longer
+ * exports — so pairing it with Solid 2 fails at resolve time, in generated code
+ * you never wrote.
  */
 export default defineConfig({
     // `allowUnauthenticatedShardAccess: true` is a DEMO default: the worker

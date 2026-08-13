@@ -39,36 +39,40 @@ This template targets the Solid 2.0 line, which is a breaking release. If you
 are porting code — or prompting a code generator — from Solid 1.x, these are the
 changes that bite first:
 
-| Solid 1.x                  | Solid 2.0                                   |
-| -------------------------- | ------------------------------------------- |
-| `solid-js/web`             | `@solidjs/web` (and `jsxImportSource`)      |
-| `solid-js/store`           | `solid-js` (stores moved into core)         |
-| `onMount`                  | `onSettled` (returns its own cleanup)       |
-| `createEffect(fn)`         | `createEffect(compute, apply)` — two args   |
-| `on(source, fn)`           | the two-argument `createEffect`             |
-| `<Suspense>` / `<Index>`   | `<Loading>` / `<For keyed={false}>`         |
-| `<ErrorBoundary>`          | `<Errored>`                                 |
-| `createResource`           | async computations under `<Loading>`        |
-| `batch`                    | automatic; `flush()` to apply synchronously |
-| `classList={{ … }}`        | `class={{ … }}`                             |
-| `<Ctx.Provider value={…}>` | `<Ctx value={…}>` — the context IS provider |
+| Solid 1.x                   | Solid 2.0                                   |
+| --------------------------- | ------------------------------------------- |
+| `solid-js/web`              | `@solidjs/web` (and `jsxImportSource`)      |
+| `solid-js/store`            | `solid-js` (stores moved into core)         |
+| `onMount`                   | `onSettled` (returns its own cleanup)       |
+| `createEffect(fn)`          | `createEffect(compute, apply)` — two args   |
+| `on(source, fn)`            | the two-argument `createEffect`             |
+| `<Suspense>` / `<Index>`    | `<Loading>` / `<For keyed={false}>`         |
+| `<ErrorBoundary>`           | `<Errored>`                                 |
+| `createResource`            | async computations under `<Loading>`        |
+| `batch`                     | automatic; `flush()` to apply synchronously |
+| `classList={{ … }}`         | `class={{ … }}`                             |
+| `mergeProps` / `splitProps` | `merge` / `omit`                            |
+| `unwrap`                    | `snapshot`                                  |
+| `<Ctx.Provider value={…}>`  | `<Ctx value={…}>` — the context IS provider |
 
-Two behaviour changes have no syntactic tell, so they are worth knowing up
-front: **signal reads do not update until the microtask flushes** (call
+DOM attributes changed too, and these are the ones a compiler catches only
+because Solid 2 typed them deliberately: **built-in attributes are lowercase**
+(`novalidate`, `autocomplete`, `tabindex`, `readonly` — `prop:tabIndex` is typed
+`never` so the old spelling is rejected rather than ignored), while **event
+handlers stay camelCase** (`onClick`). Boolean-ish ARIA attributes take the
+strings `"true"` / `"false"`, not a boolean — `aria-invalid={hasError()}` has to
+become `aria-invalid={hasError() ? "true" : "false"}`.
+
+Two behaviour changes have no syntactic tell at all, so they are worth knowing
+up front: **signal reads do not update until the microtask flushes** (call
 `flush()` when a test asserts right after a write), and **writing a signal from
 a component body throws in dev** — writes belong in event handlers or
-`onSettled`.
+`onSettled`, or the signal needs `{ ownedWrite: true }`.
 
 `solid-js` ships a `CHEATSHEET.md` in its package with the full list.
 
-### One thing that is not ported yet
-
-`lunora add auth-ui` has **no Solid 2 payload**. The copy-in auth screens are
-Solid 1.x source, and since you own those files once they are copied, the CLI
-refuses rather than handing you code that does not compile. Everything else
-works: `lunora add auth` installs the server half, and `@lunora/solid` supports
-both Solid majors, so you can build the screens against the same better-auth
-client. Every other `lunora add` feature is framework-agnostic and unaffected.
+`lunora add auth-ui` follows the same split: it detects Solid 2 and copies in
+the `auth-ui-solid-v2` screens, which are written against the 2.0 API above.
 
 ## Stack
 

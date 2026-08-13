@@ -50,24 +50,33 @@ at runtime, so nothing about your usage changes.
 What does change is the code _around_ it. The snippets on this page are Solid
 1.x; on Solid 2.0 the imports and a few APIs move:
 
-| Solid 1.x                  | Solid 2.0                                       |
-| -------------------------- | ----------------------------------------------- |
-| `solid-js/web`             | `@solidjs/web` (also `jsxImportSource`)         |
-| `solid-js/store`           | `solid-js` — stores moved into core             |
-| `onMount`                  | `onSettled`, which returns its own cleanup      |
-| `createEffect(fn)`         | `createEffect(compute, apply)` — two arguments  |
-| `<Suspense>`               | `<Loading>`                                     |
-| `<ErrorBoundary>`          | `<Errored>`                                     |
-| `<Ctx.Provider value={…}>` | `<Ctx value={…}>` — the context is the provider |
+| Solid 1.x                   | Solid 2.0                                       |
+| --------------------------- | ----------------------------------------------- |
+| `solid-js/web`              | `@solidjs/web` (also `jsxImportSource`)         |
+| `solid-js/store`            | `solid-js` — stores moved into core             |
+| `onMount`                   | `onSettled`, which returns its own cleanup      |
+| `createEffect(fn)` / `on()` | `createEffect(compute, apply)` — two arguments  |
+| `<Suspense>` / `<Index>`    | `<Loading>` / `<For keyed={false}>`             |
+| `<ErrorBoundary>`           | `<Errored>`                                     |
+| `mergeProps` / `splitProps` | `merge` / `omit`                                |
+| `classList={{ … }}`         | `class={{ … }}`                                 |
+| `<Ctx.Provider value={…}>`  | `<Ctx value={…}>` — the context is the provider |
+
+Two behaviour changes have no syntactic tell, so they surprise people: signal
+reads do not update until the microtask flushes (call `flush()` when a test
+asserts right after a write), and writing a signal from a component body throws
+in dev. Built-in DOM attributes are also lowercase now (`novalidate`,
+`autocomplete`, `tabindex`), though event handlers stay camelCase.
 
 `lunora init app -t solid-v2` scaffolds a project already wired for 2.0 (the
 `@solidjs/web` renderer, `jsxImportSource`, and `vite-plugin-solid` 3.x).
 `lunora init app --vite solid` stays on the stable Solid 1.x line.
 
-One gap: `lunora add auth-ui` has no Solid 2 payload yet. Those screens are
-copy-in, user-owned Solid 1.x source, so the CLI refuses on a Solid 2 project
-rather than writing code that will not compile. `lunora add auth` (the server
-half) is unaffected, as is every other `lunora add` feature.
+`lunora add auth-ui` splits the same way. The copy-in auth screens are source
+you own, so the two majors cannot share one payload: `auth-ui-solid` is the 1.x
+port and `auth-ui-solid-v2` the 2.0 one, and the CLI picks from your installed
+`solid-js`. The framework-agnostic controllers under `lunora/auth-ui/core` are
+identical in both.
 
 ## Provide the client
 
