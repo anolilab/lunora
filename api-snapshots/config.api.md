@@ -1782,6 +1782,7 @@ interface WranglerConfig {
         logs?: {
             enabled?: boolean;
             head_sampling_rate?: number;
+            invocation_logs?: boolean;
         };
     };
     pipelines?: ReadonlyArray<{

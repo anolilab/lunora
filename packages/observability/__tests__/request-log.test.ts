@@ -110,6 +110,27 @@ describe("request-log module", () => {
         }
     });
 
+    it("round-trips the deploy attribution, leaving it undefined when the binding is absent", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ deploymentId: "dep-abc123", versionTag: "v42" }));
+            appendRequestLogEntry(database.sql, entry({ functionPath: "cron:sweep" }));
+
+            const rows = readRequestLog(database.sql);
+
+            // Newest first, so the un-attributed cron row leads.
+            expect(rows[0]!.deploymentId).toBeUndefined();
+            expect(rows[0]!.versionTag).toBeUndefined();
+            expect(rows[1]!.deploymentId).toBe("dep-abc123");
+            expect(rows[1]!.versionTag).toBe("v42");
+        } finally {
+            database.close();
+        }
+    });
+
     it("keeps the trace id intact on a row whose args were redacted", () => {
         expect.assertions(2);
 
@@ -686,6 +707,32 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
         const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
 
         expect(event.traceId).toBe(TRACE_ID);
+    });
+
+    it("carries the deploy attribution so 'did this start with a deploy?' is a group-by", () => {
+        expect.assertions(2);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(entry({ deploymentId: "dep-abc123", versionTag: "v42" }));
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+        expect(event.deploymentId).toBe("dep-abc123");
+        expect(event.versionTag).toBe("v42");
+    });
+
+    it("omits the deploy fields when the version_metadata binding is not declared", () => {
+        expect.assertions(2);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitRequestLogEvent(entry({}));
+
+        const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
+
+        expect(event).not.toHaveProperty("deploymentId");
+        expect(event).not.toHaveProperty("versionTag");
     });
 
     it("captureRaw emits un-redacted args/identity (the dev escape hatch)", () => {

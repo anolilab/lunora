@@ -144,7 +144,11 @@ interface WranglerConfig {
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
     // `validateMtlsCertificates`.
     mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
-    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
+    observability?: {
+        enabled?: boolean;
+        head_sampling_rate?: number;
+        logs?: { enabled?: boolean; head_sampling_rate?: number; invocation_logs?: boolean };
+    };
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
     // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
@@ -871,6 +875,14 @@ const validateObservability = (wrangler: WranglerConfig, errors: string[]): void
             errors.push("observability.logs must be an object");
         } else {
             checkSamplingRate(observability.logs.head_sampling_rate, "observability.logs.head_sampling_rate");
+
+            // `invocation_logs` is the per-invocation summary line (status,
+            // duration, outcome) that the Workers Logs Query Builder groups on.
+            // Shape-checked rather than required: wrangler silently ignores a
+            // mistyped key, which is exactly the failure this catches.
+            if (observability.logs.invocation_logs !== undefined && typeof observability.logs.invocation_logs !== "boolean") {
+                errors.push('observability.logs.invocation_logs must be a boolean (set "invocation_logs": true to keep per-invocation summaries)');
+            }
         }
     }
 };

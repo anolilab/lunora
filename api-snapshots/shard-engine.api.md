@@ -3884,6 +3884,12 @@ const readCdcEpoch: (sql: SqlExec) => string;
 const readClientWatermark: (sql: SqlExec, identity: string, clientId: string) => number;
 ```
 
+### `readDeployInfo` (const)
+
+```ts
+const readDeployInfo: (env: Record<string, unknown>) => DeployInfo;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
