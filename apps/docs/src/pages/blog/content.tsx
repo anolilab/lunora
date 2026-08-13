@@ -2,14 +2,24 @@ import SiX from "@icons-pack/react-simple-icons/icons/SiX.mjs";
 import { Link } from "@tanstack/react-router";
 import type { TOCItemType } from "fumadocs-core/toc";
 import { DocsBody } from "fumadocs-ui/page";
-import { ArrowLeft, Check, Link2 } from "lucide-react";
+import { Check, Link2 } from "lucide-react";
 import type { FC, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
+import HatchSpacer from "@/components/sections/hatch-spacer";
 import JsonLd from "@/components/seo/json-ld";
+import { Kicker, Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import { SITE_URL } from "@/lib/seo";
 
-import { Eyebrow, formatDate, initials } from "./shared";
+import { formatDate } from "./shared";
+
+/**
+ * `/blog/$slug` — one post, set as the same publication as the index: the
+ * shared `ArticleHeader` carries the trail, the title and the date, and the
+ * page below it is the article column with a sticky contents rail beside it.
+ * No card chrome; hairlines and the type do the separating.
+ */
 
 interface BlogPostMeta {
     author?: string;
@@ -36,6 +46,12 @@ interface PostLink {
 
 const EMPTY_RELATED: RelatedPost[] = [];
 const EMPTY_TOC: TOCItemType[] = [];
+
+// Same rule as the index: `/og-default.jpg` is the site-wide social card, not
+// editorial art, so a post declaring it has no cover rather than a stand-in one.
+const OG_FALLBACK = "/og-default.jpg";
+
+const coverOf = (image?: string): string | undefined => (image === undefined || image === OG_FALLBACK ? undefined : image);
 
 const CopyLinkButton: FC<{ url: string }> = ({ url }) => {
     const [copied, setCopied] = useState(false);
@@ -92,7 +108,9 @@ const TableOfContents: FC<{ items: TOCItemType[] }> = ({ items }) => {
 
     return (
         <nav aria-label="Table of contents" className="flex flex-col gap-2 text-sm">
-            <p className="mb-1 font-mono text-[11px] tracking-wider text-ink-faint uppercase">On this page</p>
+            <Kicker className="mb-1" size="micro">
+                On this page
+            </Kicker>
             {items.map((item) => {
                 const active = item.url.slice(1) === activeId;
 
@@ -110,33 +128,78 @@ const TableOfContents: FC<{ items: TOCItemType[] }> = ({ items }) => {
     );
 };
 
-// At the `lg` breakpoint the 3-col grid sits flush to the page guide lines; drop the
-// card border on the side that meets a guide so it doesn't double the (translucent) line.
-const edgeClass = (index: number): string => {
-    const left = index % 3 === 0 ? "lg:border-l-0" : "";
-    const right = index % 3 === 2 ? "lg:border-r-0" : "";
+/** `CATEGORY · DATE`, the index's meta line, reused for the related tiles. */
+const MetaLine: FC<{ post: RelatedPost }> = ({ post }) => {
+    const { formatted, iso } = formatDate(post.publishedAt);
 
-    return `${left} ${right}`.trim();
+    return (
+        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
+            {post.category ?? "Blog"}
+            {formatted ? (
+                <>
+                    <span aria-hidden="true">·</span>
+                    <time dateTime={iso}>{formatted}</time>
+                </>
+            ) : null}
+        </span>
+    );
 };
 
-const RelatedCard: FC<{ edge?: string; post: RelatedPost }> = ({ edge = "", post }) => (
-    <Link className={`group flex flex-col border border-hairline bg-wash ${edge}`} params={{ slug: post.slug }} to="/blog/$slug">
-        {post.image ? (
-            <div className="relative aspect-1200/630 overflow-hidden bg-wash">
-                <img
-                    alt={post.title ?? "Blog post"}
-                    className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
-                    decoding="async"
-                    loading="lazy"
-                    src={post.image}
-                />
-            </div>
-        ) : null}
-        <div className="flex flex-col gap-1.5 p-4">
-            <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-            <h3 className="text-sm font-semibold tracking-tight text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
-            <time className="mt-1 font-mono text-[11px] tracking-wide text-ink-faint">{formatDate(post.publishedAt).formatted}</time>
+/** Cover slot. Coverless posts take the typographic tile, as on the index. */
+const Cover: FC<{ category?: string; image?: string; title?: string }> = ({ category, image, title }) => {
+    const cover = coverOf(image);
+
+    return (
+        <div className="aspect-1200/630 w-full overflow-hidden bg-wash">
+            {cover === undefined ? (
+                <div className="flex size-full items-center justify-center border border-hairline p-6">
+                    <Kicker size="micro">{category ?? "Blog"}</Kicker>
+                </div>
+            ) : (
+                <img alt={`Cover for ${title ?? "a Lunora blog post"}`} className="size-full object-cover" decoding="async" loading="lazy" src={cover} />
+            )}
         </div>
+    );
+};
+
+const RelatedCard: FC<{ post: RelatedPost }> = ({ post }) => (
+    <Link className="group flex flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
+        <Cover category={post.category} image={post.image} title={post.title} />
+        <div className="flex flex-col gap-2.5">
+            <MetaLine post={post} />
+            <h3 className="text-base font-medium text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
+        </div>
+    </Link>
+);
+
+/** Author and reading time — the two facts the header does not already carry. */
+const Byline: FC<{ author?: string; readingMinutes?: number }> = ({ author, readingMinutes }) => {
+    const parts = [author, readingMinutes ? `${String(readingMinutes)} min read` : undefined].filter((part): part is string => part !== undefined);
+
+    if (parts.length === 0) {
+        return null;
+    }
+
+    return (
+        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
+            {parts.map((part, index) => (
+                <span className="flex items-center gap-2" key={part}>
+                    {index > 0 ? <span aria-hidden="true">·</span> : null}
+                    {part}
+                </span>
+            ))}
+        </span>
+    );
+};
+
+const PostNavLink: FC<{ direction: "next" | "previous"; post: PostLink }> = ({ direction, post }) => (
+    <Link
+        className={`group flex flex-col gap-1.5 border-t border-hairline py-5 transition-colors hover:border-hairline-strong ${direction === "next" ? "sm:items-end sm:text-right" : ""}`}
+        params={{ slug: post.slug }}
+        to="/blog/$slug"
+    >
+        <Kicker size="micro">{direction === "next" ? "Next →" : "← Previous"}</Kicker>
+        <span className="font-medium text-ink transition-colors group-hover:text-ink-muted">{post.title}</span>
     </Link>
 );
 
@@ -149,7 +212,8 @@ const BlogPost: FC<{
     slug: string;
     toc?: TOCItemType[];
 }> = ({ children, next = null, post, prev: previous = null, related = EMPTY_RELATED, slug, toc = EMPTY_TOC }) => {
-    const { formatted, iso } = formatDate(post.publishedAt);
+    const { formatted } = formatDate(post.publishedAt);
+    const cover = coverOf(post.image);
     const url = `${SITE_URL}/blog/${slug}`;
     const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(post.title ?? "")}&url=${encodeURIComponent(url)}`;
 
@@ -180,127 +244,81 @@ const BlogPost: FC<{
             <JsonLd data={articleLd} />
             <JsonLd data={breadcrumbLd} />
 
-            {/* atmospheric aurora glow behind the hero */}
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[420px] bg-[radial-gradient(60%_100%_at_50%_0,color-mix(in_oklab,var(--color-royal-amethyst)_18%,transparent),transparent)]"
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Blog", to: "/blog" }, { label: post.category ?? "Post" }]}
+                lead={post.description}
+                meta={formatted || undefined}
+                title={post.title}
             />
 
-            <section className="relative z-10" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 pt-28 pb-24 lg:px-0">
-                    <Link className="inline-flex items-center gap-1.5 text-sm text-ink-muted transition-colors hover:text-ink" to="/blog">
-                        <ArrowLeft className="size-4" />
-                        Blog
-                    </Link>
-
-                    {/* hero: title left, cover right */}
-                    <div className="mt-8 grid items-center gap-8 lg:grid-cols-[1fr_minmax(0,440px)]">
-                        <div>
-                            <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-                            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-ink sm:text-5xl">{post.title}</h1>
-                            {post.description ? <p className="mt-4 max-w-xl text-lg text-ink-muted">{post.description}</p> : null}
-                        </div>
-                        {post.image ? (
-                            <div className="overflow-hidden border border-hairline bg-wash lg:border-r-0">
-                                <img alt={post.title ?? "Blog post"} className="aspect-1200/630 w-full object-cover" decoding="async" src={post.image} />
-                            </div>
+            <section data-nav-theme="dark">
+                {/* Running text keeps its own measure inside the shell; the
+                    contents rail takes the column beside it so the prose stays
+                    flush with the header's left edge. */}
+                <Shell className="grid grid-cols-1 gap-10 py-16 lg:grid-cols-[minmax(0,1fr)_200px] lg:gap-12">
+                    <article className="min-w-0 max-w-3xl">
+                        {cover ? (
+                            <img
+                                alt={`Cover for ${post.title ?? "this post"}`}
+                                className="mb-10 aspect-1200/630 w-full bg-wash object-cover"
+                                decoding="async"
+                                src={cover}
+                            />
                         ) : null}
-                    </div>
 
-                    {/* byline + share */}
-                    <div className="mt-10 flex flex-wrap items-center justify-between gap-4 border-y border-hairline py-4">
-                        <div className="flex items-center gap-3 text-sm">
-                            <span className="flex size-8 flex-none items-center justify-center rounded-full bg-royal-amethyst/15 text-[11px] font-semibold text-royal-amethyst">
-                                {initials(post.author)}
-                            </span>
-                            {post.author ? <span className="font-medium text-ink">{post.author}</span> : null}
-                            {formatted ? (
-                                <time className="font-mono text-xs tracking-wide text-ink-faint" dateTime={iso}>
-                                    {formatted}
-                                </time>
-                            ) : null}
-                            {post.readingMinutes ? (
-                                <>
-                                    <span aria-hidden="true" className="text-ink-faint">
-                                        ·
-                                    </span>
-                                    <span className="font-mono text-xs tracking-wide text-ink-faint">{`${String(post.readingMinutes)} min read`}</span>
-                                </>
-                            ) : null}
+                        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-5">
+                            <Byline author={post.author} readingMinutes={post.readingMinutes} />
+                            <div className="flex items-center gap-2">
+                                <a
+                                    aria-label="Share on X"
+                                    className="flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
+                                    href={shareUrl}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                >
+                                    <SiX className="size-4 fill-current" title="Share on X" />
+                                </a>
+                                <CopyLinkButton url={url} />
+                            </div>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <a
-                                aria-label="Share on X"
-                                className="flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
-                                href={shareUrl}
-                                rel="noreferrer"
-                                target="_blank"
-                            >
-                                <SiX className="size-4 fill-current" title="Share on X" />
-                            </a>
-                            <CopyLinkButton url={url} />
-                        </div>
-                    </div>
 
-                    {/* body: sticky TOC + prose */}
-                    <div className="mt-12 grid gap-10 lg:grid-cols-[200px_minmax(0,1fr)]">
-                        {toc.length > 0 ? (
-                            <aside className="hidden lg:block">
-                                <div className="sticky top-24">
-                                    <TableOfContents items={toc} />
-                                </div>
-                            </aside>
-                        ) : (
-                            <div className="hidden lg:block" />
-                        )}
-                        <DocsBody className="min-w-0 max-w-none [&_figure]:rounded-none! [&_figure_pre]:rounded-none! [&_pre]:rounded-none!">
+                        <DocsBody className="mt-10 min-w-0 max-w-none [&_figure]:rounded-none! [&_figure_pre]:rounded-none! [&_pre]:rounded-none!">
                             {children}
                         </DocsBody>
-                    </div>
 
-                    {/* prev / next */}
-                    {previous || next ? (
-                        <nav aria-label="More posts" className="mt-16 grid gap-4 border-t border-hairline pt-8 sm:grid-cols-2">
-                            {previous ? (
-                                <Link
-                                    className="group flex flex-col gap-1 border border-hairline p-5 transition-colors hover:border-hairline-strong"
-                                    params={{ slug: previous.slug }}
-                                    to="/blog/$slug"
-                                >
-                                    <span className="font-mono text-[11px] tracking-wider text-ink-faint uppercase">← Previous</span>
-                                    <span className="font-medium text-ink transition-colors group-hover:text-ink-muted">{previous.title}</span>
-                                </Link>
-                            ) : (
-                                <div className="hidden sm:block" />
-                            )}
-                            {next ? (
-                                <Link
-                                    className="group flex flex-col items-end gap-1 border border-hairline p-5 text-right transition-colors hover:border-hairline-strong"
-                                    params={{ slug: next.slug }}
-                                    to="/blog/$slug"
-                                >
-                                    <span className="font-mono text-[11px] tracking-wider text-ink-faint uppercase">Next →</span>
-                                    <span className="font-medium text-ink transition-colors group-hover:text-ink-muted">{next.title}</span>
-                                </Link>
-                            ) : (
-                                <div className="hidden sm:block" />
-                            )}
-                        </nav>
+                        {previous || next ? (
+                            <nav aria-label="More posts" className="mt-16 grid gap-x-10 sm:grid-cols-2">
+                                {previous ? <PostNavLink direction="previous" post={previous} /> : <div className="hidden sm:block" />}
+                                {next ? <PostNavLink direction="next" post={next} /> : <div className="hidden sm:block" />}
+                            </nav>
+                        ) : null}
+                    </article>
+
+                    {toc.length > 0 ? (
+                        <aside className="hidden lg:block">
+                            <div className="sticky top-28">
+                                <TableOfContents items={toc} />
+                            </div>
+                        </aside>
                     ) : null}
+                </Shell>
+            </section>
 
-                    {/* related */}
-                    {related.length > 0 ? (
-                        <div className="mt-24 border-t border-hairline pt-12">
-                            <h2 className="text-2xl font-semibold tracking-tight text-ink">More from the blog</h2>
-                            <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                                {related.map((item, index) => (
-                                    <RelatedCard edge={edgeClass(index)} key={item.slug} post={item} />
+            {related.length > 0 ? (
+                <>
+                    <HatchSpacer />
+                    <section data-nav-theme="dark">
+                        <Shell className="py-16">
+                            <h2 className="text-h2 font-semibold tracking-tight text-ink">More from the blog</h2>
+                            <div className="mt-8 grid grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
+                                {related.map((item) => (
+                                    <RelatedCard key={item.slug} post={item} />
                                 ))}
                             </div>
-                        </div>
-                    ) : null}
-                </div>
-            </section>
+                        </Shell>
+                    </section>
+                </>
+            ) : null}
         </div>
     );
 };

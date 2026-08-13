@@ -44,7 +44,7 @@ const icon = (tone: string | undefined, subject: boolean): ReactNode => {
 };
 
 const CompareBand: FC = () => {
-    const rivals = RIVALS.map((slug) => COMPARISONS[slug]).filter(Boolean);
+    const rivals = RIVALS.flatMap((slug) => COMPARISONS[slug] ?? []);
 
     return (
         <Section id="compare" tone="light">

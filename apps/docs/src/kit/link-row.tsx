@@ -37,7 +37,7 @@ const LinkRow: FC<{
             {external ? (
                 <MoveUpRight className="ml-auto size-4 shrink-0 text-ink-faint transition-colors group-hover:text-ink" />
             ) : (
-                <MoveRight className="ml-auto size-4 shrink-0 text-ink-faint transition-all group-hover:translate-x-0.5 group-hover:text-ink" />
+                <MoveRight className="ml-auto size-4 shrink-0 text-ink-faint transition-[color,transform] group-hover:translate-x-0.5 group-hover:text-ink" />
             )}
         </>
     );

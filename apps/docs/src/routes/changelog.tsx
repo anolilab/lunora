@@ -1,52 +1,23 @@
-import { createCompiler } from "@fumadocs/mdx-remote";
-import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import defaultMdxComponents from "fumadocs-ui/mdx";
-import type { FC } from "react";
-import { useMemo } from "react";
 
 import { createSeoHead } from "@/lib/seo";
 import Changelog from "@/pages/changelog";
 
-// Changelogs are generated markdown (not MDX), so compile in `md` format —
-// this keeps angle brackets / braces from commit messages literal instead of
-// being parsed as JSX.
-const compiler = createCompiler({ development: false, format: "md" });
+// The changelogs are parsed into structured releases on the server rather than
+// compiled as MDX: the page renders a feed of versions, dates and grouped notes,
+// and one compiled document per package cannot be sorted, filtered or merged.
+const loadFeed = createServerFn({ method: "GET" }).handler(async () => {
+    const { listFeed } = await import("@/lib/changelog-source");
 
-const loadChangelogs = createServerFn({ method: "GET" }).handler(async () => {
-    const { listChangelogs } = await import("@/lib/changelog-source");
-
-    return Promise.all(
-        listChangelogs().map(async (entry) => {
-            const result = await compiler.compile({ source: entry.content });
-
-            return { compiled: result.compiled, key: entry.key, title: entry.title };
-        }),
-    );
+    return listFeed();
 });
 
-const RouteComponent = () => {
-    const data = Route.useLoaderData();
-
-    const items = useMemo(
-        () =>
-            data.map((item) => {
-                const { default: MdxContent } = executeMdxSync(item.compiled);
-                // eslint-disable-next-line react-x/no-nested-component-definitions -- per-item compiled MDX bound to the shared component map; memoized on `data`, and the Changelog page renders it as `<item.MdxContent />` (no props to thread)
-                const Rendered: FC = () => <MdxContent components={defaultMdxComponents} />;
-
-                return { MdxContent: Rendered, key: item.key, title: item.title };
-            }),
-        [data],
-    );
-
-    return <Changelog data={items} />;
-};
+const RouteComponent = () => <Changelog feed={Route.useLoaderData()} />;
 
 export const Route = createFileRoute("/changelog")({
     component: RouteComponent,
-    loader: () => loadChangelogs(),
+    loader: () => loadFeed(),
     head: () => {
         return {
             ...createSeoHead({

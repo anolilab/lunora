@@ -1,325 +1,265 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Search } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ArrowUpRight, Search } from "lucide-react";
 import type { FC } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
+import { Kicker, Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import type { BlogPostSummary } from "@/lib/blog-source";
+import { cn } from "@/lib/utils";
 
-import { Eyebrow, formatDate, initials } from "./shared";
+import { formatDate } from "./shared";
 
-const POSTS_PER_PAGE = 10;
+/**
+ * `/blog` — a magazine index. The three newest headline the page (one wide,
+ * two beside it) and the whole archive follows as a filterable list. No card
+ * chrome; the covers and the type carry it on the page's own canvas.
+ */
 
-const Avatar: FC<{ name?: string }> = ({ name }) => (
-    <span className="flex size-6 flex-none items-center justify-center rounded-full bg-royal-amethyst/15 text-[10px] font-semibold text-royal-amethyst">
-        {initials(name)}
-    </span>
-);
+// `/og-default.jpg` is the site-wide social-card fallback, not editorial art.
+// Six of eight posts declare it, and six identical covers read as a broken
+// grid — so treat it as "no cover" and let those posts take the typographic
+// tile instead.
+const OG_FALLBACK = "/og-default.jpg";
 
-const Chip: FC<{ children: string }> = ({ children }) => (
-    <span className="border border-hairline-strong bg-black/40 px-2 py-1 font-mono text-[10px] tracking-wider text-ink-muted uppercase backdrop-blur">
-        {children}
-    </span>
-);
+const coverOf = (post: BlogPostSummary): string | undefined => (post.image === undefined || post.image === OG_FALLBACK ? undefined : post.image);
 
-const cardClass = "group flex flex-col border border-hairline bg-wash transition-colors hover:border-hairline-strong";
-
-const FeaturedMain: FC<{ post: BlogPostSummary }> = ({ post }) => {
+/** `CATEGORY · DATE`, the one meta line every entry carries. */
+const MetaLine: FC<{ post: BlogPostSummary }> = ({ post }) => {
     const { formatted, iso } = formatDate(post.publishedAt);
 
     return (
-        <Link className={`${cardClass} h-full lg:border-l-0`} params={{ slug: post.slug }} to="/blog/$slug">
-            <div className="relative min-h-[300px] flex-1 overflow-hidden bg-wash">
-                {post.image ? (
-                    <img
-                        alt={post.title ?? "Blog post"}
-                        className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
-                        decoding="async"
-                        src={post.image}
-                    />
-                ) : null}
-                <span className="absolute top-4 left-4">
-                    <Chip>{post.category ?? "Blog"}</Chip>
-                </span>
-            </div>
-            <div className="p-5">
-                <h2 className="text-2xl font-semibold tracking-tight text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
-                {post.description ? <p className="mt-2 line-clamp-2 text-sm text-ink-muted">{post.description}</p> : null}
-            </div>
-            <div className="mt-auto flex items-center gap-2 border-t border-hairline px-5 py-4 text-xs text-ink-faint">
-                <Avatar name={post.author} />
-                {post.author ? <span className="text-ink-muted">{post.author}</span> : null}
-                {formatted ? (
-                    <time className="ml-auto font-mono tracking-wide text-ink-faint" dateTime={iso}>
-                        {formatted}
-                    </time>
-                ) : null}
-            </div>
-        </Link>
+        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
+            {post.category ?? "Blog"}
+            {formatted ? (
+                <>
+                    <span aria-hidden="true">·</span>
+                    <time dateTime={iso}>{formatted}</time>
+                </>
+            ) : null}
+        </span>
     );
 };
 
-const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
-    <Link className={`${cardClass} flex-1 lg:border-r-0`} params={{ slug: post.slug }} to="/blog/$slug">
-        <div className="relative aspect-1200/630 overflow-hidden bg-wash">
-            {post.image ? (
+/**
+ * The image slot. Posts without a real cover get a hairline tile carrying
+ * their category rather than a stand-in image — an invented cover would say
+ * something about the post that the post does not.
+ */
+const Cover: FC<{ eager?: boolean; post: BlogPostSummary }> = ({ eager = false, post }) => {
+    const cover = coverOf(post);
+
+    return (
+        <div className="aspect-1200/630 w-full overflow-hidden bg-wash">
+            {cover === undefined ? (
+                <div className="flex size-full items-center justify-center border border-hairline p-6">
+                    <Kicker size="micro">{post.category ?? "Blog"}</Kicker>
+                </div>
+            ) : (
                 <img
-                    alt={post.title ?? "Blog post"}
-                    className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    alt={`Cover for ${post.title ?? "a Lunora blog post"}`}
+                    className="size-full object-cover"
                     decoding="async"
-                    loading="lazy"
-                    src={post.image}
+                    loading={eager ? "eager" : "lazy"}
+                    src={cover}
                 />
-            ) : null}
+            )}
         </div>
-        <div className="flex flex-1 flex-col gap-1.5 p-4">
-            <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
-            <h3 className="text-sm font-semibold tracking-tight text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
-            <time className="mt-auto pt-2 font-mono text-[11px] tracking-wide text-ink-faint">{formatDate(post.publishedAt).formatted}</time>
+    );
+};
+
+const Byline: FC<{ name?: string }> = ({ name }) => (name === undefined ? null : <span className="text-[13px] text-ink-faint">{name}</span>);
+
+const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
+    <Link className="group flex flex-col gap-6" params={{ slug: post.slug }} to="/blog/$slug">
+        <Cover eager post={post} />
+        <div className="flex flex-col gap-4">
+            <MetaLine post={post} />
+            <h2 className="max-w-2xl text-h2 font-bold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
+            {post.description === undefined ? null : <p className="max-w-xl text-body text-ink-muted">{post.description}</p>}
+            <Byline name={post.author} />
         </div>
     </Link>
 );
 
+/**
+ * The two posts beside the lead. Their covers run the full width of the column
+ * so the pair fills the lead's height — a thumbnail-sized cover left the band
+ * two-thirds empty and made the sides read as an afterthought rather than as
+ * the second and third stories.
+ */
+const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
+    <Link className="group flex flex-1 flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
+        <Cover post={post} />
+        <div className="flex flex-col gap-2.5">
+            <MetaLine post={post} />
+            <h3 className="text-h3 font-semibold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
+            <Byline name={post.author} />
+        </div>
+    </Link>
+);
+
+/** One archive row: thumb, meta, title, author, date. */
 const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
     const { formatted, iso } = formatDate(post.publishedAt);
 
     return (
         <li className="border-t border-hairline last:border-b">
-            <Link className="group flex items-center gap-4 px-2 py-5 transition-colors hover:bg-wash sm:gap-6" params={{ slug: post.slug }} to="/blog/$slug">
-                <div className="relative aspect-1200/630 w-28 flex-none overflow-hidden border border-hairline bg-wash sm:w-40">
-                    {post.image ? (
-                        <img
-                            alt={post.title ?? "Blog post"}
-                            className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover:scale-105"
-                            decoding="async"
-                            loading="lazy"
-                            src={post.image}
-                        />
-                    ) : null}
+            <Link className="group flex items-center gap-5 py-5 transition-colors hover:bg-wash sm:gap-7" params={{ slug: post.slug }} to="/blog/$slug">
+                <div className="w-28 flex-none sm:w-40">
+                    <Cover post={post} />
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <Eyebrow>{post.category ?? "Blog"}</Eyebrow>
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                    <MetaLine post={post} />
                     <h3 className="truncate text-base font-medium text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
-                    <div className="flex items-center gap-2 text-xs text-ink-faint">
-                        <Avatar name={post.author} />
-                        {post.author ? <span>{post.author}</span> : null}
-                    </div>
+                    <Byline name={post.author} />
                 </div>
                 {formatted ? (
-                    <time className="ml-auto hidden flex-none font-mono text-[11px] tracking-wide text-ink-faint sm:block" dateTime={iso}>
+                    <time className="ml-auto hidden flex-none font-mono text-xs text-ink-faint sm:block" dateTime={iso}>
                         {formatted}
                     </time>
                 ) : null}
-                <ArrowUpRight className="size-4 flex-none text-ink/0 transition-colors group-hover:text-ink-faint" />
+                <ArrowUpRight className="size-4 flex-none text-ink-faint opacity-0 transition-opacity group-hover:opacity-100" />
             </Link>
         </li>
     );
 };
 
-const pillClass = (active: boolean): string =>
-    `border px-3 py-1 text-sm transition-colors ${active ? "border-hairline-strong bg-hairline text-ink" : "border-hairline text-ink-muted hover:border-hairline-strong hover:text-ink"}`;
-
-const arrowClass =
-    "flex size-9 items-center justify-center border border-hairline text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink disabled:opacity-40";
-
-const Pagination: FC<{ current: number; onGoTo: (page: number) => void; total: number }> = ({ current, onGoTo, total }) => {
-    if (total <= 1) {
-        return null;
-    }
-
-    return (
-        <nav aria-label="Pagination" className="mt-12 flex items-center justify-center gap-2">
-            <button
-                aria-label="Previous page"
-                className={arrowClass}
-                disabled={current <= 1}
-                onClick={() => {
-                    onGoTo(current - 1);
-                }}
-                type="button"
-            >
-                <ArrowLeft className="size-4" />
-            </button>
-            {Array.from({ length: total }, (_, index) => index + 1).map((number_) => (
+const Filters: FC<{
+    categories: string[];
+    category: string;
+    onCategory: (next: string) => void;
+    onQuery: (next: string) => void;
+    query: string;
+}> = ({ categories, category, onCategory, onQuery, query }) => (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-1.5">
+            {categories.map((name) => (
                 <button
-                    aria-current={number_ === current ? "page" : undefined}
-                    className={pillClass(number_ === current)}
-                    key={number_}
+                    className={cn(
+                        "border px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] whitespace-nowrap uppercase transition-colors",
+                        name === category ? "border-ink bg-ink text-canvas" : "border-hairline text-ink-faint hover:border-hairline-strong hover:text-ink",
+                    )}
+                    key={name}
                     onClick={() => {
-                        onGoTo(number_);
+                        onCategory(name);
                     }}
                     type="button"
                 >
-                    {number_}
+                    {name}
                 </button>
             ))}
-            <button
-                aria-label="Next page"
-                className={arrowClass}
-                disabled={current >= total}
-                onClick={() => {
-                    onGoTo(current + 1);
+        </div>
+        <div className="relative">
+            <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
+            <input
+                aria-label="Search articles"
+                className="w-full border border-hairline bg-wash py-2 pr-4 pl-9 font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-hairline-strong sm:w-64"
+                onChange={(event) => {
+                    onQuery(event.target.value);
                 }}
-                type="button"
-            >
-                <ArrowRight className="size-4" />
-            </button>
-        </nav>
-    );
-};
+                placeholder="Search articles…"
+                type="text"
+                value={query}
+            />
+        </div>
+    </div>
+);
 
-const BlogOverview: FC<{ page?: number; posts: BlogPostSummary[] }> = ({ page = 1, posts }) => {
-    const navigate = useNavigate();
-    const [category, setCategory] = useState<string>("All");
-    const [query, setQuery] = useState<string>("");
+const BlogOverview: FC<{ posts: BlogPostSummary[] }> = ({ posts }) => {
+    const [category, setCategory] = useState("All");
+    const [query, setQuery] = useState("");
 
-    const categories = useMemo(() => {
-        const set = new Set<string>();
+    const present = new Set(posts.flatMap((post) => (post.category === undefined ? [] : [post.category])));
+    const categories = ["All", ...[...present].toSorted((a, b) => a.localeCompare(b))];
 
-        for (const post of posts) {
-            if (post.category) {
-                set.add(post.category);
-            }
+    // The three newest headline the page and are deliberately outside the filter:
+    // they are an editorial highlight, not a query result, and a lead slot that
+    // empties when you type reads as a broken page.
+    const [lead, ...side] = posts.slice(0, 3);
+
+    // "All articles" is the whole archive, not the leftovers — narrowing to a
+    // category and not finding the post you just saw at the top would be worse
+    // than showing it twice.
+    const needle = query.trim().toLowerCase();
+    const listed = posts.filter((post) => {
+        if (category !== "All" && post.category !== category) {
+            return false;
         }
 
-        return ["All", ...[...set].toSorted((a, b) => a.localeCompare(b))];
-    }, [posts]);
-
-    const filtered = useMemo(() => {
-        const needle = query.trim().toLowerCase();
-
-        return posts.filter((post) => {
-            const matchesCategory = category === "All" || post.category === category;
-            const matchesQuery =
-                needle.length === 0 || (post.title ?? "").toLowerCase().includes(needle) || (post.description ?? "").toLowerCase().includes(needle);
-
-            return matchesCategory && matchesQuery;
-        });
-    }, [posts, category, query]);
-
-    // The three newest posts always headline the hero (an editorial highlight,
-    // unaffected by the filters). "All articles" below is the full archive —
-    // every post, narrowed by the category/search filter.
-    const featured = posts.slice(0, 3);
-    const [main, ...side] = featured;
-    const listSource = filtered;
-
-    const totalPages = Math.max(1, Math.ceil(listSource.length / POSTS_PER_PAGE));
-    const currentPage = Math.min(Math.max(1, page), totalPages);
-    const start = (currentPage - 1) * POSTS_PER_PAGE;
-    const visible = listSource.slice(start, start + POSTS_PER_PAGE);
-
-    const goToPage = (next: number): void => {
-        navigate({ search: next <= 1 ? {} : { page: next }, to: "/blog" }).catch(() => {});
-    };
-
-    const resetPage = (): void => {
-        navigate({ search: {}, to: "/blog" }).catch(() => {});
-    };
-
-    const onCategory = (item: string): void => {
-        setCategory(item);
-        resetPage();
-    };
-
-    const onQuery = (value: string): void => {
-        setQuery(value);
-        resetPage();
-    };
+        return needle.length === 0 || (post.title ?? "").toLowerCase().includes(needle) || (post.description ?? "").toLowerCase().includes(needle);
+    });
 
     return (
         <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-            {/* atmospheric aurora glow behind the header */}
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 z-0 h-[420px] bg-[radial-gradient(55%_100%_at_50%_0,color-mix(in_oklab,var(--color-royal-amethyst)_16%,transparent),transparent)]"
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Blog" }]}
+                lead="Updates, deep dives, and engineering notes from the team building Lunora."
+                title="News & insights"
             />
 
-            <section className="relative z-10" data-nav-theme="dark">
-                <div className={`mx-auto max-w-6xl px-5 pt-28 lg:px-0 ${posts.length === 0 ? "pb-24" : ""}`}>
-                    <header className="mb-14">
-                        <Eyebrow>Blog</Eyebrow>
-                        <h1 className="mt-3 text-4xl font-semibold tracking-tight text-balance text-ink sm:text-5xl">News &amp; insights</h1>
-                        <p className="mt-3 max-w-2xl text-lg text-ink-muted">Updates, deep dives, and engineering notes from the team building Lunora.</p>
-                    </header>
-
-                    {posts.length === 0 ? (
-                        <div className="border border-hairline py-20 text-center">
-                            <p className="text-lg font-semibold text-ink">No posts yet</p>
-                            <p className="mt-2 text-sm text-ink-muted">Check back soon for news and insights.</p>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                            <div className="lg:col-span-2">
-                                <FeaturedMain post={main} />
-                            </div>
-                            {side.length > 0 ? (
-                                <div className="flex flex-col gap-6">
-                                    {side.map((post) => (
-                                        <FeaturedSide key={post.slug} post={post} />
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
-                    )}
-                </div>
-
-                {posts.length > 0 ? (
-                    <>
-                        <div className="my-16 border-b">
-                            <HatchSpacer />
-                        </div>
-
-                        <div className="mx-auto max-w-6xl px-5 pb-24 lg:px-0">
-                            <h2 className="text-3xl font-semibold tracking-tight text-ink">All articles</h2>
-
-                            <div className="mt-6 flex flex-col gap-4 border-b border-hairline pb-4 sm:flex-row sm:items-center sm:justify-between">
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <span className="mr-1 font-mono text-[11px] tracking-wider text-ink-faint uppercase">Categories</span>
-                                    {categories.map((item) => (
-                                        <button
-                                            className={pillClass(item === category)}
-                                            key={item}
-                                            onClick={() => {
-                                                onCategory(item);
-                                            }}
-                                            type="button"
-                                        >
-                                            {item}
-                                        </button>
-                                    ))}
-                                </div>
-
-                                <div className="relative sm:w-64">
-                                    <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
-                                    <input
-                                        aria-label="Search articles"
-                                        className="w-full border border-hairline] bg-wash py-1.5 pr-3 pl-9 text-sm text-ink placeholder:text-ink-faint focus:border-hairline-strong focus:outline-none"
-                                        onChange={(event) => {
-                                            onQuery(event.target.value);
-                                        }}
-                                        placeholder="Search..."
-                                        type="search"
-                                        value={query}
-                                    />
-                                </div>
-                            </div>
-
-                            {visible.length === 0 ? (
-                                <p className="py-16 text-center text-sm text-ink-faint">No articles match your filters.</p>
-                            ) : (
-                                <ul>
-                                    {visible.map((post) => (
-                                        <ArticleRow key={post.slug} post={post} />
-                                    ))}
-                                </ul>
-                            )}
-
-                            <Pagination current={currentPage} onGoTo={goToPage} total={totalPages} />
-                        </div>
-                    </>
-                ) : null}
+            <section data-nav-theme="dark">
+                <Shell className="flex items-center justify-between gap-4 border-b border-hairline py-4">
+                    <Kicker size="micro">{String(posts.length)} Articles</Kicker>
+                    <a className="font-mono text-micro text-ink-muted uppercase transition-colors hover:text-accent" href="/blog/rss.xml">
+                        RSS
+                    </a>
+                </Shell>
             </section>
+
+            {posts.length === 0 ? (
+                <section data-nav-theme="dark">
+                    <Shell className="py-24 text-center">
+                        <p className="text-h3 font-semibold text-ink">No posts yet</p>
+                        <p className="mt-2 text-body text-ink-muted">Check back soon for news and insights.</p>
+                    </Shell>
+                </section>
+            ) : (
+                <section data-nav-theme="dark">
+                    <Shell className="grid grid-cols-1 gap-10 py-16 lg:grid-cols-[58fr_42fr] lg:gap-12">
+                        <Featured post={lead} />
+                        {side.length > 0 ? (
+                            <div className="flex h-full flex-col gap-10">
+                                {side.map((post) => (
+                                    <FeaturedSide key={post.slug} post={post} />
+                                ))}
+                            </div>
+                        ) : null}
+                    </Shell>
+
+                    <HatchSpacer />
+
+                    <Shell className="py-16">
+                        <div className="mb-8 flex flex-col gap-6">
+                            <h2 className="text-h2 font-semibold tracking-tight text-ink">All articles</h2>
+                            <Filters categories={categories} category={category} onCategory={setCategory} onQuery={setQuery} query={query} />
+                        </div>
+
+                        {listed.length > 0 ? (
+                            <ul>
+                                {listed.map((post) => (
+                                    <ArticleRow key={post.slug} post={post} />
+                                ))}
+                            </ul>
+                        ) : (
+                            <div className="flex flex-col items-center gap-4 border-t border-hairline py-20">
+                                <p className="text-body text-ink-faint">No articles match that filter.</p>
+                                <button
+                                    className="text-sm text-ink-muted underline underline-offset-4 transition-colors hover:text-ink"
+                                    onClick={() => {
+                                        setCategory("All");
+                                        setQuery("");
+                                    }}
+                                    type="button"
+                                >
+                                    Clear filters
+                                </button>
+                            </div>
+                        )}
+                    </Shell>
+                </section>
+            )}
         </div>
     );
 };

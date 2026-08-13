@@ -6,7 +6,7 @@ import type { FC } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
+import { ArticleHeader } from "@/kit/page-header";
 import { createJsonLd, SITE_URL } from "@/lib/seo";
 
 /**
@@ -110,31 +110,12 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
             {/* eslint-disable-next-line react/no-danger -- JSON-LD structured data; the payload is built locally and `<` is escaped via safeJsonLd */}
             <script dangerouslySetInnerHTML={{ __html: faqLd }} type="application/ld+json" />
 
-            {/* Hero */}
-            <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
-                <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-36 pb-16 text-center sm:pt-44">
-                    <Reveal className="flex flex-col items-center gap-6">
-                        <nav aria-label="Breadcrumb" className="font-mono text-xs text-ink-faint">
-                            <Link className="hover:text-ink" to="/">
-                                Home
-                            </Link>{" "}
-                            /{" "}
-                            <Link className="hover:text-ink" to="/compare">
-                                Compare
-                            </Link>{" "}
-                            / <span className="text-ink-muted">vs {data.name}</span>
-                        </nav>
-                        <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-ink sm:text-6xl">
-                            Lunora{" "}
-                            <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">vs</span>{" "}
-                            {data.name}
-                        </h1>
-                        <p className="max-w-xl text-lg leading-relaxed text-ink-muted">{data.intro}</p>
-                    </Reveal>
-                </div>
-            </section>
-
-            <HatchSpacer />
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Compare", to: "/compare" }, { label: data.name }]}
+                lead={data.intro}
+                meta="Comparison"
+                title={`Lunora vs ${data.name}`}
+            />
 
             {/* Comparison table */}
             <section className="relative bg-canvas py-14" data-nav-theme="dark">
@@ -171,10 +152,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
 
             {/* Summary prose */}
             <section className="relative bg-canvas py-16" data-nav-theme="dark">
-                <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5">
+                <div className="mx-auto flex max-w-4xl flex-col gap-4 px-5">
                     <h2 className="text-2xl font-semibold tracking-tight text-ink">How Lunora and {data.name} differ</h2>
                     {data.summary.map((paragraph) => (
-                        <p className="leading-relaxed text-ink-muted" key={paragraph.slice(0, 24)}>
+                        <p className="max-w-[68ch] leading-relaxed text-ink-muted" key={paragraph.slice(0, 24)}>
                             {paragraph}
                         </p>
                     ))}
@@ -185,7 +166,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
 
             {/* Verdicts */}
             <section className="relative bg-canvas py-16" data-nav-theme="dark">
-                <div className="mx-auto max-w-5xl px-5">
+                <div className="mx-auto max-w-4xl px-5">
                     <h2 className="mb-6 text-2xl font-semibold tracking-tight text-ink">Where each one wins</h2>
                     <div className="grid grid-cols-1 gap-px border border-hairline md:grid-cols-2">
                         <div className="flex flex-col gap-3 border-b border-hairline bg-canvas p-8 md:border-r md:border-b-0">
@@ -206,7 +187,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
 
             {/* FAQ */}
             <section className="relative bg-canvas py-16" data-nav-theme="dark">
-                <div className="mx-auto flex max-w-3xl flex-col gap-6 px-5">
+                <div className="mx-auto flex max-w-4xl flex-col gap-6 px-5">
                     <h2 className="text-2xl font-semibold tracking-tight text-ink">Frequently asked questions</h2>
                     <dl className="flex flex-col divide-y divide-hairline]">
                         {data.faqs.map((faq) => (
@@ -214,7 +195,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                                 <dt className="text-base font-semibold text-ink">
                                     <h3>{faq.q}</h3>
                                 </dt>
-                                <dd className="text-sm leading-relaxed text-ink-muted">{faq.a}</dd>
+                                <dd className="max-w-[72ch] text-sm leading-relaxed text-ink-muted">{faq.a}</dd>
                             </div>
                         ))}
                     </dl>
@@ -230,7 +211,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                     className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
                     style={{ background: "radial-gradient(60% 100% at 50% 120%, hsl(256 72% 68% / 0.22), transparent 70%)" }}
                 />
-                <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-6 px-5 py-20 text-center">
+                <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 py-20 text-center">
                     <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Try Lunora on your own Cloudflare.</h2>
                     <p className="max-w-lg text-ink-muted">
                         Lunora is alpha and open source. Try it on a side project and tell us where it breaks. Prefer managed? Join the Lunora Cloud waitlist.

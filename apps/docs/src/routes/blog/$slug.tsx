@@ -4,7 +4,7 @@ import { createServerFn } from "@tanstack/react-start";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import type { ComponentProps } from "react";
 
-import { createSeoHead, SITE_URL } from "@/lib/seo";
+import { createSeoHead, isFallbackImage, SITE_URL } from "@/lib/seo";
 import type { BlogPostMeta, PostLink, RelatedPost } from "@/pages/blog/content";
 import BlogPost from "@/pages/blog/content";
 
@@ -119,10 +119,16 @@ export const Route = createFileRoute("/blog/$slug")({
             title: loaderData.meta.title,
         });
 
+        // A post that ships real cover art should share it. The generated card is
+        // the fallback for the posts that have none — which was every post until
+        // now, because this ignored `meta.image` entirely.
+        const cover = isFallbackImage(loaderData.meta.image)
+            ? `${SITE_URL}/api/og?${ogParameters.toString()}`
+            : new URL(loaderData.meta.image ?? "", SITE_URL).href;
+
         const seo = createSeoHead({
             description: loaderData.meta.description ?? `${loaderData.meta.title} — Lunora blog`,
-            // Dynamic OG image generated per post (see routes/api/og.ts).
-            ogImage: `${SITE_URL}/api/og?${ogParameters.toString()}`,
+            ogImage: cover,
             ogType: "article",
             path: `/blog/${loaderData.slug}`,
             title: loaderData.meta.title,

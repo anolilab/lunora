@@ -2,7 +2,17 @@ const SITE_URL = "https://lunora.sh";
 const SITE_NAME = "Lunora";
 const DEFAULT_DESCRIPTION =
     "Lunora gives you typed queries, mutations, and live subscriptions that sync from your Cloudflare Workers + Durable Objects backend straight to the client — with a Vite-first developer experience.";
-const DEFAULT_OG_IMAGE = `${SITE_URL}/og-default.jpg`;
+
+/**
+ * The site-wide social card. Content frontmatter names it as a bare path, so
+ * both forms have to be recognisable: a post declaring it has *no* cover, and
+ * treating it as one is how six blog entries ended up sharing an image.
+ */
+const OG_FALLBACK_PATH = "/og-default.jpg";
+const DEFAULT_OG_IMAGE = `${SITE_URL}${OG_FALLBACK_PATH}`;
+
+/** True when `value` is absent or is the shared fallback rather than real art. */
+const isFallbackImage = (value?: string): boolean => value === undefined || value === OG_FALLBACK_PATH || value === DEFAULT_OG_IMAGE;
 
 interface SeoOptions {
     canonical?: string;
@@ -56,4 +66,4 @@ export const createSeoHead = (options: SeoOptions): { links: Record<string, stri
 
 export const createJsonLd = (data: Record<string, unknown>): string => JSON.stringify({ "@context": "https://schema.org", ...data });
 
-export { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, SITE_NAME, SITE_URL };
+export { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, isFallbackImage, SITE_NAME, SITE_URL };

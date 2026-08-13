@@ -3,7 +3,6 @@
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import { rootRouteId, useMatch, useRouter } from "@tanstack/react-router";
 import type { JSX } from "react";
-import { useCallback } from "react";
 
 import { Action } from "@/kit/action";
 import { Shell } from "@/kit/layout";
@@ -35,15 +34,15 @@ const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
     // eslint-disable-next-line no-console -- the stack is not rendered, so this is the only place a developer can see it
     console.error("Route error:", error);
 
-    const handleTryAgain = useCallback((): void => {
+    const handleTryAgain = (): void => {
         router.invalidate().catch(() => {
             // Ignore: a failed invalidate lands back in this boundary anyway.
         });
-    }, [router]);
+    };
 
-    const goBack = useCallback((): void => {
+    const goBack = (): void => {
         router.history.back();
-    }, [router]);
+    };
 
     const message = isError(error) ? error.message : "The page could not be rendered.";
 

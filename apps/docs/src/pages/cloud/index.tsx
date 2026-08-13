@@ -1,12 +1,14 @@
 "use client";
 
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, BarChart3, Check, LayoutDashboard, LifeBuoy, RotateCcw } from "lucide-react";
-import type { FC, ReactNode, SyntheticEvent } from "react";
+import { ArrowRight, Check } from "lucide-react";
+import type { FC, SyntheticEvent } from "react";
 import { useState } from "react";
 
-import { Pill } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
+import HatchSpacer from "@/components/sections/hatch-spacer";
+import { Action } from "@/kit/action";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import posthog from "@/lib/posthog";
 
 /**
@@ -151,103 +153,143 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     );
 };
 
-interface Perk {
-    desc: string;
-    icon: ReactNode;
-    title: string;
-}
-
-const perks: Perk[] = [
-    { desc: "The admin UI, hosted and always on — schema, data, SQL, logs.", icon: <LayoutDashboard className="size-5" />, title: "Managed Studio" },
-    { desc: "Metrics, traces, and request logs across your shards, in one place.", icon: <BarChart3 className="size-5" />, title: "Observability" },
-    { desc: "Automatic backups and point-in-time restore across every shard.", icon: <RotateCcw className="size-5" />, title: "Backups & restore" },
-    { desc: "A human on support when something breaks. Priority for teams.", icon: <LifeBuoy className="size-5" />, title: "Real support" },
+/**
+ * What the control plane actually does, taken from the platform's own modules
+ * rather than invented for the page. Every line here maps to something built:
+ * deploy orchestration, the Workers-for-Platforms dispatcher, org membership and
+ * deploy keys, tenant secrets, Analytics-Engine metering with quota enforcement,
+ * the hosted studio, custom domains, and the cron/queue fan-out that namespaced
+ * Workers cannot do for themselves.
+ *
+ * It is written as what is being built, because none of it has opened to the
+ * public yet — a waitlist page that claims shipped features is the one thing
+ * this page cannot do.
+ */
+const capabilities: { body: string; kicker: string; title: string }[] = [
+    {
+        body: "Push and watch it go out: deploy status streams back line by line, pull requests get their own preview URL, and any deployment can be rolled back.",
+        kicker: "Deploys",
+        title: "Streaming deploys and previews",
+    },
+    {
+        body: "Your project runs as its own script behind a hostname router, with runtime limits applied per plan instead of shared with everyone else's traffic.",
+        kicker: "Isolation",
+        title: "A worker per project",
+    },
+    {
+        body: "Organisations with members, invitations and roles; deploy keys for CI; and an audit log of who changed what.",
+        kicker: "Teams",
+        title: "Orgs, keys, and an audit trail",
+    },
+    {
+        body: "Per-tenant secrets, encrypted at the edge and injected at deploy time — never checked into a repo, never readable from the dashboard.",
+        kicker: "Secrets",
+        title: "Secrets that stay secret",
+    },
+    {
+        body: "Requests, duration and storage metered per tenant, with quotas and a spend cap that stops the bill before it surprises you.",
+        kicker: "Usage",
+        title: "Metering and spend caps",
+    },
+    {
+        body: "The Studio you run locally, hosted and always on: schema, data, SQL, request logs and traces across every shard.",
+        kicker: "Studio",
+        title: "Managed Studio",
+    },
+    {
+        body: "Point a domain at a project and the platform verifies DNS and takes over routing — no certificate wrangling.",
+        kicker: "Domains",
+        title: "Custom domains",
+    },
+    {
+        body: "Scheduled functions and queue consumers work the same as they do on your own account, fanned out to your worker by the platform.",
+        kicker: "Background",
+        title: "Cron and queues",
+    },
 ];
 
 const CloudLanding: FC = () => (
     <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
-        {/* Hero + waitlist */}
-        <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-80 opacity-60"
-                style={{ background: "radial-gradient(60% 100% at 50% 0%, hsl(256 72% 68% / 0.18), transparent 70%)" }}
-            />
-            <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-40 pb-20 text-center sm:pt-48">
-                <Reveal className="flex flex-col items-center gap-6">
-                    <span className="flex items-center gap-2 border border-hairline px-3 py-1 font-mono text-xs text-ink-muted">
-                        <span className="size-1.5 bg-royal-amethyst" />
-                        Lunora Cloud · coming soon
-                    </span>
-                    <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-ink sm:text-6xl">
-                        The managed way to run{" "}
-                        <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">Lunora.</span>
-                    </h1>
-                    <p className="max-w-xl text-lg leading-relaxed text-ink-muted">
-                        Lunora is open source and runs on your own Cloudflare account today. Lunora Cloud will run it for you, so you can ship instead of
-                        operate infrastructure.
-                    </p>
-                    <WaitlistForm />
-                    <p className="text-sm text-ink-faint">
-                        Want it now?{" "}
-                        <Pill to="/docs">
-                            Self-host the open-source framework
-                            <ArrowRight className="size-4" />
-                        </Pill>
-                    </p>
-                </Reveal>
-            </div>
+        <ArticleHeader
+            actions={
+                <Action to="/docs">
+                    Self-host it today
+                    <ArrowRight className="size-4" />
+                </Action>
+            }
+            breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Cloud" }]}
+            lead="Lunora is open source and runs on your own Cloudflare account today. Lunora Cloud will run it for you, so you can ship instead of operate infrastructure."
+            meta="Early access"
+            title="The managed way to run Lunora."
+        />
+
+        <section data-nav-theme="dark">
+            <Shell className="flex flex-col items-center gap-4 py-14 text-center">
+                <WaitlistForm />
+            </Shell>
         </section>
 
-        {/* No lock-in: own it or let us run it */}
-        <section className="relative border-t border-hairline bg-canvas" data-nav-theme="dark">
-            <div className="mx-auto grid max-w-5xl grid-cols-1 gap-px border-hairline md:grid-cols-2 md:border-x">
-                <div className="flex flex-col gap-3 border-b border-hairline p-8 md:border-r md:border-b-0">
-                    <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Own it</span>
-                    <h3 className="text-xl font-semibold text-ink">Self-host on your Cloudflare</h3>
-                    <p className="text-sm leading-relaxed text-ink-muted">
-                        The framework is free and open source. Deploy to the Cloudflare account you already have. Your data, your infrastructure, ≈$0 at idle on
-                        the free tier.
-                    </p>
-                </div>
-                <div className="flex flex-col gap-3 p-8">
-                    <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Or let us run it</span>
-                    <h3 className="text-xl font-semibold text-ink">Lunora Cloud</h3>
-                    <p className="text-sm leading-relaxed text-ink-muted">
-                        The same code, managed for you. No setup, no ops. You&apos;re never forced onto the cloud — you can take the open source and self-host
-                        any time. No lock-in, ever.
-                    </p>
-                </div>
-            </div>
-        </section>
+        <HatchSpacer />
 
-        {/* What you get */}
-        <section className="relative border-t border-hairline bg-canvas py-16" data-nav-theme="dark">
-            <div className="mx-auto grid max-w-5xl grid-cols-1 gap-8 px-5 sm:grid-cols-2 lg:grid-cols-4">
-                {perks.map((perk) => (
-                    <div className="flex flex-col gap-3" key={perk.title}>
-                        <span className="flex size-10 items-center justify-center border border-hairline bg-wash text-ink-muted">{perk.icon}</span>
-                        <h4 className="text-sm font-semibold text-ink">{perk.title}</h4>
-                        <p className="text-sm leading-relaxed text-ink-muted">{perk.desc}</p>
+        {/* The brand wedge, and the reason the waitlist is not a lock-in ask. */}
+        <section data-nav-theme="dark">
+            <Shell className="py-16">
+                <div className="grid grid-cols-1 gap-px bg-hairline md:grid-cols-2">
+                    <div className="flex flex-col gap-3 bg-canvas p-8">
+                        <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">Own it</span>
+                        <h3 className="text-h3 font-semibold text-ink">Self-host on your Cloudflare</h3>
+                        <p className="text-sm leading-relaxed text-ink-muted">
+                            The framework is free and open source. Deploy to the Cloudflare account you already have. Your data, your infrastructure, &asymp;$0
+                            at idle on the free tier.
+                        </p>
                     </div>
-                ))}
-            </div>
+                    <div className="flex flex-col gap-3 bg-canvas p-8">
+                        <span className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">Or let us run it</span>
+                        <h3 className="text-h3 font-semibold text-ink">Lunora Cloud</h3>
+                        <p className="text-sm leading-relaxed text-ink-muted">
+                            The same code, managed for you. No setup, no ops. You&apos;re never forced onto the cloud — you can take the open source and
+                            self-host any time. No lock-in, ever.
+                        </p>
+                    </div>
+                </div>
+            </Shell>
         </section>
 
-        {/* Closing waitlist nudge */}
-        <section className="relative overflow-hidden border-t border-hairline bg-canvas" data-nav-theme="dark">
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
-                style={{ background: "radial-gradient(60% 100% at 50% 120%, hsl(256 72% 68% / 0.22), transparent 70%)" }}
-            />
-            <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-6 px-5 py-20 text-center">
-                <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Be first on Lunora Cloud.</h2>
-                <p className="max-w-lg text-ink-muted">
+        <HatchSpacer />
+
+        <section data-nav-theme="dark">
+            <Shell className="py-16">
+                <div className="mb-10 flex flex-col gap-3">
+                    <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">What is being built</span>
+                    <h2 className="max-w-2xl text-h2 font-semibold tracking-tight text-ink">A control plane, not a hosting reseller.</h2>
+                    <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
+                        Lunora Cloud runs on Workers for Platforms: each project gets its own isolated worker, provisioned, metered and routed by a control
+                        plane built on Lunora itself.
+                    </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-px bg-hairline sm:grid-cols-2 lg:grid-cols-4">
+                    {capabilities.map((item) => (
+                        <div className="flex flex-col gap-2.5 bg-canvas p-6" key={item.title}>
+                            <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">{item.kicker}</span>
+                            <h3 className="text-sm font-semibold text-ink">{item.title}</h3>
+                            <p className="text-sm leading-relaxed text-ink-muted">{item.body}</p>
+                        </div>
+                    ))}
+                </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        <section data-nav-theme="dark">
+            <Shell className="flex flex-col items-center gap-6 py-20 text-center">
+                <h2 className="text-h2 font-semibold tracking-tight text-ink">Be first on Lunora Cloud.</h2>
+                <p className="max-w-lg text-body text-ink-muted">
                     It&apos;s early. Join the waitlist and help shape the first managed tier — we&apos;ll ask what you&apos;d want it to do.
                 </p>
                 <WaitlistForm />
-            </div>
+            </Shell>
         </section>
     </div>
 );

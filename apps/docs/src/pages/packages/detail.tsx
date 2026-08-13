@@ -4,7 +4,7 @@ import { useLoaderData } from "@tanstack/react-router";
 import { Check, ChevronRight, Copy, Download, ExternalLink, Terminal } from "lucide-react";
 import { motion } from "motion/react";
 import type { FC } from "react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill, SectionHead } from "@/components/sections/langbase";
@@ -73,13 +73,16 @@ const CHART_HEIGHT = CHART_VIEW_HEIGHT - CHART_PAD_TOP - CHART_PAD_BOTTOM;
 const GRID_FRACTIONS = [0.25, 0.5, 0.75];
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
+/** First month the download chart plots. `YYYY-MM`, compared as a string. */
+const CHART_START_MONTH = "2026-01";
+
 const formatMonth = (m: string): string => {
     const [year, month] = m.split("-");
 
     return `${MONTH_NAMES[Number(month) - 1]} ${year}`;
 };
 
-const MiniChart: FC<{ accentColor: AccentColor; data: MonthlyDataPoint[] }> = memo(({ accentColor, data }) => {
+const MiniChart: FC<{ accentColor: AccentColor; data: MonthlyDataPoint[] }> = ({ accentColor, data }) => {
     const { color, id } = chartConfig[accentColor];
 
     const { areaPath, firstMonth, lastPoint, linePath } = useMemo(() => {
@@ -122,7 +125,7 @@ const MiniChart: FC<{ accentColor: AccentColor; data: MonthlyDataPoint[] }> = me
             </div>
         </div>
     );
-});
+};
 
 const PackageDetail: FC = () => {
     const { pkg } = useLoaderData({ from: "/packages/$slug" });
@@ -143,7 +146,11 @@ const PackageDetail: FC = () => {
 
     const weeklyDownloads = stats?.weeklyDownloads[pkg.slug] ?? 0;
     const totalDownloads = stats?.totalDownloads[pkg.slug] ?? 0;
-    const chartData = useMemo(() => stats?.monthlyChart[pkg.slug] ?? [], [stats, pkg.slug]);
+    // The npm range API answers for every month the registry has existed, so the
+    // series opens with five years of zeros before the first release and the real
+    // curve is squashed into the last few pixels. Start at the year the packages
+    // were first published.
+    const chartData = useMemo(() => (stats?.monthlyChart[pkg.slug] ?? []).filter((point) => point.month >= CHART_START_MONTH), [stats, pkg.slug]);
     const installCommand = `npm install ${pkg.npmName}`;
     const downloadField = totalDownloads > 0 ? { downloadCount: totalDownloads } : {};
 
@@ -197,7 +204,7 @@ const PackageDetail: FC = () => {
                 title={pkg.name}
             />
 
-            <section className="border-t border-hairline" data-nav-theme="dark">
+            <section data-nav-theme="dark">
                 <Shell className="flex flex-col gap-3 py-10 sm:flex-row sm:items-center">
                     <div className="relative w-full sm:max-w-md">
                         <div className="flex items-center gap-3 border border-hairline bg-[var(--site-console)] px-4 py-3 pr-12 font-mono text-sm text-ink-muted">
@@ -216,7 +223,7 @@ const PackageDetail: FC = () => {
             </section>
 
             {/* stats */}
-            <section className="border-t border-hairline" data-nav-theme="dark">
+            <section data-nav-theme="dark">
                 <div className="mx-auto grid max-w-6xl grid-cols-2 gap-px border-hairline sm:grid-cols-4 lg:border-x-0">
                     <div className="flex flex-col gap-1 bg-wash p-8">
                         <span className="font-mono text-2xl font-semibold tracking-tight text-ink">
@@ -249,7 +256,7 @@ const PackageDetail: FC = () => {
                     <HatchSpacer />
 
                     {/* features */}
-                    <section className="border-t border-hairline" data-nav-theme="dark">
+                    <section data-nav-theme="dark">
                         <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
                             <h2 className="text-2xl font-semibold tracking-tight text-ink">Features</h2>
                             <div className="mt-10 grid gap-px border border-hairline sm:grid-cols-2 lg:border-x-0">
@@ -269,33 +276,36 @@ const PackageDetail: FC = () => {
 
             {/* downloads */}
             {chartData.length > 0 ? (
-                <section className="border-t border-hairline" data-nav-theme="dark">
-                    <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
-                        <h2 className="text-2xl font-semibold tracking-tight text-ink">Downloads</h2>
-                        <div className="mt-8 grid grid-cols-2 gap-px border border-hairline sm:grid-cols-2 lg:border-x-0">
-                            <div className="flex flex-col gap-2 bg-wash p-8">
-                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={weeklyDownloads} />
-                                <span className="flex items-center gap-1.5 text-sm text-ink-faint">
-                                    <Download className="size-3.5" />
-                                    Weekly downloads
-                                </span>
+                <>
+                    <HatchSpacer />
+                    <section data-nav-theme="dark">
+                        <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
+                            <h2 className="text-2xl font-semibold tracking-tight text-ink">Downloads</h2>
+                            <div className="mt-8 grid grid-cols-2 gap-px border border-hairline sm:grid-cols-2 lg:border-x-0">
+                                <div className="flex flex-col gap-2 bg-wash p-8">
+                                    <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={weeklyDownloads} />
+                                    <span className="flex items-center gap-1.5 text-sm text-ink-faint">
+                                        <Download className="size-3.5" />
+                                        Weekly downloads
+                                    </span>
+                                </div>
+                                <div className="flex flex-col gap-2 bg-wash p-8">
+                                    <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={totalDownloads} />
+                                    <span className="text-sm text-ink-faint">Total downloads</span>
+                                </div>
                             </div>
-                            <div className="flex flex-col gap-2 bg-wash p-8">
-                                <AnimatedNumber className="text-3xl font-semibold tracking-tight text-ink" suffix="+" value={totalDownloads} />
-                                <span className="text-sm text-ink-faint">Total downloads</span>
+                            <div className="mt-px aspect-[5/2] border border-hairline bg-wash lg:border-x-0">
+                                <MiniChart accentColor={pkg.accentColor} data={chartData} />
                             </div>
                         </div>
-                        <div className="mt-px aspect-[5/2] border border-hairline bg-wash lg:border-x-0">
-                            <MiniChart accentColor={pkg.accentColor} data={chartData} />
-                        </div>
-                    </div>
-                </section>
+                    </section>
+                </>
             ) : null}
 
             <HatchSpacer />
 
             {/* CTA */}
-            <section className="border-t border-hairline" data-nav-theme="dark">
+            <section data-nav-theme="dark">
                 <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
                     <SectionHead
                         eyebrow="Get started"

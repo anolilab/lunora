@@ -2,7 +2,7 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import type { FC, KeyboardEvent } from "react";
-import { useCallback, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import dashboardsImg from "@/assets/studio/dark/dashboards.png";
 import dataImg from "@/assets/studio/dark/data.png";
@@ -39,21 +39,23 @@ const Studio: FC = () => {
     const id = useId();
     const reduceMotion = useReducedMotion();
     const tabReferences = useRef<(HTMLButtonElement | null)[]>([]);
-    // Warmed images, kept in a ref: this drives no rendering, and putting it in
-    // state would re-render the section on every hover.
-    const warmed = useRef(new Set<number>([0]));
+    // Which images have been warmed. A lazy `useState` initialiser rather than
+    // `useRef(new Set())`: an argument to useRef is evaluated on every render and
+    // then discarded. The setter is never called, so this is a stable mutable box
+    // and mutating it never re-renders the section.
+    const [warmed] = useState(() => new Set<number>([0]));
 
-    const warm = useCallback((index: number) => {
-        if (warmed.current.has(index)) {
+    const warm = (index: number): void => {
+        if (warmed.has(index)) {
             return;
         }
 
-        warmed.current.add(index);
+        warmed.add(index);
 
         const image = new Image();
 
         image.src = VIEWS[index].image;
-    }, []);
+    };
 
     // `role="tablist"` promises arrow-key navigation. Declaring the role without
     // it leaves a keyboard user worse off than plain buttons would have.

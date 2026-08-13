@@ -117,8 +117,8 @@ export const BentoSpotlightCard = ({
                     <CanvasRevealEffect animationSpeed={5} colors={revealColors} containerClassName="bg-transparent absolute inset-0 pointer-events-none" />
                 )}
             </motion.div>
-            <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-2 p-6 transition-all duration-300">
-                <Icon className="my-5 h-6 w-6 origin-left transform-gpu text-ink-muted transition-all duration-300 ease-in-out group-hover/spotlight:text-ink group-hover/spotlight:scale-110" />
+            <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-2 p-6 transition-transform duration-300">
+                <Icon className="my-5 h-6 w-6 origin-left transform-gpu text-ink-muted transition-[color,transform] duration-300 ease-in-out group-hover/spotlight:text-ink group-hover/spotlight:scale-110" />
                 <h3 className="text-lg font-bold tracking-tight text-ink">{name}</h3>
                 <p className="text-sm leading-relaxed text-ink-faint transition-colors duration-300 group-hover/spotlight:text-ink-muted">{description}</p>
             </div>
