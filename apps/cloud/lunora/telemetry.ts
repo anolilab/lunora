@@ -89,11 +89,13 @@ interface IncidentRow {
 
 interface AlertRuleRow {
     _id: Id<"alertRules">;
+    baselineWindows?: number;
     channel: AlertChannel;
     comparator?: "gt" | "lt";
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    mode?: "deviation" | "threshold";
     name: string;
     target: "error_rate" | "incident" | "issue" | "latency_p95" | "llm_cost" | "uptime";
     threshold: number;
@@ -345,10 +347,12 @@ export const ingest = mutation
                 .filter((rule): rule is AlertRuleRow & { target: MetricTarget } => METRIC_TARGETS.has(rule.target as MetricTarget))
                 .map((rule) => {
                     return {
+                        baselineWindows: rule.baselineWindows,
                         channel: rule.channel,
                         comparator: rule.comparator ?? "gt",
                         destination: rule.destination,
                         functionPath: rule.functionPath,
+                        mode: rule.mode,
                         name: rule.name,
                         ruleId: rule._id,
                         target: rule.target,

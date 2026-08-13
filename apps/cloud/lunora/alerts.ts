@@ -59,16 +59,54 @@ export const rules = query
         return (page as unknown as AlertRuleRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
     });
 
+/**
+ * Validate a new rule's numeric shape, split out of {@link createRule} so the
+ * mutation body stays about authorization + persistence.
+ *
+ * The rules differ by target family: count-crossing thresholds are event counts
+ * (≥ 1), while metric thresholds are percentages / ms / cost budgets that may
+ * legitimately be fractional (≥ 0) — and in `deviation` mode a percent change,
+ * where a NEGATIVE threshold is the meaningful way to say "fell below normal",
+ * so that mode is deliberately not floor-checked.
+ */
+const assertRuleShape = (
+    args: { baselineWindows?: number; mode?: "deviation" | "threshold"; threshold: number; windowMinutes?: number },
+    isMetric: boolean,
+): void => {
+    if (args.mode === "deviation" && !isMetric) {
+        throw new LunoraError("BAD_REQUEST", "deviation mode applies to metric targets only");
+    }
+
+    if (args.mode !== "deviation" && (isMetric ? args.threshold < 0 : args.threshold < 1)) {
+        throw new LunoraError("BAD_REQUEST", isMetric ? "threshold must be at least 0" : "threshold must be at least 1");
+    }
+
+    if (isMetric && (args.windowMinutes === undefined || args.windowMinutes < 1)) {
+        throw new LunoraError("BAD_REQUEST", "windowMinutes must be at least 1 for a metric rule");
+    }
+
+    if (args.baselineWindows !== undefined && args.baselineWindows < 1) {
+        throw new LunoraError("BAD_REQUEST", "baselineWindows must be at least 1");
+    }
+};
+
 /** Create an alert rule (owners/admins). New rules start enabled. */
 export const createRule = mutation
     .use(rateLimit("api"))
     .input({
+        // Metric `deviation` rules only: windows of history averaged into the
+        // trailing baseline. Default 7.
+        baselineWindows: v.optional(v.number()),
         channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
         // Metric targets only: how the window value is compared to `threshold`. Default `gt`.
         comparator: v.optional(v.union(v.literal("gt"), v.literal("lt"))),
         destination: boundedString(LIMITS.url),
         // Metric targets only: optional function-path scope for the window.
         functionPath: v.optional(boundedString(LIMITS.token)),
+        // Metric targets only: compare the window value to `threshold` directly
+        // (`threshold`, the default), or to its trailing baseline with
+        // `threshold` read as a percent change (`deviation`).
+        mode: v.optional(v.union(v.literal("threshold"), v.literal("deviation"))),
         name: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
         target: v.union(
@@ -88,15 +126,7 @@ export const createRule = mutation
 
         const isMetric = METRIC_TARGETS.has(args.target);
 
-        // Count-crossing thresholds are event counts (≥ 1); metric thresholds are
-        // percentages / ms / cost budgets and may legitimately be fractional (≥ 0).
-        if (isMetric ? args.threshold < 0 : args.threshold < 1) {
-            throw new LunoraError("BAD_REQUEST", isMetric ? "threshold must be at least 0" : "threshold must be at least 1");
-        }
-
-        if (isMetric && (args.windowMinutes === undefined || args.windowMinutes < 1)) {
-            throw new LunoraError("BAD_REQUEST", "windowMinutes must be at least 1 for a metric rule");
-        }
+        assertRuleShape(args, isMetric);
 
         // SSRF guard: the edge `fetch`es a `webhook`/`slack` destination when the
         // alert fires, so both must be an https URL to a public host. `pagerduty`'s
@@ -125,7 +155,13 @@ export const createRule = mutation
             // Only persist the metric-only fields for metric rules, so a count
             // rule stays exactly as before (no stray comparator/window columns).
             ...(isMetric
-                ? { comparator: args.comparator ?? "gt", windowMinutes: args.windowMinutes, ...(args.functionPath ? { functionPath: args.functionPath } : {}) }
+                ? {
+                      comparator: args.comparator ?? "gt",
+                      windowMinutes: args.windowMinutes,
+                      ...(args.functionPath ? { functionPath: args.functionPath } : {}),
+                      ...(args.mode ? { mode: args.mode } : {}),
+                      ...(args.baselineWindows === undefined ? {} : { baselineWindows: args.baselineWindows }),
+                  }
                 : {}),
         });
     });
