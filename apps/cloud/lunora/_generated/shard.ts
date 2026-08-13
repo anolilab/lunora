@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, ExportRow, ImportShardResult, KeyRange, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardExportArgs, RunShardImportArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, TransactionHeadroomTracker, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, TelemetrySink } from "@lunora/do";
-import { applyCdcChanges, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
+import { applyCdcChanges, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
 import { asBucketStorage, createSecrets, LunoraError } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import type { AiBindingLike, LunoraAi } from "@lunora/ai";
@@ -6972,7 +6972,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return { ranges: footprint.ranges(), result, tables: footprint.tables };
         }
 
-        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+        protected override executeStream(functionPath: string, args: Record<string, unknown>): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "stream" || registered.visibility === "internal") {
@@ -6982,6 +6982,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             return {
+                ...(registered.durable ? { durable: registered.durable as { ttlMs?: number } } : {}),
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }
@@ -7035,13 +7036,19 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
-            const migration = LUNORA_MIGRATIONS[args.id];
+            this.ensureMigrated();
+
+            // Falls back to the framework's reserved re-projection backfill
+            // (`__lunora_reproject__<table>`), which rewrites rows whose
+            // v.bigint()/v.bytes() columns are still stored in the pre-projection
+            // tagged form. Built here rather than at module scope because it
+            // needs this shard's `sql` handle to tell a legacy row from a
+            // current one.
+            const migration = LUNORA_MIGRATIONS[args.id] ?? buildReprojectionMigration(args.id, schema as unknown as SchemaLike, this.sql as SqlExec);
 
             if (!migration) {
                 throw new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 });
             }
-
-            this.ensureMigrated();
 
             const env = (this.env ?? {}) as Record<string, unknown>;
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
