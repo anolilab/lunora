@@ -62,6 +62,33 @@ const DEFAULT_AUTH_UI_ITEM: AuthUiItem = "auth-ui-react";
 const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): boolean =>
     Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
 
+/** Matches the leading major of a semver range (`^2.0.0-rc.0` → `2`). Hoisted so it isn't recompiled per call. */
+const LEADING_MAJOR = /^\D*(\d+)\./;
+
+/** Leading major of a semver range like `^2.0.0-rc.0`, or `undefined` when it can't be read. */
+const leadingMajor = (range: string | undefined): number | undefined => {
+    const match = LEADING_MAJOR.exec(range?.trim() ?? "");
+
+    return match ? Number(match[1]) : undefined;
+};
+
+/**
+ * Is this a Solid **2.x** project?
+ *
+ * `@lunora/solid` itself spans both Solid majors, but the `auth-ui-solid`
+ * payload does not: those screens are user-owned Solid 1.x source
+ * (`import type { JSX } from "solid-js"`, `onMount`, camelCase DOM attributes),
+ * all of which Solid 2 removed or renamed. Copying them into a Solid 2 project
+ * writes ~50 type errors into code the user now owns, so detection returns
+ * `undefined` for this case and the caller explains why — the same shape as
+ * {@link isReactNativeProject}.
+ *
+ * Detected from `@solidjs/web` (a package that exists only on the 2.x line) or
+ * an explicit `solid-js` major, so a project cannot land here by accident.
+ */
+const isSolid2Project = (dependencies: Readonly<Record<string, string>>): boolean =>
+    Object.hasOwn(dependencies, "@solidjs/web") || (leadingMajor(dependencies["solid-js"]) ?? 0) >= 2;
+
 /**
  * Detect which auth-UI item fits a project from its package.json dependencies.
  * The Lunora framework adapter dep wins; a bare framework (or its meta-framework)
@@ -74,6 +101,12 @@ const detectAuthUiItem = (dependencies: Readonly<Record<string, string>>): AuthU
     const has = (name: string): boolean => Object.hasOwn(dependencies, name);
 
     if (isReactNativeProject(dependencies)) {
+        return undefined;
+    }
+
+    // Ahead of every framework match: a Solid 2 project also has `solid-js` and
+    // `@lunora/solid`, which would otherwise resolve to the Solid 1.x payload.
+    if (isSolid2Project(dependencies)) {
         return undefined;
     }
 
@@ -169,6 +202,7 @@ export {
     detectAuthUiItem,
     EMAIL_ITEM,
     isReactNativeProject,
+    isSolid2Project,
     normalizeFeature,
     promptAuthProvider,
 };

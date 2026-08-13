@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { detectAuthUiItem, isReactNativeProject, normalizeFeature } from "../../src/commands/add/features";
+import { detectAuthUiItem, isReactNativeProject, isSolid2Project, normalizeFeature } from "../../src/commands/add/features";
 import { runAddFeature } from "../../src/commands/add/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -81,6 +81,22 @@ describe("detectAuthUiItem", () => {
         expect(detectAuthUiItem({ expo: "54.0.0", react: "19.2.0", "react-native": "0.83.0" })).toBeUndefined();
         expect(detectAuthUiItem({ "@lunora/react-native": "1.0.0", react: "19.2.0" })).toBeUndefined();
         expect(isReactNativeProject({ "react-native": "0.83.0" })).toBe(true);
+    });
+
+    it("does not resolve Solid 2 to the Solid 1.x payload", () => {
+        expect.assertions(6);
+
+        // A Solid 2 project still depends on `solid-js` and `@lunora/solid`, both
+        // of which would otherwise match `auth-ui-solid` — whose screens are 1.x
+        // source and do not compile against Solid 2.
+        expect(detectAuthUiItem({ "@lunora/solid": "1.0.0", "@solidjs/web": "2.0.0-rc.0", "solid-js": "2.0.0-rc.0" })).toBeUndefined();
+        expect(detectAuthUiItem({ "solid-js": "^2.0.0-rc.0" })).toBeUndefined();
+        expect(isSolid2Project({ "solid-js": "^2.0.0-rc.0" })).toBe(true);
+        expect(isSolid2Project({ "@solidjs/web": "^2.0.0-rc.0" })).toBe(true);
+
+        // Solid 1.x is untouched — it still resolves to the payload.
+        expect(isSolid2Project({ "solid-js": "^1.9.14" })).toBe(false);
+        expect(detectAuthUiItem({ "@lunora/solid": "1.0.0", "solid-js": "^1.9.14" })).toBe("auth-ui-solid");
     });
 });
 
@@ -162,6 +178,21 @@ describe("runAddFeature (auth-ui)", () => {
 
         expect(result.code).toBe(1);
         expect(lines.join("\n")).toMatch(/no React Native port/);
+        expect(existsSync(join(workdir, "lunora", "auth-ui"))).toBe(false);
+    });
+
+    it("`add auth-ui` refuses on Solid 2 instead of copying the Solid 1.x screens", async () => {
+        expect.assertions(3);
+
+        seedProject(workdir, { "@lunora/solid": "1.0.0", "@solidjs/web": "2.0.0-rc.0", "solid-js": "^2.0.0-rc.0" });
+
+        const { lines, logger } = makeLogger();
+        // `--yes` so the "couldn't detect your framework" fallback would otherwise
+        // have installed `auth-ui-react` without asking.
+        const result = await runAddFeature({ cwd: workdir, feature: "auth-ui", from: registryRoot, logger, yes: true });
+
+        expect(result.code).toBe(1);
+        expect(lines.join("\n")).toMatch(/no Solid 2 port/);
         expect(existsSync(join(workdir, "lunora", "auth-ui"))).toBe(false);
     });
 

@@ -666,8 +666,13 @@ for tname in "${TEMPLATES[@]}"; do
         const p = require('$scaffold_dir/package.json');
         const d = { ...p.dependencies, ...p.devDependencies };
         const has = (n) => Object.hasOwn(d, n);
+        const major = (r) => { const m = /^\D*(\d+)\./.exec((r ?? '').trim()); return m ? Number(m[1]) : 0; };
         // React Native is not a DOM target: the react payload would not work there.
         if (has('react-native') || has('@lunora/react-native')) process.stdout.write('');
+        // Solid 2 has no auth-ui port — the payload is Solid 1.x source. Checked
+        // before the framework matches, exactly as detectAuthUiItem does, because
+        // a Solid 2 project also has solid-js and @lunora/solid.
+        else if (has('@solidjs/web') || major(d['solid-js']) >= 2) process.stdout.write('');
         else if (has('@lunora/react')) process.stdout.write('react/auth-cards.tsx');
         else if (has('@lunora/vue')) process.stdout.write('vue/SignInCard.vue');
         else if (has('@lunora/svelte')) process.stdout.write('svelte/SignInCard.svelte');
@@ -982,6 +987,77 @@ for tname in "${TEMPLATES[@]}"; do
             # this coverage mode, and the first pass is the same work without it —
             # so the pair is the cost, not a number anyone has to re-derive.
             echo "  ==> coverage OK (planted errors in ${canary_targets[*]} were both reported; ${canary_elapsed}s for the canary pass vs ${typecheck_elapsed}s for the gate pass)"
+        fi
+
+        echo "  ==> typecheck OK"
+    else
+        # -- no auth-ui payload: still typecheck the template's OWN sources -----
+        # The block above is gated on the payload having been copied in, so a
+        # template the auth-ui step skips would otherwise get `pnpm install` +
+        # `pnpm run build` as its whole gate — and a bundler only compiles what a
+        # build entry reaches, which is how the no-build path above accumulated
+        # silent type errors before it was gated. `templates/solid-v2` is the
+        # first template here with no auth-ui port (the payload is Solid 1.x
+        # source; see detectAuthUiItem), so it would have been the first to ship
+        # untypechecked.
+        #
+        # Same checker and guards as the payload gate, minus the auth-ui coverage
+        # floor — the positive evidence here is the template's own schema.
+        echo "  ==> no auth-ui payload for $tname — typechecking its own sources"
+
+        typecheck_log="$RESULTS_DIR/${tname}-typecheck.log"
+        coverage_log="$RESULTS_DIR/${tname}-coverage.log"
+        : > "$typecheck_log"
+        : > "$coverage_log"
+
+        if [[ ${#TYPECHECK_PREP[@]} -gt 0 ]]; then
+            (cd "$scaffold_dir" && "${TYPECHECK_PREP[@]}" 2>&1) >> "$typecheck_log" || true
+        fi
+
+        if [[ "$COVERAGE_MODE" == "listfiles" ]]; then
+            TYPECHECK_CMD+=(--listFiles)
+        fi
+
+        echo "  ==> ${TYPECHECK_CMD[*]}"
+        typecheck_status=0
+        { (cd "$scaffold_dir" && "${TYPECHECK_CMD[@]}" 2>&1) \
+            | sed -E "s/$(printf '\033')\[[0-9;]*m//g" >> "$typecheck_log"; } || typecheck_status=$?
+
+        if typecheck_never_ran "$typecheck_status" "$typecheck_log" "$ERROR_RE"; then
+            echo "  FAIL: ${TYPECHECK_CMD[*]} in $tname exited $typecheck_status without reporting a diagnostic (see $typecheck_log)"
+            FAIL+=("$tname(typecheck:never-ran)")
+            continue
+        fi
+
+        if [[ "$COVERAGE_MODE" == "listfiles" ]]; then
+            grep -E '^/' "$typecheck_log" > "$coverage_log" || true
+            grep -vE '^/' "$typecheck_log" > "${typecheck_log}.diagnostics" || true
+            mv "${typecheck_log}.diagnostics" "$typecheck_log"
+        fi
+
+        ts_errors="$(grep -cE "$ERROR_RE" "$typecheck_log" || true)"
+
+        if [[ "$ts_errors" -gt 0 ]] && ! grep -qE "$FILE_RE" "$typecheck_log"; then
+            echo "  FAIL: typecheck in $tname aborted before reading any file — $ts_errors diagnostic(s), none naming a file (see $typecheck_log)"
+            grep -E "$ERROR_RE" "$typecheck_log" | head -10 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck:vacuous)")
+            continue
+        fi
+
+        if [[ "$ts_errors" -gt 0 ]]; then
+            echo "  FAIL: $ts_errors type error(s) in $tname (see $typecheck_log)"
+            grep -E "$ERROR_RE" "$typecheck_log" | head -25 | sed 's/^/    /'
+            FAIL+=("$tname(typecheck)")
+            continue
+        fi
+
+        # Positive evidence the checker read the scaffold at all. `lunora/schema.ts`
+        # is the one source file EVERY template ships.
+        if [[ "$COVERAGE_MODE" == "listfiles" ]] && ! grep -qF "/lunora/schema.ts" "$coverage_log"; then
+            echo "  FAIL: $tname typechecked without reading lunora/schema.ts — the gate above proved nothing (see $coverage_log)"
+            echo "        \`${TYPECHECK_CMD[*]}\` listed $(grep -c '' "$coverage_log" || true) file(s) in its program and that was not one of them."
+            FAIL+=("$tname(typecheck:coverage)")
+            continue
         fi
 
         echo "  ==> typecheck OK"

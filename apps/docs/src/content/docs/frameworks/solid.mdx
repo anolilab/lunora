@@ -39,12 +39,43 @@ bun add @lunora/solid
 
 </Tabs>
 
+## Solid 1.x and Solid 2.0
+
+`@lunora/solid` peers on `solid-js@^1.9.0 || ^2.0.0-rc.0` and ships **one build
+for both majors** — the adapter's public surface (`LunoraProvider`,
+`createQuery`, `createMutation`, `hydratePreloaded`, …) is identical on either.
+Where the two Solids diverge internally, the adapter picks the right primitive
+at runtime, so nothing about your usage changes.
+
+What does change is the code _around_ it. The snippets on this page are Solid
+1.x; on Solid 2.0 the imports and a few APIs move:
+
+| Solid 1.x                  | Solid 2.0                                       |
+| -------------------------- | ----------------------------------------------- |
+| `solid-js/web`             | `@solidjs/web` (also `jsxImportSource`)         |
+| `solid-js/store`           | `solid-js` — stores moved into core             |
+| `onMount`                  | `onSettled`, which returns its own cleanup      |
+| `createEffect(fn)`         | `createEffect(compute, apply)` — two arguments  |
+| `<Suspense>`               | `<Loading>`                                     |
+| `<ErrorBoundary>`          | `<Errored>`                                     |
+| `<Ctx.Provider value={…}>` | `<Ctx value={…}>` — the context is the provider |
+
+`lunora init app -t solid-v2` scaffolds a project already wired for 2.0 (the
+`@solidjs/web` renderer, `jsxImportSource`, and `vite-plugin-solid` 3.x).
+`lunora init app --vite solid` stays on the stable Solid 1.x line.
+
+One gap: `lunora add auth-ui` has no Solid 2 payload yet. Those screens are
+copy-in, user-owned Solid 1.x source, so the CLI refuses on a Solid 2 project
+rather than writing code that will not compile. `lunora add auth` (the server
+half) is unaffected, as is every other `lunora add` feature.
+
 ## Provide the client
 
 Wrap the tree in `<LunoraProvider client={...}>` (required at the root). Read it
 anywhere below with `useLunora()`.
 
 ```tsx title="src/index.tsx"
+// Solid 2.0: `import { render } from "@solidjs/web"`.
 import { LunoraClient } from "lunorash/client";
 import { LunoraProvider } from "@lunora/solid";
 import { render } from "solid-js/web";

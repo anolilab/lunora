@@ -23,6 +23,7 @@ import {
     detectAuthUiItem,
     EMAIL_ITEM,
     isReactNativeProject,
+    isSolid2Project,
     normalizeFeature,
     promptAuthProvider,
 } from "./features";
@@ -293,6 +294,19 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     if (feature.kind === "auth-ui" && isReactNativeProject(readProjectDependencies(cwd))) {
         options.logger.error(
             "add: auth-ui has no React Native port — the screens render DOM elements and a stylesheet, which Metro has nothing to mount. Build the screens with React Native primitives against the same better-auth client (`@lunora/react-native/auth`); `lunora add auth` still installs the server half.",
+        );
+
+        return { code: 1, items: [] };
+    }
+
+    // The Solid auth-UI payload is Solid 1.x source. It would copy in and then
+    // fail to compile against Solid 2 (`JSX` moved to `@solidjs/web`, `onMount`
+    // became `onSettled`, DOM attributes are lowercase now) — and the user owns
+    // those files, so a broken copy is theirs to repair. `@lunora/solid` itself
+    // supports both majors; only these screens are pinned to 1.x.
+    if (feature.kind === "auth-ui" && isSolid2Project(readProjectDependencies(cwd))) {
+        options.logger.error(
+            "add: auth-ui has no Solid 2 port yet — the copy-in screens are Solid 1.x source and will not compile against Solid 2. `lunora add auth` still installs the server half, and `@lunora/solid` works on both majors, so you can build the screens against the same better-auth client.",
         );
 
         return { code: 1, items: [] };

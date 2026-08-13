@@ -1,4 +1,5 @@
 import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
+import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiTypescript from "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
 import { ArrowRight } from "lucide-react";
@@ -47,6 +48,15 @@ const templates: Template[] = [
         Icon: TanstackLogo,
         name: "TanStack Start",
         slug: "tanstack-start-solid",
+        stack: "Solid",
+    },
+    {
+        brand: true,
+        category: "SPA",
+        description: "Solid 2.0 on Vite — the new signals core, @solidjs/web renderer, and Lunora live queries as plain accessors.",
+        Icon: SiSolid,
+        name: "Solid 2",
+        slug: "solid-v2",
         stack: "Solid",
     },
     {
