@@ -126,6 +126,67 @@ describe("runDoctor", () => {
         expect(result.findings.some((finding) => finding.level === "warn")).toBe(false);
     });
 
+    describe("blast-radius guardrails", () => {
+        it("prompts for a CPU cap when none is set, without failing the run", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = result.findings.find((entry) => entry.code === "cpu-limit-missing");
+
+            expect(finding?.level).toBe("info");
+            expect(finding?.fix).toContain("cpu_ms");
+            // A guardrail prompt must not turn a healthy project red.
+            expect(result.code).toBe(0);
+        });
+
+        it("stays quiet once a CPU cap is configured", async () => {
+            expect.assertions(1);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    d1_databases: [{ binding: "DB", database_id: "11111111-2222-3333-4444-555555555555" }],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    limits: { cpu_ms: 30_000 },
+                    name: "demo",
+                }),
+            );
+
+            const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(result.findings.some((entry) => entry.code === "cpu-limit-missing")).toBe(false);
+        });
+
+        it("names R2 buckets whose lifecycle rules should be checked, and stays silent without one", async () => {
+            expect.assertions(3);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    name: "demo",
+                    r2_buckets: [{ binding: "UPLOADS", bucket_name: "demo-uploads" }],
+                }),
+            );
+
+            const withBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+            const finding = withBucket.findings.find((entry) => entry.code === "r2-lifecycle-unset");
+
+            expect(finding?.message).toContain("demo-uploads");
+            expect(finding?.fix).toContain("lifecycle");
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const withoutBucket = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+            expect(withoutBucket.findings.some((entry) => entry.code === "r2-lifecycle-unset")).toBe(false);
+        });
+    });
+
     /**
      * The one check whose absence is invisible in production. Cloudflare only
      * filters on a Vectorize metadata property that has an explicit metadata

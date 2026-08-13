@@ -29,11 +29,13 @@ const DOCTOR_CODES = [
     "admin-token-missing",
     "admin-token-set",
     "cli-shadowed",
+    "cpu-limit-missing",
     "d1-placeholder-id",
     "declared-export-missing",
     "declared-export-ok",
     "dev-vars-missing-secret",
     "email-destination-placeholder",
+    "r2-lifecycle-unset",
     "vector-metadata-index-required",
     "vector-metadata-unfilterable",
     "version-counter-spread",
@@ -145,6 +147,54 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
             message: shardError,
         });
     }
+};
+
+/**
+ * No `limits.cpu_ms` in the wrangler config → INFO.
+ *
+ * Alerting is lagging by definition: by the time a threshold trips, the runaway
+ * handler or retry storm has already run. A CPU cap is one of the few controls
+ * that bounds the blast radius rather than reporting on it after the fact, and
+ * it costs nothing to set. INFO rather than WARN because the platform default
+ * is a real (if generous) limit, so this is a tightening, not a missing
+ * requirement.
+ */
+const checkCpuLimit = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    if (parsed === undefined || parsed.limits?.cpu_ms !== undefined) {
+        return;
+    }
+
+    findings.push({
+        code: "cpu-limit-missing",
+        fix: 'Add `"limits": { "cpu_ms": 30000 }` to wrangler.jsonc, tuned to your slowest legitimate handler.',
+        level: "info",
+        message: "no limits.cpu_ms is set — a runaway handler can burn CPU up to the platform default before anything stops it.",
+    });
+};
+
+/**
+ * An R2 bucket with no lifecycle rule → INFO, once per config.
+ *
+ * Orphaned incomplete multipart uploads are a classic silent storage cost: they
+ * are billed, they never appear as objects a listing would show, and nothing
+ * surfaces them until the invoice does. Lifecycle rules are the fix, and they
+ * live in Cloudflare (dashboard/API), not in wrangler config — so this can only
+ * ever be a prompt to go check, which is why it names the command instead of
+ * asserting a config shape.
+ */
+const checkR2Lifecycle = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+    const names = (parsed?.r2_buckets ?? []).map((entry) => entry.bucket_name).filter((name): name is string => typeof name === "string" && name.length > 0);
+
+    if (names.length === 0) {
+        return;
+    }
+
+    findings.push({
+        code: "r2-lifecycle-unset",
+        fix: "wrangler r2 bucket lifecycle list <bucket> — add an abort-incomplete-multipart rule if none exists.",
+        level: "info",
+        message: `R2 bucket(s) ${names.join(", ")}: verify a lifecycle rule aborts incomplete multipart uploads — orphaned parts are billed but invisible in a listing.`,
+    });
 };
 
 /**
@@ -534,6 +584,8 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkWrangler(parsed, path, findings);
     checkD1Placeholders(parsed, findings);
     checkEmailDestination(parsed, findings);
+    checkCpuLimit(parsed, findings);
+    checkR2Lifecycle(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(findings);
     checkVersionSkew(cwd, findings);

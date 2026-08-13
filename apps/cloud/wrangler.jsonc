@@ -120,6 +120,13 @@
     "ai": {
         "binding": "AI",
     },
+    // Blast-radius cap on the control plane itself. Alerting is lagging by
+    // definition, so a CPU ceiling is one of the few controls that bounds the
+    // damage rather than reporting it after the fact. Generous enough for the
+    // deploy orchestrator's longest legitimate path.
+    "limits": {
+        "cpu_ms": 60000,
+    },
     // `invocation_logs` keeps the per-invocation summary line, which is what the
     // Workers Logs Query Builder groups on; without it only explicit `console`
     // events survive and "which deploy did this start with" has nothing to

@@ -30,6 +30,11 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    // Blast-radius cap. Alerting is lagging by definition — by the time a
+    // threshold trips, the runaway handler has already run — so a CPU ceiling is
+    // one of the few controls that bounds the damage rather than reporting it.
+    // Raise it if a legitimate handler needs longer.
+    "limits": { "cpu_ms": 30000 },
     "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": true } },
     // Deploy attribution: the runtime reads this binding and stamps
     // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs

@@ -1766,6 +1766,9 @@ interface WranglerConfig {
         binding?: string;
         id?: string;
     } | null | undefined>;
+    limits?: {
+        cpu_ms?: number;
+    };
     logpush?: boolean;
     main?: string;
     migrations?: ReadonlyArray<{
@@ -1799,6 +1802,7 @@ interface WranglerConfig {
     };
     r2_buckets?: ReadonlyArray<{
         binding?: string;
+        bucket_name?: string;
     }>;
     secrets_store_secrets?: ReadonlyArray<{
         binding?: string;
