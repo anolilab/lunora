@@ -39,20 +39,24 @@ export const useMetricsSeries = (organizationId: OrgId, from: number, to: number
     useEffect(() => {
         let cancelled = false;
 
-        client
-            .action(api.metrics.list, { from, organizationId, to })
-            .then((result) => {
+        // `void` on an async IIFE rather than a `.then()` chain: these callbacks
+        // only set state, so there is no value to return from them, and the
+        // await form says "fire and forget" once instead of per link.
+        void (async () => {
+            try {
+                const result = await client.action(api.metrics.list, { from, organizationId, to });
+
                 if (!cancelled) {
                     setSeries(result);
                     setError(undefined);
                 }
-            })
-            .catch((error_: unknown) => {
+            } catch (error_: unknown) {
                 if (!cancelled) {
                     setError(error_ instanceof Error ? error_.message : "failed to load metrics");
                     setSeries([]);
                 }
-            });
+            }
+        })();
 
         return () => {
             cancelled = true;
