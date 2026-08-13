@@ -142,6 +142,30 @@ export default createConfig(
             "unicorn/filename-case": "off",
         },
     },
+    // Copy-in auth screens (`lunora/auth-ui`), installed by `lunora registry add`
+    // and user-owned from then on. Source of truth is `packages/auth-ui`, whose
+    // own config disables the same rules — so these exemptions keep a consumer
+    // copy lintable rather than diverging it from the template it was copied
+    // from (the next `registry add` would overwrite any local edits anyway).
+    //
+    // Same four rules, same reasons, as the `src/client` block above: inline
+    // event handlers and object literals are idiomatic for admin UI at this
+    // scale, and `void promise` marks intentional fire-and-forget in handlers.
+    {
+        files: ["lunora/auth-ui/**/*.{ts,tsx}"],
+        rules: {
+            // Already off for `lunora/**/*.ts` + `src/**` above; the auth screens
+            // are `.tsx` under `lunora/`, which fell through that glob. Upstream
+            // `packages/auth-ui` disables it too — these components are exported
+            // by name and imported by name.
+            "import/prefer-default-export": "off",
+            "no-void": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-perf/jsx-no-new-object-as-prop": "off",
+            "sonarjs/void-use": "off",
+            "unicorn/filename-case": "off",
+        },
+    },
     // TanStack Start file routes (src/routes) + their SSR loader helpers.
     //
     // `no-use-before-define` is off because every route file has a genuine ordering
