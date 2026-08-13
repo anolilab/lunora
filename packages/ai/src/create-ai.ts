@@ -3,7 +3,7 @@ import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
 import type { AiGatewayMetadata } from "./gateway";
-import { buildAiGatewayMetadataFields, resolveAiGateway } from "./gateway";
+import { buildAiGatewayMetadataFields, readAiGatewayEnvTags, resolveAiGateway } from "./gateway";
 import type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
 
 /**
@@ -24,7 +24,12 @@ const resolveGatewayOption = (
     env: Record<string, unknown> | undefined,
     metadata: AiGatewayMetadata | undefined,
 ): AiGatewayOptions | undefined => {
-    const metadataFields = buildAiGatewayMetadataFields(metadata);
+    // Deployment-scoped tags (`LUNORA_AI_GATEWAY_TAGS`) sit UNDER any per-call
+    // tags, which sit under the built-in correlation fields: the more specific
+    // the source, the later it wins.
+    const environmentTags = env === undefined ? undefined : readAiGatewayEnvTags(env);
+    const effectiveMetadata = environmentTags === undefined ? metadata : { ...metadata, tags: { ...environmentTags, ...metadata?.tags } };
+    const metadataFields = buildAiGatewayMetadataFields(effectiveMetadata);
 
     if (gateway !== undefined) {
         return metadataFields !== undefined && gateway.metadata === undefined ? { ...gateway, metadata: metadataFields } : gateway;
@@ -39,7 +44,7 @@ const resolveGatewayOption = (
     // option has no authorization field — so `resolved.headers` (incl. any
     // `cf-aig-authorization`) is discarded here, and `resolveAiGateway` warns once
     // when an auth token was configured. See `AI_GATEWAY_TOKEN_ENV`.
-    const resolved = resolveAiGateway(env, metadata, "workers-ai-binding");
+    const resolved = resolveAiGateway(env, effectiveMetadata, "workers-ai-binding");
 
     if (resolved === undefined) {
         return undefined;

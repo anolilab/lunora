@@ -23,6 +23,18 @@ const AI_GATEWAY_ACCOUNT_ID_ENV = "LUNORA_AI_GATEWAY_ACCOUNT_ID";
 const AI_GATEWAY_ID_ENV = "LUNORA_AI_GATEWAY_ID";
 ```
 
+### `AI_GATEWAY_METADATA_MAX_KEYS` (const)
+
+```ts
+const AI_GATEWAY_METADATA_MAX_KEYS = 5;
+```
+
+### `AI_GATEWAY_TAGS_ENV` (const)
+
+```ts
+const AI_GATEWAY_TAGS_ENV = "LUNORA_AI_GATEWAY_TAGS";
+```
+
 ### `AI_GATEWAY_TOKEN_ENV` (const)
 
 ```ts
@@ -108,6 +120,12 @@ Re-exported from `ai` — signature tracked at its source.
 ### `jsonSchema` (function)
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
+
+### `readAiGatewayEnvTags` (const)
+
+```ts
+const readAiGatewayEnvTags: (env: Record<string, unknown>) => Record<string, string> | undefined;
+```
 
 ### `resolveAiGateway` (const)
 
