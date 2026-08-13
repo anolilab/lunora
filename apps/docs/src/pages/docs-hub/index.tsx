@@ -5,6 +5,7 @@ import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
 import { Boxes, Gauge, LayoutDashboard, Terminal } from "lucide-react";
 import type { ComponentType, FC } from "react";
 
+import HatchSpacer from "@/components/sections/hatch-spacer";
 import { GridCell, HairlineGrid } from "@/kit/grid";
 import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 import { LinkRow, LinkRowList } from "@/kit/link-row";
@@ -75,6 +76,8 @@ const DocsHub: FC = () => (
             </div>
         </PageHeader>
 
+        <HatchSpacer />
+
         <Section id="runtime">
             <Shell>
                 <SectionHeader index="01" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime" />
@@ -93,6 +96,8 @@ const DocsHub: FC = () => (
             </Shell>
         </Section>
 
+        <HatchSpacer />
+
         <Section id="tools" tone="deep">
             <Shell>
                 <SectionHeader index="02" label="Tooling" note="Extend your workflow beyond the core library." title="Developer tools" />
@@ -103,6 +108,8 @@ const DocsHub: FC = () => (
                 </LinkRowList>
             </Shell>
         </Section>
+
+        <HatchSpacer />
 
         <Section id="popular">
             <Shell>
