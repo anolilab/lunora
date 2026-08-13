@@ -80,17 +80,10 @@ const DocsHub: FC = () => (
 
         <Section id="runtime">
             <Shell>
-                <SectionHeader index="01" label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime" />
+                <SectionHeader label="Adapters" note="Start with the adapter built for your project." title="Choose your runtime" />
                 <HairlineGrid columns={4}>
-                    {runtimes.map(({ blurb, brand, Icon, name, to }, index) => (
-                        <GridCell
-                            blurb={blurb}
-                            icon={<Icon color={brand ? "default" : undefined} />}
-                            index={String(index + 1).padStart(2, "0")}
-                            key={name}
-                            title={name}
-                            to={to}
-                        />
+                    {runtimes.map(({ blurb, brand, Icon, name, to }) => (
+                        <GridCell blurb={blurb} icon={<Icon color={brand ? "default" : undefined} />} key={name} title={name} to={to} />
                     ))}
                 </HairlineGrid>
             </Shell>
@@ -100,7 +93,7 @@ const DocsHub: FC = () => (
 
         <Section id="tools" tone="deep">
             <Shell>
-                <SectionHeader index="02" label="Tooling" note="Extend your workflow beyond the core library." title="Developer tools" />
+                <SectionHeader label="Tooling" note="Extend your workflow beyond the core library." title="Developer tools" />
                 <LinkRowList>
                     {tools.map((tool) => (
                         <LinkRow icon={tool.icon} key={tool.title} subtitle={tool.subtitle} title={tool.title} to={tool.to} />
@@ -113,7 +106,7 @@ const DocsHub: FC = () => (
 
         <Section id="popular">
             <Shell>
-                <SectionHeader index="03" label="Reference" note="The references and guides readers reach for most." title="Popular pages" />
+                <SectionHeader label="Reference" note="The references and guides readers reach for most." title="Popular pages" />
                 <div className="grid grid-cols-1 gap-x-col-gap gap-y-10 md:grid-cols-2">
                     {popular.map((column) => (
                         <div key={column.title}>

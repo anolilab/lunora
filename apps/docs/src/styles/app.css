@@ -25,6 +25,25 @@
 @variant dark (&:where(.dark, .dark *)); /* <body class="dark"> */
 @variant light (&:where(.light, .light *)); /* <body class="light"> */
 
+/* The platform strip's two gradient stops. Registering them as `<color>` is
+   what makes them animatable — an unregistered custom property is a token
+   stream and interpolates discretely, which is the whole reason `strip-hue`
+   drives these instead of `background-image`.
+
+   The initial values are only a floor: the element sets both from the theme
+   tokens inline, so a re-brand still reaches them. */
+@property --strip-a {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: #5ce1ef;
+}
+
+@property --strip-b {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: #a894ee;
+}
+
 @theme {
     /* Fonts, radius, and the color mappings (--color-*) now come from the shared
        tokens import above. Only docs-specific animations live here. */
@@ -37,6 +56,9 @@
     --animate-shiny-text: shiny-text 8s infinite;
     --animate-scroll-left: scroll-left 45s linear infinite;
     --animate-scroll-right: scroll-right 60s linear infinite;
+
+    /* Matches the hero shader's 54s palette walk, so the two drift together. */
+    --animate-strip-hue: strip-hue 54s linear infinite;
 
     @keyframes button-shine {
         from {
@@ -100,6 +122,33 @@
         }
         to {
             transform: translateX(0);
+        }
+    }
+
+    /* The platform strip's hue walk. The pair of stops advances one accent per
+       third, so the band moves through the palette the way the hero does — two
+       adjacent accents at a time, never all three at once. Every stop is a
+       `-tint`, which is what keeps the dark ink on the band above 4.5:1 for the
+       whole loop.
+
+       It animates the two stop *colours*, not the `background-image`. Animating
+       the image directly compiles to a discrete animation: measured, the band
+       held one gradient for a third of the cycle and then jumped to the next,
+       instead of drifting. Registered `<color>` properties interpolate, so the
+       gradient is declared once and its endpoints move. */
+    @keyframes strip-hue {
+        0%,
+        100% {
+            --strip-a: var(--site-accent-tint);
+            --strip-b: var(--site-accent-2-tint);
+        }
+        33.333% {
+            --strip-a: var(--site-accent-2-tint);
+            --strip-b: var(--site-accent-3-tint);
+        }
+        66.667% {
+            --strip-a: var(--site-accent-3-tint);
+            --strip-b: var(--site-accent-tint);
         }
     }
 }

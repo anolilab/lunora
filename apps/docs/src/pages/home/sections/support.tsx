@@ -68,7 +68,7 @@ const MANIFEST: { label: string; tone?: "accent"; value: string }[] = [
 const SupportSection: FC = () => (
     <Section id="support">
         <Shell>
-            <SectionHeader index="09" label="Open source" title="Built in the open, on purpose.">
+            <SectionHeader label="Open source" title="Built in the open, on purpose.">
                 <p className="text-body text-ink-muted">Nothing about Lunora is a black box. Read it, fork it, or send the fix yourself.</p>
             </SectionHeader>
 
@@ -76,12 +76,10 @@ const SupportSection: FC = () => (
                 is the narrow column that makes them credible. */}
             <div className="grid grid-cols-1 border border-hairline lg:grid-cols-[1.4fr_1fr] lg:border-x-0">
                 <div className="flex flex-col justify-between gap-10 border-b border-hairline p-6 sm:p-8 lg:border-r lg:border-b-0">
-                    <ol className="flex flex-col gap-8">
-                        {PATHS.map((path, index) => (
+                    <ul className="flex flex-col gap-8">
+                        {PATHS.map((path) => (
                             <li key={path.title}>
-                                <Kicker>
-                                    {String(index + 1).padStart(2, "0")} / {path.label}
-                                </Kicker>
+                                <Kicker>{path.label}</Kicker>
                                 <a className="group mt-2 flex items-start justify-between gap-3" href={path.href} rel="noopener noreferrer" target="_blank">
                                     <span className="text-h3 font-bold text-ink transition-colors group-hover:text-accent">{path.title}</span>
                                     <MoveUpRight className="mt-1 size-4 shrink-0 text-ink-faint transition-colors group-hover:text-accent" />
@@ -89,7 +87,7 @@ const SupportSection: FC = () => (
                                 <p className="mt-1.5 text-blurb text-ink-muted">{path.blurb}</p>
                             </li>
                         ))}
-                    </ol>
+                    </ul>
 
                     <div className="flex flex-wrap items-center gap-2.5">
                         <Action href="https://github.com/anolilab/lunora" variant="primary">

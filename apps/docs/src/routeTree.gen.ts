@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AgentSetupDotmdRouteImport } from './routes/agent-setup[.]md'
 import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as CloudRouteImport } from './routes/cloud'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
@@ -40,6 +41,11 @@ import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.doc
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentSetupDotmdRoute = AgentSetupDotmdRouteImport.update({
+  id: '/agent-setup.md',
+  path: '/agent-setup.md',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChangelogRoute = ChangelogRouteImport.update({
@@ -175,6 +181,7 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
@@ -204,6 +211,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
@@ -234,6 +242,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
@@ -265,6 +274,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
@@ -294,6 +304,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
@@ -323,6 +334,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
@@ -353,6 +365,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentSetupDotmdRoute: typeof AgentSetupDotmdRoute
   ChangelogRoute: typeof ChangelogRoute
   CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
@@ -388,6 +401,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent-setup.md': {
+      id: '/agent-setup.md'
+      path: '/agent-setup.md'
+      fullPath: '/agent-setup.md'
+      preLoaderRoute: typeof AgentSetupDotmdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/changelog': {
@@ -577,6 +597,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentSetupDotmdRoute: AgentSetupDotmdRoute,
   ChangelogRoute: ChangelogRoute,
   CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,

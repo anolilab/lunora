@@ -49,12 +49,7 @@ const CompareBand: FC = () => {
     return (
         <Section id="compare">
             <Shell>
-                <SectionHeader
-                    index="07"
-                    label="Compare"
-                    note="The full matrix, including where they win, is on the comparison pages."
-                    title="Where Lunora differs"
-                >
+                <SectionHeader label="Compare" note="The full matrix, including where they win, is on the comparison pages." title="Where Lunora differs">
                     <p className="text-body text-ink-muted">
                         Same reactive, typed model as the best of them. The difference is where it runs and who sends the bill.
                     </p>

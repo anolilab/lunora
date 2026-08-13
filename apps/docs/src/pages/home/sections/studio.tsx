@@ -76,7 +76,7 @@ const Studio: FC = () => {
     return (
         <Section id="studio" tone="deep">
             <Shell>
-                <SectionHeader action={{ label: "Explore Studio", to: "/studio" }} index="04" label="Studio" title="Look at your backend.">
+                <SectionHeader action={{ label: "Explore Studio", to: "/studio" }} label="Studio" title="Look at your backend.">
                     <p className="text-body text-ink-muted">
                         A local admin UI ships with every app and runs against your live edge database. No separate deploy, no read-only mirror.
                     </p>

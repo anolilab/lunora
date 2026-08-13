@@ -1,14 +1,13 @@
 "use client";
 
-import { Check, ChevronRight, Copy } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { FC } from "react";
-import { useState } from "react";
 
 import { Action } from "@/kit/action";
 import { RuleGrid } from "@/kit/grid";
 import { Kicker, Shell } from "@/kit/layout";
 import { PageHeader } from "@/kit/page-header";
-import posthog from "@/lib/posthog";
+import AgentSetup from "@/pages/home/sections/agent-setup";
 import PlatformStrip from "@/pages/home/sections/platform-strip";
 import siteConfig from "~/site.config";
 
@@ -16,46 +15,6 @@ import siteConfig from "~/site.config";
  * Landing hero: the colour field and its panel, then the numbered promise row
  * that states what Lunora is before any section argues for it.
  */
-
-const InstallCommand: FC = () => {
-    const [copied, setCopied] = useState(false);
-
-    const copy = () => {
-        const run = async () => {
-            try {
-                await navigator.clipboard.writeText(siteConfig.cta.install);
-            } catch {
-                // Permission denied, or no secure context. Nothing was copied,
-                // so neither the check mark nor the event should claim it was.
-                return;
-            }
-
-            posthog.capture("install_command_copied", { location: "home_hero" });
-            setCopied(true);
-            setTimeout(() => {
-                setCopied(false);
-            }, 1500);
-        };
-
-        void run();
-    };
-
-    return (
-        <button
-            className="group flex w-full items-center gap-3 border border-hairline px-4 py-2.5 font-mono text-blurb text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
-            onClick={copy}
-            type="button"
-        >
-            <span className="text-ink-faint select-none">$</span>
-            {siteConfig.cta.install}
-            {copied ? (
-                <Check className="ml-auto size-4 text-positive" />
-            ) : (
-                <Copy className="ml-auto size-3.5 text-ink-faint transition-colors group-hover:text-ink-muted" />
-            )}
-        </button>
-    );
-};
 
 const PROMISES = [
     { label: "Open source", text: "FSL-1.1-Apache-2.0, deployed to your own Cloudflare account." },
@@ -73,7 +32,7 @@ const Hero: FC = () => (
             and an offline queue — types sync from server to client automatically via codegen.
         </p>
 
-        <PageHeader>
+        <PageHeader backdrop="blinds">
             <div className="mb-5 flex items-center justify-between gap-4">
                 <Kicker>Open source / FSL-1.1-Apache-2.0</Kicker>
                 <Kicker>Alpha</Kicker>
@@ -103,7 +62,7 @@ const Hero: FC = () => (
             </p>
 
             <div className="mt-3">
-                <InstallCommand />
+                <AgentSetup />
             </div>
         </PageHeader>
 

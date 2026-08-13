@@ -96,7 +96,7 @@ const capabilities: Capability[] = [
 const Capabilities: FC = () => (
     <Section id="capabilities">
         <Shell>
-            <SectionHeader index="05" label="Add-ons" note="Deployed to your own Cloudflare account." title="Everything a real app needs">
+            <SectionHeader label="Add-ons" note="Deployed to your own Cloudflare account." title="Everything a real app needs">
                 <p className="text-body text-ink-muted">Opt-in packages for auth, payments, email, AI, storage, and jobs — typed onto your ctx.</p>
             </SectionHeader>
 
@@ -104,13 +104,12 @@ const Capabilities: FC = () => (
                 become the grid item and let the container's hairline show
                 through the whole cell face instead of only at the seams. */}
             <HairlineGrid className="border border-hairline lg:border-x-0" columns={4}>
-                {capabilities.map((cap, index) => (
+                {capabilities.map((cap) => (
                     <GridCell
                         blurb={cap.desc}
                         icon={cap.icons.map(({ glyph: Glyph, name }) => (
                             <Glyph aria-hidden="true" key={name} />
                         ))}
-                        index={String(index + 1).padStart(2, "0")}
                         key={cap.title}
                         title={cap.title}
                     >

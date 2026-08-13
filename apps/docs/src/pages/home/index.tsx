@@ -135,7 +135,13 @@ const Home: FC = () => (
         {/* Vertical guide lines at the container edges, running the whole page.
             Sections meet them exactly (Shell drops its padding at `lg`), so a
             full-width grid inside one drops its own side borders there rather
-            than drawing a second line on top. */}
+            than drawing a second line on top.
+
+            The rails run behind the hero's colour field rather than stopping
+            above it — the field lifts itself over them (`z-30` in `PageHeader`).
+            Ending the rails below the hero instead would take them off the
+            promise grid too, which has no side borders of its own and relies on
+            these for its outer edges. */}
         <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-shell -translate-x-1/2 border-x border-hairline lg:block"
@@ -147,7 +153,7 @@ const Home: FC = () => (
 
         <Section id="features">
             <Shell>
-                <SectionHeader index="01" label="Framework" title="Everything you need to ship realtime">
+                <SectionHeader label="Framework" title="Everything you need to ship realtime">
                     <p className="text-body text-ink-muted">Realtime, storage, types, and a studio — with no glue code between them.</p>
                 </SectionHeader>
 
@@ -156,7 +162,6 @@ const Home: FC = () => (
                         <GridCell
                             blurb={feature.blurb}
                             highlight={index === 1}
-                            index={String(index + 1).padStart(2, "0")}
                             key={feature.title}
                             readout={feature.readout}
                             stage={<FeatureVisual feature={feature} highlight={index === 1} />}
@@ -171,7 +176,7 @@ const Home: FC = () => (
 
         <Section id="playground" tone="deep">
             <Shell>
-                <SectionHeader index="02" label="Playground" title="Copy, paste, ship.">
+                <SectionHeader label="Playground" title="Copy, paste, ship.">
                     <p className="text-body text-ink-muted">A schema, a function, and a component — the whole round trip in one screen.</p>
                 </SectionHeader>
             </Shell>
@@ -186,7 +191,7 @@ const Home: FC = () => (
 
         <Section id="how-it-works">
             <Shell>
-                <SectionHeader index="03" label="How it works" title="Define. Write. Ship.">
+                <SectionHeader label="How it works" title="Define. Write. Ship.">
                     <p className="text-body text-ink-muted">From a schema to a live, globally-synced backend.</p>
                 </SectionHeader>
                 <HowItWorks />
@@ -205,7 +210,7 @@ const Home: FC = () => (
 
         <Section id="docs">
             <Shell>
-                <SectionHeader action={{ label: "Browse all docs", to: "/docs" }} index="06" label="Documentation" title="Choose your runtime">
+                <SectionHeader action={{ label: "Browse all docs", to: "/docs" }} label="Documentation" title="Choose your runtime">
                     <p className="text-body text-ink-muted">Start with the adapter built for your project.</p>
                 </SectionHeader>
 

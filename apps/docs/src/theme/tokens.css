@@ -135,6 +135,17 @@
     --site-on-accent: #0e0e11;
     --site-ribbon: linear-gradient(100deg, var(--site-accent), var(--site-accent-2) 55%, var(--site-accent-3));
 
+    /* Accents lifted toward white, for the one band that carries dark ink on a
+       full accent fill. Measured against `--site-on-accent` at 80%: the raw
+       accents run 7.5 / 4.2 / 4.7, so violet fails AA outright and rose clears
+       it by 0.2. At this tint all three sit at 5.0 or better, which is what
+       lets the band cycle hue without the text dropping out on one phase.
+       Mixed in sRGB, not oklch — oklch lightens far less per percent here, and
+       the tint is chosen by measured contrast rather than by appearance. */
+    --site-accent-tint: color-mix(in srgb, var(--site-accent) 80%, white);
+    --site-accent-2-tint: color-mix(in srgb, var(--site-accent-2) 80%, white);
+    --site-accent-3-tint: color-mix(in srgb, var(--site-accent-3) 80%, white);
+
     /* "Healthy / live" status. Its own role rather than an accent alias — a
        brand may want a cool accent and still need green to read as green. */
     --site-positive: hsl(152 62% 52%);

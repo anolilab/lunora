@@ -44,7 +44,7 @@ const FAQS = [
 const Faq: FC = () => (
     <Section id="faq" tone="deep">
         <Shell>
-            <SectionHeader index="08" label="Questions" title="Answered plainly.">
+            <SectionHeader label="Questions" title="Answered plainly.">
                 <p className="text-body text-ink-muted">Including the ones with awkward answers.</p>
             </SectionHeader>
 

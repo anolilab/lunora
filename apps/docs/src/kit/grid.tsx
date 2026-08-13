@@ -73,10 +73,10 @@ const CellTitle: FC<{ children: ReactNode; highlight: boolean; href?: string; to
 /**
  * One cell of a `HairlineGrid`.
  *
- * Reading order top to bottom: the visual stage, then the index, the title
- * (with a hover arrow when it links somewhere), the blurb, and an optional
- * mono readout pinned to the bottom. The stage leads because these cells sell
- * a capability — the picture does that faster than the heading does.
+ * Reading order top to bottom: the visual stage, then the title (with a hover
+ * arrow when it links somewhere), the blurb, and an optional mono readout
+ * pinned to the bottom. The stage leads because these cells sell a capability —
+ * the picture does that faster than the heading does.
  *
  * `highlight` flips the cell to the accent. Use it on at most one cell per
  * grid; a second one stops it reading as emphasis.
@@ -90,14 +90,13 @@ const GridCell: FC<{
     href?: string;
     /** Small mark shown above the title. For cells with no full `stage`. */
     icon?: ReactNode;
-    index?: string;
     /** Mono line pinned to the bottom — a type signature, a value, a result. */
     readout?: ReactNode;
     /** The visual area at the top of the cell. */
     stage?: ReactNode;
     title?: ReactNode;
     to?: string;
-}> = ({ blurb, children, className, highlight = false, href, icon, index, readout, stage, title, to }) => {
+}> = ({ blurb, children, className, highlight = false, href, icon, readout, stage, title, to }) => {
     // Resolve the palette once. Threading `highlight ?` through every slot
     // instead puts eight independent branches in one render, which is both
     // harder to read and easy to get inconsistent when a slot is added.
@@ -107,7 +106,6 @@ const GridCell: FC<{
               cell: "bg-accent text-on-accent",
               edge: "border-on-accent/15",
               icon: "text-on-accent",
-              index: "text-on-accent/70",
               readout: "text-on-accent/60",
               title: "text-on-accent",
           }
@@ -116,7 +114,6 @@ const GridCell: FC<{
               cell: "bg-canvas",
               edge: "border-hairline",
               icon: "text-ink-faint",
-              index: "text-accent",
               readout: "text-ink-faint",
               title: "text-ink",
           };
@@ -130,10 +127,9 @@ const GridCell: FC<{
             ) : null}
 
             <div className="flex flex-1 flex-col gap-3 p-6">
-                {index || icon ? (
+                {icon ? (
                     <div className="flex items-center justify-between gap-3">
-                        {icon ? <span className={cn("flex items-center gap-2 [&_svg]:size-5", tone.icon)}>{icon}</span> : null}
-                        {index ? <span className={cn("ml-auto font-mono text-kicker uppercase", tone.index)}>{index}</span> : null}
+                        <span className={cn("flex items-center gap-2 [&_svg]:size-5", tone.icon)}>{icon}</span>
                     </div>
                 ) : null}
 
@@ -156,8 +152,8 @@ const GridCell: FC<{
 };
 
 /**
- * The numbered rule grid: a row of `NN / Label` + one sentence. Used directly
- * under a page header to state what the thing is, before any section does.
+ * The rule grid: a row of `Label` + one sentence. Used directly under a page
+ * header to state what the thing is, before any section does.
  */
 const RuleGrid: FC<{
     className?: string;
@@ -165,11 +161,9 @@ const RuleGrid: FC<{
     items: { label: string; text: ReactNode }[];
 }> = ({ className, columns = 5, items }) => (
     <dl className={cn("grid grid-cols-1 gap-px bg-hairline", COLUMN_CLASS[columns], className)}>
-        {items.map((item, index) => (
+        {items.map((item) => (
             <div className="flex flex-col gap-2 bg-canvas p-[1.375rem]" key={item.label}>
-                <dt className="font-mono text-kicker uppercase text-accent">
-                    {String(index + 1).padStart(2, "0")} / {item.label}
-                </dt>
+                <dt className="font-mono text-kicker uppercase text-accent">{item.label}</dt>
                 <dd className="text-blurb text-ink-muted">{item.text}</dd>
             </div>
         ))}
