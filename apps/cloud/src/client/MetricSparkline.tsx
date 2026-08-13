@@ -45,10 +45,16 @@ export const Sparkline = ({ points }: { points: ReadonlyArray<SparklinePoint> })
     );
 };
 
+/** Net-movement label per `Math.sign(trend)` — a lookup instead of a repeated three-way fold. */
+const TREND_DIRECTION = { "-1": "down", "0": "flat", "1": "up" } as const;
+
+/** The glyph shown for each direction. */
+const TREND_ARROW = { down: "▼", flat: "→", up: "▲" } as const;
+
 /** Direction arrow + delta for a series' net movement over the window. */
 export const TrendBadge = ({ trend }: { trend: number }): ReactElement => {
-    const direction = trend > 0 ? "up" : trend < 0 ? "down" : "flat";
-    const arrow = trend > 0 ? "▲" : trend < 0 ? "▼" : "→";
+    const direction = TREND_DIRECTION[Math.sign(trend) as -1 | 0 | 1];
+    const arrow = TREND_ARROW[direction];
 
     return (
         <span className={`metric-trend metric-trend-${direction}`}>

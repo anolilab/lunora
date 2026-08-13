@@ -55,6 +55,7 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
     }, []);
 
     return (
+        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- a native <dialog> handles keyboard dismissal itself (the `onCancel` below closes on Escape); the click handler only adds backdrop dismissal, which has no keyboard equivalent to mirror
         <dialog
             aria-label="Command palette"
             className="palette"
@@ -68,7 +69,10 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
             onClick={(event) => {
                 // ::backdrop clicks land on the dialog element itself, so a hit that is
                 // not inside the panel is a backdrop hit — the old overlay behaviour.
-                if (event.target === dialogRef.current) {
+                // Compared as an EventTarget: `event.target` is the generic DOM type,
+                // and narrowing it to the ref's element type is what makes the identity
+                // check well-typed rather than a cross-type comparison.
+                if ((event.target as EventTarget | null) === (dialogRef.current as EventTarget | null)) {
                     onClose();
                 }
             }}

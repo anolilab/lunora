@@ -12,12 +12,12 @@
  * uses, over the SAME `alertRuleState` latch, so the two paths can't drift and a
  * breach alerts exactly once regardless of which path first sees it.
  *
- * Expressed as a pure function over the injected {@link ControlPlaneDb} ports,
+ * Expressed as a pure function over the injected {@link ControlPlaneDatabase} ports,
  * like `runUptimeSweep`, so the evaluate→fire/clear logic is testable against a
  * fake store. The edge (`src/server.ts`) supplies the real D1 and delivers the
  * returned alerts.
  */
-import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
+import type { ControlPlaneDatabase } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
 import { fireMetricRules } from "./alerts";
 

@@ -42,7 +42,7 @@ export interface McpTool {
     path: string;
 }
 
-const toolName = (path: string): string => path.replace(/^\/v1\//, "").replaceAll("/", ".");
+const toolName = (path: string): string => (path.startsWith("/v1/") ? path.slice("/v1/".length) : path).replaceAll("/", ".");
 
 /** A tool paired with the route it dispatches to — the MCP handler's dispatch table. */
 export interface McpToolRoute<Handler> {

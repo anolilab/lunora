@@ -5,14 +5,14 @@
  * fire an uptime alert the first time a deployment's failures cross a rule's
  * threshold.
  *
- * Expressed as a pure function over the injected {@link ControlPlaneDb} ports,
+ * Expressed as a pure function over the injected {@link ControlPlaneDatabase} ports,
  * like `runTeardownSweep` / `runUsageRollback` in `../deploy/sweeps.ts`, so the
  * probe→record→fire logic is testable against a fake store with no real `fetch`.
  * The edge (`src/server.ts`) supplies the real D1 + `fetch` and delivers the
  * returned alerts. The alert firing itself reuses the shared `fireCrossedRules`
  * so this path can't drift from the telemetry ingest path.
  */
-import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
+import type { ControlPlaneDatabase } from "../store";
 import type { AlertDelivery, FiringRule } from "../telemetry/alerts";
 import { fireCrossedRules, isSafeWebhookUrl } from "../telemetry/alerts";
 import type { UptimeProbe } from "./probe";

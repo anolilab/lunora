@@ -120,7 +120,7 @@ export interface FiringSource {
  *
  * `insertAlert` is injected because the two callers write through different
  * stores — the typed lunora `ctx.db` (branded ids) vs the structural
- * `ControlPlaneDb` (string ids) — so the id type flows through as `TId`.
+ * `ControlPlaneDatabase` (string ids) — so the id type flows through as `TId`.
  */
 export const fireCrossedRules = async <TId extends string>(
     rules: ReadonlyArray<FiringRule>,

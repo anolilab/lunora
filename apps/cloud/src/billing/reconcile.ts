@@ -6,7 +6,7 @@
  * credits ledger + the schedule live in `server.ts` (this stays store-only, so
  * the mapping and the suspend/recover writes are testable against a fake store).
  */
-import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
+import type { ControlPlaneDatabase } from "../store";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
 import type { PeriodUsage } from "./spend";
 
