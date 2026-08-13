@@ -137,6 +137,10 @@ interface WranglerConfig {
     // Workers KV namespaces. The namespace `id` is a remote resource Lunora
     // can't mint — warn, don't fail. See `validateKvNamespaces`.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+    // Per-Worker runtime caps. `cpu_ms` bounds the blast radius of a runaway
+    // handler — detection is lagging by definition, so the cap is what actually
+    // limits the bill while an alert is still being written. See `validateLimits`.
+    limits?: { cpu_ms?: number };
     // Cloudflare Logpush toggle (jobs are created out-of-band via dashboard/API).
     logpush?: boolean;
     // The worker entry, relative to the config file. Read to check that every
@@ -182,7 +186,11 @@ interface WranglerConfig {
     };
     // Structural only (`validateR2Buckets`): a declared bucket needs a
     // `bucket_name` — the remote bucket itself (`wrangler r2 bucket create`) is
-    // out of scope for a pure validator.
+    // out of scope for a pure validator. `bucket_name` is the remote bucket the
+    // binding points at, projected here (wrangler has always required it) so a
+    // consumer can name the real bucket in a diagnostic instead of the binding
+    // alias. Entries stay nullable: the shared array validator reports a
+    // non-object entry itself, so narrowing here would only move the failure.
     r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
     // Cloudflare Secrets Store bindings (`env.<BINDING>.get()`). Each references a
     // remote store + secret by name (created out-of-band); `validateSecretsStore`
@@ -966,6 +974,49 @@ const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
     }
 };
 
+/** Cloudflare's own ceiling on `limits.cpu_ms`; a value above it is rejected at deploy rather than clamped. */
+const MAX_CPU_MS = 300_000;
+
+/**
+ * `limits` bounds a Worker's runtime consumption — today just `cpu_ms`.
+ *
+ * Worth validating rather than ignoring because it is a GUARDRAIL, and a
+ * guardrail that silently isn't applied is worse than none: alerting is lagging
+ * by definition, so the cap is what actually bounds the blast radius of a
+ * runaway handler or a retry storm while a human is still reading the alert. A
+ * mistyped `cpu_ms` (or a `limits` block wrangler drops) leaves the deployment
+ * uncapped while the config reads as though it isn't.
+ */
+const validateLimits = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { limits } = wrangler;
+
+    if (limits === undefined) {
+        return;
+    }
+
+    if (typeof limits !== "object" || Array.isArray(limits)) {
+        errors.push('limits must be an object (e.g. { "cpu_ms": 30000 })');
+
+        return;
+    }
+
+    const cpuMs = limits.cpu_ms;
+
+    if (cpuMs === undefined) {
+        return;
+    }
+
+    if (typeof cpuMs !== "number" || !Number.isFinite(cpuMs) || !Number.isInteger(cpuMs) || cpuMs <= 0) {
+        errors.push("limits.cpu_ms must be a positive integer number of milliseconds");
+
+        return;
+    }
+
+    if (cpuMs > MAX_CPU_MS) {
+        errors.push(`limits.cpu_ms must be at most ${String(MAX_CPU_MS)} (Cloudflare's per-invocation ceiling)`);
+    }
+};
+
 /**
  * `placement` is Smart Placement config — `{ "mode": "smart" }` is the only
  * documented shape. Recognizing it catches a typo'd mode (`"smrat"`) wrangler
@@ -1346,6 +1397,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
 
     validateSendEmail(wrangler, errors, warnings);
     validateLogpush(wrangler, errors);
+    validateLimits(wrangler, errors);
     validatePlacement(wrangler, errors);
     validateObservability(wrangler, errors);
     validateAssets(wrangler, errors);
