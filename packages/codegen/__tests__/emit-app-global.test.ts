@@ -61,7 +61,9 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
-        expect(output).toContain('import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";');
+        expect(output).toContain(
+            'import { createD1CtxDb, emitD1QueryCost, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";',
+        );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
     });
 

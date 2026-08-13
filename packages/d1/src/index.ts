@@ -33,4 +33,6 @@ export type {
 export { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./introspect";
 export type { Migration, MigrationRunnerResult } from "./migration-runner";
 export { MigrationRunner } from "./migration-runner";
+export type { D1QueryCost } from "./query-metrics";
+export { d1QueryTag, emitD1QueryCost, readD1QueryCost } from "./query-metrics";
 export { default as sqliteDialect } from "./sqlite-dialect";
