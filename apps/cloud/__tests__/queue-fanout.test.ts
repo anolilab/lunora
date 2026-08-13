@@ -51,7 +51,7 @@ const groups: TenantQueueGroup[] = [
 
 describe(fanOutQueue, () => {
     it("forwards every group and collects no retries on success", async () => {
-        const dispatch = vi.fn().mockResolvedValue([]);
+        const dispatch = vi.fn<(group: TenantQueueGroup) => Promise<string[]>>().mockResolvedValue([]);
         const { retry } = await fanOutQueue({ dispatch, groups });
 
         expect(dispatch).toHaveBeenCalledTimes(2);
@@ -59,14 +59,16 @@ describe(fanOutQueue, () => {
     });
 
     it("collects the tenant's per-message retry ids", async () => {
-        const dispatch = vi.fn().mockImplementation((group: TenantQueueGroup) => Promise.resolve(group.script === "app-a" ? ["m2"] : []));
+        const dispatch = vi
+            .fn<(group: TenantQueueGroup) => Promise<string[]>>()
+            .mockImplementation((group: TenantQueueGroup) => Promise.resolve(group.script === "app-a" ? ["m2"] : []));
         const { retry } = await fanOutQueue({ dispatch, groups });
 
         expect([...retry]).toStrictEqual(["m2"]);
     });
 
     it("retries a whole group when its dispatch throws (delivery failure)", async () => {
-        const dispatch = vi.fn().mockImplementation((group: TenantQueueGroup) => {
+        const dispatch = vi.fn<(group: TenantQueueGroup) => Promise<string[]>>().mockImplementation((group: TenantQueueGroup) => {
             if (group.script === "app-a") {
                 throw new Error("tenant unreachable");
             }
