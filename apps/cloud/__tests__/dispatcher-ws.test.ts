@@ -54,7 +54,9 @@ describe("dispatcher WebSocket pass-through", () => {
         // …and the upgrade is metered exactly once (per-message invocations are
         // metered inside the DO, not re-counted on every frame here).
         expect(writeDataPoint).toHaveBeenCalledTimes(1);
-        expect(writeDataPoint).toHaveBeenCalledWith({ blobs: ["acme", "free"], doubles: [1], indexes: ["acme"] });
+        // A 101 upgrade meters as its own status class on the subscription route,
+        // so WS traffic stays distinguishable from request traffic in the stream.
+        expect(writeDataPoint).toHaveBeenCalledWith({ blobs: ["acme", "free", "1xx", "/_lunora/ws"], doubles: [1], indexes: ["acme"] });
     });
 
     it("404s an upgrade to an unknown hostname without calling the namespace", async () => {

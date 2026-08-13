@@ -522,10 +522,14 @@ depend on the platform's own telemetry pipeline being healthy.
 (This list had collapsed into a single paragraph through successive edits; it is
 restored here with each item's verified status.)
 
-2. **Deployment health charts on the project page** (🔨 open) — request volume /
-   error rate per deployment. Still blocked on its own stated prerequisite:
-   status-code capture in the dispatcher metering (`outcome` blob on the AE data
-   point). Verified absent from `src/metering/`.
+2. **Deployment health charts on the project page** (🔨 open — prerequisite now
+   shipped) — request volume / error rate per deployment. The stated blocker is
+   cleared: the dispatcher's AE data point now carries an `outcome` status class
+   (blob3) and a low-cardinality `route` label (blob4) alongside the existing
+   script/plan blobs, so error rate and per-endpoint volume are both readable
+   from the metering stream. A blue/green alias resolves to the versioned script
+   name, so blob1 already carries the deploy identity. What remains is the chart
+   itself — the read query + the project-page panel.
 3. **Log viewer upgrade** (✅ shipped) — severity chips, filter bar, and
    log↔trace correlation landed with B2's full log-management pass.
 4. **Design-system pass** (✅ shipped) — the aurora redesign covered the token

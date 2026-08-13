@@ -1,6 +1,6 @@
 import { limitsForPlan } from "../billing/plans";
 import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
-import { recordRequestUsage } from "../metering/analytics";
+import { normalizeRoutePath, recordRequestUsage, statusClass } from "../metering/analytics";
 import type { CustomDomainRoute } from "./route";
 import { createCustomDomainResolver, createPlanResolver, createRouteResolver, resolveTenant } from "./route";
 
@@ -128,7 +128,19 @@ export default {
             // Per-request metering source (fire-and-forget; no-op without the
             // binding). A WS upgrade is counted once here; per-message frames are
             // metered by the DO/AE path, not re-counted on every frame.
-            recordRequestUsage(env.USAGE_ANALYTICS, { plan: route.plan ?? "free", scriptName: route.scriptName });
+            //
+            // `outcome` + `route` are what let the usage stream answer WHICH
+            // endpoint moved and whether it started failing — the per-deployment
+            // health question billing metrics structurally cannot answer. Both
+            // are deliberately low-cardinality (a status class, an id-collapsed
+            // path); the raw code and raw path would make every record its own
+            // dimension.
+            recordRequestUsage(env.USAGE_ANALYTICS, {
+                outcome: statusClass(response.status),
+                plan: route.plan ?? "free",
+                route: normalizeRoutePath(new URL(request.url).pathname),
+                scriptName: route.scriptName,
+            });
 
             // Debug header (GAPS.md B3): which cell + script served this. A 101
             // upgrade response is immutable — return it verbatim.
