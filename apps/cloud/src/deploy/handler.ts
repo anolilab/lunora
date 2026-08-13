@@ -172,6 +172,53 @@ const bearerKey = (request: Request): null | string => {
     return key === "" ? null : key;
 };
 
+/** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
+interface DeployTelemetry {
+    endpoint: string;
+    tailConsumer?: string;
+    token: string;
+}
+
+/**
+ * Assemble the {@link TenantDeploymentSpec} for one release.
+ *
+ * Split out of the NDJSON stream body because it is pure assembly — every
+ * telemetry-conditional field lives here, so the streaming half reads as the
+ * sequence of steps it is.
+ */
+const buildDeploymentSpec = (input: {
+    adminToken: string;
+    bindings: TenantBindingSpec | undefined;
+    bundle: ArrayBuffer;
+    cell: string;
+    dispatchNamespace: string;
+    kind: string;
+    organizationId: string;
+    projectId: string; // gitleaks:allow -- a field declaration; the scanner matches the Cypress project-id shape
+    releaseScriptName: string;
+    scriptName: string;
+    telemetry: DeployTelemetry | undefined;
+    tenantSecrets: Record<string, string>;
+}): TenantDeploymentSpec => {
+    const { telemetry } = input;
+
+    return {
+        // The stable project label (pre-versioning) keys per-tenant D1/R2, so data
+        // persists across deploys; the versioned releaseScriptName is the
+        // immutable per-deployment worker script id.
+        alias: input.scriptName,
+        bindings: normalizeBindings(input.bindings),
+        bundle: input.bundle,
+        cell: input.cell,
+        dispatchNamespace: input.dispatchNamespace,
+        scriptName: input.releaseScriptName,
+        secrets: { ...input.tenantSecrets, LUNORA_ADMIN_TOKEN: input.adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
+        ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
+        tags: [`org:${input.organizationId}`, `project:${input.projectId}`, `env:${input.kind}`],
+        ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
+    };
+};
+
 export const handleDeployRequest = async (request: Request, deps: DeployHandlerDeps): Promise<Response> => {
     const key = bearerKey(request);
 
@@ -249,6 +296,26 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
             };
 
+            /**
+             * The one terminal-failure path: emit the failed phase + done frames,
+             * best-effort mark the row failed, and close the stream. Extracted
+             * because three call sites had to do all four steps in order, and a
+             * missed one strands the row mid-flight with the client still hanging.
+             */
+            const failStream = async (message: string): Promise<void> => {
+                write({ deploymentId, error: message, phase: "failed" });
+
+                try {
+                    await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
+                } catch {
+                    // The status write is the likeliest thing to have just failed;
+                    // reporting the failure downstream matters more than recording it.
+                }
+
+                write({ deploymentId, done: true, status: "failed" });
+                controller.close();
+            };
+
             write({ deploymentId, event: "accepted" });
 
             // Tenant env secrets are decrypted and merged in; LUNORA_ADMIN_TOKEN
@@ -261,12 +328,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             try {
                 tenantSecrets = (await deps.backend.resolveSecrets?.({ key, kind, organizationId: target.organizationId, projectId })) ?? {};
             } catch (error) {
-                const message = error instanceof Error ? error.message : "failed to resolve tenant secrets";
-
-                write({ deploymentId, error: message, phase: "failed" });
-                await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
-                write({ deploymentId, done: true, status: "failed" });
-                controller.close();
+                await failStream(error instanceof Error ? error.message : "failed to resolve tenant secrets");
 
                 return;
             }
@@ -274,7 +336,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
             // Resolve the telemetry config to inject (endpoint var + ingest-token
             // secret + tail consumer). Best-effort — a failure here must not fail
             // the deploy, so the tenant just ships untelemetered.
-            let telemetry: undefined | { endpoint: string; tailConsumer?: string; token: string };
+            let telemetry: DeployTelemetry | undefined;
 
             try {
                 telemetry = await deps.resolveTelemetry?.({ key, organizationId: target.organizationId });
@@ -282,21 +344,20 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 telemetry = undefined;
             }
 
-            const spec: TenantDeploymentSpec = {
-                // The stable project label (pre-versioning) keys per-tenant D1/R2,
-                // so data persists across deploys; the versioned releaseScriptName
-                // is the immutable per-deployment worker script id.
-                alias: scriptName,
-                bindings: normalizeBindings(body.bindings),
+            const spec = buildDeploymentSpec({
+                adminToken,
+                bindings: body.bindings,
                 bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
-                scriptName: releaseScriptName,
-                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken, ...(telemetry ? { LUNORA_OTLP_TOKEN: telemetry.token } : {}) },
-                ...(telemetry?.tailConsumer ? { tailConsumers: [telemetry.tailConsumer] } : {}),
-                tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
-                ...(telemetry ? { vars: { LUNORA_OTLP_ENDPOINT: telemetry.endpoint } } : {}),
-            };
+                kind,
+                organizationId: target.organizationId,
+                projectId,
+                releaseScriptName,
+                scriptName,
+                tenantSecrets,
+                telemetry,
+            });
 
             const { healthCheck } = deps;
 
@@ -322,19 +383,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 // this the rejection escapes `start`, the row is stranded mid-flight in
                 // `accepted`/`provisioning` forever, and the NDJSON stream is never
                 // closed, so the client hangs instead of seeing a failure.
-                const message = error instanceof Error ? error.message : "deployment failed";
-
-                write({ deploymentId, error: message, phase: "failed" });
-
-                try {
-                    await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
-                } catch {
-                    // The status write is the likeliest thing to have just failed;
-                    // reporting the failure downstream matters more than recording it.
-                }
-
-                write({ deploymentId, done: true, status: "failed" });
-                controller.close();
+                await failStream(error instanceof Error ? error.message : "deployment failed");
 
                 return;
             }
@@ -348,12 +397,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                     await deps.backend.activateDeployment({ deploymentId, key });
                     write({ deploymentId, event: "released" });
                 } catch (error) {
-                    const message = error instanceof Error ? error.message : "activation failed";
-
-                    write({ deploymentId, error: message, phase: "failed" });
-                    await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
-                    write({ deploymentId, done: true, status: "failed" });
-                    controller.close();
+                    await failStream(error instanceof Error ? error.message : "activation failed");
 
                     return;
                 }

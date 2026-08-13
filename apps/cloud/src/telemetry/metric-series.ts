@@ -28,14 +28,12 @@ interface Accumulator {
 }
 
 /**
- * Fold exact metric points into per-metric bucketed series. One series per
- * distinct `name|kind|functionPath`; each point falls in the bucket
- * `floor(at / bucketMs) * bucketMs` and every point in that bucket is averaged
- * (exact). Buckets are emitted oldest→newest; `firstValue`/`lastValue`/`trend`
- * come from the ordered buckets. Capped at {@link MAX_METRIC_SERIES} series.
+ * Bucket every valid point into its `(name, kind, functionPath)` accumulator.
+ * Points that are unnamed or carry a non-finite value/timestamp are dropped, and
+ * a new series past {@link MAX_METRIC_SERIES} is refused so one noisy emitter
+ * can't unbound the fold.
  */
-export const foldMetricSeries = (points: ReadonlyArray<StoredMetricPoint>, options: { bucketMs?: number } = {}): MetricSeries[] => {
-    const bucketMs = Math.max(Math.trunc(options.bucketMs ?? DEFAULT_METRICS_BUCKET_MS), 1);
+const accumulateMetricPoints = (points: ReadonlyArray<StoredMetricPoint>, bucketMs: number): Map<string, Accumulator> => {
     const byKey = new Map<string, Accumulator>();
 
     for (const point of points) {
@@ -67,30 +65,52 @@ export const foldMetricSeries = (points: ReadonlyArray<StoredMetricPoint>, optio
         }
     }
 
+    return byKey;
+};
+
+/** Project one accumulator onto a time-ordered series of bucket means, or `undefined` when it collected nothing. */
+const projectSeries = (accumulator: Accumulator): MetricSeries | undefined => {
+    const ordered = [...accumulator.buckets.entries()].toSorted((a, b) => a[0] - b[0]);
+    const seriesPoints = ordered.map(([t, cell]) => {
+        return { t, value: cell.sum / cell.count };
+    });
+
+    if (seriesPoints.length === 0) {
+        return undefined;
+    }
+
+    const firstValue = seriesPoints[0].value;
+    const lastValue = seriesPoints[seriesPoints.length - 1].value;
+
+    return {
+        firstValue,
+        lastValue,
+        name: accumulator.name,
+        points: seriesPoints,
+        trend: lastValue - firstValue,
+        ...(accumulator.functionPath === undefined ? {} : { functionPath: accumulator.functionPath }),
+        kind: accumulator.kind,
+    };
+};
+
+/**
+ * Fold exact metric points into per-metric bucketed series. One series per
+ * distinct `name|kind|functionPath`; each point falls in the bucket
+ * `floor(at / bucketMs) * bucketMs` and every point in that bucket is averaged
+ * (exact). Buckets are emitted oldest→newest; `firstValue`/`lastValue`/`trend`
+ * come from the ordered buckets. Capped at {@link MAX_METRIC_SERIES} series.
+ */
+export const foldMetricSeries = (points: ReadonlyArray<StoredMetricPoint>, options: { bucketMs?: number } = {}): MetricSeries[] => {
+    const bucketMs = Math.max(Math.trunc(options.bucketMs ?? DEFAULT_METRICS_BUCKET_MS), 1);
+    const byKey = accumulateMetricPoints(points, bucketMs);
     const series: MetricSeries[] = [];
 
     for (const accumulator of byKey.values()) {
-        const ordered = [...accumulator.buckets.entries()].toSorted((a, b) => a[0] - b[0]);
-        const seriesPoints = ordered.map(([t, cell]) => {
-            return { t, value: cell.sum / cell.count };
-        });
+        const projected = projectSeries(accumulator);
 
-        if (seriesPoints.length === 0) {
-            continue;
+        if (projected !== undefined) {
+            series.push(projected);
         }
-
-        const firstValue = seriesPoints[0].value;
-        const lastValue = seriesPoints[seriesPoints.length - 1].value;
-
-        series.push({
-            firstValue,
-            lastValue,
-            name: accumulator.name,
-            points: seriesPoints,
-            trend: lastValue - firstValue,
-            ...(accumulator.functionPath === undefined ? {} : { functionPath: accumulator.functionPath }),
-            kind: accumulator.kind,
-        });
     }
 
     return series;

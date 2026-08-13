@@ -18,7 +18,7 @@ import { COLUMN_LABEL, Field, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";
 import { SpanDetail, TraceWaterfall } from "./TraceDetail";
-import type { DeploymentId, ProjectId } from "./types";
+import type { DeploymentId, OrgId, ProjectId } from "./types";
 
 /** One rolled-up trace as the list renders it (hot D1 rows and archived rows share the shape). */
 type TraceRollup = ReturnOf<typeof api.traces.list>[number];
@@ -200,8 +200,99 @@ const OpenTraceCard = ({
  * the mono label voice. Nothing tints a row: the selected trace is a value step
  * on its background, and errors colour the latency and the status chip only.
  */
-export const TracesSection = ({ focusTraceId, organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
+/** One archived trace row, as `traces.listArchived` resolves it. */
+type ArchivedTraceRow = ReturnOf<typeof api.traces.listArchived> extends ReadonlyArray<infer R> ? R : never;
+
+/** Older traces folded out of the columnar archive, plus the loader that fetches them. */
+interface ArchiveBackfill {
+    loadingOlder: boolean;
+    /** Fetch the window's archived traces (idempotent; safe to call again). */
+    loadOlderFromArchive: () => void;
+    /** `undefined` until a fetch for the CURRENT window has resolved. */
+    olderTraces: ArchivedTraceRow[] | undefined;
+}
+
+/**
+ * Seamless "load older": traces past D1's hot window, read straight from the
+ * columnar archive (`traces.listArchived`, an action).
+ *
+ * The result is keyed by the browse context, so a response that arrives after
+ * the user changed deployment or range is ignored rather than rendered — the
+ * same staleness guard the per-trace archive fetch uses, and the reason neither
+ * needs a reset effect. Fails open to an empty list: an unconfigured archive
+ * should read as "nothing older", not as an error.
+ */
+const useArchiveBackfill = (context: { deploymentId: string; from: number; organizationId: OrgId; to: number }): ArchiveBackfill => {
     const client = useLunora();
+    const { deploymentId, from, organizationId, to } = context;
+    const [olderArchive, setOlderArchive] = useState<{ key: string; traces: ArchivedTraceRow[] } | undefined>(undefined);
+    const [loadingOlder, setLoadingOlder] = useState(false);
+    const archiveKey = `${deploymentId}:${String(from)}:${String(to)}`;
+
+    const loadOlderFromArchive = (): void => {
+        setLoadingOlder(true);
+        void (async () => {
+            try {
+                const rows = await client.action(api.traces.listArchived, { from, organizationId, to });
+
+                setOlderArchive({ key: archiveKey, traces: rows });
+            } catch {
+                setOlderArchive({ key: archiveKey, traces: [] });
+            } finally {
+                setLoadingOlder(false);
+            }
+        })();
+    };
+
+    return { loadingOlder, loadOlderFromArchive, olderTraces: olderArchive?.key === archiveKey ? olderArchive.traces : undefined };
+};
+
+/**
+ * The archived spans for one trace, fetched only when D1's hot window has none.
+ *
+ * `traces.getArchived` is an action (the R2-SQL read is a `fetch`), and it fails
+ * open to `[]` so the waterfall simply stays empty where no archive is
+ * provisioned. The result is tagged with the trace it was fetched for, so a
+ * response arriving after the user opened a different trace is ignored rather
+ * than rendered under the wrong one — which is also why no reset effect is
+ * needed on every trace switch.
+ */
+const useArchivedSpans = (context: { hotSpansEmpty: boolean; organizationId: OrgId; traceId: string }): ObservationSpan[] | undefined => {
+    const client = useLunora();
+    const { hotSpansEmpty, organizationId, traceId } = context;
+    const [archived, setArchived] = useState<{ spans: ObservationSpan[]; traceId: string } | undefined>(undefined);
+
+    useEffect(() => {
+        if (!hotSpansEmpty) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void (async () => {
+            try {
+                const result = await client.action(api.traces.getArchived, { organizationId, traceId });
+
+                if (!cancelled) {
+                    setArchived({ spans: result, traceId });
+                }
+            } catch {
+                if (!cancelled) {
+                    setArchived({ spans: [], traceId });
+                }
+            }
+        })();
+
+        // eslint-disable-next-line consistent-return -- a `useEffect` callback either returns a cleanup or nothing; the guard above bails before there is anything to clean up
+        return () => {
+            cancelled = true;
+        };
+    }, [client, hotSpansEmpty, organizationId, traceId]);
+
+    return archived?.traceId === traceId ? archived.spans : undefined;
+};
+
+export const TracesSection = ({ focusTraceId, organizationId, preloaded }: SectionProps<ReturnOf<typeof api.projects.listByOrg>>): ReactElement => {
     const { from, to } = useTimeRange();
     const projects = usePreloadedQuery(preloaded);
     // Plain `string`, not `ProjectId | ""`: Base UI's Select is generic over its
@@ -224,74 +315,15 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
     const [traceId, setTraceId] = useState(focusTraceId ?? "");
     const [errorOnly, setErrorOnly] = useState(false);
     const [selectedSpanId, setSelectedSpanId] = useState("");
-    // Archive fallback: the spans `traces.getArchived` returned, tagged with the
-    // trace they were fetched for. Keying by `traceId` means a stale fetch for a
-    // previous trace is simply ignored downstream — no reset effect (which would
-    // chain an extra render on every trace switch).
-    const [archived, setArchived] = useState<{ spans: NonNullable<typeof spans>; traceId: string } | undefined>(undefined);
 
     const traces = useQuery(api.traces.list, deploymentId ? { deploymentId: deploymentId as DeploymentId, errorOnly, from, organizationId, to } : "skip");
     const spans = useQuery(api.traces.get, traceId ? { organizationId, traceId } : "skip");
 
-    // D1 has no spans for this trace (loaded, empty) → try the columnar archive
-    // (an action — the R2-SQL read is a `fetch`). Fails open to `[]`, so the
-    // waterfall just stays empty when the archive isn't configured.
+    // D1 has no spans for this trace (loaded, empty) → fall back to the archive.
     const d1Empty = traceId !== "" && spans?.length === 0;
+    const archivedSpans = useArchivedSpans({ hotSpansEmpty: d1Empty, organizationId, traceId });
 
-    useEffect(() => {
-        if (!d1Empty) {
-            return;
-        }
-
-        let cancelled = false;
-
-        void (async () => {
-            try {
-                const result = await client.action(api.traces.getArchived, { organizationId, traceId });
-
-                if (!cancelled) {
-                    setArchived({ spans: result, traceId });
-                }
-            } catch {
-                if (!cancelled) {
-                    setArchived({ spans: [], traceId });
-                }
-            }
-        })();
-
-        // eslint-disable-next-line consistent-return -- a `useEffect` callback either returns a cleanup or nothing; the early guards above bail before there is anything to clean up
-        return () => {
-            cancelled = true;
-        };
-    }, [client, d1Empty, organizationId, traceId]);
-
-    // Seamless "load older": traces past D1's hot window folded straight from the
-    // columnar archive (`traces.listArchived`, an action). Keyed by the current
-    // browse context so a stale result for a previous deployment/range is ignored
-    // downstream (mirrors the per-trace archive keying above — no reset effect).
-    const [olderArchive, setOlderArchive] = useState<{ key: string; traces: NonNullable<typeof traces> } | undefined>(undefined);
-    const [loadingOlder, setLoadingOlder] = useState(false);
-    const archiveKey = `${deploymentId}:${String(from)}:${String(to)}`;
-    const olderTraces = olderArchive?.key === archiveKey ? olderArchive.traces : undefined;
-
-    const loadOlderFromArchive = (): void => {
-        setLoadingOlder(true);
-        void (async () => {
-            try {
-                const rows = await client.action(api.traces.listArchived, { from, organizationId, to });
-
-                setOlderArchive({ key: archiveKey, traces: rows });
-            } catch {
-                setOlderArchive({ key: archiveKey, traces: [] });
-            } finally {
-                setLoadingOlder(false);
-            }
-        })();
-    };
-
-    // Only honor the archive fetch that belongs to the trace currently open (a
-    // stale fetch for a previous trace is ignored — no reset effect needed).
-    const archivedSpans = archived?.traceId === traceId ? archived.spans : undefined;
+    const { loadOlderFromArchive, loadingOlder, olderTraces } = useArchiveBackfill({ deploymentId, from, organizationId, to });
 
     // Hot rollups first, then archived rows the hot window doesn't already carry
     // (dedup by traceId, hot wins) — one seamless, newest-first list.
