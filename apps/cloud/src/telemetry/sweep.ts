@@ -24,11 +24,13 @@ import { fireMetricRules } from "./alerts";
 /** An `alertRules` row as the control-plane store returns it. */
 interface AlertRuleRow {
     _id: string;
+    baselineWindows?: number;
     channel: AlertChannel;
     comparator?: "gt" | "lt";
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    mode?: "deviation" | "threshold";
     name: string;
     organizationId: string;
     target: string;
@@ -72,10 +74,12 @@ const DEFAULT_SCAN_LIMIT = 2000;
 
 /** Map an `alertRules` row to the shared {@link MetricRule} the firing loop reads. */
 const toMetricRule = (row: AlertRuleRow): MetricRule => ({
+    baselineWindows: row.baselineWindows,
     channel: row.channel,
     comparator: row.comparator ?? "gt",
     destination: row.destination,
     functionPath: row.functionPath,
+    mode: row.mode,
     name: row.name,
     ruleId: row._id,
     target: row.target as MetricTarget,

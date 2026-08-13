@@ -327,12 +327,14 @@ export interface Doc_incidents {
 export interface Doc_alertRules {
     _id: Id<"alertRules">;
     _creationTime: number;
+    baselineWindows?: number;
     channel: "email" | "webhook" | "slack" | "pagerduty";
     comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
     target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
@@ -1009,12 +1011,14 @@ export interface Insert_incidents {
 export interface Insert_alertRules {
     _id?: Id<"alertRules">;
     _creationTime?: number;
+    baselineWindows?: number;
     channel: "email" | "webhook" | "slack" | "pagerduty";
     comparator?: "gt" | "lt";
     createdAt: number;
     destination: string;
     enabled: boolean;
     functionPath?: string;
+    mode?: "threshold" | "deviation";
     name: string;
     organizationId: Id<"organizations">;
     target: "issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost";
