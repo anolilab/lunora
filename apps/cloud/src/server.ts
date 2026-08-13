@@ -377,7 +377,7 @@ const sweepUsageRollback = async (env: Env): Promise<void> => {
  * lift overage suspensions once a balance is restored. Runs on Creem's credits
  * API — no-ops without `CREEM_API_KEY`. (Self-serve credit-pack *purchase* — the
  * webhook that funds these accounts — still needs the live credit-pack product
- * ids; this is the enforcement + recovery half.)
+ * ids; this is the enforcement + recovery half).
  */
 const sweepOverageReconciliation = async (env: Env): Promise<void> => {
     if (!env.DB || !env.CREEM_API_KEY) {

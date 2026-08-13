@@ -259,6 +259,7 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
             }
         })();
 
+        // eslint-disable-next-line consistent-return -- a `useEffect` callback either returns a cleanup or nothing; the early guards above bail before there is anything to clean up
         return () => {
             cancelled = true;
         };
@@ -297,6 +298,21 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
     const hotIds = new Set((traces ?? []).map((trace) => trace.traceId));
     const archivedRows = (olderTraces ?? []).filter((trace) => !hotIds.has(trace.traceId));
     const rows = [...(traces ?? []), ...archivedRows];
+
+    // The archive footer has three states — not yet loaded (offer the fetch),
+    // loaded but empty (say so), loaded with rows (the list above already shows
+    // them). Named here so the JSX below reads as one slot rather than a chain.
+    let archiveFooter: ReactElement | null = null;
+
+    if (olderTraces === undefined) {
+        archiveFooter = (
+            <Button className="self-start" disabled={loadingOlder} onClick={loadOlderFromArchive} size="sm" variant="outline">
+                {loadingOlder ? "[Loading…]" : "Load older from archive"}
+            </Button>
+        );
+    } else if (archivedRows.length === 0) {
+        archiveFooter = <p className={cn(COLUMN_LABEL, "text-muted-foreground m-0")}>No older traces in the archive for this window.</p>;
+    }
 
     const selected = rows.find((trace) => trace.traceId === traceId);
 
@@ -427,13 +443,7 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
                         )}
                         {/* Seamless deeper history: fold older traces out of the columnar archive
                             for the selected window (fails open to none where no archive is provisioned). */}
-                        {olderTraces === undefined ? (
-                            <Button className="self-start" disabled={loadingOlder} onClick={loadOlderFromArchive} size="sm" variant="outline">
-                                {loadingOlder ? "[Loading…]" : "Load older from archive"}
-                            </Button>
-                        ) : archivedRows.length === 0 ? (
-                            <p className={cn(COLUMN_LABEL, "text-muted-foreground m-0")}>No older traces in the archive for this window.</p>
-                        ) : null}
+                        {archiveFooter}
                     </CardContent>
                 </Card>
             ) : null}

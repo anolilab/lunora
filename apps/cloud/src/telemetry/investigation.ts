@@ -282,6 +282,7 @@ const evidenceNote = (bundle: EvidenceBundle): string => {
  * fallback when AI is unconfigured. Fully derived from the bundle, so its output
  * is stable and its structure is immune to anything in the (untrusted) telemetry.
  */
+/* eslint-disable @typescript-eslint/no-use-before-define -- the runner factories are declared above the pure helpers they call (`deterministicResult`, `tryParseJsonObject`) so the module reads top-down from its public surface; both references are inside function bodies, evaluated per call and never during module init. */
 export const createDeterministicRunner = (): IncidentInvestigationRunner => {
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- interface is async for LLM runners; this one resolves immediately.
