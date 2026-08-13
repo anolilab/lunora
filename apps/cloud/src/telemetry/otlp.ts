@@ -193,6 +193,24 @@ const EVALUATION_PREFIX = "gen_ai.evaluation.";
  * a **finite numeric score**; a lone `.label` with no score is dropped. Names
  * follow attribute (insertion) order, so the output is deterministic.
  */
+/** The name part of a `name`+`suffix` key, or `undefined` when the key doesn't end with `suffix` (or names nothing). */
+const suffixName = (key: string, suffix: string): string | undefined => {
+    if (!key.endsWith(suffix)) {
+        return undefined;
+    }
+
+    const name = key.slice(0, -suffix.length);
+
+    return name === "" ? undefined : name;
+};
+
+/** An evaluation attribute's numeric score — `doubleValue`, or a parsed `intValue` — or `undefined` when neither is a finite number. */
+const evaluationScore = (value: OtlpAnyValue | undefined): number | undefined => {
+    const score = value?.doubleValue ?? (value?.intValue === undefined ? undefined : Number(value.intValue));
+
+    return typeof score === "number" && Number.isFinite(score) ? score : undefined;
+};
+
 const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluation[] | undefined => {
     if (attributes === undefined) {
         return undefined;
@@ -207,22 +225,20 @@ const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluati
         }
 
         const rest = attribute.key.slice(EVALUATION_PREFIX.length);
+        const scoreName = suffixName(rest, ".score");
+        const score = scoreName === undefined ? undefined : evaluationScore(attribute.value);
 
-        if (rest.endsWith(".score")) {
-            const name = rest.slice(0, -".score".length);
-            const { value } = attribute;
-            const score = value?.doubleValue ?? (value?.intValue === undefined ? undefined : Number(value.intValue));
+        if (scoreName !== undefined && score !== undefined) {
+            scores.set(scoreName, score);
 
-            if (name !== "" && typeof score === "number" && Number.isFinite(score)) {
-                scores.set(name, score);
-            }
-        } else if (rest.endsWith(".label")) {
-            const name = rest.slice(0, -".label".length);
-            const label = attribute.value?.stringValue;
+            continue;
+        }
 
-            if (name !== "" && label !== undefined && label !== "") {
-                labels.set(name, label);
-            }
+        const labelName = suffixName(rest, ".label");
+        const label = attribute.value?.stringValue;
+
+        if (labelName !== undefined && label !== undefined && label !== "") {
+            labels.set(labelName, label);
         }
     }
 
@@ -230,6 +246,8 @@ const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluati
         return undefined;
     }
 
+    // A label without a matching score is dropped: the score is what makes an
+    // evaluation an evaluation.
     return [...scores.entries()].map(([name, score]) => {
         const label = labels.get(name);
 
@@ -244,6 +262,51 @@ const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluati
  * the wall clock so an event always carries a sane time.
  */
 const epochMsFromNano = (nano: string | undefined): number => (nano && nano.length > 6 ? Number(nano.slice(0, -6)) : Date.now());
+
+/**
+ * Project one ERROR span onto a {@link TelemetryEvent}, or `undefined` when the
+ * span did not fail (only error spans feed Issue grouping).
+ *
+ * Split out of the resource→scope→span walk below for the same reason as
+ * {@link decodeSpanObservation}: the walk resolves envelope context, this turns
+ * a single span into a row.
+ */
+const decodeTelemetryEvent = (span: OtlpSpan, context: { isContainer: boolean; serviceName: string | undefined }): TelemetryEvent | undefined => {
+    if (span.status?.code !== STATUS_ERROR) {
+        return undefined;
+    }
+
+    const { isContainer, serviceName } = context;
+    const message = span.status.message ?? span.name ?? "";
+    const code = attributeString(span.attributes, "error.type");
+    const ts = epochMsFromNano(span.endTimeUnixNano);
+    const traceId = span.traceId === undefined || span.traceId === "" ? undefined : span.traceId;
+    const trace = traceId === undefined ? {} : { traceId };
+
+    if (isContainer) {
+        const container = serviceName ?? "container";
+
+        return {
+            code,
+            container,
+            functionPath: `container:${container}`,
+            instance: attributeString(span.attributes, "lunora.instance"),
+            kind: "container",
+            message,
+            ...trace,
+            ts,
+        };
+    }
+
+    return {
+        code,
+        functionPath: attributeString(span.attributes, "lunora.function_path") ?? span.name ?? "unknown",
+        kind: "error",
+        message,
+        ...trace,
+        ts,
+    };
+};
 
 /**
  * Decode the error spans of an OTLP trace payload into normalized events. Worker
@@ -261,38 +324,10 @@ export const decodeTelemetryEvents = (payload: OtlpTracePayload): TelemetryEvent
             const isContainer = (scopeSpans.scope?.name ?? "").includes("@lunora/container");
 
             for (const span of scopeSpans.spans ?? []) {
-                if (span.status?.code !== STATUS_ERROR) {
-                    continue;
-                }
+                const event = decodeTelemetryEvent(span, { isContainer, serviceName });
 
-                const message = span.status.message ?? span.name ?? "";
-                const code = attributeString(span.attributes, "error.type");
-                const ts = epochMsFromNano(span.endTimeUnixNano);
-
-                const traceId = span.traceId === undefined || span.traceId === "" ? undefined : span.traceId;
-
-                if (isContainer) {
-                    const container = serviceName ?? "container";
-
-                    events.push({
-                        code,
-                        container,
-                        functionPath: `container:${container}`,
-                        instance: attributeString(span.attributes, "lunora.instance"),
-                        kind: "container",
-                        message,
-                        ...(traceId === undefined ? {} : { traceId }),
-                        ts,
-                    });
-                } else {
-                    events.push({
-                        code,
-                        functionPath: attributeString(span.attributes, "lunora.function_path") ?? span.name ?? "unknown",
-                        kind: "error",
-                        message,
-                        ...(traceId === undefined ? {} : { traceId }),
-                        ts,
-                    });
+                if (event !== undefined) {
+                    events.push(event);
                 }
             }
         }
@@ -619,6 +654,38 @@ const dataPointValue = (dataPoint: OtlpHistogramDataPoint & OtlpNumberDataPoint)
     return typeof dataPoint.sum === "number" && Number.isFinite(dataPoint.sum) ? dataPoint.sum : undefined;
 };
 
+/**
+ * Flatten one metric's data points onto {@link MetricPoint} rows. A point whose
+ * value can't be read is skipped rather than written as zero — a missing sample
+ * is not a sample of nothing.
+ */
+const metricPointsFrom = (
+    dataPoints: (OtlpHistogramDataPoint & OtlpNumberDataPoint)[] | undefined,
+    context: { kind: MetricPoint["kind"]; name: string; serviceName: string | undefined },
+): MetricPoint[] => {
+    const points: MetricPoint[] = [];
+
+    for (const dataPoint of dataPoints ?? []) {
+        const value = dataPointValue(dataPoint);
+
+        if (value === undefined) {
+            continue;
+        }
+
+        points.push({
+            at: epochMsFromNano(dataPoint.timeUnixNano),
+            attributes: lunoraAttributes(dataPoint.attributes),
+            functionPath: attributeString(dataPoint.attributes, "lunora.function_path"),
+            kind: context.kind,
+            name: context.name,
+            serviceName: context.serviceName,
+            value,
+        });
+    }
+
+    return points;
+};
+
 /** Flatten every data point of an OTLP metrics payload into {@link MetricPoint}s. Tolerant — a valueless point is skipped. */
 export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] => {
     const points: MetricPoint[] = [];
@@ -634,36 +701,15 @@ export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] =
                     continue;
                 }
 
-                const emit = (kind: MetricPoint["kind"], dataPoints: (OtlpHistogramDataPoint & OtlpNumberDataPoint)[] | undefined): void => {
-                    for (const dataPoint of dataPoints ?? []) {
-                        const value = dataPointValue(dataPoint);
+                // The three point families OTLP can carry; a metric declares one.
+                const families = [
+                    { kind: "gauge", points: metric.gauge?.dataPoints },
+                    { kind: "sum", points: metric.sum?.dataPoints },
+                    { kind: "histogram", points: metric.histogram?.dataPoints },
+                ] as const;
 
-                        if (value === undefined) {
-                            continue;
-                        }
-
-                        points.push({
-                            at: epochMsFromNano(dataPoint.timeUnixNano),
-                            attributes: lunoraAttributes(dataPoint.attributes),
-                            functionPath: attributeString(dataPoint.attributes, "lunora.function_path"),
-                            kind,
-                            name,
-                            serviceName,
-                            value,
-                        });
-                    }
-                };
-
-                if (metric.gauge) {
-                    emit("gauge", metric.gauge.dataPoints);
-                }
-
-                if (metric.sum) {
-                    emit("sum", metric.sum.dataPoints);
-                }
-
-                if (metric.histogram) {
-                    emit("histogram", metric.histogram.dataPoints);
+                for (const family of families) {
+                    points.push(...metricPointsFrom(family.points, { kind: family.kind, name, serviceName }));
                 }
             }
         }
