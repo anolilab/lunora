@@ -55,22 +55,20 @@ const cases = [
 ] as const;
 
 describe("cross-org IDOR guard on delete/revoke", () => {
-    for (const { fn, id } of cases) {
-        it(`rejects a foreign-org row in ${id}`, async () => {
-            const { ctx, writes } = makeCtx("org_2");
+    it.each(cases)("rejects a foreign-org row in $id", async ({ fn }) => {
+        const { ctx, writes } = makeCtx("org_2");
 
-            await expect(fn.handler(ctx, { id: "row_x" as never, organizationId: "org_1" as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
-            expect(writes).toStrictEqual([]);
-        });
+        await expect(fn.handler(ctx, { id: "row_x" as never, organizationId: "org_1" as never })).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(writes).toStrictEqual([]);
+    });
 
-        it(`allows a row that belongs to the caller's org in ${id}`, async () => {
-            const { ctx, writes } = makeCtx("org_1");
+    it.each(cases)("allows a row that belongs to the caller's org in $id", async ({ fn }) => {
+        const { ctx, writes } = makeCtx("org_1");
 
-            await fn.handler(ctx, { id: "row_x" as never, organizationId: "org_1" as never });
+        await fn.handler(ctx, { id: "row_x" as never, organizationId: "org_1" as never });
 
-            expect(writes).toStrictEqual(["row_x"]);
-        });
-    }
+        expect(writes).toStrictEqual(["row_x"]);
+    });
 });
 
 describe("cross-org IDOR guard on project-scoped secrets access", () => {

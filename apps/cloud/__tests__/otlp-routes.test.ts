@@ -67,6 +67,7 @@ describe("oTLP ingest routes", () => {
         );
 
         expect(response.status).toBe(200);
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; without the assertion `tsc --noEmit` fails
         expect(((await response.json()) as { partialSuccess: { rejectedSpans: number } }).partialSuccess.rejectedSpans).toBe(100);
     });
 

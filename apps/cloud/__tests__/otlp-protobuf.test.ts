@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+/* eslint-disable no-bitwise -- these helpers hand-encode protobuf fixtures; varints and wire tags are defined in terms of shifts and masks, exactly like the decoder under test. */
 import { decodeMetricPoints, decodeObservations } from "../src/telemetry/otlp";
 import { decodeMetricsPayloadProto, decodeTracePayloadProto } from "../src/telemetry/otlp-protobuf";
 

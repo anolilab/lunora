@@ -4,6 +4,17 @@ import dispatcher from "../src/dispatcher/worker";
 import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
 
 /**
+ * The `DISPATCHER.get` shape the worker calls, mirrored from its own
+ * `DispatchNamespace` — binding the doubles to it means a change to the
+ * dispatch call breaks these tests instead of letting them drift.
+ */
+type DispatchNamespaceGet = (
+    name: string,
+    args?: unknown,
+    options?: { limits?: { cpuMs?: number; subRequests?: number }; outbound?: unknown },
+) => { fetch: (request: Request) => Promise<Response> };
+
+/**
  * Dispatcher WebSocket pass-through (CLOUD-PLAN.md §6 risk #3 spike). The hottest
  * Lunora path is the hibernated-WS subscription, served at `/_lunora/ws`. Through
  * Workers for Platforms that upgrade must traverse `env.DISPATCHER.get(script)
@@ -24,7 +35,7 @@ interface FakeEnv {
 const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDatasetLike): FakeEnv => {
     return {
         LUNORA_APP_DOMAIN: "lunora.app",
-        DISPATCHER: { get: vi.fn().mockReturnValue({ fetch: fetchImpl }) },
+        DISPATCHER: { get: vi.fn<DispatchNamespaceGet>().mockReturnValue({ fetch: fetchImpl }) },
         USAGE_ANALYTICS: analytics,
     };
 };
@@ -44,7 +55,7 @@ describe("dispatcher WebSocket pass-through", () => {
     });
 
     it("dispatches the upgrade with per-plan limits and meters it once", async () => {
-        const writeDataPoint = vi.fn();
+        const writeDataPoint = vi.fn<AnalyticsEngineDatasetLike["writeDataPoint"]>();
         const env = makeEnv(() => Promise.resolve({ status: 101, webSocket: {} } as unknown as Response), { writeDataPoint });
 
         await dispatcher.fetch(upgrade(), env as never);
@@ -60,7 +71,7 @@ describe("dispatcher WebSocket pass-through", () => {
     });
 
     it("404s an upgrade to an unknown hostname without calling the namespace", async () => {
-        const get = vi.fn();
+        const get = vi.fn<DispatchNamespaceGet>();
         const response = await dispatcher.fetch(upgrade("lunora.app"), { LUNORA_APP_DOMAIN: "lunora.app", DISPATCHER: { get } });
 
         expect(response.status).toBe(404);
