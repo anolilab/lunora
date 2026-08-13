@@ -93,7 +93,7 @@ export const list = action
         try {
             const series = await reader.readSeries({ from, organizationId: args.organizationId, ...(args.to === undefined ? {} : { to: args.to }) });
 
-            return series.map(toView);
+            return series.map((point) => toView(point));
         } catch {
             // AE SQL unreachable / dataset absent — degrade to an empty trend view.
             return [];
@@ -180,7 +180,7 @@ export const series = query
 
         const points = (page as unknown as MetricPointRow[]).filter((row) => row.at >= from && row.at <= to);
 
-        return foldMetricSeries(points).map(toView);
+        return foldMetricSeries(points).map((point) => toView(point));
     });
 
 /** Exact metric points older than this are pruned from D1's hot window (matches span observations). */

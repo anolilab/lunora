@@ -108,7 +108,8 @@ describe("protobuf decoder hardening", () => {
         // cap must reject it rather than build an O(n²) BigInt (CPU-exhaustion DoS).
         const bomb = new Uint8Array(1024).fill(0xff);
 
-        expect(() => decodeTracePayloadProto(bomb)).toThrow();
+        // This message is ours and asserted deliberately: it is the varint bomb guard.
+        expect(() => decodeTracePayloadProto(bomb)).toThrow(/malformed OTLP protobuf/u);
     });
 
     it("decodes an empty body to an empty payload", () => {
