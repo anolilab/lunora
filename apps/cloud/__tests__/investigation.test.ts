@@ -180,7 +180,9 @@ describe(resolveInvestigationRunner, () => {
 
         const runner = resolveInvestigationRunner({ generate: async () => "{}", mode: "none" });
 
-        expect((await runner.investigate(bundle)).by).toBe("deterministic");
+        const result = await runner.investigate(bundle);
+
+        expect(result.by).toBe("deterministic");
     });
 
     it("degrades to the deterministic result when the LLM generation throws", async () => {
@@ -243,7 +245,7 @@ describe("prompt-injection hardening", () => {
 
         // Structure is fixed; confidence stays inside the enum; no injected value leaks in.
         expect(["high", "low", "medium"]).toContain(result.confidence);
-        expect(Object.keys(result).sort()).toStrictEqual([
+        expect(Object.keys(result).toSorted()).toStrictEqual([
             "by",
             "confidence",
             "evidenceNote",

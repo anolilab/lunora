@@ -70,7 +70,7 @@ export const foldMetricSeries = (points: ReadonlyArray<StoredMetricPoint>, optio
     const series: MetricSeries[] = [];
 
     for (const accumulator of byKey.values()) {
-        const ordered = [...accumulator.buckets.entries()].sort((a, b) => a[0] - b[0]);
+        const ordered = [...accumulator.buckets.entries()].toSorted((a, b) => a[0] - b[0]);
         const seriesPoints = ordered.map(([t, cell]) => {
             return { t, value: cell.sum / cell.count };
         });

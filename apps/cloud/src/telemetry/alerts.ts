@@ -206,7 +206,7 @@ export const percentile = (values: ReadonlyArray<number>, p: number): number => 
         return 0;
     }
 
-    const sorted = [...values].sort((a, b) => a - b);
+    const sorted = [...values].toSorted((a, b) => a - b);
     const rank = Math.ceil((p / 100) * sorted.length);
     const index = Math.min(Math.max(rank, 1), sorted.length) - 1;
 

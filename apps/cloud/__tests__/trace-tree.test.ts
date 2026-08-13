@@ -41,7 +41,7 @@ describe(foldObservationTraces, () => {
             2,
         );
 
-        expect(traces.map((trace) => trace.traceId)).toEqual(["new", "mid"]);
+        expect(traces.map((trace) => trace.traceId)).toStrictEqual(["new", "mid"]);
     });
 });
 
@@ -53,7 +53,7 @@ describe(buildTraceTree, () => {
             span({ endedAt: 1120, parentSpanId: "child", spanId: "grandchild", startedAt: 1080 }),
         ]);
 
-        expect(rows.map((row) => [row.spanId, row.depth])).toEqual([
+        expect(rows.map((row) => [row.spanId, row.depth])).toStrictEqual([
             ["root", 0],
             ["child", 1],
             ["grandchild", 2],
@@ -77,6 +77,6 @@ describe(buildTraceTree, () => {
         const rows = buildTraceTree([span({ parentSpanId: "missing", spanId: "a" }), span({ parentSpanId: "a", spanId: "b" })]);
 
         expect(rows).toHaveLength(2);
-        expect(rows.map((row) => row.depth)).toEqual([0, 1]);
+        expect(rows.map((row) => row.depth)).toStrictEqual([0, 1]);
     });
 });

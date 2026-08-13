@@ -109,7 +109,9 @@ export const createCloudflareProvisioner = (options: CloudflareProvisionerOption
                 // data persists across versions.
                 const databaseName = tenantD1Name(spec.alias);
                 const existing = await api.findD1DatabaseByName(databaseName);
-                const uuid = existing?.uuid ?? (await api.createD1Database(databaseName)).uuid;
+                // `??` still short-circuits: the create only runs when the lookup missed.
+                const database = existing ?? (await api.createD1Database(databaseName));
+                const { uuid } = database;
 
                 bindings.push({ id: uuid, name: spec.bindings.d1.binding, type: "d1" });
             }

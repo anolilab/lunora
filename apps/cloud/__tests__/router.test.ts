@@ -128,8 +128,11 @@ describe("pOST /v1/logs/tail", () => {
     it("403s a missing or wrong tail secret", async () => {
         const router = createDeployRouter();
 
-        expect((await router.fetch(tailPost({ batches: [] }), env(makeCtx()))).status).toBe(403);
-        expect((await router.fetch(tailPost({ batches: [] }, "nope"), env(makeCtx()))).status).toBe(403);
+        const noToken = await router.fetch(tailPost({ batches: [] }), env(makeCtx()));
+        const wrongToken = await router.fetch(tailPost({ batches: [] }, "nope"), env(makeCtx()));
+
+        expect(noToken.status).toBe(403);
+        expect(wrongToken.status).toBe(403);
     });
 
     it("resolves each script → org and ingests the batch via the internal mutation", async () => {
@@ -199,8 +202,11 @@ describe("pOST /v1/cells", () => {
     it("401s a missing or wrong admin token (tenant can't register a cell)", async () => {
         const router = createDeployRouter();
 
-        expect((await router.fetch(cellPost(validBody), env(makeCtx()))).status).toBe(401);
-        expect((await router.fetch(cellPost(validBody, "nope"), env(makeCtx()))).status).toBe(401);
+        const noToken = await router.fetch(cellPost(validBody), env(makeCtx()));
+        const wrongToken = await router.fetch(cellPost(validBody, "nope"), env(makeCtx()));
+
+        expect(noToken.status).toBe(401);
+        expect(wrongToken.status).toBe(401);
     });
 
     it("401s when no platform admin token is configured", async () => {
