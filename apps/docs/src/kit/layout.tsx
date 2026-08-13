@@ -36,15 +36,14 @@ const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...re
 /**
  * A full-bleed horizontal band. `tone` picks the surface.
  *
- * Pads the top only. The hatched spacer separates one band from the next, and
- * this is the gap between that spacer and the heading under it; padding both
- * edges doubled the rhythm, which is what left a screen of empty canvas between
- * every two bands.
+ * Padding is asymmetric: a full `section` above, a smaller `section-end` below.
+ * Matching them doubles the rhythm and leaves a screen of empty canvas between
+ * every two bands, which is why the bottom is not simply `pt-section`.
  *
- * The bottom stays flush against the following spacer on purpose: the spacer is
- * the separation, so a band's last row meeting it reads as one join rather than
- * two. A band needing more room beneath its content should say so on that
- * content, not on every section on the site.
+ * It was zero for a while, on the theory that the hatched spacer was itself the
+ * separation and a band's last row meeting it read as one join. In practice a
+ * trailing button or caption lands hard against that divider and reads as a
+ * layout bug — it did in four separate bands before this was given a value.
  */
 const Section: FC<{
     children: ReactNode;
@@ -54,7 +53,7 @@ const Section: FC<{
 }> = ({ children, className, id, tone = "canvas" }) => (
     <section
         className={cn(
-            "relative border-t border-hairline pt-section",
+            "relative border-t border-hairline pt-section pb-section-end",
             tone === "canvas" && "bg-canvas",
             tone === "deep" && "bg-canvas-deep",
             tone === "surface" && "bg-surface",

@@ -157,7 +157,7 @@ const Home: FC = () => (
                     <p className="text-body text-ink-muted">Realtime, storage, types, and a studio — with no glue code between them.</p>
                 </SectionHeader>
 
-                <HairlineGrid className="border border-hairline lg:border-x-0" columns={3}>
+                <HairlineGrid className="border border-b-0 border-hairline lg:border-x-0" columns={3}>
                     {features.map((feature, index) => (
                         <GridCell
                             blurb={feature.blurb}

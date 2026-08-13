@@ -50,7 +50,7 @@ const Faq: FC = () => (
 
             <div className="border-t border-hairline">
                 {FAQS.map((faq) => (
-                    <details className="group border-b border-hairline" key={faq.q} name="lunora-faq">
+                    <details className="group border-b border-hairline last:border-b-0" key={faq.q} name="lunora-faq">
                         <summary className="flex cursor-pointer list-none items-center justify-between gap-6 py-5 text-body text-ink transition-colors hover:text-accent [&::-webkit-details-marker]:hidden">
                             {faq.q}
                             <Plus

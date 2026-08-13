@@ -103,7 +103,7 @@ const Capabilities: FC = () => (
             {/* No per-cell `Reveal` wrapper here: a transparent wrapper would
                 become the grid item and let the container's hairline show
                 through the whole cell face instead of only at the seams. */}
-            <HairlineGrid className="border border-hairline lg:border-x-0" columns={4}>
+            <HairlineGrid className="border border-b-0 border-hairline lg:border-x-0" columns={4}>
                 {capabilities.map((cap) => (
                     <GridCell
                         blurb={cap.desc}

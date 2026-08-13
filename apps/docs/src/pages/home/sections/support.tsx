@@ -74,7 +74,7 @@ const SupportSection: FC = () => (
 
             {/* Heavy left, small right. The paths carry the width; the manifest
                 is the narrow column that makes them credible. */}
-            <div className="grid grid-cols-1 border border-hairline lg:grid-cols-[1.4fr_1fr] lg:border-x-0">
+            <div className="grid grid-cols-1 border border-b-0 border-hairline lg:grid-cols-[1.4fr_1fr] lg:border-x-0">
                 <div className="flex flex-col justify-between gap-10 border-b border-hairline p-6 sm:p-8 lg:border-r lg:border-b-0">
                     <ul className="flex flex-col gap-8">
                         {PATHS.map((path) => (

@@ -88,6 +88,7 @@
     /* ── Layout rhythm ── */
     --spacing-gutter: var(--site-gutter);
     --spacing-section: var(--site-section-gap);
+    --spacing-section-end: var(--site-section-gap-end);
     --spacing-col-gap: var(--site-col-gap);
     --container-shell: var(--site-shell);
 }
@@ -170,6 +171,13 @@
        sum lands at ~130–150px, not the ~300px a full-gap reading would give. */
     --site-gutter: 1.25rem;
     --site-section-gap: 6rem;
+    /* Smaller than the top gap on purpose. A band was flush to its lower edge
+       for a while, on the theory that the hatched spacer was itself the
+       separation — but a button or a caption landing hard against that divider
+       reads as a layout bug, and it did in four different bands. Matching the
+       6rem top instead would restore the ~300px trough between bands that the
+       asymmetry exists to avoid. */
+    --site-section-gap-end: 3.5rem;
     --site-col-gap: clamp(1rem, 0.3rem + 1.7vw, 2.5rem);
     /* 72rem matches `max-w-6xl`, the width the rest of the site and the navbar
        already use. Sections wider than the bar they sit under read as

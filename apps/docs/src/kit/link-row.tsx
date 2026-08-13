@@ -93,7 +93,12 @@ const LinkRowList: FC<{
             {children}
         </div>
     ) : (
-        <div className={cn("flex flex-col border-t border-hairline", "[&>*]:border-b [&>*]:border-hairline", className)}>{children}</div>
+        // The last row keeps no bottom seam: a column list is closed by the
+        // band's own spacer, and a trailing rule sitting just above that spacer
+        // reads as two dividers rather than one.
+        <div className={cn("flex flex-col border-t border-hairline", "[&>*]:border-b [&>*]:border-hairline", "[&>*:last-child]:border-b-0", className)}>
+            {children}
+        </div>
     );
 
 export { LinkRow, LinkRowList };
