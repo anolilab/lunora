@@ -158,38 +158,34 @@ export const UsageSection = ({ organizationId, preloaded }: SectionProps<ReturnO
                 <CardDescription>Metered platform usage for the current billing period, live as your deployments report it.</CardDescription>
             </CardHeader>
             <CardContent>
-                {summary === undefined ? (
-                    <p className={cn(COLUMN_LABEL, "text-muted-foreground m-0 py-8 text-center")}>[Loading…]</p>
-                ) : (
-                    <div className="flex flex-col gap-8">
-                        {/* The one thing seen first: the period's request volume, tinted by its quota state. */}
-                        <div className="flex flex-col gap-1.5">
-                            <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Requests</span>
-                            <span
-                                className={cn(
-                                    "font-mono text-5xl leading-none tracking-[-0.02em] tabular-nums",
-                                    STATE_TEXT[quotaState(included.requests > 0 ? summary.requests / included.requests : 0)],
-                                )}
-                            >
-                                {formatNumber(summary.requests)}
-                            </span>
-                            <span className="text-muted-foreground font-mono text-[11px] tabular-nums">period from {formatDate(periodStart)}</span>
-                        </div>
-
-                        <div className="flex flex-col gap-5">
-                            <Meter included={included.requests} label="Requests" used={summary.requests} />
-                            <Meter included={included.cpuMs} label="CPU ms" used={summary.cpuMs} />
-                        </div>
-
-                        {series && series.length > 0 ? <UsageBars series={series} /> : null}
-
-                        {/* Unmetered against a plan quota, so it stays a plain stat row. */}
-                        <div className="border-border flex items-baseline justify-between gap-4 border-t pt-4">
-                            <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Storage</span>
-                            <span className="font-mono text-sm tabular-nums">{formatBytes(summary.storageBytes)}</span>
-                        </div>
+                <div className="flex flex-col gap-8">
+                    {/* The one thing seen first: the period's request volume, tinted by its quota state. */}
+                    <div className="flex flex-col gap-1.5">
+                        <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Requests</span>
+                        <span
+                            className={cn(
+                                "font-mono text-5xl leading-none tracking-[-0.02em] tabular-nums",
+                                STATE_TEXT[quotaState(included.requests > 0 ? summary.requests / included.requests : 0)],
+                            )}
+                        >
+                            {formatNumber(summary.requests)}
+                        </span>
+                        <span className="text-muted-foreground font-mono text-[11px] tabular-nums">period from {formatDate(periodStart)}</span>
                     </div>
-                )}
+
+                    <div className="flex flex-col gap-5">
+                        <Meter included={included.requests} label="Requests" used={summary.requests} />
+                        <Meter included={included.cpuMs} label="CPU ms" used={summary.cpuMs} />
+                    </div>
+
+                    {series && series.length > 0 ? <UsageBars series={series} /> : null}
+
+                    {/* Unmetered against a plan quota, so it stays a plain stat row. */}
+                    <div className="border-border flex items-baseline justify-between gap-4 border-t pt-4">
+                        <span className={cn(COLUMN_LABEL, "text-muted-foreground")}>Storage</span>
+                        <span className="font-mono text-sm tabular-nums">{formatBytes(summary.storageBytes)}</span>
+                    </div>
+                </div>
             </CardContent>
         </Card>
     );

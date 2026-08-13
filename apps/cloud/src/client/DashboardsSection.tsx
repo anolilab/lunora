@@ -76,15 +76,16 @@ export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<Re
                         action={() => {
                             setError(null);
 
-                            void create
-                                .mutate({ name, organizationId })
-                                .then((id) => {
+                            void (async () => {
+                                try {
+                                    const id = await create.mutate({ name, organizationId });
+
                                     setSelectedId(id);
                                     setName("");
-                                })
-                                .catch((error_: unknown) => {
+                                } catch (error_: unknown) {
                                     setError(error_ instanceof Error ? error_.message : "could not create dashboard");
-                                });
+                                }
+                            })();
                         }}
                     >
                         <Field htmlFor="dashboard-name" label="Dashboard name">
@@ -106,13 +107,7 @@ export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<Re
                 </CardContent>
             </Card>
 
-            {dashboards === undefined ? (
-                <Card>
-                    <CardContent className={cn(COLUMN_LABEL, "text-muted-foreground py-8 text-center")}>[Loading…]</CardContent>
-                </Card>
-            ) : null}
-
-            {dashboards?.length === 0 ? (
+            {dashboards.length === 0 ? (
                 <Card>
                     <CardContent className="text-muted-foreground py-8 text-center text-sm">
                         No dashboards yet — create one above, then add panels to it.
@@ -120,7 +115,7 @@ export const DashboardsSection = ({ organizationId, preloaded }: SectionProps<Re
                 </Card>
             ) : null}
 
-            {dashboards !== undefined && dashboards.length > 0 ? (
+            {dashboards.length > 0 ? (
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)] lg:items-start">
                     <nav aria-label="Dashboards" className="flex flex-col border border-border">
                         {dashboards.map((board) => (
