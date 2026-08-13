@@ -4,13 +4,15 @@ import type { CloudflareApi } from "../src/cloudflare/api";
 import type { TeardownTarget } from "../src/deploy/teardown";
 import { createResourceTeardown, runTeardownSweep } from "../src/deploy/teardown";
 
-const target = (id: string, kind = "preview"): TeardownTarget => ({
-    alias: id,
-    deleteResources: false,
-    dispatchNamespace: `lunora-${kind}`,
-    id,
-    scriptName: `${id}-v1`,
-});
+const target = (id: string, kind = "preview"): TeardownTarget => {
+    return {
+        alias: id,
+        deleteResources: false,
+        dispatchNamespace: `lunora-${kind}`,
+        id,
+        scriptName: `${id}-v1`,
+    };
+};
 
 describe(runTeardownSweep, () => {
     it("deletes each pending script and marks it torn down", async () => {
@@ -99,7 +101,9 @@ describe(runTeardownSweep, () => {
 
     it("releases the alias only when its last deployment is torn down (deleteResources)", async () => {
         const released: string[] = [];
-        const lastOfAlias = (id: string): TeardownTarget => ({ ...target(id), deleteResources: true });
+        const lastOfAlias = (id: string): TeardownTarget => {
+            return { ...target(id), deleteResources: true };
+        };
 
         const result = await runTeardownSweep({
             destroy: () => Promise.resolve(),
@@ -136,26 +140,30 @@ describe(runTeardownSweep, () => {
     });
 });
 
-const cloudflareApi = (over: Partial<CloudflareApi> = {}): CloudflareApi => ({
-    createCustomHostname: () => Promise.resolve({ id: "h" }),
-    createD1Database: () => Promise.resolve({ uuid: "u" }),
-    createR2Bucket: () => Promise.resolve(),
-    deleteD1Database: () => Promise.resolve(),
-    deleteDispatchScript: () => Promise.resolve(),
-    deleteR2Bucket: () => Promise.resolve(),
-    findD1DatabaseByName: () => Promise.resolve(null),
-    putDispatchScript: () => Promise.resolve(),
-    putSecret: () => Promise.resolve(),
-    ...over,
-});
+const cloudflareApi = (over: Partial<CloudflareApi> = {}): CloudflareApi => {
+    return {
+        createCustomHostname: () => Promise.resolve({ id: "h" }),
+        createD1Database: () => Promise.resolve({ uuid: "u" }),
+        createR2Bucket: () => Promise.resolve(),
+        deleteD1Database: () => Promise.resolve(),
+        deleteDispatchScript: () => Promise.resolve(),
+        deleteR2Bucket: () => Promise.resolve(),
+        findD1DatabaseByName: () => Promise.resolve(null),
+        putDispatchScript: () => Promise.resolve(),
+        putSecret: () => Promise.resolve(),
+        ...over,
+    };
+};
 
-const ref = (over: Partial<Parameters<ReturnType<typeof createResourceTeardown>>[0]> = {}): Parameters<ReturnType<typeof createResourceTeardown>>[0] => ({
-    alias: "app",
-    deleteResources: true,
-    dispatchNamespace: "lunora-preview",
-    scriptName: "app-v1",
-    ...over,
-});
+const ref = (over: Partial<Parameters<ReturnType<typeof createResourceTeardown>>[0]> = {}): Parameters<ReturnType<typeof createResourceTeardown>>[0] => {
+    return {
+        alias: "app",
+        deleteResources: true,
+        dispatchNamespace: "lunora-preview",
+        scriptName: "app-v1",
+        ...over,
+    };
+};
 
 describe(createResourceTeardown, () => {
     it("deletes the script, then the alias-keyed D1 + R2, when deleteResources is set", async () => {
@@ -185,7 +193,7 @@ describe(createResourceTeardown, () => {
 
         await destroy(ref({ deleteResources: false }));
 
-        expect(deleteDispatchScript).toHaveBeenCalledOnce();
+        expect(deleteDispatchScript).toHaveBeenCalledTimes(1);
         expect(findD1DatabaseByName).not.toHaveBeenCalled();
         expect(deleteD1Database).not.toHaveBeenCalled();
         expect(deleteR2Bucket).not.toHaveBeenCalled();

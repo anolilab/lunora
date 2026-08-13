@@ -38,7 +38,7 @@ export interface DashboardPanel {
 }
 
 /** The panel kinds, in the order the editor offers them. */
-export const PANEL_KINDS: readonly PanelKind[] = ["metric", "stat", "traces", "logs"];
+export const PANEL_KINDS: ReadonlyArray<PanelKind> = ["metric", "stat", "traces", "logs"];
 
 /** Human labels for each panel kind (editor dropdown + widget headers). */
 export const PANEL_KIND_LABELS: Record<PanelKind, string> = {
@@ -49,7 +49,7 @@ export const PANEL_KIND_LABELS: Record<PanelKind, string> = {
 };
 
 /** The stat aggregations, in the order the editor offers them. */
-export const STAT_AGGREGATIONS: readonly StatAggregation[] = ["last", "first", "count"];
+export const STAT_AGGREGATIONS: ReadonlyArray<StatAggregation> = ["last", "first", "count"];
 
 /** Human labels for each stat aggregation. */
 export const STAT_AGGREGATION_LABELS: Record<StatAggregation, string> = {
@@ -99,17 +99,17 @@ export const createPanel = (input: { config: PanelConfig; id: string; kind: Pane
 };
 
 /** Append a panel to a board (immutably). */
-export const addPanel = (panels: readonly DashboardPanel[], panel: DashboardPanel): DashboardPanel[] => [...panels, panel];
+export const addPanel = (panels: ReadonlyArray<DashboardPanel>, panel: DashboardPanel): DashboardPanel[] => [...panels, panel];
 
 /** Remove the panel with `id` from a board (immutably); a no-op when absent. */
-export const removePanel = (panels: readonly DashboardPanel[], id: string): DashboardPanel[] => panels.filter((panel) => panel.id !== id);
+export const removePanel = (panels: ReadonlyArray<DashboardPanel>, id: string): DashboardPanel[] => panels.filter((panel) => panel.id !== id);
 
 /**
  * Move a panel one slot toward the front (`up`) or back (`down`) by swapping it
  * with its neighbor. Clamped at the ends (moving the first panel up, or the last
  * down, returns an unchanged copy) and a no-op for an unknown id.
  */
-export const movePanel = (panels: readonly DashboardPanel[], id: string, direction: "down" | "up"): DashboardPanel[] => {
+export const movePanel = (panels: ReadonlyArray<DashboardPanel>, id: string, direction: "down" | "up"): DashboardPanel[] => {
     const index = panels.findIndex((panel) => panel.id === id);
 
     if (index === -1) {
@@ -143,7 +143,7 @@ export const validatePanel = (panel: DashboardPanel): null | string => {
 };
 
 /** Validate every panel on a board; returns the first error, or `null` when all are valid. */
-export const validatePanels = (panels: readonly DashboardPanel[]): null | string => {
+export const validatePanels = (panels: ReadonlyArray<DashboardPanel>): null | string => {
     for (const panel of panels) {
         const error = validatePanel(panel);
 
@@ -160,7 +160,7 @@ export interface MetricSeriesLike {
     firstValue: number;
     lastValue: number;
     name: string;
-    points: readonly unknown[];
+    points: ReadonlyArray<unknown>;
 }
 
 /**
@@ -169,7 +169,7 @@ export interface MetricSeriesLike {
  * panel has no metric name or the named series isn't in the window (so the widget
  * can render a "no data" state rather than a misleading zero).
  */
-export const statValue = (series: readonly MetricSeriesLike[], panel: DashboardPanel): number | undefined => {
+export const statValue = (series: ReadonlyArray<MetricSeriesLike>, panel: DashboardPanel): number | undefined => {
     if (panel.config.metricName === undefined || panel.config.metricName === "") {
         return undefined;
     }

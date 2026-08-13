@@ -20,7 +20,7 @@ export interface SparklinePoint {
  * are spaced evenly on x (by index) and scaled to the series' own min→max on y,
  * so a flat series still renders a centered line rather than dividing by zero.
  */
-export const Sparkline = ({ points }: { points: readonly SparklinePoint[] }): ReactElement => {
+export const Sparkline = ({ points }: { points: ReadonlyArray<SparklinePoint> }): ReactElement => {
     if (points.length === 0) {
         return <div className="metric-spark metric-spark-empty" />;
     }

@@ -35,7 +35,7 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
-import type { ControlPlaneDb } from "./store";
+import type { ControlPlaneDb as ControlPlaneDatabase } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
 import { runUptimeSweep } from "./uptime/sweep";
@@ -314,7 +314,7 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
 };
 
 /** The control-plane D1 as the structural {@link ControlPlaneDb} the sweeps use. */
-const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDb =>
+const controlPlaneDatabase = (database: D1DatabaseLike): ControlPlaneDatabase =>
     createD1CtxDb({ exec: buildExec(database), schema: schema as unknown as D1CtxDbOptions["schema"] });
 
 /**
@@ -405,7 +405,7 @@ const sweepOverageReconciliation = async (env: Env): Promise<void> => {
  * `markDelivered` path which only ever records `delivered`; a sweep runs in a
  * trusted system context, so it patches directly.
  */
-const deliverFiredAlerts = async (env: Env, database: ControlPlaneDb, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> => {
+const deliverFiredAlerts = async (env: Env, database: ControlPlaneDatabase, deliveries: ReadonlyArray<AlertDelivery>, now: number): Promise<void> => {
     if (deliveries.length === 0) {
         return;
     }

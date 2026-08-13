@@ -11,10 +11,10 @@ import type { TraceRollup } from "./trace-tree";
 export interface TraceFilter {
     /** Keep only traces with at least one errored span. */
     errorOnly?: boolean;
-    /** Case-insensitive substring over the root operation (function path / name). */
-    functionPath?: string;
     /** Keep traces active at/after this epoch-ms (the trace ended no earlier). */
     from?: number;
+    /** Case-insensitive substring over the root operation (function path / name). */
+    functionPath?: string;
     /** Keep traces whose total latency is at least this many ms (slow-trace filter). */
     minDurationMs?: number;
     /** Keep traces active at/before this epoch-ms (the trace started no later) — the "older than" page cursor. */

@@ -7,9 +7,9 @@
  * ledger insert, and the per-cell checkpoint are testable against a fake store
  * (server.ts just supplies the real ctx-db + Cloudflare clients).
  */
-import type { ControlPlaneDb } from "../store";
 import type { AnalyticsUsageReader } from "../metering/analytics";
 import type { UsageAttribution, UsageRollbackPorts } from "../metering/rollback";
+import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
 import type { TeardownPorts } from "./teardown";
 
 interface TeardownRow {
@@ -32,57 +32,59 @@ interface TeardownRow {
  * but never on a routine version prune (which would delete the live version's
  * database). Reads the full deployments set once to evaluate that.
  */
-export const teardownPorts = (database: ControlPlaneDb, destroy: TeardownPorts["destroy"], now: number): TeardownPorts => ({
-    destroy,
-    listPending: async () => {
-        const { page } = await database.findMany("deployments", {});
-        const rows = page as TeardownRow[];
+export const teardownPorts = (database: ControlPlaneDatabase, destroy: TeardownPorts["destroy"], now: number): TeardownPorts => {
+    return {
+        destroy,
+        listPending: async () => {
+            const { page } = await database.findMany("deployments", {});
+            const rows = page as TeardownRow[];
 
-        // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
-        const aliveAliases = new Set<string>();
+            // Aliases that still have a live/superseded/etc (non-destroyed) deployment.
+            const aliveAliases = new Set<string>();
 
-        // `!= null`, not `!== undefined`: `deployments` is `.global()`, so these rows
-        // come from D1, which returns SQL NULL — never `undefined` — for an unset
-        // optional column. The three checks below all read optional columns, and all
-        // three invert if they test for `undefined`: the sweep silently selects
-        // nothing (leaking every dispatch script, tenant D1 and R2 bucket forever),
-        // and `deleteResources` flips to `true` for an alias-less row, which is the
-        // one case this function exists to prevent.
-        for (const row of rows) {
-            if (row.status !== "destroyed" && row.alias != null) {
-                aliveAliases.add(row.alias);
+            // `!= null`, not `!== undefined`: `deployments` is `.global()`, so these rows
+            // come from D1, which returns SQL NULL — never `undefined` — for an unset
+            // optional column. The three checks below all read optional columns, and all
+            // three invert if they test for `undefined`: the sweep silently selects
+            // nothing (leaking every dispatch script, tenant D1 and R2 bucket forever),
+            // and `deleteResources` flips to `true` for an alias-less row, which is the
+            // one case this function exists to prevent.
+            for (const row of rows) {
+                if (row.status !== "destroyed" && row.alias != null) {
+                    aliveAliases.add(row.alias);
+                }
             }
-        }
 
-        return rows
-            .filter((row) => row.status === "destroyed" && row.teardownAt == null)
-            .map((row) => {
-                const alias = row.alias ?? row.scriptName;
+            return rows
+                .filter((row) => row.status === "destroyed" && row.teardownAt == null)
+                .map((row) => {
+                    const alias = row.alias ?? row.scriptName;
 
-                return {
-                    alias,
-                    deleteResources: row.alias == null ? false : !aliveAliases.has(alias),
-                    dispatchNamespace: `lunora-${row.kind}`,
-                    id: row._id,
-                    scriptName: row.scriptName,
-                };
-            });
-    },
-    markTornDown: async (id) => {
-        await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");
-    },
-    releaseAlias: async (alias) => {
-        // Drop the ownership ledger row(s) for a fully-torn-down alias so the label
-        // is free to re-claim. Idempotent: no row (already released, or a pre-ledger
-        // deployment) is a no-op.
-        const { page } = await database.findMany("aliasOwnership", { where: { alias } });
+                    return {
+                        alias,
+                        deleteResources: row.alias == null ? false : !aliveAliases.has(alias),
+                        dispatchNamespace: `lunora-${row.kind}`,
+                        id: row._id,
+                        scriptName: row.scriptName,
+                    };
+                });
+        },
+        markTornDown: async (id) => {
+            await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");
+        },
+        releaseAlias: async (alias) => {
+            // Drop the ownership ledger row(s) for a fully-torn-down alias so the label
+            // is free to re-claim. Idempotent: no row (already released, or a pre-ledger
+            // deployment) is a no-op.
+            const { page } = await database.findMany("aliasOwnership", { where: { alias } });
 
-        for (const row of page as { _id: string }[]) {
-            // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
-            await database.delete(row._id, "aliasOwnership");
-        }
-    },
-});
+            for (const row of page as { _id: string }[]) {
+                // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
+                await database.delete(row._id, "aliasOwnership");
+            }
+        },
+    };
+};
 
 interface AttributionRow {
     _id: string;
@@ -103,7 +105,7 @@ interface CellRow {
  * checkpoint can't persist and the bootstrap window applies each run.
  */
 export const usageRollbackPorts = async (
-    database: ControlPlaneDb,
+    database: ControlPlaneDatabase,
     reader: AnalyticsUsageReader,
     options: { cellName: string; now: number; periodStart: number },
 ): Promise<UsageRollbackPorts> => {

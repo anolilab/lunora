@@ -37,7 +37,9 @@ const asString = (value: unknown): string | undefined => (typeof value === "stri
  */
 export const parseWranglerManifest = (wrangler: WranglerConfig): DeployManifest => {
     const durableObjects = (wrangler.durable_objects?.bindings ?? [])
-        .map((entry) => ({ binding: asString(entry.name), className: asString(entry.class_name) }))
+        .map((entry) => {
+            return { binding: asString(entry.name), className: asString(entry.class_name) };
+        })
         .filter((entry): entry is { binding: string; className: string } => entry.binding !== undefined && entry.className !== undefined);
 
     const d1Binding = asString(wrangler.d1_databases?.[0]?.binding);

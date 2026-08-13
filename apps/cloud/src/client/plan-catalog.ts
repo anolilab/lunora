@@ -5,7 +5,7 @@ import { LUNORA_CLOUD_PLANS } from "../billing/plans";
 export type PlanId = "enterprise" | "free" | "pro";
 
 /** Card order — cheapest first, as shown in the create flow. */
-export const PLAN_ORDER: readonly PlanId[] = ["free", "pro", "enterprise"];
+export const PLAN_ORDER: ReadonlyArray<PlanId> = ["free", "pro", "enterprise"];
 
 /** Human labels for the entitlement feature flags in {@link LUNORA_CLOUD_PLANS}. */
 const FEATURE_LABELS: Record<string, string> = {
@@ -28,9 +28,9 @@ export interface PlanCard {
     /** Add-on capabilities the plan unlocks (empty on free). */
     features: string[];
     id: PlanId;
+    name: string;
     /** Quota lines (projects / members / previews / included usage). */
     quotas: string[];
-    name: string;
     tagline: string;
 }
 
@@ -39,7 +39,7 @@ export interface PlanCard {
  * plan config (`LUNORA_CLOUD_PLANS`) and the included-usage table so the UI can
  * never drift from what the server actually grants.
  */
-export const PLAN_CATALOG: readonly PlanCard[] = PLAN_ORDER.map((id) => {
+export const PLAN_CATALOG: ReadonlyArray<PlanCard> = PLAN_ORDER.map((id) => {
     const plan = LUNORA_CLOUD_PLANS.plans[id];
     const usage = INCLUDED_USAGE[id];
     const projects = plan?.limits?.projects ?? 0;

@@ -31,12 +31,16 @@ const archivedRow: Row = {
 };
 
 /** A fetch double that answers the R2-SQL query with `rows`, matching the `{ result: { rows } }` envelope. */
-const fakeFetch = (rows: Row[]): typeof globalThis.fetch =>
-    (async () =>
-        new Response(JSON.stringify({ result: { rows } }), {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        })) as unknown as typeof globalThis.fetch;
+const fakeFetch =
+    (rows: Row[]): typeof globalThis.fetch =>
+    async () =>
+        Response.json(
+            { result: { rows } },
+            {
+                headers: { "content-type": "application/json" },
+                status: 200,
+            },
+        );
 
 /** Build a fake action ctx: member auth + an env (R2 config) + an injected fetch. */
 const makeCtx = (options: { env?: Row; fetch?: typeof globalThis.fetch }): ActionCtx =>
@@ -78,18 +82,20 @@ describe("traces.getArchived (D1-empty fallback)", () => {
 });
 
 /** A span row in a trace, as `observations.findMany` returns it. */
-const span = (traceId: string, startedAt: number): Row => ({
-    _id: `obs_${traceId}_${String(startedAt)}`,
-    durationMs: 10,
-    endedAt: startedAt + 10,
-    kind: "worker",
-    level: "info",
-    name: `${traceId}:root`,
-    organizationId: "org_1",
-    spanId: `s_${traceId}_${String(startedAt)}`,
-    startedAt,
-    traceId,
-});
+const span = (traceId: string, startedAt: number): Row => {
+    return {
+        _id: `obs_${traceId}_${String(startedAt)}`,
+        durationMs: 10,
+        endedAt: startedAt + 10,
+        kind: "worker",
+        level: "info",
+        name: `${traceId}:root`,
+        organizationId: "org_1",
+        spanId: `s_${traceId}_${String(startedAt)}`,
+        startedAt,
+        traceId,
+    };
+};
 
 describe("traces.list (time-range window threads through as from/to)", () => {
     const listCtx = (rows: Row[]): QueryCtx =>

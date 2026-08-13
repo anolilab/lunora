@@ -75,7 +75,7 @@ export const renderAlert = (rule: { name: string; target: CountTarget }, source:
 
 /**
  * A fired alert to deliver (email/webhook) then mark delivered. `TId` is the
- * alert-row id — a branded `Id<"alerts">` when fired from the lunora `ctx.db`
+ * alert-row id — a branded `Id&lt;"alerts">` when fired from the lunora `ctx.db`
  * (telemetry ingest), a plain `string` from the structural control-plane store
  * (the uptime sweep) — so both firing paths share one type without either
  * widening its id.
@@ -123,7 +123,7 @@ export interface FiringSource {
  * `ControlPlaneDb` (string ids) — so the id type flows through as `TId`.
  */
 export const fireCrossedRules = async <TId extends string>(
-    rules: readonly FiringRule[],
+    rules: ReadonlyArray<FiringRule>,
     source: FiringSource,
     insertAlert: (row: Record<string, unknown>) => Promise<TId>,
     now: number,
@@ -187,7 +187,7 @@ export interface MetricObservation {
 }
 
 /** Percentage (0–100) of error-level observations in the window; 0 for an empty window. */
-export const computeErrorRate = (observations: readonly MetricObservation[]): number => {
+export const computeErrorRate = (observations: ReadonlyArray<MetricObservation>): number => {
     if (observations.length === 0) {
         return 0;
     }
@@ -201,7 +201,7 @@ export const computeErrorRate = (observations: readonly MetricObservation[]): nu
  * The `p`th percentile (0–100) of `values` by nearest-rank on the sorted values.
  * Empty input is 0. Kept dependency-free and deterministic for the tests.
  */
-export const percentile = (values: readonly number[], p: number): number => {
+export const percentile = (values: ReadonlyArray<number>, p: number): number => {
     if (values.length === 0) {
         return 0;
     }
@@ -210,11 +210,11 @@ export const percentile = (values: readonly number[], p: number): number => {
     const rank = Math.ceil((p / 100) * sorted.length);
     const index = Math.min(Math.max(rank, 1), sorted.length) - 1;
 
-    return sorted[index] as number;
+    return sorted[index];
 };
 
 /** The p95 of `durationMs` over the window's observations. */
-export const computeLatencyP95 = (observations: readonly MetricObservation[]): number =>
+export const computeLatencyP95 = (observations: ReadonlyArray<MetricObservation>): number =>
     percentile(
         observations.map((observation) => observation.durationMs),
         95,
@@ -228,7 +228,7 @@ export const computeLatencyP95 = (observations: readonly MetricObservation[]): n
  * a proxy budget. Once the sink populates `costMinor`, the proxy naturally stops
  * being used (a non-zero cost sum wins) and can be removed.
  */
-export const computeLlmCost = (observations: readonly MetricObservation[]): number => {
+export const computeLlmCost = (observations: ReadonlyArray<MetricObservation>): number => {
     const generations = observations.filter((observation) => observation.kind === "generation");
     const cost = generations.reduce((sum, observation) => sum + (observation.costMinor ?? 0), 0);
 
@@ -240,7 +240,7 @@ export const computeLlmCost = (observations: readonly MetricObservation[]): numb
 };
 
 /** Compute a metric target's value over a window of observations. */
-export const computeMetric = (target: MetricTarget, observations: readonly MetricObservation[]): number => {
+export const computeMetric = (target: MetricTarget, observations: ReadonlyArray<MetricObservation>): number => {
     switch (target) {
         case "error_rate": {
             return computeErrorRate(observations);
@@ -393,7 +393,7 @@ export const renderMetricAlert = (
  */
 const windowsFor = (
     rule: MetricRule,
-    observations: readonly MetricObservation[],
+    observations: ReadonlyArray<MetricObservation>,
     now: number,
 ): { baseline: MetricObservation[]; current: MetricObservation[]; prior: MetricObservation[] } => {
     const windowMs = rule.windowMinutes * 60_000;
@@ -454,7 +454,7 @@ export interface MetricLevelEvaluation {
  */
 export const evaluateMetricLevel = (
     rule: Pick<MetricRule, "comparator" | "mode" | "target" | "threshold">,
-    currentWindow: readonly MetricObservation[],
+    currentWindow: ReadonlyArray<MetricObservation>,
     wasFiring: boolean,
     baselineWindow: ReadonlyArray<MetricObservation> = [],
 ): MetricLevelEvaluation => {
@@ -478,7 +478,7 @@ export const evaluateMetricLevel = (
 /**
  * Ports the metric firing loop reads + writes through, injected so the two
  * callers can share one loop over different stores: the ingest path (typed
- * `ctx.db`, branded `Id<"alerts">`) and the periodic sweep (structural
+ * `ctx.db`, branded `Id&lt;"alerts">`) and the periodic sweep (structural
  * control-plane store, string ids). `wasFiring` returns a rule's persisted
  * firing state (false when never evaluated); `writeState` persists the new
  * state + last value after a transition; `insertAlert` writes the `alerts` row.
@@ -507,8 +507,8 @@ export interface MetricRuleOutcome<TId extends string> {
  * hash) so the recent-alerts list dedupes cleanly.
  */
 export const fireMetricRules = async <TId extends string>(
-    rules: readonly MetricRule[],
-    observations: readonly MetricObservation[],
+    rules: ReadonlyArray<MetricRule>,
+    observations: ReadonlyArray<MetricObservation>,
     organizationId: string,
     ports: MetricRulePorts<TId>,
     now: number,
@@ -656,9 +656,11 @@ export interface ChannelAlert {
 }
 
 /** Slack incoming-webhook message — subject as a bold heading, body beneath. */
-export const renderSlackPayload = (alert: Pick<ChannelAlert, "body" | "subject">): { text: string } => ({
-    text: `*${alert.subject}*\n${alert.body}`,
-});
+export const renderSlackPayload = (alert: Pick<ChannelAlert, "body" | "subject">): { text: string } => {
+    return {
+        text: `*${alert.subject}*\n${alert.body}`,
+    };
+};
 
 /**
  * PagerDuty Events API v2 `trigger` event. The rule's `destination` is the
@@ -672,12 +674,14 @@ export const renderPagerDutyPayload = (
     event_action: "trigger";
     payload: { severity: "error"; source: string; summary: string };
     routing_key: string;
-} => ({
-    dedup_key: alert.subject,
-    event_action: "trigger",
-    payload: { severity: "error", source: "lunora-cloud", summary: `${alert.subject} — ${alert.body}` },
-    routing_key: alert.destination,
-});
+} => {
+    return {
+        dedup_key: alert.subject,
+        event_action: "trigger",
+        payload: { severity: "error", source: "lunora-cloud", summary: `${alert.subject} — ${alert.body}` },
+        routing_key: alert.destination,
+    };
+};
 
 /**
  * The concrete webhook request (URL + JSON body) for a webhook-family channel.

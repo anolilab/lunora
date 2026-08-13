@@ -10,6 +10,7 @@ export type DeployEvent = Record<string, unknown>;
 
 export interface DeployClientOptions {
     apiUrl: string;
+
     /**
      * The tenant's binding manifest, read from its `wrangler.jsonc` (DO classes,
      * and whether the app provisions a per-tenant D1 / R2). The server floors it

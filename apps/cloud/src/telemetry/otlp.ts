@@ -68,7 +68,7 @@ export interface TelemetryEvent {
 
 /**
  * One eval score attached to a generation span — decoded from the
- * `gen_ai.evaluation.<name>.score` (+ optional `.label`) attribute pair a
+ * `gen_ai.evaluation.&lt;name>.score` (+ optional `.label`) attribute pair a
  * parallel framework branch emits. A compact metadata record, never a payload.
  */
 export interface SpanEvaluation {
@@ -168,11 +168,11 @@ const MAX_GENERATION_TEXT = 4096;
 const truncateText = (text: string | undefined): string | undefined =>
     text === undefined ? undefined : text.length > MAX_GENERATION_TEXT ? `${text.slice(0, MAX_GENERATION_TEXT)}…` : text;
 
-/** Attribute-key prefix for a per-evaluation generation-span score (`gen_ai.evaluation.<name>.score|label`). */
+/** Attribute-key prefix for a per-evaluation generation-span score (`gen_ai.evaluation.&lt;name>.score|label`). */
 const EVALUATION_PREFIX = "gen_ai.evaluation.";
 
 /**
- * Collect `gen_ai.evaluation.<name>.score` (+ optional `.label`) attribute pairs
+ * Collect `gen_ai.evaluation.&lt;name>.score` (+ optional `.label`) attribute pairs
  * into a compact {@link SpanEvaluation}[]. Defensive by design — the framework
  * branch that emits these hasn't landed, so today every span returns `undefined`
  * here (no matching attributes → no array). An eval is kept only when it carries
@@ -196,7 +196,7 @@ const decodeEvaluations = (attributes: OtlpKeyValue[] | undefined): SpanEvaluati
 
         if (rest.endsWith(".score")) {
             const name = rest.slice(0, -".score".length);
-            const value = attribute.value;
+            const { value } = attribute;
             const score = value?.doubleValue ?? (value?.intValue === undefined ? undefined : Number(value.intValue));
 
             if (name !== "" && typeof score === "number" && Number.isFinite(score)) {
@@ -602,7 +602,7 @@ export const decodeMetricPoints = (payload: OtlpMetricsPayload): MetricPoint[] =
 
         for (const scopeMetrics of resourceMetrics.scopeMetrics ?? []) {
             for (const metric of scopeMetrics.metrics ?? []) {
-                const name = metric.name;
+                const { name } = metric;
 
                 if (name === undefined || name === "") {
                     continue;

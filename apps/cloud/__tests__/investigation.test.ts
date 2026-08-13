@@ -13,32 +13,38 @@ import {
 } from "../src/telemetry/investigation";
 
 /** One error span with sensible defaults. */
-const span = (overrides: Partial<EvidenceSpanRow> = {}): EvidenceSpanRow => ({
-    functionPath: "container:api",
-    level: "error",
-    name: "handleRequest",
-    startedAt: 1000,
-    statusMessage: "boom",
-    traceId: "t1",
-    ...overrides,
-});
+const span = (overrides: Partial<EvidenceSpanRow> = {}): EvidenceSpanRow => {
+    return {
+        functionPath: "container:api",
+        level: "error",
+        name: "handleRequest",
+        startedAt: 1000,
+        statusMessage: "boom",
+        traceId: "t1",
+        ...overrides,
+    };
+};
 
 /** One log line with sensible defaults. */
-const log = (overrides: Partial<EvidenceLogRow> = {}): EvidenceLogRow => ({
-    createdAt: 1000,
-    level: "error",
-    message: "kaboom",
-    traceId: "t1",
-    ...overrides,
-});
+const log = (overrides: Partial<EvidenceLogRow> = {}): EvidenceLogRow => {
+    return {
+        createdAt: 1000,
+        level: "error",
+        message: "kaboom",
+        traceId: "t1",
+        ...overrides,
+    };
+};
 
-const incident = (overrides: Partial<InvestigationIncident> = {}): InvestigationIncident => ({
-    container: "api",
-    count: 5,
-    kind: "crash_loop",
-    title: "api keeps crashing",
-    ...overrides,
-});
+const incident = (overrides: Partial<InvestigationIncident> = {}): InvestigationIncident => {
+    return {
+        container: "api",
+        count: 5,
+        kind: "crash_loop",
+        title: "api keeps crashing",
+        ...overrides,
+    };
+};
 
 describe(buildEvidenceBundle, () => {
     it("correlates the incident's container error spans and their trace logs", () => {

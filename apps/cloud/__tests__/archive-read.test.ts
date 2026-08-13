@@ -39,13 +39,13 @@ describe(archiveRowToObservation, () => {
     });
 });
 
-describe("TelemetryStore.readArchivedTrace", () => {
+describe("telemetryStore.readArchivedTrace", () => {
     it("no-ops to [] without R2-SQL config", async () => {
         await expect(createCloudflareTelemetryStore({}).readArchivedTrace({ organizationId: "org_1", traceId: "t1" })).resolves.toStrictEqual([]);
     });
 });
 
-describe("TelemetryStore.readArchivedSpansInWindow", () => {
+describe("telemetryStore.readArchivedSpansInWindow", () => {
     it("no-ops to [] without R2-SQL config", async () => {
         await expect(
             createCloudflareTelemetryStore({}).readArchivedSpansInWindow({ from: 0, limit: 50, organizationId: "org_1", to: 100 }),

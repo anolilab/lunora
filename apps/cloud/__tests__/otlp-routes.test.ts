@@ -9,30 +9,36 @@ import { createDeployRouter } from "../src/deploy/router";
  * ingest mutations are no-ops (we assert the HTTP contract, not persistence).
  */
 const context = {
-    runAction: async (): Promise<unknown> => ({}),
-    runMutation: async (): Promise<unknown> => ({ alerts: [], incidents: 0, issues: 0 }),
+    runAction: async (): Promise<unknown> => {
+        return {};
+    },
+    runMutation: async (): Promise<unknown> => {
+        return { alerts: [], incidents: 0, issues: 0 };
+    },
     runQuery: async (_reference: unknown, args: { deployKey?: string }): Promise<unknown> => (args.deployKey === "valid" ? { organizationId: "org_1" } : null),
 };
 
 const environment = { __lunoraCtx: context } as unknown;
 
 const post = (path: string, body: BodyInit, headers: Record<string, string> = {}): Promise<Response> =>
-    createDeployRouter().fetch(new Request(`https://cloud.test${path}`, { body, headers, method: "POST" }), environment) as Promise<Response>;
+    createDeployRouter().fetch(new Request(`https://cloud.test${path}`, { body, headers, method: "POST" }), environment);
 
 const jsonPost = (path: string, body: unknown, headers: Record<string, string> = {}): Promise<Response> =>
     post(path, JSON.stringify(body), { "content-type": "application/json", ...headers });
 
 /** One OK worker span with valid ids + timing. */
-const okSpan = (index: number): Record<string, unknown> => ({
-    endTimeUnixNano: "1700000000100000000",
-    name: "messages:send",
-    spanId: `span${String(index)}`,
-    startTimeUnixNano: "1700000000000000000",
-    status: { code: 1 },
-    traceId: `trace${String(index)}`,
-});
+const okSpan = (index: number): Record<string, unknown> => {
+    return {
+        endTimeUnixNano: "1700000000100000000",
+        name: "messages:send",
+        spanId: `span${String(index)}`,
+        startTimeUnixNano: "1700000000000000000",
+        status: { code: 1 },
+        traceId: `trace${String(index)}`,
+    };
+};
 
-describe("OTLP ingest routes", () => {
+describe("oTLP ingest routes", () => {
     it("401s a request with no bearer token", async () => {
         expect((await jsonPost("/v1/traces", { resourceSpans: [] })).status).toBe(401);
     });
@@ -45,7 +51,7 @@ describe("OTLP ingest routes", () => {
         const response = await jsonPost("/v1/traces", { resourceSpans: [] }, { authorization: "Bearer valid" });
 
         expect(response.status).toBe(200);
-        expect(await response.json()).toStrictEqual({});
+        await expect(response.json()).resolves.toStrictEqual({});
     });
 
     it("reports partialSuccess when the span batch exceeds the cap", async () => {

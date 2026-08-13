@@ -27,9 +27,9 @@ export interface PutScriptInput {
     namespace: string;
     newSqliteClasses?: string[];
     scriptName: string;
+    tags: string[];
     /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
     tailConsumers?: string[];
-    tags: string[];
     /** Plain env vars to attach as `plain_text` bindings (non-secret config). */
     vars?: Record<string, string>;
 }
@@ -45,6 +45,7 @@ export interface CloudflareApi {
     deleteD1Database: (uuid: string) => Promise<void>;
     /** Remove a dispatch-namespace script (preview teardown / project deletion). */
     deleteDispatchScript: (input: { namespace: string; scriptName: string }) => Promise<void>;
+
     /**
      * Delete an R2 bucket by name (teardown). 404-tolerant. Throws if the bucket
      * is non-empty — R2's REST delete requires an empty bucket, and object purge
@@ -165,9 +166,11 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
                 return;
             }
 
-            const data = (await response.json().catch(() => ({}))) as CloudflareEnvelope;
+            const data = (await response.json().catch(() => {
+                return {};
+            })) as CloudflareEnvelope;
 
-            if ((data.errors ?? []).some((error) => error.code === 10004)) {
+            if ((data.errors ?? []).some((error) => error.code === 10_004)) {
                 return;
             }
 
@@ -212,10 +215,12 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             // Workers-for-Platforms multipart upload: a `metadata` part (bindings,
             // main_module, migrations, tags) + the bundle module part.
             // Plain env vars ride the bindings array as `plain_text` entries.
-            const varBindings: ScriptBinding[] = Object.entries(input.vars ?? {}).map(([name, text]) => ({ name, text, type: "plain_text" }));
+            const variableBindings: ScriptBinding[] = Object.entries(input.vars ?? {}).map(([name, text]) => {
+                return { name, text, type: "plain_text" };
+            });
 
             const metadata = {
-                bindings: [...input.bindings, ...varBindings],
+                bindings: [...input.bindings, ...variableBindings],
                 compatibility_date: "2026-06-10",
                 compatibility_flags: ["nodejs_compat"],
                 main_module: input.mainModule,
@@ -224,7 +229,13 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
                     : {}),
                 // The dispatch-namespace tail worker (log ingest, GAPS.md B2) —
                 // wired here at deploy time, per the tail worker's own contract.
-                ...(input.tailConsumers && input.tailConsumers.length > 0 ? { tail_consumers: input.tailConsumers.map((service) => ({ service })) } : {}),
+                ...(input.tailConsumers && input.tailConsumers.length > 0
+                    ? {
+                          tail_consumers: input.tailConsumers.map((service) => {
+                              return { service };
+                          }),
+                      }
+                    : {}),
                 tags: input.tags,
             };
 

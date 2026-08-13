@@ -37,7 +37,7 @@ export interface InvestigationResult {
     /** One-line, human-readable note on what evidence backed the result. */
     readonly evidenceNote: string;
     /** Distinct trace ids the incident's error spans belong to (bounded). */
-    readonly relatedTraceIds: readonly string[];
+    readonly relatedTraceIds: ReadonlyArray<string>;
     /** The single most likely root cause, in one terse sentence. */
     readonly rootCauseHypothesis: string;
     /** A concrete, highest-impact next step to remediate. */
@@ -93,10 +93,10 @@ export interface EvidenceLog {
 export interface EvidenceTimeline {
     readonly errorLogCount: number;
     readonly errorSpanCount: number;
-    /** Latest evidence timestamp seen, or `undefined` when there was none. */
-    readonly lastSeen?: number;
     /** Earliest evidence timestamp seen, or `undefined` when there was none. */
     readonly firstSeen?: number;
+    /** Latest evidence timestamp seen, or `undefined` when there was none. */
+    readonly lastSeen?: number;
     readonly traceCount: number;
     /** `lastSeen − firstSeen`, or `0` when fewer than two data points. */
     readonly windowMs: number;
@@ -105,9 +105,9 @@ export interface EvidenceTimeline {
 /** The read-only evidence bundle handed to a runner's `investigate`. */
 export interface EvidenceBundle {
     readonly incident: InvestigationIncident;
-    readonly logs: readonly EvidenceLog[];
-    readonly relatedTraceIds: readonly string[];
-    readonly spans: readonly EvidenceSpan[];
+    readonly logs: ReadonlyArray<EvidenceLog>;
+    readonly relatedTraceIds: ReadonlyArray<string>;
+    readonly spans: ReadonlyArray<EvidenceSpan>;
     readonly timeline: EvidenceTimeline;
 }
 
@@ -117,7 +117,7 @@ export interface EvidenceBundle {
  * can await a model, but the deterministic runner resolves immediately.
  */
 export interface IncidentInvestigationRunner {
-    investigate(bundle: EvidenceBundle): Promise<InvestigationResult>;
+    investigate: (bundle: EvidenceBundle) => Promise<InvestigationResult>;
 }
 
 /** Max error spans carried into the bundle (and thus the prompt). */
@@ -138,7 +138,7 @@ const containerCulprit = (container: string): string => `container:${container}`
 /**
  * Does this error span belong to the incident's container? When the incident has
  * no container (e.g. a bare error spike) every error span is fair game; otherwise
- * we match the ingest's `container:<name>` attribution on `functionPath`.
+ * we match the ingest's `container:&lt;name>` attribution on `functionPath`.
  */
 const spanMatchesIncident = (span: EvidenceSpanRow, incident: InvestigationIncident): boolean => {
     if (span.level !== "error") {
@@ -166,8 +166,8 @@ const spanMatchesIncident = (span: EvidenceSpanRow, incident: InvestigationIncid
  */
 export const buildEvidenceBundle = (input: {
     incident: InvestigationIncident;
-    logs: readonly EvidenceLogRow[];
-    spans: readonly EvidenceSpanRow[];
+    logs: ReadonlyArray<EvidenceLogRow>;
+    spans: ReadonlyArray<EvidenceSpanRow>;
 }): EvidenceBundle => {
     const { incident, logs, spans } = input;
 
@@ -176,12 +176,14 @@ export const buildEvidenceBundle = (input: {
         .toSorted((a, b) => b.startedAt - a.startedAt)
         .slice(0, MAX_EVIDENCE_SPANS);
 
-    const evidenceSpans: EvidenceSpan[] = matchedSpans.map((span) => ({
-        culprit: span.functionPath ?? span.name,
-        message: span.statusMessage ?? span.name,
-        startedAt: span.startedAt,
-        traceId: span.traceId,
-    }));
+    const evidenceSpans: EvidenceSpan[] = matchedSpans.map((span) => {
+        return {
+            culprit: span.functionPath ?? span.name,
+            message: span.statusMessage ?? span.name,
+            startedAt: span.startedAt,
+            traceId: span.traceId,
+        };
+    });
 
     // Distinct trace ids, insertion-ordered (newest-first, from the sorted spans),
     // capped. `relatedTraceIds` both scopes the log correlation and drives the UI's
@@ -205,12 +207,14 @@ export const buildEvidenceBundle = (input: {
         .toSorted((a, b) => b.createdAt - a.createdAt)
         .slice(0, MAX_EVIDENCE_LOGS);
 
-    const evidenceLogs: EvidenceLog[] = correlatedLogs.map((log) => ({
-        createdAt: log.createdAt,
-        level: log.level,
-        message: log.message,
-        traceId: log.traceId,
-    }));
+    const evidenceLogs: EvidenceLog[] = correlatedLogs.map((log) => {
+        return {
+            createdAt: log.createdAt,
+            level: log.level,
+            message: log.message,
+            traceId: log.traceId,
+        };
+    });
 
     const timestamps = [...evidenceSpans.map((span) => span.startedAt), ...evidenceLogs.map((log) => log.createdAt)];
     const firstSeen = timestamps.length > 0 ? Math.min(...timestamps) : undefined;
@@ -278,12 +282,14 @@ const evidenceNote = (bundle: EvidenceBundle): string => {
  * fallback when AI is unconfigured. Fully derived from the bundle, so its output
  * is stable and its structure is immune to anything in the (untrusted) telemetry.
  */
-export const createDeterministicRunner = (): IncidentInvestigationRunner => ({
-    // eslint-disable-next-line @typescript-eslint/require-await -- interface is async for LLM runners; this one resolves immediately.
-    async investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
-        return deterministicResult(bundle);
-    },
-});
+export const createDeterministicRunner = (): IncidentInvestigationRunner => {
+    return {
+        // eslint-disable-next-line @typescript-eslint/require-await -- interface is async for LLM runners; this one resolves immediately.
+        async investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
+            return deterministicResult(bundle);
+        },
+    };
+};
 
 /** Build the deterministic result from a bundle (shared by both runners). */
 export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult => {
@@ -294,9 +300,9 @@ export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult
     const topCulprit = bundle.spans[0]?.culprit;
     const topMessage = bundle.spans[0]?.message;
 
-    const summary =
-        `${clampField(incident.title)} — a ${kindLabel}${where} seen ${String(incident.count)} time(s). ` +
-        (topMessage === undefined ? "No representative error message was captured." : `Representative error: ${clampField(topMessage)}.`);
+    const summary = `${clampField(incident.title)} — a ${kindLabel}${where} seen ${String(incident.count)} time(s). ${
+        topMessage === undefined ? "No representative error message was captured." : `Representative error: ${clampField(topMessage)}.`
+    }`;
 
     const rootCauseHypothesis =
         topCulprit === undefined
@@ -423,23 +429,25 @@ const tryParseJsonObject = (raw: string): null | Record<string, unknown> => {
  * and re-validate the completion into a structured result. **Fail-closed**: if
  * generation throws or returns empty, it degrades to the deterministic result
  * rather than surfacing the error — an investigation should always return
- * *something* actionable.
+ * something* actionable.
  */
-export const createLlmRunner = (generate: GeneratePort): IncidentInvestigationRunner => ({
-    async investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
-        try {
-            const text = await generate(buildInvestigationPrompt(bundle));
+export const createLlmRunner = (generate: GeneratePort): IncidentInvestigationRunner => {
+    return {
+        async investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
+            try {
+                const text = await generate(buildInvestigationPrompt(bundle));
 
-            if (text.trim().length === 0) {
+                if (text.trim().length === 0) {
+                    return deterministicResult(bundle);
+                }
+
+                return parseLlmResult(text, bundle);
+            } catch {
                 return deterministicResult(bundle);
             }
-
-            return parseLlmResult(text, bundle);
-        } catch {
-            return deterministicResult(bundle);
-        }
-    },
-});
+        },
+    };
+};
 
 /** Which runner to use. `auto` = LLM when a `generate` port is available. */
 export type RunnerMode = "auto" | "llm" | "none";

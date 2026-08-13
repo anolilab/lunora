@@ -543,7 +543,7 @@ describe(spanArchiveRecord, () => {
     });
 });
 
-describe("TelemetryStore.archiveSpans", () => {
+describe("telemetryStore.archiveSpans", () => {
     it("no-ops without a pipeline binding", async () => {
         await expect(
             createCloudflareTelemetryStore({}).archiveSpans(

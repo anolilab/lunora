@@ -25,7 +25,7 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 
     const { page } = await context.db.members.findMany({ where: { organizationId } });
 
-    return page as unknown as MemberRow[];
+    return page;
 });
 
 /** Add a member to an organization (owners/admins only). Idempotent per user. */

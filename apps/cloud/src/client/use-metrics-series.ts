@@ -47,9 +47,9 @@ export const useMetricsSeries = (organizationId: OrgId, from: number, to: number
                     setError(undefined);
                 }
             })
-            .catch((caught: unknown) => {
+            .catch((error_: unknown) => {
                 if (!cancelled) {
-                    setError(caught instanceof Error ? caught.message : "failed to load metrics");
+                    setError(error_ instanceof Error ? error_.message : "failed to load metrics");
                     setSeries([]);
                 }
             });
