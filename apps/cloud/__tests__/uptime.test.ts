@@ -20,12 +20,16 @@ const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb>
 const stepClock = (): (() => number) => {
     let t = 0;
 
-    return () => (t += 5);
+    return () => {
+        t += 5;
+
+        return t;
+    };
 };
 
 describe(probeDeployment, () => {
     it("is up on a sub-500 status and records the code + latency", async () => {
-        const fetch = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof globalThis.fetch;
+        const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
 
         const probe = await probeDeployment({ clock: stepClock(), fetch, url: "https://a.example" });
 
@@ -33,7 +37,7 @@ describe(probeDeployment, () => {
     });
 
     it("is down on a 5xx status", async () => {
-        const fetch = vi.fn(async () => new Response(null, { status: 503 })) as unknown as typeof globalThis.fetch;
+        const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 503 }));
 
         const probe = await probeDeployment({ clock: stepClock(), fetch, url: "https://a.example" });
 
@@ -41,9 +45,9 @@ describe(probeDeployment, () => {
     });
 
     it("is down (never throws) when the fetch rejects, carrying the message", async () => {
-        const fetch = vi.fn(async () => {
+        const fetch = vi.fn<typeof globalThis.fetch>(async () => {
             throw new Error("connection refused");
-        }) as unknown as typeof globalThis.fetch;
+        });
 
         const probe = await probeDeployment({ clock: stepClock(), fetch, url: "https://a.example" });
 
@@ -77,8 +81,8 @@ describe(summarizeUptime, () => {
 
 /** A one-deployment, one-uptime-rule org, with injected probe results. */
 const sweepFixture = (probe: UptimeProbe, overrides: { rules?: unknown[]; state?: unknown[] } = {}) => {
-    const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
-    const patch = vi.fn(() => Promise.resolve(undefined));
+    const insert = vi.fn<ControlPlaneDb["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+    const patch = vi.fn<ControlPlaneDb["patch"]>(() => Promise.resolve(undefined));
     const database = fakeDb(
         {
             alertRules: overrides.rules ?? [
@@ -151,8 +155,8 @@ describe(runUptimeSweep, () => {
     });
 
     it("skips an SSRF-unsafe deployment URL — never probes or records it", async () => {
-        const probe = vi.fn(() => Promise.resolve({ latencyMs: 1, ok: false }));
-        const insert = vi.fn((table: string) => Promise.resolve(`${table}_id`));
+        const probe = vi.fn<(url: string) => Promise<UptimeProbe>>(() => Promise.resolve({ latencyMs: 1, ok: false }));
+        const insert = vi.fn<ControlPlaneDb["insert"]>((table: string) => Promise.resolve(`${table}_id`));
         const database = fakeDb(
             {
                 alertRules: [
@@ -168,6 +172,7 @@ describe(runUptimeSweep, () => {
                     },
                 ],
                 // A private/loopback host a low-privilege member could set — must not be probed.
+                // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the cleartext link-local URL IS the fixture: this asserts the SSRF guard refuses to probe it
                 deployments: [{ _id: "dep1", organizationId: "org1", status: "live", url: "http://169.254.169.254/latest/meta-data" }],
                 uptimeState: [],
             },

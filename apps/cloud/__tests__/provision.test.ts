@@ -22,23 +22,23 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
 
     return {
         api: {
-            createCustomHostname: vi.fn(async () => {
+            createCustomHostname: vi.fn<CloudflareApi["createCustomHostname"]>(async () => {
                 return { id: "ch-1" };
             }),
-            createD1Database: vi.fn(async () => {
+            createD1Database: vi.fn<CloudflareApi["createD1Database"]>(async () => {
                 return { uuid: "d1-uuid-123" };
             }),
-            createR2Bucket: vi.fn(async () => undefined),
-            deleteD1Database: vi.fn(async () => undefined),
-            deleteDispatchScript: vi.fn(async ({ scriptName }) => {
+            createR2Bucket: vi.fn<CloudflareApi["createR2Bucket"]>(async () => undefined),
+            deleteD1Database: vi.fn<CloudflareApi["deleteD1Database"]>(async () => undefined),
+            deleteDispatchScript: vi.fn<CloudflareApi["deleteDispatchScript"]>(async ({ scriptName }) => {
                 deletes.push(scriptName);
             }),
-            deleteR2Bucket: vi.fn(async () => undefined),
-            findD1DatabaseByName: vi.fn(async () => null),
-            putDispatchScript: vi.fn(async (input) => {
+            deleteR2Bucket: vi.fn<CloudflareApi["deleteR2Bucket"]>(async () => undefined),
+            findD1DatabaseByName: vi.fn<CloudflareApi["findD1DatabaseByName"]>(async () => null),
+            putDispatchScript: vi.fn<CloudflareApi["putDispatchScript"]>(async (input) => {
                 puts.push(input);
             }),
-            putSecret: vi.fn(async ({ name }) => {
+            putSecret: vi.fn<CloudflareApi["putSecret"]>(async ({ name }) => {
                 secrets.push(name);
             }),
         },
