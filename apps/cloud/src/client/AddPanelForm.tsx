@@ -6,7 +6,7 @@ import { createPanel, isMetricPanel, PANEL_KIND_LABELS, PANEL_KINDS, STAT_AGGREG
 
 interface AddPanelFormProps {
     /** Metric names to offer as suggestions for metric/stat panels. */
-    metricNames: readonly string[];
+    metricNames: ReadonlyArray<string>;
     /** Append the built panel to the board. */
     onAdd: (panel: DashboardPanel) => void;
 }
@@ -30,7 +30,6 @@ export const AddPanelForm = ({ metricNames, onAdd }: AddPanelFormProps): ReactEl
 
     return (
         <form
-            className="inline-form"
             action={() => {
                 setError(null);
 
@@ -52,6 +51,7 @@ export const AddPanelForm = ({ metricNames, onAdd }: AddPanelFormProps): ReactEl
                 setMetricName("");
                 setFilter("");
             }}
+            className="inline-form"
         >
             <input
                 aria-label="Panel title"

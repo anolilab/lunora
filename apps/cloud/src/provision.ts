@@ -44,10 +44,10 @@ export interface TenantDeploymentSpec {
     scriptName: string;
     /** Per-deployment secrets, applied via the WfP script-secrets API. */
     secrets: Record<string, string>;
-    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
-    tailConsumers?: string[];
     /** Lifecycle tags: `org:…`, `project:…`, `env:…`, `plan:…` (§2.1). */
     tags: string[];
+    /** Service names to set as `tail_consumers` (e.g. the log-tail worker). */
+    tailConsumers?: string[];
     /** Plain (non-secret) env vars, e.g. `LUNORA_OTLP_ENDPOINT`. */
     vars?: Record<string, string>;
 }

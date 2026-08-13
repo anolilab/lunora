@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 import type { AnalyticsUsageReader } from "../src/metering/analytics";
 import type { ControlPlaneDb } from "../src/store";
-import { teardownPorts, usageRollbackPorts } from "../src/deploy/sweeps";
 
 /** A fake ControlPlaneDb whose findMany answers per-table from the given pages. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
-    delete: () => Promise.resolve(undefined),
-    findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-    insert: () => Promise.resolve("id"),
-    patch: () => Promise.resolve(undefined),
-    ...spies,
-});
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+    return {
+        delete: () => Promise.resolve(undefined),
+        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
+        insert: () => Promise.resolve("id"),
+        patch: () => Promise.resolve(undefined),
+        ...spies,
+    };
+};
 
 describe(teardownPorts, () => {
     it("lists only destroyed-and-not-torn-down rows, mapped to lunora-{kind} targets", async () => {
@@ -71,7 +73,9 @@ describe(teardownPorts, () => {
     });
 });
 
-const reader = (rows: { requests: number; scriptName: string }[]): AnalyticsUsageReader => ({ readRequestUsage: () => Promise.resolve(rows) });
+const reader = (rows: { requests: number; scriptName: string }[]): AnalyticsUsageReader => {
+    return { readRequestUsage: () => Promise.resolve(rows) };
+};
 
 describe(usageRollbackPorts, () => {
     it("resolves a script to its owning org/deployment from the deployments table", async () => {
@@ -120,6 +124,7 @@ describe(usageRollbackPorts, () => {
 
         const ports = await usageRollbackPorts(database, reader([]), { cellName: "ghost", now: 1000, periodStart: 0 });
         await ports.setCheckpoint(4242);
+
         await expect(ports.getCheckpoint()).resolves.toBeUndefined();
 
         expect(patch).not.toHaveBeenCalled();

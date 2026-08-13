@@ -1,7 +1,6 @@
 import type { ReactElement } from "react";
 
 import type { ObservationSpan, WaterfallSpan } from "../telemetry/trace-tree";
-
 import { formatMs } from "./format";
 
 interface TraceWaterfallProps {
@@ -21,7 +20,9 @@ export const TraceWaterfall = ({ onSelect, rows, selectedSpanId }: TraceWaterfal
                 aria-selected={row.spanId === selectedSpanId}
                 className={`trace-wrow trace-wrow-click${row.level === "error" ? " trace-wrow-err" : ""}${row.spanId === selectedSpanId ? " active" : ""}`}
                 key={row.spanId}
-                onClick={() => onSelect(row.spanId)}
+                onClick={() => {
+                    onSelect(row.spanId);
+                }}
                 onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();

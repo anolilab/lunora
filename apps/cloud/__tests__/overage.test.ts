@@ -123,21 +123,25 @@ describe(reconcileOverage, () => {
 });
 
 describe(reconcileAllOverages, () => {
-    const org = (id: string, requests: number, alreadyDebitedCredits = 0): OverageOrgInput => ({
-        alreadyDebitedCredits,
-        organizationId: id,
-        periodStart: 500,
-        plan: "pro",
-        usage: { cpuMs: 0, requests },
-    });
+    const org = (id: string, requests: number, alreadyDebitedCredits = 0): OverageOrgInput => {
+        return {
+            alreadyDebitedCredits,
+            organizationId: id,
+            periodStart: 500,
+            plan: "pro",
+            usage: { cpuMs: 0, requests },
+        };
+    };
 
-    const ports = (balance: null | number, over: Partial<OverageFleetPorts> = {}): OverageFleetPorts => ({
-        advanceWatermark: () => Promise.resolve(),
-        ledger: { balance: () => Promise.resolve(balance), debit: () => Promise.resolve() },
-        onExhausted: () => Promise.resolve(),
-        onRecovered: () => Promise.resolve(),
-        ...over,
-    });
+    const ports = (balance: null | number, over: Partial<OverageFleetPorts> = {}): OverageFleetPorts => {
+        return {
+            advanceWatermark: () => Promise.resolve(),
+            ledger: { balance: () => Promise.resolve(balance), debit: () => Promise.resolve() },
+            onExhausted: () => Promise.resolve(),
+            onRecovered: () => Promise.resolve(),
+            ...over,
+        };
+    };
 
     it("fires onRecovered after a successful debit (self-heal: covered org un-suspended)", async () => {
         const onRecovered = vi.fn(() => Promise.resolve());

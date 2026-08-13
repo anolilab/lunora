@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ControlPlaneDb } from "../src/store";
-import { nextConsecutiveFailures, probeDeployment, summarizeUptime } from "../src/uptime/probe";
 import type { UptimeProbe } from "../src/uptime/probe";
+import { nextConsecutiveFailures, probeDeployment, summarizeUptime } from "../src/uptime/probe";
 import { runUptimeSweep } from "../src/uptime/sweep";
 
 /** A fake ControlPlaneDb answering findMany per-table, mirroring sweeps.test.ts. */
-const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => ({
-    delete: () => Promise.resolve(undefined),
-    findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
-    insert: () => Promise.resolve("alert_id"),
-    patch: () => Promise.resolve(undefined),
-    ...spies,
-});
+const fakeDb = (pages: Record<string, unknown[]>, spies: Partial<ControlPlaneDb> = {}): ControlPlaneDb => {
+    return {
+        delete: () => Promise.resolve(undefined),
+        findMany: (table) => Promise.resolve({ page: pages[table] ?? [] }),
+        insert: () => Promise.resolve("alert_id"),
+        patch: () => Promise.resolve(undefined),
+        ...spies,
+    };
+};
 
 /** A clock that advances 5ms per read, so probe latency is a deterministic 5. */
 const stepClock = (): (() => number) => {

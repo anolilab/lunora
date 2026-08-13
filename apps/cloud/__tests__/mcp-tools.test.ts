@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createDeployRouter } from "../src/deploy/router";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
+import { createDeployRouter } from "../src/deploy/router";
 import { createMcpRouteHandler } from "../src/mcp/handler";
 
 const noop = (): Promise<Response> => Promise.resolve(new Response());
 
-const route = (path: string, spec: RegisteredRoute<typeof noop>["spec"], method: "GET" | "POST" = "POST"): RegisteredRoute<typeof noop> => ({
-    handler: noop,
-    method,
-    path,
-    spec,
-});
+const route = (path: string, spec: RegisteredRoute<typeof noop>["spec"], method: "GET" | "POST" = "POST"): RegisteredRoute<typeof noop> => {
+    return {
+        handler: noop,
+        method,
+        path,
+        spec,
+    };
+};
 
 const jsonError = (status: number, message: string): Response => Response.json({ error: message }, { status });
 
@@ -21,7 +23,7 @@ describe(createMcpRouteHandler, () => {
     const rpc = (method: string, params?: unknown): Request =>
         new Request("https://cloud/v1/mcp", {
             body: JSON.stringify({ id: 1, jsonrpc: "2.0", method, params }),
-            headers: { authorization: "Bearer dk_agent", "cf-connecting-ip": "203.0.113.7", "content-type": "application/json" },
+            headers: { authorization: "Bearer dk_agent", "cf-connecting-ip": "203.0.113.7", "content-type": "application/json" }, // gitleaks:allow -- fabricated fixture token, not a credential
             method: "POST",
         });
 
@@ -73,12 +75,10 @@ describe(createMcpRouteHandler, () => {
         const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
         const payload = (await (
             await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {})
-        ).json()) as {
-            result: { isError: boolean };
-        };
+        ).json()) as { result: { isError: boolean } };
 
         expect(seen).toStrictEqual({
-            authorization: "Bearer dk_agent",
+            authorization: "Bearer dk_agent", // gitleaks:allow -- the same fabricated fixture, asserted as forwarded verbatim
             body: { deploymentId: "dep_1", organizationId: "org_1" },
             ip: "203.0.113.7",
             path: "/v1/deployments/rollback",

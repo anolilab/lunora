@@ -20,11 +20,11 @@ export interface StoredMetricPoint {
 }
 
 interface Accumulator {
+    /** bucket-start (epoch ms) → running sum + count, averaged on emit. */
+    buckets: Map<number, { count: number; sum: number }>;
     functionPath?: string;
     kind: string;
     name: string;
-    /** bucket-start (epoch ms) → running sum + count, averaged on emit. */
-    buckets: Map<number, { count: number; sum: number }>;
 }
 
 /**
@@ -71,7 +71,9 @@ export const foldMetricSeries = (points: ReadonlyArray<StoredMetricPoint>, optio
 
     for (const accumulator of byKey.values()) {
         const ordered = [...accumulator.buckets.entries()].sort((a, b) => a[0] - b[0]);
-        const seriesPoints = ordered.map(([t, cell]) => ({ t, value: cell.sum / cell.count }));
+        const seriesPoints = ordered.map(([t, cell]) => {
+            return { t, value: cell.sum / cell.count };
+        });
 
         if (seriesPoints.length === 0) {
             continue;

@@ -141,7 +141,6 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
                         </DialogHeader>
 
                         <FieldForm
-                            className="max-w-none"
                             action={() => {
                                 setError(null);
 
@@ -175,6 +174,7 @@ export const ImportProjectDialog = ({ onImported, onOpenChange, open, organizati
                                     }
                                 })();
                             }}
+                            className="max-w-none"
                         >
                             <Field htmlFor="import-repo" label="Repository URL">
                                 <Input

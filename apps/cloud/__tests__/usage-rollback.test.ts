@@ -5,17 +5,21 @@ import { BOOTSTRAP_WINDOW_MS, runUsageRollback } from "../src/metering/rollback"
 
 const NOW = 1_700_000_000_000;
 
-const attribution = (org: string, deployment: string): UsageAttribution => ({ deploymentId: deployment, organizationId: org });
+const attribution = (org: string, deployment: string): UsageAttribution => {
+    return { deploymentId: deployment, organizationId: org };
+};
 
-const ports = (overrides: Partial<UsageRollbackPorts>): UsageRollbackPorts => ({
-    getCheckpoint: () => Promise.resolve(undefined),
-    now: NOW,
-    read: () => Promise.resolve([]),
-    record: () => Promise.resolve(),
-    resolveScript: () => undefined,
-    setCheckpoint: () => Promise.resolve(),
-    ...overrides,
-});
+const ports = (overrides: Partial<UsageRollbackPorts>): UsageRollbackPorts => {
+    return {
+        getCheckpoint: () => Promise.resolve(undefined),
+        now: NOW,
+        read: () => Promise.resolve([]),
+        record: () => Promise.resolve(),
+        resolveScript: () => undefined,
+        setCheckpoint: () => Promise.resolve(),
+        ...overrides,
+    };
+};
 
 describe(runUsageRollback, () => {
     it("reads from the bootstrap window on first run and advances the checkpoint", async () => {

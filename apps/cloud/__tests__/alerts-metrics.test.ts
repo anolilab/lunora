@@ -19,16 +19,18 @@ import {
 } from "../src/telemetry/alerts";
 
 /** Build a metric observation with sensible defaults; override what a case needs. */
-const observation = (over: Partial<MetricObservation> = {}): MetricObservation => ({
-    durationMs: 10,
-    kind: "worker",
-    level: "info",
-    startedAt: 1_000,
-    ...over,
-});
+const observation = (over: Partial<MetricObservation> = {}): MetricObservation => {
+    return {
+        durationMs: 10,
+        kind: "worker",
+        level: "info",
+        startedAt: 1000,
+        ...over,
+    };
+};
 
 /** N observations, `errors` of which are error-level. */
-const mixed = (total: number, errors: number, startedAt = 1_000): MetricObservation[] =>
+const mixed = (total: number, errors: number, startedAt = 1000): MetricObservation[] =>
     Array.from({ length: total }, (_, index) => observation({ level: index < errors ? "error" : "info", startedAt }));
 
 describe(computeErrorRate, () => {
@@ -342,7 +344,9 @@ describe(fireMetricRules, () => {
         const scoped: MetricRule = { ...rule, functionPath: "messages:send" };
         const observations: MetricObservation[] = [
             // Breaching, but on a DIFFERENT function path — must be ignored.
-            ...mixed(2, 2, now - 60_000).map((o) => ({ ...o, functionPath: "users:get" })),
+            ...mixed(2, 2, now - 60_000).map((o) => {
+                return { ...o, functionPath: "users:get" };
+            }),
             // The scoped path: only info spans → not breaching.
             observation({ functionPath: "messages:send", level: "info", startedAt: now - 60_000 }),
         ];

@@ -22,7 +22,7 @@ export interface McpHandlerDeps<Environment> {
     /** JSON error helper (reuse the router's so shapes match). */
     jsonError: (status: number, message: string) => Response;
     /** The tool-eligible (non-MCP) routes; `mcpToolRoutes` filters by opt-in + deny-list. */
-    routes: readonly RegisteredRoute<RouteHandler<Environment>>[];
+    routes: ReadonlyArray<RegisteredRoute<RouteHandler<Environment>>>;
     /** Validate a bearer deploy key (control-plane lookup); false → reject. */
     verifyKey: (key: string, environment: Environment) => Promise<boolean>;
 }
@@ -71,7 +71,11 @@ export const createMcpRouteHandler = <Environment>(deps: McpHandlerDeps<Environm
             return Response.json({
                 id,
                 jsonrpc: "2.0",
-                result: { tools: tools.map((tool) => ({ description: tool.description, inputSchema: { type: "object" }, name: tool.name })) },
+                result: {
+                    tools: tools.map((tool) => {
+                        return { description: tool.description, inputSchema: { type: "object" }, name: tool.name };
+                    }),
+                },
             });
         }
 
@@ -106,6 +110,6 @@ export const createMcpRouteHandler = <Environment>(deps: McpHandlerDeps<Environm
             return Response.json({ id, jsonrpc: "2.0", result: { content: [{ text: JSON.stringify(body), type: "text" }], isError: response.status >= 400 } });
         }
 
-        return Response.json({ error: { code: -32601, message: `unknown method: ${String(rpc.method)}` }, id, jsonrpc: "2.0" });
+        return Response.json({ error: { code: -32_601, message: `unknown method: ${String(rpc.method)}` }, id, jsonrpc: "2.0" });
     };
 };

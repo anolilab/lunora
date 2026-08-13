@@ -111,9 +111,11 @@ const tailPost = (body: unknown, secret?: string): Request =>
         method: "POST",
     });
 
-describe("POST /v1/logs/tail", () => {
+describe("pOST /v1/logs/tail", () => {
     /** Router env with the platform tail secret configured. */
-    const env = (ctx: unknown): Record<string, unknown> => ({ __lunoraCtx: ctx, LUNORA_TAIL_SECRET: "tail-secret" });
+    const env = (ctx: unknown): Record<string, unknown> => {
+        return { __lunoraCtx: ctx, LUNORA_TAIL_SECRET: "tail-secret" };
+    };
 
     it("503s when the platform tail secret is not configured", async () => {
         const router = createDeployRouter();
@@ -188,8 +190,10 @@ const cellPost = (body: unknown, token?: string): Request =>
         method: "POST",
     });
 
-describe("POST /v1/cells", () => {
-    const env = (ctx: unknown): Record<string, unknown> => ({ __lunoraCtx: ctx, LUNORA_ADMIN_TOKEN: "admin-secret" });
+describe("pOST /v1/cells", () => {
+    const env = (ctx: unknown): Record<string, unknown> => {
+        return { __lunoraCtx: ctx, LUNORA_ADMIN_TOKEN: "admin-secret" };
+    };
     const validBody = { cloudflareAccountId: "acc_1", dispatchNamespacePrefix: "ns", name: "eu-west" };
 
     it("401s a missing or wrong admin token (tenant can't register a cell)", async () => {

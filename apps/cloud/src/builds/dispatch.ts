@@ -18,10 +18,10 @@ import { runBuild } from "./runner";
 export interface BuildDispatchPorts {
     /** Lease the next runnable build for this runner, or null when the queue is empty. */
     claimNext: (runnerId: string) => Promise<ClaimedBuild | null>;
-    /** Ports the runner drives a claimed build through (logs / complete / fail / fetch / execute / release). */
-    runnerPorts: BuildRunnerPorts;
     /** Stable id identifying this runner instance on the lease. */
     runnerId: string;
+    /** Ports the runner drives a claimed build through (logs / complete / fail / fetch / execute / release). */
+    runnerPorts: BuildRunnerPorts;
 }
 
 export interface BuildDispatchResult {

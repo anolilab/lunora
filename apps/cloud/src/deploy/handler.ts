@@ -66,6 +66,7 @@ export interface DeployHandlerDeps {
     /** Probe the uploaded script's URL before release (GAPS.md A1); `false` fails the deployment without touching the active pointer. Omit to skip health gating. */
     healthCheck?: (url: string) => Promise<boolean>;
     provisioner: Provisioner;
+
     /**
      * Resolve the telemetry config injected into a tenant Worker: the OTLP ingest
      * endpoint (set as a `LUNORA_OTLP_ENDPOINT` var), a scoped ingest token (set
@@ -87,10 +88,10 @@ interface DeployBody {
      */
     bindings?: TenantBindingSpec;
     branch?: string;
-    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
-    cronSpecs?: string[];
     /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
     bundle?: string;
+    /** The tenant's cron expressions (wrangler `triggers.crons`) for the fan-out (§2.4). */
+    cronSpecs?: string[];
     kind?: DeployKind;
     projectId?: string;
     scriptName?: string;
@@ -125,7 +126,9 @@ const normalizeBindings = (requested: TenantBindingSpec | undefined): TenantBind
             (entry): entry is { binding: string; className: string } => isBindingRef(entry) && typeof (entry as { className?: unknown }).className === "string",
         )
         .slice(0, MAX_DURABLE_OBJECTS)
-        .map((entry) => ({ binding: entry.binding, className: entry.className }));
+        .map((entry) => {
+            return { binding: entry.binding, className: entry.className };
+        });
 
     if (!durableObjects.some((entry) => entry.className === SHARD_DO_BINDING.className)) {
         durableObjects.unshift({ ...SHARD_DO_BINDING });

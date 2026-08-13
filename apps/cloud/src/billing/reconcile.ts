@@ -6,7 +6,7 @@
  * credits ledger + the schedule live in `server.ts` (this stays store-only, so
  * the mapping and the suspend/recover writes are testable against a fake store).
  */
-import type { ControlPlaneDb } from "../store";
+import type { ControlPlaneDb as ControlPlaneDatabase } from "../store";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
 import type { PeriodUsage } from "./spend";
 
@@ -44,7 +44,7 @@ export interface OverageReconcileData {
  * watermark). Also returns the account-id and suspension maps the ledger +
  * ports need.
  */
-export const buildOverageReconcileData = async (database: ControlPlaneDb, periodStart: number): Promise<OverageReconcileData> => {
+export const buildOverageReconcileData = async (database: ControlPlaneDatabase, periodStart: number): Promise<OverageReconcileData> => {
     const { page: organizationPage } = await database.findMany("organizations", {});
     const organizations = organizationPage as OrgRow[];
 
@@ -98,49 +98,51 @@ export const buildOverageReconcileData = async (database: ControlPlaneDb, period
  * suspension is never lifted here.
  */
 export const overageFleetPorts = (
-    database: ControlPlaneDb,
+    database: ControlPlaneDatabase,
     ledger: OverageFleetPorts["ledger"],
     now: number,
     suspension: Map<string, string | undefined>,
-): OverageFleetPorts => ({
-    advanceWatermark: async (organizationId, periodStart, debitedCredits) => {
-        const { page } = await database.findMany("overageDebits", { where: { organizationId, periodStart } });
-        const existing = (page as DebitRow[])[0] as (DebitRow & { _id: string }) | undefined;
+): OverageFleetPorts => {
+    return {
+        advanceWatermark: async (organizationId, periodStart, debitedCredits) => {
+            const { page } = await database.findMany("overageDebits", { where: { organizationId, periodStart } });
+            const existing = (page as DebitRow[])[0] as (DebitRow & { _id: string }) | undefined;
 
-        if (!existing) {
-            await database.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });
-        } else if (debitedCredits > existing.debitedCredits) {
-            await database.patch(existing._id, { debitedCredits, updatedAt: now }, "overageDebits");
-        }
-    },
-    ledger,
-    onExhausted: async (organizationId) => {
-        if (suspension.get(organizationId) !== undefined) {
-            return; // already suspended (by any mechanism) — don't override the reason
-        }
+            if (!existing) {
+                await database.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });
+            } else if (debitedCredits > existing.debitedCredits) {
+                await database.patch(existing._id, { debitedCredits, updatedAt: now }, "overageDebits");
+            }
+        },
+        ledger,
+        onExhausted: async (organizationId) => {
+            if (suspension.get(organizationId) !== undefined) {
+                return; // already suspended (by any mechanism) — don't override the reason
+            }
 
-        await database.patch(organizationId, { suspendedAt: now, suspendedReason: "overage" }, "organizations");
-        await database.insert("auditLog", {
-            action: "organization.suspend",
-            actorUserId: "system:overage",
-            createdAt: now,
-            organizationId,
-            target: "prepaid credit balance exhausted",
-        });
-    },
-    onRecovered: async (organizationId) => {
-        // Only lift our own suspensions — dunning/spend-cap/support ones stay.
-        if (suspension.get(organizationId) !== "overage") {
-            return;
-        }
+            await database.patch(organizationId, { suspendedAt: now, suspendedReason: "overage" }, "organizations");
+            await database.insert("auditLog", {
+                action: "organization.suspend",
+                actorUserId: "system:overage",
+                createdAt: now,
+                organizationId,
+                target: "prepaid credit balance exhausted",
+            });
+        },
+        onRecovered: async (organizationId) => {
+            // Only lift our own suspensions — dunning/spend-cap/support ones stay.
+            if (suspension.get(organizationId) !== "overage") {
+                return;
+            }
 
-        await database.patch(organizationId, { suspendedAt: undefined, suspendedReason: undefined }, "organizations");
-        await database.insert("auditLog", {
-            action: "organization.unsuspend",
-            actorUserId: "system:overage",
-            createdAt: now,
-            organizationId,
-            target: "prepaid credit balance restored",
-        });
-    },
-});
+            await database.patch(organizationId, { suspendedAt: undefined, suspendedReason: undefined }, "organizations");
+            await database.insert("auditLog", {
+                action: "organization.unsuspend",
+                actorUserId: "system:overage",
+                createdAt: now,
+                organizationId,
+                target: "prepaid credit balance restored",
+            });
+        },
+    };
+};
