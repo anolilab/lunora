@@ -338,8 +338,15 @@ const formatMetric = (target: MetricTarget, value: number): string => {
 };
 
 /** Format a percentage change, rendering a non-finite one as the "from zero" case it always is. */
-const formatChange = (change: number, suffix: string): string =>
-    Number.isFinite(change) ? `${change >= 0 ? "+" : ""}${change.toFixed(0)}% ${suffix}` : `up from zero ${suffix}`;
+const formatChange = (change: number, suffix: string): string => {
+    if (!Number.isFinite(change)) {
+        return `up from zero ${suffix}`;
+    }
+
+    const sign = change >= 0 ? "+" : "";
+
+    return `${sign}${change.toFixed(0)}% ${suffix}`;
+};
 
 /**
  * Render a fired metric alert's subject + body.
@@ -435,6 +442,19 @@ export interface MetricLevelEvaluation {
 }
 
 /**
+ * The level-triggered transition from (is the window breaching now, was the rule
+ * already firing). Named rather than nested so each arm reads as the state
+ * change it is: fire on a fresh breach, clear on a recovery, otherwise hold.
+ */
+const transitionFor = (breaching: boolean, wasFiring: boolean): MetricLevelEvaluation["action"] => {
+    if (breaching) {
+        return wasFiring ? "none" : "fire";
+    }
+
+    return wasFiring ? "clear" : "none";
+};
+
+/**
  * Decide a metric rule's level-triggered transition from its current window +
  * prior firing state.
  *
@@ -464,7 +484,7 @@ export const evaluateMetricLevel = (
     const deviationPercent = baselineValue === undefined ? undefined : rateOfChangePercent(currentValue, baselineValue);
     const subject = deviationPercent ?? currentValue;
     const breaching = compareMetric(subject, rule.comparator, rule.threshold);
-    const action = breaching && !wasFiring ? "fire" : !breaching && wasFiring ? "clear" : "none";
+    const action = transitionFor(breaching, wasFiring);
 
     return {
         action,

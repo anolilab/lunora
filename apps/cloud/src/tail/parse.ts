@@ -49,7 +49,10 @@ const asLevel = (value: unknown): LogLevel => (typeof value === "string" && LEVE
  * as the raw `[&lt;json string>]` args array or as the JSON string directly.
  */
 export const parseLogMessage = (message: unknown): TailLogLine | null => {
-    const text = Array.isArray(message) ? (message.length === 1 && typeof message[0] === "string" ? message[0] : undefined) : asString(message);
+    // A tail message arrives either as a single-element array of strings (the
+    // common `console.log("…")` shape) or as a bare value.
+    const soleString = Array.isArray(message) && message.length === 1 && typeof message[0] === "string" ? message[0] : undefined;
+    const text = Array.isArray(message) ? soleString : asString(message);
 
     if (text === undefined) {
         return null;

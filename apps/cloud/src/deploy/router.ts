@@ -1363,6 +1363,14 @@ export const createDeployRouter = (): HttpRouterLike => {
 
     const postRoutes = new Map(routes.filter((route) => route.method === "POST").map((route) => [route.path, route.handler]));
     const getRoutes = new Map(routes.filter((route) => route.method === "GET").map((route) => [route.path, route.handler]));
+    /** The route table for a request method, or `undefined` for a method this router serves no routes for. */
+    const methodTable = (method: string): typeof getRoutes | undefined => {
+        if (method === "GET") {
+            return getRoutes;
+        }
+
+        return method === "POST" ? postRoutes : undefined;
+    };
 
     // Standard OTLP + native telemetry ingest → the per-token telemetry tier.
     const telemetryPaths = new Set(["/v1/logs", "/v1/metrics", "/v1/telemetry", "/v1/traces"]);
@@ -1410,7 +1418,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
 
             const routerEnv = (environment as RouterEnv | undefined) ?? {};
-            const table = request.method === "GET" ? getRoutes : request.method === "POST" ? postRoutes : undefined;
+            const table = methodTable(request.method);
             const handler = table?.get(url.pathname);
 
             return handler ? handler(request, routerEnv) : jsonError(404, "not found");
