@@ -12,13 +12,64 @@ import { createAnalytics, createAnalyticsSqlClient } from "@lunora/bindings/anal
 
 export type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 
-/** Emit one request data point: `blob1=script`, `blob2=plan`, `double1=count`. */
-export const recordRequestUsage = (dataset: AnalyticsEngineDatasetLike | undefined, input: { plan: string; scriptName: string }): void => {
+/** Path segments kept in a route label; deeper ones collapse to `/…`. Bounds the tag length without losing the part that identifies the endpoint. */
+const MAX_ROUTE_SEGMENTS = 4;
+
+/** A segment that identifies a specific RECORD rather than an endpoint: numeric, uuid/hex, or simply too long to be a route word. */
+const IDENTIFIER_SEGMENT = /^(?:\d+|[\da-f]{8,}|[\w-]{22,})$/iu;
+
+/**
+ * Collapse a request path to a low-cardinality route label — `/orders/:id/items`.
+ *
+ * Cardinality is the whole point. Recording the raw path makes every record id
+ * its own dimension, so the dataset grows without bound and grouping by route
+ * answers nothing; the label has to name the ENDPOINT, which is the thing an
+ * operator can act on. Segments that look like identifiers become `:id`, and
+ * the depth is capped so a pathological URL can't mint a giant tag.
+ */
+export const normalizeRoutePath = (pathname: string): string => {
+    const segments = pathname.split("/").filter((segment) => segment !== "");
+
+    if (segments.length === 0) {
+        return "/";
+    }
+
+    const kept = segments.slice(0, MAX_ROUTE_SEGMENTS).map((segment) => (IDENTIFIER_SEGMENT.test(segment) ? ":id" : segment.toLowerCase()));
+    const suffix = segments.length > MAX_ROUTE_SEGMENTS ? "/…" : "";
+
+    return `/${kept.join("/")}${suffix}`;
+};
+
+/** Status class of a response — `2xx`/`4xx`/`5xx`. Four possible values, so it costs nothing to group on, unlike the raw code. */
+export const statusClass = (status: number): string => `${String(Math.floor(status / 100))}xx`;
+
+/**
+ * Emit one request data point: `blob1=script`, `blob2=plan`, `blob3=outcome`,
+ * `blob4=route`, `double1=count`.
+ *
+ * `blob1`/`blob2` keep their positions because the usage rollup's SQL reads
+ * `blob1 AS scriptName` — the ledger must not shift under a widening.
+ *
+ * The `outcome` and `route` dimensions are what make per-deployment health
+ * charts possible: billing metrics can say a tenant's requests rose, but never
+ * which endpoint rose or whether it started failing. There is deliberately no
+ * separate version blob — a blue/green alias already resolves to the VERSIONED
+ * script name, so `blob1` carries the deploy identity for exactly the traffic
+ * that has one.
+ */
+export const recordRequestUsage = (
+    dataset: AnalyticsEngineDatasetLike | undefined,
+    input: { outcome?: string; plan: string; route?: string; scriptName: string },
+): void => {
     if (!dataset) {
         return;
     }
 
-    createAnalytics(dataset).writeDataPoint({ blobs: [input.scriptName, input.plan], doubles: [1], indexes: [input.scriptName] });
+    createAnalytics(dataset).writeDataPoint({
+        blobs: [input.scriptName, input.plan, input.outcome ?? "unknown", input.route ?? "unknown"],
+        doubles: [1],
+        indexes: [input.scriptName],
+    });
 };
 
 /** A row read back from the AE dataset, summed per script over a window. */
