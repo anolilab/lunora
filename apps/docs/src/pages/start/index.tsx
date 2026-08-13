@@ -16,7 +16,7 @@ import TanstackLogo from "@/assets/frameworks/tanstack.svg?react";
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { ClosingCta } from "@/components/sections/langbase";
 import { Action } from "@/kit/action";
-import { Shell } from "@/kit/layout";
+import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
 import InstallCommand from "@/pages/start/install-command";
 
@@ -27,9 +27,13 @@ import InstallCommand from "@/pages/start/install-command";
  * `packages/cli/src/commands/init/handler.ts`, which is what the CLI validates
  * against. Keep the two in step: this page listed eight kits when the binary
  * offered sixteen, and told every reader to pass `--template`, which is wrong
- * for the four create-vite overlays — those take `--vite` and have no template
+ * for the create-vite overlays — those take `--vite` and have no template
  * directory at all. A starter page printing a flag the CLI rejects is worse
  * than no starter page.
+ *
+ * The overlay list comes from `ADAPTERS` in `init/overlay/adapters.ts`, not from
+ * `FRAMEWORK_CHOICES`: the picker omits `vanilla`, but `--vite vanilla` is valid
+ * and was missing here.
  */
 
 interface Kit {
@@ -73,6 +77,7 @@ const overlays: Kit[] = [
     { brand: true, Icon: SiVuedotjs, id: "vue", name: "Vue", note: "create-vite's Vue base plus Lunora.", stack: "SPA" },
     { brand: true, Icon: SiSolid, id: "solid", name: "Solid", note: "create-vite's Solid base plus Lunora.", stack: "SPA" },
     { brand: true, Icon: SiSvelte, id: "svelte", name: "Svelte", note: "create-vite's Svelte base plus Lunora.", stack: "SPA" },
+    { brand: true, Icon: SiTypescript, id: "vanilla", name: "Vanilla", note: "No framework — create-vite's plain base plus Lunora.", stack: "SPA" },
 ];
 
 /** The `--add` feature list, verbatim from the CLI's own option description. */
@@ -159,7 +164,7 @@ const Start: FC = () => (
         <section data-nav-theme="dark">
             <Shell className="py-20">
                 <div className="flex flex-col gap-3">
-                    <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">Templates · -t</span>
+                    <Kicker size="micro">Templates · -t</Kicker>
                     <h2 className="text-h2 font-semibold tracking-tight text-ink">Twelve whole projects</h2>
                     <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                         Each one is a complete app in <code className="font-mono text-ink-muted">templates/</code>, fetched at init and wired to the same typed,
@@ -180,7 +185,7 @@ const Start: FC = () => (
         <section data-nav-theme="dark">
             <Shell className="py-20">
                 <div className="flex flex-col gap-3">
-                    <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">SPA · --vite</span>
+                    <Kicker size="micro">SPA · --vite</Kicker>
                     <h2 className="text-h2 font-semibold tracking-tight text-ink">Or start from create-vite</h2>
                     <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                         No bespoke template — the official create-vite base for your framework, with the Lunora layer added on top.
@@ -201,7 +206,9 @@ const Start: FC = () => (
             <Shell className="py-20">
                 <div className="grid grid-cols-1 gap-px bg-hairline lg:grid-cols-3">
                     <div className="flex flex-col gap-3 bg-canvas p-8 lg:col-span-2">
-                        <span className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">--add</span>
+                        <Kicker size="micro" tone="accent">
+                            --add
+                        </Kicker>
                         <h3 className="text-h3 font-semibold text-ink">Add the rest at scaffold time</h3>
                         <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                             Pass a comma-separated list and init wires the packages, config and example code for each one, instead of leaving you to follow a
@@ -218,14 +225,14 @@ const Start: FC = () => (
 
                     <div className="flex flex-col gap-8 bg-canvas p-8">
                         <div className="flex flex-col gap-2">
-                            <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">--here</span>
+                            <Kicker size="micro">--here</Kicker>
                             <p className="text-sm leading-relaxed text-ink-muted">
                                 Already have an app? Init detects the framework, patches the config and scaffolds <code className="font-mono">lunora/</code> in
                                 place.
                             </p>
                         </div>
                         <div className="flex flex-col gap-2">
-                            <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">--ci github | gitlab</span>
+                            <Kicker size="micro">--ci github | gitlab</Kicker>
                             <p className="text-sm leading-relaxed text-ink-muted">Scaffold the deploy pipeline with it, so the first push ships.</p>
                         </div>
                     </div>

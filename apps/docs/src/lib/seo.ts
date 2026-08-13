@@ -11,8 +11,16 @@ const DEFAULT_DESCRIPTION =
 const OG_FALLBACK_PATH = "/og-default.jpg";
 const DEFAULT_OG_IMAGE = `${SITE_URL}${OG_FALLBACK_PATH}`;
 
-/** True when `value` is absent or is the shared fallback rather than real art. */
-const isFallbackImage = (value?: string): boolean => value === undefined || value === OG_FALLBACK_PATH || value === DEFAULT_OG_IMAGE;
+/**
+ * True when `value` is not real art: absent, blank, or the shared fallback.
+ *
+ * The blank cases are not hypothetical. Frontmatter is typed `image?: string`
+ * but never validated, and YAML gives `null` for a bare `image:` and `""` for
+ * `image: ""`. Both used to pass this guard as "real", which resolved
+ * `new URL("", SITE_URL)` to the homepage and put an HTML page in `og:image`.
+ */
+const isFallbackImage = (value?: null | string): boolean =>
+    typeof value !== "string" || value.trim() === "" || value === OG_FALLBACK_PATH || value === DEFAULT_OG_IMAGE;
 
 interface SeoOptions {
     canonical?: string;

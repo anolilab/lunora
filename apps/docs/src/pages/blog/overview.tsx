@@ -9,7 +9,7 @@ import { ArticleHeader } from "@/kit/page-header";
 import type { BlogPostSummary } from "@/lib/blog-source";
 import { cn } from "@/lib/utils";
 
-import { formatDate } from "./shared";
+import { Cover, formatDate, MetaLine } from "./shared";
 
 /**
  * `/blog` — a magazine index. The three newest headline the page (one wide,
@@ -17,65 +17,13 @@ import { formatDate } from "./shared";
  * chrome; the covers and the type carry it on the page's own canvas.
  */
 
-// `/og-default.jpg` is the site-wide social-card fallback, not editorial art.
-// Six of eight posts declare it, and six identical covers read as a broken
-// grid — so treat it as "no cover" and let those posts take the typographic
-// tile instead.
-const OG_FALLBACK = "/og-default.jpg";
-
-const coverOf = (post: BlogPostSummary): string | undefined => (post.image === undefined || post.image === OG_FALLBACK ? undefined : post.image);
-
-/** `CATEGORY · DATE`, the one meta line every entry carries. */
-const MetaLine: FC<{ post: BlogPostSummary }> = ({ post }) => {
-    const { formatted, iso } = formatDate(post.publishedAt);
-
-    return (
-        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
-            {post.category ?? "Blog"}
-            {formatted ? (
-                <>
-                    <span aria-hidden="true">·</span>
-                    <time dateTime={iso}>{formatted}</time>
-                </>
-            ) : null}
-        </span>
-    );
-};
-
-/**
- * The image slot. Posts without a real cover get a hairline tile carrying
- * their category rather than a stand-in image — an invented cover would say
- * something about the post that the post does not.
- */
-const Cover: FC<{ eager?: boolean; post: BlogPostSummary }> = ({ eager = false, post }) => {
-    const cover = coverOf(post);
-
-    return (
-        <div className="aspect-1200/630 w-full overflow-hidden bg-wash">
-            {cover === undefined ? (
-                <div className="flex size-full items-center justify-center border border-hairline p-6">
-                    <Kicker size="micro">{post.category ?? "Blog"}</Kicker>
-                </div>
-            ) : (
-                <img
-                    alt={`Cover for ${post.title ?? "a Lunora blog post"}`}
-                    className="size-full object-cover"
-                    decoding="async"
-                    loading={eager ? "eager" : "lazy"}
-                    src={cover}
-                />
-            )}
-        </div>
-    );
-};
-
 const Byline: FC<{ name?: string }> = ({ name }) => (name === undefined ? null : <span className="text-[13px] text-ink-faint">{name}</span>);
 
 const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-col gap-6" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover eager post={post} />
+        <Cover category={post.category} eager image={post.image} title={post.title} />
         <div className="flex flex-col gap-4">
-            <MetaLine post={post} />
+            <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h2 className="max-w-2xl text-h2 font-bold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
             {post.description === undefined ? null : <p className="max-w-xl text-body text-ink-muted">{post.description}</p>}
             <Byline name={post.author} />
@@ -91,9 +39,9 @@ const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
  */
 const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-1 flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover post={post} />
+        <Cover category={post.category} image={post.image} title={post.title} />
         <div className="flex flex-col gap-2.5">
-            <MetaLine post={post} />
+            <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h3 className="text-h3 font-semibold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
             <Byline name={post.author} />
         </div>
@@ -108,10 +56,10 @@ const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
         <li className="border-t border-hairline last:border-b">
             <Link className="group flex items-center gap-5 py-5 transition-colors hover:bg-wash sm:gap-7" params={{ slug: post.slug }} to="/blog/$slug">
                 <div className="w-28 flex-none sm:w-40">
-                    <Cover post={post} />
+                    <Cover category={post.category} image={post.image} title={post.title} />
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
-                    <MetaLine post={post} />
+                    <MetaLine category={post.category} publishedAt={post.publishedAt} />
                     <h3 className="truncate text-base font-medium text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
                     <Byline name={post.author} />
                 </div>

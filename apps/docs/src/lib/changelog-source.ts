@@ -42,7 +42,12 @@ interface Release {
     /** ISO date from the release heading, e.g. "2026-08-11". */
     date: string;
     groups: ReleaseGroup[];
-    /** Stable id: package key + version. */
+
+    /**
+     * Stable id. Package + version is NOT unique — semantic-release re-emitted
+     * `@lunora/ai` 1.0.0-alpha.1 twice with different notes — so the block's
+     * ordinal within its file is what makes this a key React can rely on.
+     */
     id: string;
     key: string;
     kind: ReleaseKind;
@@ -53,12 +58,16 @@ interface Release {
     version: string;
 }
 
-/** An unbroken run of days on which the only thing that shipped was dependency bumps. */
+/**
+ * A stretch of releases that were nothing but dependency bumps.
+ *
+ * "Unbroken" means no substantive release fell inside it, not that every
+ * calendar day in the range shipped something — the range can be wider than the
+ * number of days that did.
+ */
 interface DependencyDay {
     /** Newest day in the run — what the feed sorts on. */
     date: string;
-    /** How many days the run covers. */
-    days: number;
     /** Oldest day in the run; equal to `date` for a single day. */
     from: string;
     /** How many distinct packages were re-released across the run. */
@@ -66,12 +75,6 @@ interface DependencyDay {
 }
 
 type FeedItem = (Release & { type: "release" }) | (DependencyDay & { type: "deps" });
-
-interface ChangelogEntry {
-    content: string;
-    key: string;
-    title: string;
-}
 
 // `## [1.0.0-alpha.72](https://…) (2026-08-11)` — the link is optional, because
 // the first release of a package has nothing to compare against.
@@ -129,7 +132,7 @@ const readChangelogs = (): { depPackagesByDate: Map<string, Set<string>>; releas
         const key = slugFromPath(file);
         const pkg = typeof parsed.data.title === "string" ? parsed.data.title : key;
 
-        for (const block of parsed.content.split(RELEASE_SPLIT).slice(1)) {
+        for (const [ordinal, block] of parsed.content.split(RELEASE_SPLIT).slice(1).entries()) {
             const heading = RELEASE_HEADING.exec(block)?.groups;
             const version = heading?.linked ?? heading?.bare;
             const groups = heading?.date === undefined || version === undefined ? [] : parseGroups(block);
@@ -149,7 +152,7 @@ const readChangelogs = (): { depPackagesByDate: Map<string, Set<string>>; releas
             releases.push({
                 date: heading.date,
                 groups,
-                id: `${key}@${version}`,
+                id: `${key}@${version}#${String(ordinal)}`,
                 key,
                 kind: kindOf(groups),
                 pkg,
@@ -200,7 +203,7 @@ const listFeed = (): FeedItem[] => {
 
         const packages = new Set(run.flatMap((date) => [...(depPackagesByDate.get(date) ?? [])]));
 
-        feed.push({ date: run[0], days: run.length, from: run.at(-1) ?? run[0], packages: packages.size, type: "deps" });
+        feed.push({ date: run[0], from: run.at(-1) ?? run[0], packages: packages.size, type: "deps" });
         run = [];
     };
 
@@ -220,20 +223,6 @@ const listFeed = (): FeedItem[] => {
     return feed;
 };
 
-const listChangelogs = (): ChangelogEntry[] =>
-    files
-        .map(([file, raw]): ChangelogEntry => {
-            const parsed = matter(raw);
-            const key = slugFromPath(file);
+export type { DependencyDay, FeedItem, Release, ReleaseGroup, ReleaseKind };
 
-            return {
-                content: parsed.content,
-                key,
-                title: typeof parsed.data.title === "string" ? parsed.data.title : key,
-            };
-        })
-        .toSorted((a, b) => a.title.localeCompare(b.title));
-
-export type { ChangelogEntry, DependencyDay, FeedItem, Release, ReleaseGroup, ReleaseKind };
-
-export { listChangelogs, listFeed };
+export { listFeed };

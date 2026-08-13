@@ -7,7 +7,7 @@ import { useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Action } from "@/kit/action";
-import { Shell } from "@/kit/layout";
+import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
 import posthog from "@/lib/posthog";
 
@@ -236,7 +236,7 @@ const CloudLanding: FC = () => (
             <Shell className="py-16">
                 <div className="grid grid-cols-1 gap-px bg-hairline md:grid-cols-2">
                     <div className="flex flex-col gap-3 bg-canvas p-8">
-                        <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">Own it</span>
+                        <Kicker size="micro">Own it</Kicker>
                         <h3 className="text-h3 font-semibold text-ink">Self-host on your Cloudflare</h3>
                         <p className="text-sm leading-relaxed text-ink-muted">
                             The framework is free and open source. Deploy to the Cloudflare account you already have. Your data, your infrastructure, &asymp;$0
@@ -244,7 +244,9 @@ const CloudLanding: FC = () => (
                         </p>
                     </div>
                     <div className="flex flex-col gap-3 bg-canvas p-8">
-                        <span className="font-mono text-[10px] tracking-[0.18em] text-accent uppercase">Or let us run it</span>
+                        <Kicker size="micro" tone="accent">
+                            Or let us run it
+                        </Kicker>
                         <h3 className="text-h3 font-semibold text-ink">Lunora Cloud</h3>
                         <p className="text-sm leading-relaxed text-ink-muted">
                             The same code, managed for you. No setup, no ops. You&apos;re never forced onto the cloud — you can take the open source and
@@ -260,7 +262,7 @@ const CloudLanding: FC = () => (
         <section data-nav-theme="dark">
             <Shell className="py-16">
                 <div className="mb-10 flex flex-col gap-3">
-                    <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">What is being built</span>
+                    <Kicker size="micro">What is being built</Kicker>
                     <h2 className="max-w-2xl text-h2 font-semibold tracking-tight text-ink">A control plane, not a hosting reseller.</h2>
                     <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                         Lunora Cloud runs on Workers for Platforms: each project gets its own isolated worker, provisioned, metered and routed by a control
@@ -271,7 +273,7 @@ const CloudLanding: FC = () => (
                 <div className="grid grid-cols-1 gap-px bg-hairline sm:grid-cols-2 lg:grid-cols-4">
                     {capabilities.map((item) => (
                         <div className="flex flex-col gap-2.5 bg-canvas p-6" key={item.title}>
-                            <span className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">{item.kicker}</span>
+                            <Kicker size="micro">{item.kicker}</Kicker>
                             <h3 className="text-sm font-semibold text-ink">{item.title}</h3>
                             <p className="text-sm leading-relaxed text-ink-muted">{item.body}</p>
                         </div>

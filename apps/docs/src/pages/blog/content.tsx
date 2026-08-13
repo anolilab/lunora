@@ -10,9 +10,9 @@ import HatchSpacer from "@/components/sections/hatch-spacer";
 import JsonLd from "@/components/seo/json-ld";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
-import { SITE_URL } from "@/lib/seo";
+import { isFallbackImage, SITE_URL } from "@/lib/seo";
 
-import { formatDate } from "./shared";
+import { Cover, formatDate, MetaLine } from "./shared";
 
 /**
  * `/blog/$slug` — one post, set as the same publication as the index: the
@@ -46,12 +46,6 @@ interface PostLink {
 
 const EMPTY_RELATED: RelatedPost[] = [];
 const EMPTY_TOC: TOCItemType[] = [];
-
-// Same rule as the index: `/og-default.jpg` is the site-wide social card, not
-// editorial art, so a post declaring it has no cover rather than a stand-in one.
-const OG_FALLBACK = "/og-default.jpg";
-
-const coverOf = (image?: string): string | undefined => (image === undefined || image === OG_FALLBACK ? undefined : image);
 
 const CopyLinkButton: FC<{ url: string }> = ({ url }) => {
     const [copied, setCopied] = useState(false);
@@ -129,44 +123,11 @@ const TableOfContents: FC<{ items: TOCItemType[] }> = ({ items }) => {
 };
 
 /** `CATEGORY · DATE`, the index's meta line, reused for the related tiles. */
-const MetaLine: FC<{ post: RelatedPost }> = ({ post }) => {
-    const { formatted, iso } = formatDate(post.publishedAt);
-
-    return (
-        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
-            {post.category ?? "Blog"}
-            {formatted ? (
-                <>
-                    <span aria-hidden="true">·</span>
-                    <time dateTime={iso}>{formatted}</time>
-                </>
-            ) : null}
-        </span>
-    );
-};
-
-/** Cover slot. Coverless posts take the typographic tile, as on the index. */
-const Cover: FC<{ category?: string; image?: string; title?: string }> = ({ category, image, title }) => {
-    const cover = coverOf(image);
-
-    return (
-        <div className="aspect-1200/630 w-full overflow-hidden bg-wash">
-            {cover === undefined ? (
-                <div className="flex size-full items-center justify-center border border-hairline p-6">
-                    <Kicker size="micro">{category ?? "Blog"}</Kicker>
-                </div>
-            ) : (
-                <img alt={`Cover for ${title ?? "a Lunora blog post"}`} className="size-full object-cover" decoding="async" loading="lazy" src={cover} />
-            )}
-        </div>
-    );
-};
-
 const RelatedCard: FC<{ post: RelatedPost }> = ({ post }) => (
     <Link className="group flex flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
         <Cover category={post.category} image={post.image} title={post.title} />
         <div className="flex flex-col gap-2.5">
-            <MetaLine post={post} />
+            <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h3 className="text-base font-medium text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
         </div>
     </Link>
@@ -181,14 +142,14 @@ const Byline: FC<{ author?: string; readingMinutes?: number }> = ({ author, read
     }
 
     return (
-        <span className="flex items-center gap-2 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
+        <Kicker className="flex items-center gap-2" size="micro">
             {parts.map((part, index) => (
                 <span className="flex items-center gap-2" key={part}>
                     {index > 0 ? <span aria-hidden="true">·</span> : null}
                     {part}
                 </span>
             ))}
-        </span>
+        </Kicker>
     );
 };
 
@@ -213,7 +174,7 @@ const BlogPost: FC<{
     toc?: TOCItemType[];
 }> = ({ children, next = null, post, prev: previous = null, related = EMPTY_RELATED, slug, toc = EMPTY_TOC }) => {
     const { formatted } = formatDate(post.publishedAt);
-    const cover = coverOf(post.image);
+    const cover = isFallbackImage(post.image) ? undefined : post.image;
     const url = `${SITE_URL}/blog/${slug}`;
     const shareUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(post.title ?? "")}&url=${encodeURIComponent(url)}`;
 

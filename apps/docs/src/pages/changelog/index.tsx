@@ -164,9 +164,7 @@ const ReleaseRow: FC<{ item: Extract<FeedItem, { type: "release" }> }> = ({ item
 
             {item.groups.map((group) => (
                 <section key={group.name}>
-                    <h3 className="font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">
-                        {SECTION_LABEL[group.name.toLowerCase()] ?? group.name}
-                    </h3>
+                    <h3 className="font-mono text-micro text-ink-faint uppercase">{SECTION_LABEL[group.name.toLowerCase()] ?? group.name}</h3>
                     <ul className="mt-3 flex flex-col gap-2">
                         {group.items.map((note) => (
                             <li className="flex gap-3 text-sm leading-relaxed text-ink-muted" key={note}>
@@ -184,18 +182,19 @@ const ReleaseRow: FC<{ item: Extract<FeedItem, { type: "release" }> }> = ({ item
 const DepsRow: FC<{ item: Extract<FeedItem, { type: "deps" }> }> = ({ item }) => (
     <div className="grid gap-2 border-t border-hairline py-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)] lg:gap-16">
         <span className="font-mono text-xs text-ink-faint">
-            {item.days > 1 ? `${formatDate(item.from)} – ${formatDate(item.date)}` : formatDate(item.date)}
+            {item.from === item.date ? formatDate(item.date) : `${formatDate(item.from)} – ${formatDate(item.date)}`}
         </span>
         <p className="text-sm text-ink-faint">
-            Dependency updates only, across <span className="text-ink-muted">{item.packages}</span> packages
-            {item.days > 1 ? ` over ${String(item.days)} days` : null}.
+            Dependency updates only, across <span className="text-ink-muted">{item.packages}</span> packages.
         </p>
     </div>
 );
 
 const PAGE_SIZE = 30;
 
-const Chip: FC<{ active: boolean; children: ReactNode; onClick: () => void }> = ({ active, children, onClick }) => (
+// `onClick` is optional because the package picker's trigger is one of these
+// and Radix opens the popover from the wrapper, not from a handler here.
+const Chip: FC<{ active: boolean; children: ReactNode; onClick?: () => void }> = ({ active, children, onClick }) => (
     <button
         className={cn(
             "flex items-center gap-2 border px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] whitespace-nowrap uppercase transition-colors",
@@ -213,12 +212,13 @@ const matchesNotes = (groups: ReleaseGroup[], query: string): boolean => groups.
 /**
  * Package filter: a popover checklist rather than a row of chips.
  *
- * 52 packages cannot sit in a bar, and grouping them by category — the first
- * attempt — asked the reader to know which category a package is in before they
- * could find it. Here they are named, searchable, and grouped only as a heading.
+ * The 37 packages that have shipped something cannot sit in a bar, and grouping
+ * them by category — the first attempt — asked the reader to know which category
+ * a package is in before they could find it. Here they are named, searchable,
+ * and grouped only as a heading.
  *
  * An empty selection means every package, so the page opens unfiltered and the
- * button reads "All packages" rather than starting with 52 boxes ticked and
+ * button reads "All packages" rather than starting with every box ticked and
  * making "none selected" a state that shows nothing.
  */
 const PackagePicker: FC<{
@@ -227,8 +227,6 @@ const PackagePicker: FC<{
     selected: string[];
 }> = ({ onChange, options, selected }) => {
     const [query, setQuery] = useState("");
-    // Membership is asked once per option per render; a Set answers in constant
-    // time where `includes` rescans the whole selection for each of 52 rows.
     const picked = new Set(selected);
 
     const needle = query.trim().toLowerCase();
@@ -249,16 +247,10 @@ const PackagePicker: FC<{
     return (
         <Popover>
             <PopoverTrigger asChild>
-                <button
-                    className={cn(
-                        "flex items-center gap-2 border px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] whitespace-nowrap uppercase transition-colors",
-                        selected.length > 0 ? "border-ink bg-ink text-canvas" : "border-hairline text-ink-faint hover:border-hairline-strong hover:text-ink",
-                    )}
-                    type="button"
-                >
+                <Chip active={selected.length > 0}>
                     {selected.length > 0 ? `${String(selected.length)} packages` : "All packages"}
                     <ChevronDown className="size-3.5" />
-                </button>
+                </Chip>
             </PopoverTrigger>
             <PopoverContent align="start" className="w-80 rounded-none border-hairline bg-canvas p-0" sideOffset={8}>
                 <div className="flex items-center gap-2 border-b border-hairline px-3 py-2">
@@ -289,7 +281,9 @@ const PackagePicker: FC<{
                 <div className="max-h-80 overflow-y-auto py-1">
                     {grouped.map(([category, items]) => (
                         <div key={category}>
-                            <p className="px-3 pt-3 pb-1 font-mono text-[10px] tracking-[0.18em] text-ink-faint uppercase">{category}</p>
+                            <Kicker className="block px-3 pt-3 pb-1" size="micro">
+                                {category}
+                            </Kicker>
                             {items.map((option) => {
                                 const active = picked.has(option.value);
 
