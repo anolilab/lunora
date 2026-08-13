@@ -48,7 +48,7 @@ describe(limitsForPlan, () => {
 
 describe(createPlanResolver, () => {
     it("resolves a plan and caches it within the TTL", async () => {
-        const fetchMock = vi.fn().mockResolvedValue(Response.json({ plan: "pro" }, { status: 200 }));
+        const fetchMock = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ plan: "pro" }, { status: 200 }));
         const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock });
 
         await expect(resolve("acme-app")).resolves.toBe("pro");

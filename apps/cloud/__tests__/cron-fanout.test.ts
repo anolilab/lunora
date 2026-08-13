@@ -60,7 +60,7 @@ describe(dueTicks, () => {
 
 describe(fanOutCron, () => {
     it("dispatches each due tick and counts outcomes", async () => {
-        const dispatch = vi.fn().mockResolvedValue(true);
+        const dispatch = vi.fn<(tick: { scriptName: string }) => Promise<boolean>>().mockResolvedValue(true);
         const result = await fanOutCron({ dispatch, now: at("2026-06-15T00:00:00Z"), targets });
 
         expect(result).toStrictEqual({ delivered: 2, failed: 0 });
@@ -68,7 +68,7 @@ describe(fanOutCron, () => {
     });
 
     it("counts a failed/throwing tick without aborting the rest", async () => {
-        const dispatch = vi.fn().mockImplementation((tick: { scriptName: string }) => {
+        const dispatch = vi.fn<(tick: { scriptName: string }) => Promise<boolean>>().mockImplementation((tick: { scriptName: string }) => {
             if (tick.scriptName === "app-a") {
                 throw new Error("tenant unreachable");
             }

@@ -2,11 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createDeployRouter } from "../src/deploy/router";
 
+/**
+ * One injected action-context port (`runAction`/`runMutation`/`runQuery`).
+ * Mirrors the router's own `LunoraActionContext` members without their generic
+ * return: the router receives this context as `unknown`, so the fakes only need
+ * the call shape, and a concrete return keeps `mockResolvedValue` inferable.
+ */
+type ActionPort = (reference: unknown, args?: Record<string, unknown>) => Promise<unknown>;
+
 /** Minimal injected Lunora action context (the worker normally provides this). */
 const makeCtx = (overrides: Record<string, unknown> = {}) => {
     return {
-        runAction: vi.fn().mockResolvedValue({ applied: true, status: 200 }),
-        runMutation: vi.fn().mockResolvedValue("id_1"),
+        runAction: vi.fn<ActionPort>().mockResolvedValue({ applied: true, status: 200 }),
+        runMutation: vi.fn<ActionPort>().mockResolvedValue("id_1"),
         ...overrides,
     };
 };
@@ -137,8 +145,8 @@ describe("pOST /v1/logs/tail", () => {
 
     it("resolves each script → org and ingests the batch via the internal mutation", async () => {
         const router = createDeployRouter();
-        const runQuery = vi.fn().mockResolvedValue({ organizationId: "org_9" });
-        const runMutation = vi.fn().mockResolvedValue({ ingested: 2 });
+        const runQuery = vi.fn<ActionPort>().mockResolvedValue({ organizationId: "org_9" });
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue({ ingested: 2 });
         const ctx = makeCtx({ runMutation, runQuery });
 
         const response = await router.fetch(
@@ -167,8 +175,8 @@ describe("pOST /v1/logs/tail", () => {
 
     it("drops a batch whose script resolves to no org (superseded/unknown release)", async () => {
         const router = createDeployRouter();
-        const runMutation = vi.fn();
-        const ctx = makeCtx({ runMutation, runQuery: vi.fn().mockResolvedValue(null) });
+        const runMutation = vi.fn<ActionPort>();
+        const ctx = makeCtx({ runMutation, runQuery: vi.fn<ActionPort>().mockResolvedValue(null) });
 
         const response = await router.fetch(
             tailPost({ batches: [{ lines: [{ level: "info", message: "a" }], scriptName: "ghost-v9" }] }, "tail-secret"),
@@ -225,7 +233,7 @@ describe("pOST /v1/cells", () => {
 
     it("registers the cell via the internal mutation with a valid admin token", async () => {
         const router = createDeployRouter();
-        const runMutation = vi.fn().mockResolvedValue("cell_1");
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue("cell_1");
         const response = await router.fetch(cellPost(validBody, "admin-secret"), env(makeCtx({ runMutation })));
 
         expect(response.status).toBe(201);
