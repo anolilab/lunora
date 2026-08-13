@@ -36,13 +36,15 @@ const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...re
 /**
  * A full-bleed horizontal band. `tone` picks the surface.
  *
- * Deliberately applies no vertical padding. The hatched spacer between bands
- * carries the rhythm, and a band that pads itself as well doubles it: a section
- * gap became the spacer plus twice the padding, which is what left the page
- * with a screen of empty canvas between every two bands.
+ * Pads the top only. The hatched spacer separates one band from the next, and
+ * this is the gap between that spacer and the heading under it; padding both
+ * edges doubled the rhythm, which is what left a screen of empty canvas between
+ * every two bands.
  *
- * If a band needs breathing room beyond the spacer, that is a property of that
- * band's content and belongs on the content, not on every section on the site.
+ * The bottom stays flush against the following spacer on purpose: the spacer is
+ * the separation, so a band's last row meeting it reads as one join rather than
+ * two. A band needing more room beneath its content should say so on that
+ * content, not on every section on the site.
  */
 const Section: FC<{
     children: ReactNode;
@@ -52,7 +54,7 @@ const Section: FC<{
 }> = ({ children, className, id, tone = "canvas" }) => (
     <section
         className={cn(
-            "relative border-t border-hairline",
+            "relative border-t border-hairline pt-section",
             tone === "canvas" && "bg-canvas",
             tone === "deep" && "bg-canvas-deep",
             tone === "surface" && "bg-surface",
