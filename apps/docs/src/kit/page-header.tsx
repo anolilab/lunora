@@ -22,14 +22,25 @@ import { cn } from "@/lib/utils";
  * view every visitor loads, so a renderer would be bytes spent on nothing.
  */
 
-// Fixed field heights. The panel centres itself in whichever applies, so there
-// is nothing else to keep in step when these change.
+// Fixed field heights. The panel places itself inside whichever applies, so
+// there is nothing else to keep in step when these change.
 const FIELD = {
     full: "h-[30rem] sm:h-[38rem] lg:h-[45rem]",
-    short: "h-[22rem] sm:h-[26rem] lg:h-[30rem]",
+    short: "h-[15rem] sm:h-[17rem] lg:h-[19rem]",
+};
+
+// `bottom` sits the panel on the field's lower edge so the two share a line and
+// the band ends where the panel does. A section landing page wants that: the
+// header is a title bar, not a stage, and centring a short panel in a short
+// field leaves a sliver of colour under it that reads as a mistake.
+const PLACE = {
+    bottom: "items-end",
+    center: "items-center",
 };
 
 const PageHeader: FC<{
+    /** Where the panel sits in the field. */
+    align?: "bottom" | "center";
     /** Panel content — meta row, title, actions. */
     children: ReactNode;
     className?: string;
@@ -37,7 +48,7 @@ const PageHeader: FC<{
     panelWidth?: "default" | "wide";
     /** `full` for the landing hero, `short` for section landing pages. */
     size?: "full" | "short";
-}> = ({ children, className, panelWidth = "default", size = "full" }) => (
+}> = ({ align = "center", children, className, panelWidth = "default", size = "full" }) => (
     // The bar keeps light ink over this field. Dark ink would need a field
     // that is genuinely light, and the aurora accents sit mid-lightness — so
     // the top scrim below guarantees contrast instead, whatever the hue.
@@ -88,7 +99,7 @@ const PageHeader: FC<{
             {/* The panel, centred in the field and aligned to the shell gutter.
             No border: the field behind it is already a hard value change, so an
             outline on top only draws a second edge where there is one. */}
-            <Shell className="absolute inset-0 flex items-center">
+            <Shell className={cn("absolute inset-0 flex", PLACE[align])}>
                 <div className={cn("w-full bg-canvas p-[clamp(1.5rem,1rem+2vw,3rem)]", panelWidth === "wide" ? "max-w-[50rem]" : "max-w-[40rem]")}>
                     {children}
                 </div>
