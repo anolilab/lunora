@@ -165,8 +165,22 @@ const attributeNumber = (attributes: OtlpKeyValue[] | undefined, key: string): n
 const MAX_GENERATION_TEXT = 4096;
 
 /** Truncate a recorded generation payload so a large prompt/completion can't bloat a row. */
-const truncateText = (text: string | undefined): string | undefined =>
-    text === undefined ? undefined : text.length > MAX_GENERATION_TEXT ? `${text.slice(0, MAX_GENERATION_TEXT)}…` : text;
+const truncateText = (text: string | undefined): string | undefined => {
+    if (text === undefined || text.length <= MAX_GENERATION_TEXT) {
+        return text;
+    }
+
+    return `${text.slice(0, MAX_GENERATION_TEXT)}…`;
+};
+
+/** An OTLP log record's body as a message string: strings pass through, absent bodies become empty, anything else is JSON. */
+const describeBody = (body: unknown): string => {
+    if (typeof body === "string") {
+        return body;
+    }
+
+    return body === undefined ? "" : JSON.stringify(body);
+};
 
 /** Attribute-key prefix for a per-evaluation generation-span score (`gen_ai.evaluation.&lt;name>.score|label`). */
 const EVALUATION_PREFIX = "gen_ai.evaluation.";
@@ -405,7 +419,7 @@ export const decodeLogRecords = (payload: OtlpLogsPayload): OtlpLogEntry[] => {
                     fields: redactRecord(logFields(record.attributes)),
                     functionPath: attributeString(record.attributes, "lunora.function_path") ?? attributeString(record.attributes, "code.function"),
                     level: severityToLevel(record.severityNumber, record.severityText),
-                    message: typeof body === "string" ? body : body === undefined ? "" : JSON.stringify(body),
+                    message: describeBody(body),
                     serviceName,
                     spanId: record.spanId === "" ? undefined : record.spanId,
                     traceId: record.traceId === "" ? undefined : record.traceId,
