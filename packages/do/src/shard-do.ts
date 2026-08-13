@@ -178,6 +178,7 @@ import {
     readCdcCursor,
     readCdcEpoch,
     readClientWatermark,
+    readDeployInfo,
     readGlobalShapeSnapshot,
     readIdempotent,
     readMigrationStatus,
@@ -7011,20 +7012,48 @@ abstract class ShardDO {
      */
     private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
+        const attributed = this.attributeToDeploy(entry);
 
         try {
-            appendRequestLogEntry(this.shardHost.sql, entry, writeOptions);
+            appendRequestLogEntry(this.shardHost.sql, attributed, writeOptions);
         } catch {
             // Best-effort: never let request-log persistence fail the caller.
         }
 
-        if (config.emit || entry.outcome === "error") {
+        if (config.emit || attributed.outcome === "error") {
             try {
-                emitRequestLogEvent(entry, writeOptions);
+                emitRequestLogEvent(attributed, writeOptions);
             } catch {
                 // Best-effort: never let event emission fail the caller.
             }
         }
+    }
+
+    /**
+     * Stamp the deploying Worker's version onto a request-log entry, so the
+     * durable row AND the emitted Workers-Logs event both carry it.
+     *
+     * This is the attribution half of request logging: an alert tells you the
+     * error rate moved, but only a version on the event itself turns "did this
+     * start with a deploy?" into a group-by. Doing it at deploy time (here) is
+     * the point — correlating a spike against a deploy timeline after the fact
+     * is the archaeology this avoids.
+     *
+     * Reads the `CF_VERSION_METADATA` binding via the shared
+     * {@link readDeployInfo}, which returns an empty object when the binding
+     * isn't declared — so an app that hasn't added it logs exactly as before.
+     * Resolved per call rather than cached: `this.env` is the DO's own env and a
+     * new version gets a new isolate, but re-reading two fields off a bound
+     * object costs nothing and removes the staleness question entirely.
+     */
+    private attributeToDeploy(entry: AppendRequestLogEntry): AppendRequestLogEntry {
+        const { deploymentId, versionTag } = readDeployInfo(this.env as Record<string, unknown>);
+
+        if (deploymentId === undefined && versionTag === undefined) {
+            return entry;
+        }
+
+        return { ...entry, ...(deploymentId === undefined ? {} : { deploymentId }), ...(versionTag === undefined ? {} : { versionTag }) };
     }
 
     /**

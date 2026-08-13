@@ -1195,6 +1195,27 @@ describe("wrangler-validator", () => {
         });
     });
 
+    describe("observability.logs.invocation_logs", () => {
+        const withLogs = (logs: unknown): WranglerConfig =>
+            ({ compatibility_date: REQUIRED_COMPATIBILITY_DATE, observability: { enabled: true, logs } }) as WranglerConfig;
+
+        it("accepts the boolean that keeps per-invocation summaries", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: true }));
+
+            expect(report.errors.join(" ")).not.toContain("invocation_logs");
+        });
+
+        it("rejects a non-boolean, which wrangler would otherwise ignore silently", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(withLogs({ invocation_logs: "true" }));
+
+            expect(report.errors.join(" ")).toContain("observability.logs.invocation_logs must be a boolean");
+        });
+    });
+
     describe("containers", () => {
         const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
             return {
