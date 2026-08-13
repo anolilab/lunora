@@ -78,6 +78,9 @@ export const openApiSpec: Record<string, unknown> = {
                                     "args": {
                                         "additionalProperties": false,
                                         "properties": {
+                                            "baselineWindows": {
+                                                "type": "number"
+                                            },
                                             "channel": {
                                                 "anyOf": [
                                                     {
@@ -112,6 +115,18 @@ export const openApiSpec: Record<string, unknown> = {
                                             },
                                             "destination": {},
                                             "functionPath": {},
+                                            "mode": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "threshold",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "deviation",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            },
                                             "name": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",

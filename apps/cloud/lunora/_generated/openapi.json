@@ -75,6 +75,9 @@
                   "args": {
                     "additionalProperties": false,
                     "properties": {
+                      "baselineWindows": {
+                        "type": "number"
+                      },
                       "channel": {
                         "anyOf": [
                           {
@@ -109,6 +112,18 @@
                       },
                       "destination": {},
                       "functionPath": {},
+                      "mode": {
+                        "anyOf": [
+                          {
+                            "const": "threshold",
+                            "type": "string"
+                          },
+                          {
+                            "const": "deviation",
+                            "type": "string"
+                          }
+                        ]
+                      },
                       "name": {},
                       "organizationId": {
                         "description": "Id<\"organizations\">",

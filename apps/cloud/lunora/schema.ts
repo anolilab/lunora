@@ -575,6 +575,9 @@ export default defineSchema({
     // Configured from the dashboard; evaluated (pure) inside the telemetry ingest
     // (metric rules) / uptime sweep (uptime).
     alertRules: defineTable({
+        // `mode: "deviation"` only: how many `windowMinutes`-long windows before
+        // the current one average into the baseline. Absent ⇒ 7.
+        baselineWindows: v.optional(v.number()),
         // Delivery channel. `email` via the mailer; `webhook`/`slack`/`pagerduty`
         // are typed JSON POSTs (Slack incoming-webhook JSON, PagerDuty Events v2).
         channel: v.union(v.literal("email"), v.literal("webhook"), v.literal("slack"), v.literal("pagerduty")),
@@ -588,6 +591,14 @@ export default defineSchema({
         // Optional scope for a metric rule: evaluate only spans from this
         // function path (e.g. `messages:send`). Absent ⇒ the whole org.
         functionPath: v.optional(v.string()),
+        // How a metric rule decides it is breaching. `threshold` (absent ⇒ this)
+        // compares the window value to `threshold` directly — right when the
+        // number has an absolute meaning (an SLO, a spend cap). `deviation`
+        // compares the window value to its own trailing baseline and reads
+        // `threshold` as a percent change — right for usage and cost signals,
+        // where a static threshold either fires constantly or never fires until
+        // the bill lands, because "normal" is whatever last week was.
+        mode: v.optional(v.union(v.literal("threshold"), v.literal("deviation"))),
         name: v.string(),
         organizationId: v.id("organizations"),
         // What the rule watches. Count-crossing: `issue`/`incident` (a fingerprint

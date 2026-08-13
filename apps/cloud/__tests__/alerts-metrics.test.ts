@@ -137,6 +137,68 @@ describe(evaluateMetricLevel, () => {
     it("stays quiet when under threshold and not firing", () => {
         expect(evaluateMetricLevel(rule, mixed(4, 0), false)).toStrictEqual({ action: "none", currentValue: 0, firing: false });
     });
+
+    describe("deviation mode", () => {
+        // "Alert when the window is more than 100% above its trailing baseline."
+        const deviating = { comparator: "gt" as const, mode: "deviation" as const, target: "error_rate" as const, threshold: 100 };
+
+        it("fires on the percentage change from baseline, not the raw value", () => {
+            // 20% error rate — nowhere near a 100 threshold read absolutely, but
+            // quadruple a 5% baseline, which is the thing worth paging about.
+            expect(evaluateMetricLevel(deviating, mixed(10, 2), false, mixed(100, 5))).toStrictEqual({
+                action: "fire",
+                baselineValue: 5,
+                currentValue: 20,
+                deviationPercent: 300,
+                firing: true,
+            });
+        });
+
+        it("stays quiet when the window sits at its baseline, however high that is", () => {
+            // 80% errors both now and historically: alarming, but not a CHANGE.
+            // A static-threshold rule is the right tool for that; this one is not.
+            expect(evaluateMetricLevel(deviating, mixed(10, 8), false, mixed(100, 80))).toStrictEqual({
+                action: "none",
+                baselineValue: 80,
+                currentValue: 80,
+                deviationPercent: 0,
+                firing: false,
+            });
+        });
+
+        it("treats a rise from a zero baseline as a breach rather than a divide-by-zero", () => {
+            const evaluation = evaluateMetricLevel(deviating, mixed(4, 1), false, mixed(100, 0));
+
+            expect(evaluation.action).toBe("fire");
+            expect(evaluation.deviationPercent).toBe(Number.POSITIVE_INFINITY);
+        });
+
+        it("fires a `lt` rule on a drop below baseline, where the threshold is a negative percent", () => {
+            // "Fire when this falls more than 50% below baseline" — how you alert
+            // on a signal disappearing. 80% baseline down to 20% is -75%.
+            const dropping = { ...deviating, comparator: "lt" as const, threshold: -50 };
+
+            expect(evaluateMetricLevel(dropping, mixed(10, 2), false, mixed(100, 80))).toStrictEqual({
+                action: "fire",
+                baselineValue: 80,
+                currentValue: 20,
+                deviationPercent: -75,
+                firing: true,
+            });
+            // A shallower dip stays quiet.
+            expect(evaluateMetricLevel(dropping, mixed(10, 7), false, mixed(100, 80)).action).toBe("none");
+        });
+
+        it("ignores the baseline entirely in the default threshold mode", () => {
+            // Same windows as the firing case above, minus `mode` — 20% against a
+            // threshold of 100 is quiet, proving the baseline is not consulted.
+            expect(evaluateMetricLevel({ ...deviating, mode: "threshold" }, mixed(10, 2), false, mixed(100, 5))).toStrictEqual({
+                action: "none",
+                currentValue: 20,
+                firing: false,
+            });
+        });
+    });
 });
 
 /**
@@ -241,6 +303,39 @@ describe(fireMetricRules, () => {
         expect(store.rows).toHaveLength(0); // clearing never writes an alert row
         expect(store.state.get("rule_1")).toBe(false);
         expect(store.writes).toStrictEqual([{ firing: false, ruleId: "rule_1", value: 0 }]);
+    });
+
+    it("fires a deviation rule against its trailing baseline and says so in the notification", async () => {
+        // 5-minute windows, 3 windows of baseline. Current window is 100% errors;
+        // the three windows behind it are 10% — a spike a static threshold tuned
+        // for this metric would have to be guessed at in advance.
+        const deviationRule: MetricRule = { ...rule, baselineWindows: 3, mode: "deviation", name: "Error rate spike", threshold: 200 };
+        const observations: MetricObservation[] = [
+            ...mixed(4, 4, now - 60_000),
+            ...mixed(10, 1, now - 7 * 60_000),
+            ...mixed(10, 1, now - 12 * 60_000),
+            ...mixed(10, 1, now - 17 * 60_000),
+        ];
+        const store = metricStore();
+
+        const outcome = await fireMetricRules([deviationRule], observations, "org_1", store.ports, now);
+
+        expect(outcome.fired).toBe(1);
+        expect(outcome.deliveries[0]?.subject).toContain("above its baseline");
+        expect(outcome.deliveries[0]?.body).toContain("trailing baseline");
+        expect(outcome.deliveries[0]?.body).toContain("+900%");
+    });
+
+    it("does not let the spike inflate its own baseline", async () => {
+        // The current window is the ONLY traffic. If the baseline slice leaked the
+        // current window in, the deviation would be 0% and this would never fire.
+        const deviationRule: MetricRule = { ...rule, mode: "deviation", threshold: 50 };
+        const observations: MetricObservation[] = mixed(4, 4, now - 60_000);
+        const store = metricStore();
+
+        const outcome = await fireMetricRules([deviationRule], observations, "org_1", store.ports, now);
+
+        expect(outcome.fired).toBe(1);
     });
 
     it("honors a functionPath scope", async () => {

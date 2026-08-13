@@ -276,13 +276,38 @@ export const rateOfChangePercent = (current: number, prior: number): number => {
     return ((current - prior) / prior) * 100;
 };
 
+/**
+ * How a metric rule decides it is breaching.
+ *
+ * - `threshold` — the window value is compared to `threshold` directly. Right
+ *   when the number has an absolute meaning: an error-rate SLO, a spend cap.
+ * - `deviation` — the window value is compared to its own TRAILING BASELINE,
+ *   and `threshold` is read as a percentage change. Right when there is no
+ *   defensible absolute number, which is most usage and cost signals: a static
+ *   threshold there either fires constantly or never fires until the bill
+ *   lands, because "normal" is whatever last week was.
+ */
+export type MetricMode = "deviation" | "threshold";
+
+/** Windows of history forming the trailing baseline in `deviation` mode when a rule names no `baselineWindows`. */
+export const DEFAULT_BASELINE_WINDOWS = 7;
+
 /** An enabled metric-window rule the metric firing loop evaluates. */
 export interface MetricRule {
+    /**
+     * `deviation` mode only: how many `windowMinutes`-long windows before the
+     * current one average into the baseline. Absent ⇒
+     * {@link DEFAULT_BASELINE_WINDOWS}; with a 1-day window that is the
+     * trailing-week baseline.
+     */
+    baselineWindows?: number;
     channel: AlertChannel;
     comparator: Comparator;
     destination: string;
     /** Optional scope: evaluate only observations from this function path. */
     functionPath?: string;
+    /** Absent ⇒ {@link MetricMode} `threshold`, the historical behaviour. */
+    mode?: MetricMode;
     name: string;
     ruleId: string;
     target: MetricTarget;
@@ -312,22 +337,52 @@ const formatMetric = (target: MetricTarget, value: number): string => {
     return target === "llm_cost" ? `${rounded} (cost units)` : `${rounded}${unit}`;
 };
 
-/** Render a fired metric alert's subject + body, including the window-over-window change. */
+/** Format a percentage change, rendering a non-finite one as the "from zero" case it always is. */
+const formatChange = (change: number, suffix: string): string =>
+    Number.isFinite(change) ? `${change >= 0 ? "+" : ""}${change.toFixed(0)}% ${suffix}` : `up from zero ${suffix}`;
+
+/**
+ * Render a fired metric alert's subject + body.
+ *
+ * A `deviation` rule says what it actually measured — the change from the
+ * trailing baseline, and what that baseline was — because "error rate is 12%"
+ * is not actionable on its own when the rule fired for being 400% above
+ * normal. A `threshold` rule keeps the original wording, with the
+ * window-over-window change as narrative colour.
+ */
 export const renderMetricAlert = (
-    rule: { comparator: Comparator; functionPath?: string; name: string; target: MetricTarget; threshold: number; windowMinutes: number },
-    evaluation: Pick<MetricEvaluation, "currentValue" | "priorValue">,
+    rule: {
+        comparator: Comparator;
+        functionPath?: string;
+        mode?: MetricMode;
+        name: string;
+        target: MetricTarget;
+        threshold: number;
+        windowMinutes: number;
+    },
+    evaluation: Pick<MetricEvaluation, "currentValue" | "priorValue"> & { baselineValue?: number; deviationPercent?: number },
 ): { body: string; subject: string } => {
     const scope = rule.functionPath ? ` for ${rule.functionPath}` : "";
     const direction = rule.comparator === "lt" ? "below" : "above";
-    const change = rateOfChangePercent(evaluation.currentValue, evaluation.priorValue);
-    const changeText = Number.isFinite(change) ? `${change >= 0 ? "+" : ""}${change.toFixed(0)}% vs the prior window` : "up from zero in the prior window";
+    const label = METRIC_LABEL[rule.target];
+    const value = formatMetric(rule.target, evaluation.currentValue);
+
+    if (rule.mode === "deviation" && evaluation.deviationPercent !== undefined && evaluation.baselineValue !== undefined) {
+        return {
+            body:
+                `${label}${scope} is ${value} over the last ${String(rule.windowMinutes)} min on Lunora Cloud — ` +
+                `${formatChange(evaluation.deviationPercent, "vs its trailing baseline")} of ` +
+                `${formatMetric(rule.target, evaluation.baselineValue)}, ${direction} the ${String(rule.threshold)}% deviation the rule allows.`,
+            subject: `[Lunora] ${rule.name}: ${label} ${direction} its baseline`,
+        };
+    }
 
     return {
         body:
-            `${METRIC_LABEL[rule.target]}${scope} is ${formatMetric(rule.target, evaluation.currentValue)} over the last ` +
+            `${label}${scope} is ${value} over the last ` +
             `${String(rule.windowMinutes)} min on Lunora Cloud — ${direction} the ${formatMetric(rule.target, rule.threshold)} threshold ` +
-            `(${changeText}).`,
-        subject: `[Lunora] ${rule.name}: ${METRIC_LABEL[rule.target]} ${direction} threshold`,
+            `(${formatChange(rateOfChangePercent(evaluation.currentValue, evaluation.priorValue), "vs the prior window")}).`,
+        subject: `[Lunora] ${rule.name}: ${label} ${direction} threshold`,
     };
 };
 
@@ -340,13 +395,18 @@ const windowsFor = (
     rule: MetricRule,
     observations: readonly MetricObservation[],
     now: number,
-): { current: MetricObservation[]; prior: MetricObservation[] } => {
+): { baseline: MetricObservation[]; current: MetricObservation[]; prior: MetricObservation[] } => {
     const windowMs = rule.windowMinutes * 60_000;
     const scoped = rule.functionPath ? observations.filter((observation) => observation.functionPath === rule.functionPath) : observations;
     const currentStart = now - windowMs;
     const priorStart = now - 2 * windowMs;
+    // The trailing baseline spans the N windows immediately BEFORE the current
+    // one — it must never include the current window, or the spike being
+    // detected would drag its own baseline up and mask itself.
+    const baselineStart = currentStart - Math.max(1, rule.baselineWindows ?? DEFAULT_BASELINE_WINDOWS) * windowMs;
 
     return {
+        baseline: scoped.filter((observation) => observation.startedAt > baselineStart && observation.startedAt <= currentStart),
         current: scoped.filter((observation) => observation.startedAt > currentStart && observation.startedAt <= now),
         prior: scoped.filter((observation) => observation.startedAt > priorStart && observation.startedAt <= currentStart),
     };
@@ -366,21 +426,53 @@ const windowsFor = (
  */
 export interface MetricLevelEvaluation {
     action: "clear" | "fire" | "none";
+    /** `deviation` mode: the trailing-baseline value the current window was compared against. Absent in `threshold` mode. */
+    baselineValue?: number;
     currentValue: number;
+    /** `deviation` mode: the percent change from baseline that was compared to `threshold`. Absent in `threshold` mode. */
+    deviationPercent?: number;
     firing: boolean;
 }
 
-/** Decide a metric rule's level-triggered transition from its current window + prior firing state. */
+/**
+ * Decide a metric rule's level-triggered transition from its current window +
+ * prior firing state.
+ *
+ * In `deviation` mode the comparison subject is the percentage change from the
+ * trailing baseline rather than the raw window value, so `threshold` reads as
+ * "alert at +200% versus normal". Everything downstream — the fire/clear latch,
+ * the persisted state, the delivery — is identical; only the number being
+ * compared changes. A rise from a zero baseline yields an infinite change,
+ * which {@link compareMetric} treats as breaching any finite `gt` threshold: a
+ * metric going from nothing to something IS the signal there, not a
+ * divide-by-zero to suppress.
+ *
+ * A `lt` deviation rule therefore takes a NEGATIVE threshold — `-50` reads as
+ * "fire when this falls more than 50% below baseline", which is how you alert
+ * on traffic disappearing. A positive threshold on a `lt` rule fires on almost
+ * any window, since most changes are below it.
+ */
 export const evaluateMetricLevel = (
-    rule: Pick<MetricRule, "comparator" | "target" | "threshold">,
+    rule: Pick<MetricRule, "comparator" | "mode" | "target" | "threshold">,
     currentWindow: readonly MetricObservation[],
     wasFiring: boolean,
+    baselineWindow: ReadonlyArray<MetricObservation> = [],
 ): MetricLevelEvaluation => {
     const currentValue = computeMetric(rule.target, currentWindow);
-    const breaching = compareMetric(currentValue, rule.comparator, rule.threshold);
+    const deviationMode = rule.mode === "deviation";
+    const baselineValue = deviationMode ? computeMetric(rule.target, baselineWindow) : undefined;
+    const deviationPercent = baselineValue === undefined ? undefined : rateOfChangePercent(currentValue, baselineValue);
+    const subject = deviationPercent ?? currentValue;
+    const breaching = compareMetric(subject, rule.comparator, rule.threshold);
     const action = breaching && !wasFiring ? "fire" : !breaching && wasFiring ? "clear" : "none";
 
-    return { action, currentValue, firing: breaching };
+    return {
+        action,
+        ...(baselineValue === undefined ? {} : { baselineValue }),
+        currentValue,
+        ...(deviationPercent === undefined ? {} : { deviationPercent }),
+        firing: breaching,
+    };
 };
 
 /**
@@ -426,8 +518,8 @@ export const fireMetricRules = async <TId extends string>(
     let cleared = 0;
 
     for (const rule of rules) {
-        const { current, prior } = windowsFor(rule, observations, now);
-        const evaluation = evaluateMetricLevel(rule, current, ports.wasFiring(rule.ruleId));
+        const { baseline, current, prior } = windowsFor(rule, observations, now);
+        const evaluation = evaluateMetricLevel(rule, current, ports.wasFiring(rule.ruleId), baseline);
 
         if (evaluation.action === "none") {
             continue;
@@ -444,7 +536,12 @@ export const fireMetricRules = async <TId extends string>(
 
         // The prior-window value is still used for the "vs the prior window" narrative,
         // even though the fire/clear decision is level-triggered against persisted state.
-        const rendered = renderMetricAlert(rule, { currentValue: evaluation.currentValue, priorValue: computeMetric(rule.target, prior) });
+        const rendered = renderMetricAlert(rule, {
+            ...(evaluation.baselineValue === undefined ? {} : { baselineValue: evaluation.baselineValue }),
+            ...(evaluation.deviationPercent === undefined ? {} : { deviationPercent: evaluation.deviationPercent }),
+            currentValue: evaluation.currentValue,
+            priorValue: computeMetric(rule.target, prior),
+        });
         const hash = `${rule.target}:${rule.functionPath ?? "*"}`;
         // eslint-disable-next-line no-await-in-loop -- one insert per fired rule; small, serialized
         const id = await ports.insertAlert({
