@@ -209,7 +209,7 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
     // literal. The brand is reapplied at the query boundary, where it means
     // something. Same for the deployment pick below.
     const [projectId, setProjectId] = useState("");
-    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip");
+    const deployments = useQuery(api.deployments.listByProject, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a Lunora row id from app state; matches the Cypress project-id shape
     const [deploymentId, setDeploymentId] = useState("");
     // Deep-link in: open the focused trace's waterfall directly (`traces.get` needs
     // only org + traceId, so no project/deployment pick is required) as a one-shot
@@ -245,18 +245,19 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
 
         let cancelled = false;
 
-        client
-            .action(api.traces.getArchived, { organizationId, traceId })
-            .then((result) => {
+        void (async () => {
+            try {
+                const result = await client.action(api.traces.getArchived, { organizationId, traceId });
+
                 if (!cancelled) {
                     setArchived({ spans: result, traceId });
                 }
-            })
-            .catch(() => {
+            } catch {
                 if (!cancelled) {
                     setArchived({ spans: [], traceId });
                 }
-            });
+            }
+        })();
 
         return () => {
             cancelled = true;
@@ -274,17 +275,17 @@ export const TracesSection = ({ focusTraceId, organizationId, preloaded }: Secti
 
     const loadOlderFromArchive = (): void => {
         setLoadingOlder(true);
-        client
-            .action(api.traces.listArchived, { from, organizationId, to })
-            .then((rows) => {
+        void (async () => {
+            try {
+                const rows = await client.action(api.traces.listArchived, { from, organizationId, to });
+
                 setOlderArchive({ key: archiveKey, traces: rows });
-            })
-            .catch(() => {
+            } catch {
                 setOlderArchive({ key: archiveKey, traces: [] });
-            })
-            .finally(() => {
+            } finally {
                 setLoadingOlder(false);
-            });
+            }
+        })();
     };
 
     // Only honor the archive fetch that belongs to the trace currently open (a

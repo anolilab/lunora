@@ -297,24 +297,31 @@ export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult
     const kindLabel = KIND_LABELS[incident.kind];
     const where = incident.container == null ? "" : ` in container "${clampField(incident.container)}"`;
 
-    const topCulprit = bundle.spans[0]?.culprit;
-    const topMessage = bundle.spans[0]?.message;
+    // Destructured, and tested for truthiness rather than `=== undefined`: this
+    // package sets `noUncheckedIndexedAccess: false`, so `spans[0]` types as
+    // present even when the bundle carried none. Truthiness is honest about the
+    // runtime shape either way, and also treats an empty string as "no evidence",
+    // which is what the fallback copy means.
+    const [topSpan] = bundle.spans;
+    const topCulprit = topSpan?.culprit;
+    const topMessage = topSpan?.message;
 
-    const summary = `${clampField(incident.title)} — a ${kindLabel}${where} seen ${String(incident.count)} time(s). ${
-        topMessage === undefined ? "No representative error message was captured." : `Representative error: ${clampField(topMessage)}.`
-    }`;
+    const evidence = topMessage ? `Representative error: ${clampField(topMessage)}.` : "No representative error message was captured.";
+    const summary = `${clampField(incident.title)} — a ${kindLabel}${where} seen ${String(incident.count)} time(s). ${evidence}`;
 
-    const rootCauseHypothesis =
-        topCulprit === undefined
-            ? `Insufficient captured evidence to localize the ${kindLabel}; enable tracing on the affected deployment.`
-            : `${kindLabel === "out-of-memory" ? "Memory growth" : "Failures"} concentrated in ${clampField(topCulprit)}.`;
+    const concentration = kindLabel === "out-of-memory" ? "Memory growth" : "Failures";
+    const rootCauseHypothesis = topCulprit
+        ? `${concentration} concentrated in ${clampField(topCulprit)}.`
+        : `Insufficient captured evidence to localize the ${kindLabel}; enable tracing on the affected deployment.`;
 
+    const remediationFromTraces =
+        bundle.relatedTraceIds.length > 0
+            ? "Open the linked traces to find the failing span, patch it, and redeploy; resolve the incident once the pattern clears."
+            : "Reproduce against a preview deployment with tracing enabled, then patch the failing path.";
     const suggestedRemediation =
         incident.kind === "oom"
             ? "Raise the container memory limit or fix the leak in the hottest span, then redeploy and watch the incident."
-            : bundle.relatedTraceIds.length > 0
-              ? "Open the linked traces to find the failing span, patch it, and redeploy; resolve the incident once the pattern clears."
-              : "Reproduce against a preview deployment with tracing enabled, then patch the failing path.";
+            : remediationFromTraces;
 
     return {
         by: "deterministic",
