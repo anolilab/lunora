@@ -12,23 +12,23 @@ Lunora is a pnpm monorepo for the Lunora framework — a type-safe, real-time ba
 
 pnpm workspaces are `apps/*`, `packages/*`, `examples/*`, `tests/*`. The rest of the top level is not a workspace:
 
-| Path             | What it is                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/*`     | The published `@lunora/*` packages (+ the `lunorash` umbrella). See [Packages](#packages).                                            |
-| `apps/*`         | `docs` (site), `studio` (admin UI), `playground` (dev app), `cloud` (hosted control plane).                                           |
-| `examples/*`     | Runnable example apps (`todo-app`, `blog`, `expo`, `payment-demo`, …).                                                                |
-| `templates/*`    | Whole-project starters fetched by `lunora init` (`next`, `nuxt`, `expo`, `standalone`, …).                                            |
-| `registry/*`     | Copy-in registry items installed with `lunora registry add` (`auth`, `auth-ui-*`, `ai`, …).                                           |
-| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright) and `vis-templates`.                                                          |
-| `scripts/*`      | Repo checks + release helpers (`check-*.js` run from `postinstall`, `api-snapshot.js`).                                               |
-| `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                       |
-| `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package).       |
-| `protocol/`      | Wire-protocol spec + shared fixtures.                                                                                                 |
-| `plugins/*`      | The Claude Code / Codex agent plugin (`plugins/lunora`) — the `packages/cli/skills` payload + the end-of-turn `lunora verify` hook.   |
-| `plans/`         | Implementation plans handed to agents; `plans/README.md` is the index.                                                                |
-| `sdks/`          | Non-JS client SDKs (`python`, `go`, `ruby`, `rust`, `swift`, `java`, `kotlin`) + `lunora sdk generate` targets. See `sdks/README.md`. |
-| `patches/`       | pnpm patches applied to third-party deps.                                                                                             |
-| `marketing/`     | Brand + design tokens.                                                                                                                |
+| Path             | What it is                                                                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/*`     | The published `@lunora/*` packages (+ the `lunorash` umbrella). See [Packages](#packages).                                                    |
+| `apps/*`         | `docs` (site), `studio` (admin UI), `playground` (dev app), `cloud` (hosted control plane).                                                   |
+| `examples/*`     | Runnable example apps (`todo-app`, `blog`, `expo`, `payment-demo`, …).                                                                        |
+| `templates/*`    | Whole-project starters fetched by `lunora init` (`next`, `nuxt`, `expo`, `standalone`, …).                                                    |
+| `registry/*`     | Copy-in registry items installed with `lunora registry add` (`auth`, `auth-ui-*`, `ai`, …).                                                   |
+| `tests/*`        | Cross-cutting suites: `e2e` (`@lunora/e2e`, Playwright) and `vis-templates`.                                                                  |
+| `scripts/*`      | Repo checks + release helpers (`check-*.js` run from `postinstall`, `api-snapshot.js`).                                                       |
+| `api-snapshots/` | Committed public-API snapshots, one `<pkg>.api.md` per package — gated by `pnpm run api:check`.                                               |
+| `shared/`        | Bundler-inlined helpers, **not** a package. See [Top-level `shared/`](#top-level-shared--bundler-inlined-source-not-a-package).               |
+| `protocol/`      | Wire-protocol spec + shared fixtures.                                                                                                         |
+| `plugins/*`      | The Claude Code / Codex agent plugin (`plugins/lunora`) — the `packages/cli/skills` payload + the end-of-turn `lunora verify` hook.           |
+| `plans/`         | Implementation plans handed to agents; `plans/README.md` is the index.                                                                        |
+| `sdks/`          | Non-JS client SDKs (`python`, `go`, `ruby`, `rust`, `swift`, `java`, `kotlin`, `dart`) + `lunora sdk generate` targets. See `sdks/README.md`. |
+| `patches/`       | pnpm patches applied to third-party deps.                                                                                                     |
+| `marketing/`     | Brand + design tokens.                                                                                                                        |
 
 ## Build & Test Commands
 

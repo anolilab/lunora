@@ -418,6 +418,16 @@
                       "timeoutMinutes": 15
                       "directory": "sdks/kotlin"
                       "run": "bash build.sh"
+                    - "language": "dart"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                      "directory": "sdks/dart"
+                      # `pub get` first: `dart run` resolves `package:lunora/…`
+                      # through .dart_tool/package_config.json, which is
+                      # gitignored. --offline because this package declares no
+                      # dependencies — the resolve is local, and a conformance run
+                      # must never be able to become a network call.
+                      "run": "dart pub get --offline && dart run test/conformance.dart"
                     - "language": "swift"
                       # Swift ships with the macOS image, so this leg needs no
                       # third-party setup action.
@@ -485,6 +495,17 @@
                   unzip -q /tmp/kotlin.zip -d /tmp/kotlin
                   echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
 
+            # Pinned to an exact SDK version, not "stable": `dart format`'s style
+            # is chosen by a language version, and a moving toolchain would
+            # reformat the transport out from under a green PR. This is the dart
+            # leg's whole install — `dart format` and `dart analyze` ship with the
+            # SDK, so it needs no separate linter step below.
+            - "name": "Setup dart"
+              "if": "matrix.sdk.language == 'dart'"
+              "uses": "dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1" # v1.8.0
+              "with":
+                  "sdk": "3.13.0"
+
             - "name": "Setup ruby"
               "if": "matrix.sdk.language == 'ruby'"
               "uses": "ruby/setup-ruby@90be1154f987f4dc0fe0dd0feedac9e473aa4ba8" # v1.286.0
@@ -499,11 +520,13 @@
             # (or by SHA-256 for the two that ship as a downloaded artifact), so
             # a new release cannot change the rule set under a green PR.
             #
-            # Six of the seven. swift-format ships no binary on any release and
-            # has no versioned package, so the swift leg has nothing to install:
-            # it uses the toolchain's own copy, prints the version it ran, and
-            # asserts it against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh`. A
-            # runner image whose Swift moves fails that leg by name instead of
+            # Six of the eight. Two legs have nothing to install here, for
+            # opposite reasons. Dart's linter and formatter ARE the SDK, which the
+            # setup step above already pins to an exact version. swift-format
+            # ships no binary on any release and has no versioned package, so the
+            # swift leg uses the toolchain's own copy, prints the version it ran,
+            # and asserts it against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` —
+            # a runner image whose Swift moves fails that leg by name instead of
             # quietly linting against a rule set nobody chose.
             - "name": "Install ruff"
               "if": "matrix.sdk.language == 'python'"

@@ -1,10 +1,10 @@
 ---
 title: Non-JS SDKs
-description: Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java or Kotlin — vendored into your project and pinned to your CLI version.
+description: Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java, Kotlin or Dart/Flutter — vendored into your project and pinned to your CLI version.
 ---
 
 Lunora's own clients are TypeScript, but the [wire protocol](/docs/concepts/wire-protocol)
-is not TypeScript-bound. `lunora sdk generate` emits a client for seven other
+is not TypeScript-bound. `lunora sdk generate` emits a client for eight other
 languages, built from your deployment's own function surface.
 
 ```bash
@@ -24,6 +24,7 @@ in the consuming project.
 | Java     | `java`   | nothing; JDK only                                                    |
 | Kotlin   | `kotlin` | nothing; JDK + Kotlin stdlib                                         |
 | Swift    | `swift`  | nothing; Foundation only                                             |
+| Dart     | `dart`   | nothing; `dart:convert` only, so every Flutter target works          |
 | Rust     | `rust`   | `serde` + `serde_json`, already declared in the emitted `Cargo.toml` |
 | Ruby     | `ruby`   | `dry-struct` + `dry-types`, which the generated models require       |
 
@@ -73,18 +74,27 @@ your build at the generated directory:
 | Swift    | `.package(path: "sdk/swift")`, product `LunoraApi`. SwiftPM identifies a path package by its **directory name** |
 | Java     | `javac -sourcepath sdk/java`                                                                                    |
 | Kotlin   | `kotlinc sdk/kotlin …`                                                                                          |
+| Dart     | `lunora_sdk: {path: sdk/dart}` in `dependencies`; `import 'package:lunora_sdk/lunora_api.dart'`                 |
 
 ## What you get, and what you don't
 
 Every language implements the full wire codec, the stable subscription key, RPC,
 live subscriptions, the shape/poke protocol and resume-across-reconnect, and every
-client is safe to share across threads. All seven get typed argument and result
+client is safe to share across threads. All eight get typed argument and result
 models generated from your schema.
 
 One deliberate gap:
 
 - **Optimistic updates and the offline queue are JS-only.** The non-JS clients
   speak the protocol; they do not implement the client-side mutation queue.
+
+One thing only Dart gets:
+
+- **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
+  hands back a `Stream` a Flutter `StreamBuilder` consumes directly. It subscribes
+  on first listen and unsubscribes when the last listener cancels, so disposing the
+  widget disposes the subscription. The callback-shaped `subscribeList(...)` every
+  other language has is there too.
 
 Two things are worth knowing about the models everywhere:
 
@@ -106,7 +116,7 @@ Every SDK is tested against the same golden frames in
 [`protocol/fixtures/`](https://github.com/anolilab/lunora/tree/alpha/protocol/fixtures)
 as the reference TypeScript client, and
 [`protocol/conformance-cases.json`](https://github.com/anolilab/lunora/tree/alpha/protocol/conformance-cases.json)
-lists the cases every suite must exercise. Adding a name there turns all seven
+lists the cases every suite must exercise. Adding a name there turns all eight
 languages red until each one covers it.
 
 CI also generates each SDK into a scratch directory outside the repository, then

@@ -20,7 +20,7 @@ if [ -d /opt/homebrew/opt/openjdk/bin ]; then
     export PATH="/opt/homebrew/opt/openjdk/bin:$PATH"
 fi
 
-ALL=(python go ruby rust swift java kotlin)
+ALL=(python go ruby rust swift java kotlin dart)
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")
@@ -44,6 +44,11 @@ run_suite() {
         swift) (cd "$ROOT/sdks/swift" && swift test) ;;
         java) (cd "$ROOT/sdks/java" && bash build.sh) ;;
         kotlin) (cd "$ROOT/sdks/kotlin" && bash build.sh) ;;
+        # `pub get` first, because `dart run` needs .dart_tool/package_config.json
+        # and that directory is gitignored. --offline, because this package
+        # declares no dependencies: the resolve is local and must never be able to
+        # turn a conformance run into a network call.
+        dart) (cd "$ROOT/sdks/dart" && dart pub get --offline >/dev/null && dart run test/conformance.dart) ;;
         *)
             echo "unknown language: $1" >&2
             return 2

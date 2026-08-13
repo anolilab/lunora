@@ -25,11 +25,11 @@ three of them were.
 generated surface, so the result runs with **no Lunora package installed
 anywhere**. This is the same copy-in model as `lunora registry add`, and it is not
 a preference: the runtime packages the generated code used to import do not exist.
-`lunora` 404s on PyPI, RubyGems and crates.io, `dev.lunora:lunora` 404s on Maven
-Central, and `github.com/anolilab/lunora-go` 404s too — so the Go surface could
-not resolve its own import in a user's project at all, and only compiled in CI
-because the generated package happened to sit inside this repo's module.
-Publishing seven registries (Maven Central alone needs a build tool these
+`lunora` 404s on PyPI, RubyGems, crates.io and pub.dev, `dev.lunora:lunora` 404s
+on Maven Central, and `github.com/anolilab/lunora-go` 404s too — so the Go
+surface could not resolve its own import in a user's project at all, and only
+compiled in CI because the generated package happened to sit inside this repo's
+module. Publishing eight registries (Maven Central alone needs a build tool these
 transports do not have, plus groupId ownership and signing) is a larger project
 than the SDKs.
 
@@ -47,6 +47,7 @@ same shape as this repo's. `targets/<lang>.ts` carries the reasoning; the summar
 | swift    | `Package.swift` + `Sources/Lunora/` + `Sources/LunoraApi/` | `.package(path: "<out>")` + `.product(name:package:)`     |
 | java     | `dev/lunora/*.java` + `lunoraapi/Api.java`                 | `javac -sourcepath <out>`                                 |
 | kotlin   | `dev/lunora/*.kt` + `lunoraapi/Api.kt`                     | `kotlinc <out> …`                                         |
+| dart     | `pubspec.yaml` (`lunora_sdk`) + `lib/`                     | `lunora_sdk: {path: <out>}` in `dependencies`             |
 
 Two of those cost the consumer a line they would not otherwise write. Go needs the
 `replace`, because two packages in one module beat one flat package: the transport
@@ -55,11 +56,21 @@ named `error` or a result model named `Map` would be a redeclaration — a schem
 a user's project breaking the SDK's own compile. Swift needs `package:` spelled as
 the output DIRECTORY's name, because SwiftPM takes a path dependency's identity
 from the last path component and ignores the manifest's `name:`; a bare product
-name does not resolve either. Both measured, both recorded in their target file.
+name does not resolve either. Both measured, both recorded in their target file. Dart is the counter-example
+worth naming beside Swift, because the two look alike and are not: pub takes a
+path dependency's identity from the DEPENDED-ON `pubspec.yaml`'s `name:` field,
+not from the directory, so `lunora_sdk` is what a consumer writes no matter where
+they generated into. It is also the only target that emits ONE package rather
+than two units — `import 'lunora.dart'` inside `lib/` is a file import, not a
+module import, so the generated surface and the vendored transport coexist with
+no boundary to cross. The price is that nothing under `sdks/dart/lib/` may name
+its own package: every import there is relative, because the copy resolves under
+whatever name the emitted manifest declares and a `package:lunora/…`
+self-import would dangle in every generated SDK.
 
 ### What a consumer must install
 
-Five of seven: nothing.
+Six of eight: nothing.
 
 | Language     | Install                                                            |
 | ------------ | ------------------------------------------------------------------ |
@@ -67,12 +78,15 @@ Five of seven: nothing.
 | go           | nothing — stdlib only                                              |
 | java, kotlin | nothing — JDK only                                                 |
 | swift        | nothing — Foundation only                                          |
+| dart         | nothing — `dart:convert` / `dart:typed_data` only                  |
 | rust         | `serde` (derive) + `serde_json`, declared in the emitted manifests |
 | ruby         | `dry-struct` + `dry-types`, and only when models are emitted       |
 
 The two that are not empty are quicktype's, not the transports': the Ruby backend
 renders `Dry::Struct` types with no renderer option to avoid them, and Rust models
-are `serde` types. Cargo resolves Rust's from the emitted `Cargo.toml`, so only
+are `serde` types. Dart's models are quicktype's too and still add nothing — its
+backend renders hand-rolled `fromJson`/`toJson` over `dart:convert` rather than
+annotations needing a codec package. Cargo resolves Rust's from the emitted `Cargo.toml`, so only
 Ruby's is a manual step.
 
 ### Which vintage did I get
@@ -96,22 +110,68 @@ this directory and is what CI uses.
 ## Capability matrix
 
 This table exists for the same reason `PlatformCapabilities` does (see
-`CLAUDE.md`): seven independently hand-written transports drift, and silence is
+`CLAUDE.md`): eight independently hand-written transports drift, and silence is
 what lets the next consumer discover a gap at runtime. Update it in the same
 change that adds or removes a capability.
 
-| Capability                    | python | go  | ruby | rust | swift | java | kotlin |
-| ----------------------------- | ------ | --- | ---- | ---- | ----- | ---- | ------ |
-| Wire codec (all tags)         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Stable subscription key       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| RPC query / mutation / action | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     |
-| Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     |
+| Capability                    | python | go  | ruby | rust | swift | java | kotlin | dart |
+| ----------------------------- | ------ | --- | ---- | ---- | ----- | ---- | ------ | ---- |
+| Wire codec (all tags)         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Stable subscription key       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| RPC query / mutation / action | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Live subscriptions            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Shapes + poke protocol        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Resume across reconnect       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Subscription as a Stream      | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+
+**Subscription as a Stream, dart.** The one row where a target does something the
+others do not, and it is the reason the port exists: `client.watch(path, args)`
+and the generated `watchX(args)` return a `Stream`, which a Flutter
+`StreamBuilder` consumes with no adapter. The stream subscribes on first listen
+and unsubscribes when the last listener cancels, so disposing a widget disposes
+the subscription and there is no `dispose()` override to forget. The
+callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
+value whose lifetime is not a widget's.
+
+**Typed models, dart.** Dart is the target where quicktype's default output was
+expected to fail the way the JVM backends do and did not. Its backend renames
+properties exactly as Java's and Kotlin's do — a wire `2fa` becomes a `the2Fa`
+field — but its DEFAULT render (that is, without `just-types`) writes the exact
+wire key as a string literal inside `fromJson`/`toJson`, and an enum keeps its
+wire value in an `EnumValues` table. Measured against the same adversarial key
+set that defeated the JVM backends (`2fa`, `ID`, `URLs`, `some-key`, `user_name`,
+`channelId`, and an `image-url` enum); all seven survived, over `dart:convert`
+and no other dependency. So `targets/dart.ts` is a normal quicktype target and
+there is no third hand-written model emitter.
+
+What that output gets WRONG is fixed in the emitter, the way `narrowBareExcept`
+fixes Python's swallowed `KeyboardInterrupt`. Two defects, both reachable by no
+renderer option and both already familiar from sibling ports:
+
+- **An unset optional list is sent as `[]`.** `field == null ? [] : List<…>` in
+  `toJson`, and its mirror in `fromJson`, so `v.optional(v.array(…))` left unset
+  arrives as an empty array rather than an absent key — and an absent key decodes
+  to `[]` rather than to null. The same class of bug as Rust's `"limit": null`.
+- **An unset optional map THROWS.** `Map.from(field!)` for a `v.record()` — a
+  null-assertion on a field quicktype just declared nullable — so constructing OR
+  serialising a model whose optional record is unset dies with "Null check
+  operator used on a null value". Not a divergence: a hard crash on the first
+  call, in every generated Dart SDK whose schema carries one.
+
+The `!` is what tells the two cases apart, and it is quicktype's own nullability
+marker rather than a guess: a REQUIRED record renders `Map.from(field)` with no
+`!` at all. Both repairs are pinned in `packages/codegen/__tests__/sdk-dart.test.ts`
+against quicktype's real output, so a version bump that changes the emitted shape
+turns that test red instead of silently restoring the crash.
+
+Unset optionals are dropped from the body by `LunoraClient.wireValue`, which is
+Dart's counterpart to Swift's `JSONEncoder` omitting a nil — the pruning is
+scoped to generated models, where null can only mean "unset", and never applied
+to a hand-built argument tree where the caller chose it.
 
 **Typed models, JVM.** The two JVM targets are the only ones whose models are NOT
 rendered by quicktype, and the exception is measured rather than stylistic:
@@ -161,6 +221,16 @@ inserted raised `RuntimeError: dictionary changed size during iteration` on 10 o
 enough to fail inside one run, which is the CPython counterpart of the Swift
 leg's TSan pass — the failures above were measured at the stock interval.
 
+Dart carries no lock either, and for a different reason again: isolates share no
+mutable memory, so the socket read loop and the code calling `subscribe` are the
+same isolate's event loop, and every method that touches the registry is
+synchronous end to end — there is no `await` between reading the id counter and
+writing it, and therefore no point for a second event to land in. That is why
+this port has no counterpart to the four-thread subscription-count case the other
+six run: it would assert nothing the language does not already guarantee.
+Reaching one client from two isolates is not supported; give each isolate its
+own, as one would with any Dart object.
+
 Rust carries no lock and needs none: every method that touches that state takes
 `&mut self`, so two threads reaching it at once is a compile error rather than a
 data race, and with no interior mutability, `static` or `unsafe` in the client
@@ -182,19 +252,22 @@ Each transport is held to its own ecosystem's standard tools, run by
 narrow it). CI runs the identical script per leg, so the local check and the gate
 cannot drift.
 
-| Language | Format                                | Lint                       | Config             |
-| -------- | ------------------------------------- | -------------------------- | ------------------ |
-| python   | `ruff format --check`                 | `ruff check`               | `pyproject.toml`   |
-| go       | `gofmt -l`                            | `go vet`                   | — (tool defaults)  |
-| ruby     | `rubocop` (layout cops)               | `rubocop`                  | `.rubocop.yml`     |
-| rust     | `cargo fmt --check`                   | `cargo clippy -D warnings` | `rustfmt.toml`     |
-| swift    | `swift format lint --strict`          | same                       | `.swift-format`    |
-| java     | `google-java-format --aosp --dry-run` | `javac -Xlint:all -Werror` | — (`--aosp` = 4sp) |
-| kotlin   | `ktlint`                              | `ktlint`                   | `.editorconfig`    |
+| Language | Format                                | Lint                         | Config                  |
+| -------- | ------------------------------------- | ---------------------------- | ----------------------- |
+| python   | `ruff format --check`                 | `ruff check`                 | `pyproject.toml`        |
+| go       | `gofmt -l`                            | `go vet`                     | — (tool defaults)       |
+| ruby     | `rubocop` (layout cops)               | `rubocop`                    | `.rubocop.yml`          |
+| rust     | `cargo fmt --check`                   | `cargo clippy -D warnings`   | `rustfmt.toml`          |
+| swift    | `swift format lint --strict`          | same                         | `.swift-format`         |
+| java     | `google-java-format --aosp --dry-run` | `javac -Xlint:all -Werror`   | — (`--aosp` = 4sp)      |
+| kotlin   | `ktlint`                              | `ktlint`                     | `.editorconfig`         |
+| dart     | `dart format --set-exit-if-changed`   | `dart analyze --fatal-infos` | `analysis_options.yaml` |
 
-Six of the seven tools are pinned in CI by version or by SHA-256, so a new
-release cannot change the rule set under a green PR. swift-format is the
-exception, and not by choice: it ships no binary on any release and no versioned
+Seven of the eight tools are pinned in CI by version or by SHA-256, so a new
+release cannot change the rule set under a green PR. Dart's are pinned by the
+same mechanism from the other end — its formatter and linter ARE the SDK, so
+`dart-lang/setup-dart` pinning an exact SDK version pins both, and that leg needs
+no separate install step. swift-format is the exception, and not by choice: it ships no binary on any release and no versioned
 package, so the swift leg uses the Swift toolchain's own copy. Its pin is
 therefore an assertion — `SWIFT_FORMAT_VERSION` in `lint-all.sh`, checked against
 the version the tool reports, which the summary line prints either way
@@ -206,8 +279,18 @@ of your own, pass it and the version to expect from it —
 release a toolchain calls `6.3.0` reports `603.0.0`, and `swift format` ignores a
 `swift-format` on `PATH`.
 
+Two dart-specific settings, for the same reason rustfmt needs `--config-path`.
+`dart format --language-version=3.6` is passed explicitly rather than left to
+discovery: the style is chosen by the SDK constraint in the nearest `pubspec.yaml`,
+the smoke lives outside `sdks/dart/` and there is no pubspec above `sdks/smoke/`,
+so left alone the smoke would be formatted against the LATEST style while the
+transport is formatted against 3.6 — two rule sets inside one leg. Keep it in step
+with `sdks/dart/pubspec.yaml`. And `dart analyze --fatal-infos`, because
+`dart analyze` exits 0 on an info-level lint by default, which is where most of
+`analysis_options.yaml` reports.
+
 A tool missing locally reports `SKIP`, never
-`PASS` — not everyone has seven toolchains, and a check that did not run must not
+`PASS` — not everyone has eight toolchains, and a check that did not run must not
 read as one that passed. CI sets `SDK_LINT_REQUIRE_TOOLS=1`, which turns that
 `SKIP` into a failure: there the install step just ran, so a missing tool means it
 broke, and a gate that skips everything is green for the worst possible reason.
@@ -239,11 +322,11 @@ same files the TypeScript client is tested against.
 coverage drifted badly before that list existed, leaving the decode-side bounds
 unasserted in two ports for several commits with every gate green.
 
-**All seven suites read that file at run time and fail if the run did not cover
+**All eight suites read that file at run time and fail if the run did not cover
 it**, so adding a name there turns every language red until it is covered. The
 evidence is produced by the case executing, never by a suite listing names it
 claims to cover, and the mechanism is whatever each runner offers rather than one
-shape forced onto all seven:
+shape forced onto all eight:
 
 | Language | Mechanism                                                                                                |
 | -------- | -------------------------------------------------------------------------------------------------------- |
@@ -254,15 +337,16 @@ shape forced onto all seven:
 | swift    | no after-all hook that can fail in XCTest, so likewise — hence `caseX` methods and one dispatching test  |
 | java     | each case calls `covers()`; the end of `main` is the after-all hook                                      |
 | kotlin   | as java                                                                                                  |
+| dart     | each case calls `covers()`; the end of `main` is the after-all hook, as java                             |
 
 Where the manifest drives the run, a required name with no dispatch arm fails,
 which is the same guarantee from the other direction: the only way to go green is
 to execute a case under that name.
 
 Run all of them at once with `./sdks/run-all.sh`, which fans the suites out in
-parallel — they are seven independent toolchains reading the same read-only
+parallel — they are eight independent toolchains reading the same read-only
 fixtures, so the whole set costs about as long as the slowest compiler rather
-than the sum of all seven. Pass language names to narrow it
+than the sum of all eight. Pass language names to narrow it
 (`./sdks/run-all.sh go rust`). Or one at a time:
 
 | Language | Run the suite                                                           | Toolchain           |
@@ -274,6 +358,7 @@ than the sum of all seven. Pass language names to narrow it
 | swift    | `swift test`                                                            | Foundation only     |
 | java     | `PATH="$JDK_BIN:$PATH" bash build.sh`                                   | JDK only, see below |
 | kotlin   | `PATH="$JDK_BIN:$PATH" bash build.sh`                                   | kotlinc + JDK       |
+| dart     | `dart pub get --offline && dart run test/conformance.dart`              | Dart SDK only       |
 
 **The JVM legs need a real JDK on `PATH`.** On macOS `/usr/bin/java` is Apple's
 stub, which reports "No Java runtime present" and does not run anything, so
@@ -296,14 +381,14 @@ outside the Go module, so the test cache cannot see those files change and repla
 a PASS recorded before the edit. Without it, editing a fixture or the manifest
 leaves the go leg green without having run.
 
-CI runs all seven per PR (`sdk-conformance` in `.github/workflows/test.yml`),
+CI runs all eight per PR (`sdk-conformance` in `.github/workflows/test.yml`),
 and each leg also runs `./sdks/generated-check.sh <lang>` — the generated surface
 hardcodes the runtime's call signatures, and nothing else pins that coupling.
 
 ## The generated-SDK check
 
 ```bash
-./sdks/generated-check.sh            # all seven, sequentially
+./sdks/generated-check.sh            # all eight, sequentially
 ./sdks/generated-check.sh go rust    # a subset
 ```
 
@@ -328,8 +413,17 @@ build after the same bug was fixed in Ruby.
 
 The smoke programs are `sdks/smoke/<lang>/`, and each asserts the same thing: that
 a generated call reaches the wire as
-`{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}`. They sit outside
+`{"args":{"channelId":"chan_1"},"functionPath":"messages:list"}` — note the absent
+`limit`, which is what makes this assertion catch the unset-optional bug at all. They sit outside
 every transport's tree because that is what they are — consumer code, importing
 `lunorasdk/lunoraapi` and `import LunoraApi`, which resolve only against generated
 output. `--from sdks` is passed for them, because the default fetch is the CLI's
-release tag and six of the seven transports do not exist at any released tag yet.
+release tag and seven of the eight transports do not exist at any released tag
+yet.
+
+The dart leg runs `dart analyze` in BOTH the generated package and the consumer,
+and the first is the one that matters: `dart analyze` only reports on the package
+it runs in, so from the consumer it type-checks the smoke's use of the surface
+and stays silent about the surface itself — measured, not assumed. Run inside the
+generated package it is the counterpart of `swift build`, and it covers
+quicktype's models too.

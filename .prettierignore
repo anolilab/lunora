@@ -63,3 +63,4 @@ marketing/videos/build/
 # swiftpm and cargo intermediates that no CI checkout even contains.
 sdks/*/.build/
 sdks/**/target/
+sdks/**/.dart_tool/
