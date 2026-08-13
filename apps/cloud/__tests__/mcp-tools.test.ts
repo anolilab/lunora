@@ -35,7 +35,7 @@ describe(createMcpRouteHandler, () => {
     });
 
     it("403s when the deploy key is invalid — before exposing tools/list", async () => {
-        const verifyKey = vi.fn(() => Promise.resolve(false));
+        const verifyKey = vi.fn<(key: string, environment: unknown) => Promise<boolean>>(() => Promise.resolve(false));
         const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey });
         const response = await handler(rpc("tools/list"), {});
 
@@ -50,6 +50,7 @@ describe(createMcpRouteHandler, () => {
             verifyKey: () => Promise.resolve(true),
         });
         const response = await handler(rpc("tools/list"), {});
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
         const payload = (await response.json()) as { result: { tools: { name: string }[] } };
 
         expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
@@ -75,6 +76,7 @@ describe(createMcpRouteHandler, () => {
 
         const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
         const response = await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {});
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
         const payload = (await response.json()) as { result: { isError: boolean } };
 
         expect(seen).toStrictEqual({
@@ -89,6 +91,7 @@ describe(createMcpRouteHandler, () => {
     it("reports isError for an unknown tool without dispatching anywhere", async () => {
         const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
         const response = await handler(rpc("tools/call", { name: "nope" }), {});
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
         const payload = (await response.json()) as { result: { isError: boolean } };
 
         expect(payload.result.isError).toBe(true);

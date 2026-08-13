@@ -102,7 +102,7 @@ describe("orchestrator verify phase", () => {
 describe("handler release flow", () => {
     it("uploads the versioned script from createDeployment, activates it, and emits released", async () => {
         let uploadedScript = "";
-        const activate = vi.fn(() => Promise.resolve());
+        const activate = vi.fn<NonNullable<DeployBackend["activateDeployment"]>>(() => Promise.resolve());
         const capturing: Provisioner = {
             deploy: (spec) => {
                 uploadedScript = spec.scriptName;
@@ -125,7 +125,7 @@ describe("handler release flow", () => {
     });
 
     it("fails the release without activating when the health check fails", async () => {
-        const activate = vi.fn(() => Promise.resolve());
+        const activate = vi.fn<NonNullable<DeployBackend["activateDeployment"]>>(() => Promise.resolve());
         const statuses: string[] = [];
 
         const response = await handleDeployRequest(
@@ -181,7 +181,7 @@ describe("dispatcher alias routing", () => {
     });
 
     it("createRouteResolver caches lookups and fails open to null", async () => {
-        const fetchMock = vi.fn(() => Promise.resolve(Response.json({ scriptName: "app-v3" })));
+        const fetchMock = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(Response.json({ scriptName: "app-v3" })));
         const resolve = createRouteResolver({
             controlPlaneToken: "t",
             controlPlaneUrl: "https://cp",

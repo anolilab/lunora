@@ -41,7 +41,8 @@ describe("admin token at-rest sealing", () => {
     it("returns undefined for a sealed token when the key is missing (never leaks ciphertext)", async () => {
         const sealed = await sealAdminToken("adm_secret", KEY);
 
-        await expect(resolveAdminToken(sealed, undefined)).resolves.toBeUndefined();
+        // No key configured at all — the omitted argument IS the case under test.
+        await expect(resolveAdminToken(sealed)).resolves.toBeUndefined();
     });
 
     it("fails to decrypt a sealed token under the wrong key", async () => {

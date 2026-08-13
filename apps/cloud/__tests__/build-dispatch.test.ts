@@ -24,7 +24,17 @@ const runnerPorts = (overrides: Partial<BuildRunnerPorts> = {}): BuildRunnerPort
 const queue = (builds: ClaimedBuild[]): ((runnerId: string) => Promise<ClaimedBuild | null>) => {
     let index = 0;
 
-    return () => Promise.resolve(index < builds.length ? builds[index++] : null);
+    return () => {
+        if (index >= builds.length) {
+            return Promise.resolve(null);
+        }
+
+        const build = builds[index];
+
+        index += 1;
+
+        return Promise.resolve(build);
+    };
 };
 
 const ports = (overrides: Partial<BuildDispatchPorts>): BuildDispatchPorts => {
