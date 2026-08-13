@@ -49,7 +49,8 @@ describe(createMcpRouteHandler, () => {
             routes: [rollbackRoute, route("/v1/secrets", { auth: "session" })],
             verifyKey: () => Promise.resolve(true),
         });
-        const payload = (await (await handler(rpc("tools/list"), {})).json()) as { result: { tools: { name: string }[] } };
+        const response = await handler(rpc("tools/list"), {});
+        const payload = (await response.json()) as { result: { tools: { name: string }[] } };
 
         expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
     });
@@ -73,9 +74,8 @@ describe(createMcpRouteHandler, () => {
         };
 
         const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
-        const payload = (await (
-            await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {})
-        ).json()) as { result: { isError: boolean } };
+        const response = await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {});
+        const payload = (await response.json()) as { result: { isError: boolean } };
 
         expect(seen).toStrictEqual({
             authorization: "Bearer dk_agent", // gitleaks:allow -- the same fabricated fixture, asserted as forwarded verbatim
@@ -88,7 +88,8 @@ describe(createMcpRouteHandler, () => {
 
     it("reports isError for an unknown tool without dispatching anywhere", async () => {
         const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
-        const payload = (await (await handler(rpc("tools/call", { name: "nope" }), {})).json()) as { result: { isError: boolean } };
+        const response = await handler(rpc("tools/call", { name: "nope" }), {});
+        const payload = (await response.json()) as { result: { isError: boolean } };
 
         expect(payload.result.isError).toBe(true);
     });

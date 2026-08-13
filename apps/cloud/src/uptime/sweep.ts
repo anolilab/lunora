@@ -95,7 +95,7 @@ const selectProbeWindow = <T extends { _id: string }>(deployments: ReadonlyArray
         return [...deployments];
     }
 
-    const sorted = [...deployments].sort((a, b) => (a._id < b._id ? -1 : a._id > b._id ? 1 : 0));
+    const sorted = [...deployments].toSorted((a, b) => (a._id < b._id ? -1 : a._id > b._id ? 1 : 0));
     const windows = Math.ceil(sorted.length / MAX_PROBES_PER_SWEEP);
     const offset = (Math.floor(now / MINUTE_MS) % windows) * MAX_PROBES_PER_SWEEP;
 

@@ -51,11 +51,11 @@ describe(foldSessions, () => {
         );
 
         expect(session?.errorCount).toBe(1);
-        expect(session?.models).toEqual(["model-a", "model-b"]);
+        expect(session?.models).toStrictEqual(["model-a", "model-b"]);
     });
 
     it("skips turns with no sessionId (fail-open until the framework emits one)", () => {
-        expect(foldSessions([turn({ sessionId: undefined }), turn({ sessionId: "" })], 10)).toEqual([]);
+        expect(foldSessions([turn({ sessionId: undefined }), turn({ sessionId: "" })], 10)).toStrictEqual([]);
     });
 
     it("orders sessions newest-active first and honors the limit", () => {
@@ -64,7 +64,7 @@ describe(foldSessions, () => {
             2,
         );
 
-        expect(sessions.map((session) => session.sessionId)).toEqual(["new", "mid"]);
+        expect(sessions.map((session) => session.sessionId)).toStrictEqual(["new", "mid"]);
     });
 
     it("treats missing token counts as zero", () => {

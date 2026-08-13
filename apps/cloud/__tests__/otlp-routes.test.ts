@@ -40,11 +40,15 @@ const okSpan = (index: number): Record<string, unknown> => {
 
 describe("oTLP ingest routes", () => {
     it("401s a request with no bearer token", async () => {
-        expect((await jsonPost("/v1/traces", { resourceSpans: [] })).status).toBe(401);
+        const response = await jsonPost("/v1/traces", { resourceSpans: [] });
+
+        expect(response.status).toBe(401);
     });
 
     it("401s a request with an unknown key", async () => {
-        expect((await jsonPost("/v1/traces", { resourceSpans: [] }, { authorization: "Bearer nope" })).status).toBe(401);
+        const response = await jsonPost("/v1/traces", { resourceSpans: [] }, { authorization: "Bearer nope" });
+
+        expect(response.status).toBe(401);
     });
 
     it("accepts a valid JSON trace batch with an empty success body", async () => {
