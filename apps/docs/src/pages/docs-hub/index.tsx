@@ -62,7 +62,7 @@ const popular = [
 
 const DocsHub: FC = () => (
     <div className="bg-canvas" data-theme="dark">
-        <PageHeader panelWidth="wide" size="short">
+        <PageHeader align="bottom" panelWidth="wide" size="short">
             <div className="mb-7 flex items-center justify-between gap-4">
                 <Kicker>Documentation</Kicker>
                 <Kicker>Alpha</Kicker>
