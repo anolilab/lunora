@@ -5,7 +5,6 @@ import type {
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
-    ShardAsyncSqlExec,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -244,20 +243,6 @@ const createReferenceHost = (): ReferenceHost => {
         },
     };
 
-    const asyncSql: ShardAsyncSqlExec = {
-        all: async (query_, params) => {
-            const statement = database.prepare(query_);
-
-            return statement.all(...(params as import("node:sqlite").SQLInputValue[]));
-        },
-        run: async (query_, params) => {
-            const statement = database.prepare(query_);
-            const result = statement.run(...(params as import("node:sqlite").SQLInputValue[]));
-
-            return { rowsAffected: Number(result.changes) };
-        },
-    };
-
     const drainQueue = (): void => {
         if (shardState.running || shardState.pending.length === 0) {
             return;
@@ -361,7 +346,6 @@ const createReferenceHost = (): ReferenceHost => {
 
     const shard: ShardHost = {
         alarms,
-        asyncSql,
         runSerialized,
         sql,
         transaction,

@@ -12,7 +12,7 @@
  * gets to Cloudflare's Durable Object recycle-and-rehydrate cycle.
  */
 
-import type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
+import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 import Database from "better-sqlite3";
 
 /**
@@ -39,8 +39,8 @@ const normalizeBinding = (value: unknown): SqliteBindable =>
     value === undefined ? null : (value as SqliteBindable);
 
 /**
- * Build the `ShardSqlExec` (sync) and `ShardAsyncSqlExec` (promise-wrapped)
- * executors over one `better-sqlite3` connection.
+ * Build the `ShardSqlExec` (sync) executor over one `better-sqlite3`
+ * connection.
  *
  * Unlike the `node:sqlite` reference host — which sniffs `select` off the
  * trimmed, lowercased query text to decide `.all()` vs `.run()` — this uses
@@ -86,24 +86,6 @@ const createSql = (database: Database.Database): ShardSqlExec => {
                 },
                 toArray: () => [...rows],
             };
-        },
-    };
-};
-
-const createAsyncSql = (database: Database.Database): ShardAsyncSqlExec => {
-    return {
-        // eslint-disable-next-line @typescript-eslint/require-await -- the contract's async surface wraps a synchronous engine; no await needed, but the return type is a Promise
-        all: async (query, params) => {
-            const statement = database.prepare(query);
-
-            return statement.all(...params.map((value) => normalizeBinding(value))) as SqlRow[];
-        },
-        // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
-        run: async (query, params) => {
-            const statement = database.prepare(query);
-            const result = statement.run(...params.map((value) => normalizeBinding(value)));
-
-            return { rowsAffected: result.changes };
         },
     };
 };
@@ -326,7 +308,6 @@ const createNodeShardHost = (
     database.pragma("journal_mode = WAL");
 
     const sql = createSql(database);
-    const asyncSql = createAsyncSql(database);
     const { alarms, dispose: disposeAlarms } = createAlarms(database, options.onAlarm);
 
     /**
@@ -404,7 +385,6 @@ const createNodeShardHost = (
 
     const host: ShardHost = {
         alarms,
-        asyncSql,
         runSerialized,
         shardKey: options.shardKey,
         sql,

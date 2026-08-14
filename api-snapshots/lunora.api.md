@@ -3293,10 +3293,6 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
-### `ShardAsyncSqlExec` (interface)
-
-Re-exported from `@lunora/platform` — signature tracked at its source.
-
 ### `ShardDirectory` (type)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
