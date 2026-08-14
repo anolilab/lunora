@@ -70,10 +70,12 @@
     },
     "devDependencies": {
         "@angular/core": "catalog:angular",
+        "@angular/platform-browser": "catalog:angular",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "jsdom": "catalog:frontend",
         "rxjs": "catalog:angular",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
