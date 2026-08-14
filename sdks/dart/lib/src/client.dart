@@ -155,6 +155,7 @@ class LunoraClient {
   bool _wasEverConnected = false;
   bool _flushing = false;
   bool _flushAgain = false;
+  bool _closed = false;
 
   /// Registers the sender used for subscription frames. Call once the socket is
   /// open.
@@ -218,12 +219,21 @@ class LunoraClient {
   /// observers rather than through a Future.
   Future<int> hydrate() => _queue.hydrate();
 
+  /// Whether [close] has been called. A closed client accepts no further calls.
+  bool get closed => _closed;
+
   /// Reject every queued write so no caller is left awaiting one, and drop every
   /// subscription.
+  ///
+  /// Terminal: a call made afterwards fails fast rather than being queued
+  /// against a client that will never flush again. Without that, a write issued
+  /// after `close` re-entered the queue this method had just drained and its
+  /// Future never settled — the exact hang `close` exists to prevent.
   ///
   /// Durable storage is deliberately left intact: closing an app must not
   /// discard writes the next session will restore.
   void close() {
+    _closed = true;
     _connected = false;
     _send = null;
     _subscriptions.clear();
@@ -310,6 +320,8 @@ class LunoraClient {
     // One stable idempotency key per logical write, shared by the direct send
     // and any replay of it, so the server can deduplicate a write it already
     // committed rather than applying it twice.
+    _assertOpen();
+
     final id = mutationId ?? nextMutationId();
     final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
@@ -343,7 +355,15 @@ class LunoraClient {
   /// replay for it would be a lie.
   Future<Object?> action(String functionPath, {Object? args, String? shardKey}) async => (await _rpc(functionPath, args: args, shardKey: shardKey)).result;
 
+  void _assertOpen() {
+    if (_closed) {
+      throw const LunoraApiException(clientClosed, 'this client is closed');
+    }
+  }
+
   Future<({Object? result, int? commitCursor})> _rpc(String functionPath, {Object? args, String? shardKey, String? mutationId}) async {
+    _assertOpen();
+
     final post = _post;
 
     if (post == null) {
@@ -371,39 +391,19 @@ class LunoraClient {
   /// Projects a generated model into the tree [encodeWire] accepts, through the
   /// `toJson()` quicktype renders on every model.
   ///
-  /// The null pruning is the point, not tidiness. quicktype's Dart backend emits
-  /// EVERY field in `toJson()`, so an unset optional reaches the wire as
-  /// `"limit": null` — which `v.optional()` rejects, failing the call. Two
-  /// sibling ports shipped exactly that bug before their smoke tests called a
-  /// generated method rather than only compiling one. Swift avoids it because
-  /// `JSONEncoder` omits a nil by default; this is that same behaviour, applied
-  /// where Dart does not give it for free.
+  /// A faithful pass-through, deliberately. It used to prune null fields, which
+  /// was wrong for half the schemas it saw: an unset `v.optional()` must reach
+  /// the wire as an ABSENT key, but a `v.nullable()` set to null must reach it as
+  /// a PRESENT key holding null, and nothing at this boundary can tell the two
+  /// apart — the model has already flattened both to a null field. Pruning broke
+  /// every nullable argument; not pruning broke every unset optional.
   ///
-  /// Scoped to generated models, which is why it lives here and not in
-  /// [encodeWire]: a model's unset optional is the ONLY thing null can mean at
-  /// this boundary, whereas a null inside a hand-built argument tree is a value
-  /// the caller chose and must survive.
-  static Object? wireValue(dynamic model) {
-    if (model == null) {
-      return null;
-    }
-
-    return _pruneUnset(model is Map || model is List ? model : model.toJson());
-  }
-
-  static Object? _pruneUnset(Object? value) {
-    if (value is Map) {
-      return <String, Object?>{
-        for (final entry in value.entries)
-          if (entry.value != null) '${entry.key}': _pruneUnset(entry.value),
-      };
-    }
-    if (value is List) {
-      return <Object?>[for (final item in value) _pruneUnset(item)];
-    }
-
-    return value;
-  }
+  /// So the distinction is drawn where it is still visible, in the emitter:
+  /// `guardOptionalFields` in `targets/dart.ts` makes `toJson()` omit an unset
+  /// optional and keep a required null, using the `required` marker quicktype
+  /// itself puts in the constructor. By the time a map arrives here it is already
+  /// right, and second-guessing it is what caused the bug.
+  static Object? wireValue(dynamic model) => model == null || model is Map || model is List ? model : model.toJson();
 
   // ─── Frame builders ───────────────────────────────────────────────────────
 
@@ -487,32 +487,23 @@ class LunoraClient {
   /// A live query as a `Stream`, so a Flutter widget can bind it with
   /// `StreamBuilder` and let the framework own the lifecycle.
   ///
-  /// The subscription starts when the stream is first listened to and is torn
-  /// down when the last listener cancels — which is what makes this the right
-  /// default in a widget tree: disposing the widget disposes the subscription,
-  /// with no `dispose()` override to forget. Use [subscribe] directly when the
-  /// value's lifetime is not a widget's.
-  Stream<Object?> watch(String functionPath, {Object? args}) {
-    LunoraUnsubscribe? cancel;
-    late final StreamController<Object?> controller;
+  /// Each listener opens its OWN subscription, which starts when it listens and
+  /// is torn down when it cancels — so disposing a widget disposes exactly its
+  /// own subscription, with no `dispose()` override to forget, and two
+  /// `StreamBuilder`s can watch one query without either interfering with the
+  /// other. Use [subscribe] directly when the value's lifetime is not a
+  /// widget's.
+  ///
+  /// `Stream.multi` and not a plain `StreamController`: a single-subscription
+  /// controller throws "Stream has already been listened to" on a second
+  /// listener AND on a re-listen after cancel, both of which a widget tree does
+  /// routinely — a stream held in `State` and handed to two builders, or a
+  /// builder that rebuilds after its subscription was cancelled.
+  Stream<Object?> watch(String functionPath, {Object? args}) => Stream<Object?>.multi((controller) {
+        final cancel = subscribe(functionPath, args: args, onData: controller.add, onError: controller.addError);
 
-    controller = StreamController<Object?>(
-      onListen: () {
-        cancel = subscribe(
-          functionPath,
-          args: args,
-          onData: controller.add,
-          onError: (error) => controller.addError(error),
-        );
-      },
-      onCancel: () {
-        cancel?.call();
-        cancel = null;
-      },
-    );
-
-    return controller.stream;
-  }
+        controller.onCancel = cancel;
+      });
 
   /// Opens a partially-replicated keyed view. `onRows` fires once per applied
   /// poke with the view's full contents, in insertion order.
@@ -543,16 +534,18 @@ class LunoraClient {
       return;
     }
 
-    for (final entry in _subscriptions.entries) {
-      sender(
-        buildSubscribeFrame(
-          entry.key,
-          entry.value.functionPath,
-          entry.value.args,
-          sinceSeq: entry.value.cursor,
-          sinceEpoch: entry.value.epoch,
-        ),
-      );
+    // Every frame is BUILT before any is sent. The sender writes a socket this
+    // client does not own, and a write that synchronously unsubscribes — or
+    // throws into a handler that does — would otherwise mutate `_subscriptions`
+    // while it is being iterated. Swift's port serialises this under its lock
+    // for the same reason.
+    final frames = <Map<String, Object?>>[
+      for (final entry in _subscriptions.entries)
+        buildSubscribeFrame(entry.key, entry.value.functionPath, entry.value.args, sinceSeq: entry.value.cursor, sinceEpoch: entry.value.epoch),
+    ];
+
+    for (final frame in frames) {
+      sender(frame);
     }
   }
 
@@ -903,6 +896,10 @@ class LunoraClient {
   /// One drain-and-replay pass. See [flushOfflineQueue], which owns the
   /// re-entrancy and the coalesced-reconnect loop around it.
   Future<void> _flushOnce() async {
+    if (_closed) {
+      return;
+    }
+
     // Weed out writes whose assumptions expired while offline before draining
     // the rest. `drainConflict` rejects each one itself.
     for (final stale in _queue.drainConflict()) {
@@ -956,7 +953,13 @@ class LunoraClient {
       } on Object {
         // Uncoded: a transport failure. Transient — put this write and every
         // one after it back at the front, in order, and stop the flush.
-        _queue.requeue(sendable.sublist(index));
+        //
+        // Unless the client was closed underneath us, in which case `close` has
+        // already rejected these callers and re-queuing would leave the queue
+        // holding entries nobody will ever settle.
+        if (!_closed) {
+          _queue.requeue(sendable.sublist(index));
+        }
 
         return;
       }

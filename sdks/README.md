@@ -226,10 +226,25 @@ marker rather than a guess: a REQUIRED record renders `Map.from(field)` with no
 against quicktype's real output, so a version bump that changes the emitted shape
 turns that test red instead of silently restoring the crash.
 
-Unset optionals are dropped from the body by `LunoraClient.wireValue`, which is
-Dart's counterpart to Swift's `JSONEncoder` omitting a nil — the pruning is
-scoped to generated models, where null can only mean "unset", and never applied
-to a hand-built argument tree where the caller chose it.
+There is a third repair, and it is the one the other seven ports get wrong too.
+An unset `v.optional()` must reach the wire as an ABSENT key — `v.optional()`
+rejects an explicit null — while a `v.nullable()` set to null must reach it as a
+PRESENT key holding null, because the validator requires it. quicktype writes
+`"x": x` for both, so no rule applied at the transport can be right for both
+halves: dropping nulls (which this target did at first, and which Swift's
+`JSONEncoder` does by omitting a nil) breaks every nullable argument, and keeping
+them breaks every unset optional.
+
+Only the MODEL still knows which is which, and quicktype says so plainly —
+`required this.x` in the constructor for one, plain `this.x` for the other. So
+`guardOptionalFields` puts an `if (x != null)` in front of exactly the optional
+entries and `LunoraClient.wireValue` projects `toJson()` through untouched. It
+matches entries to constructor parameters BY POSITION, because the wire key is
+not derivable from the field name (`some-key` is `someKey`, and an optional
+enum's entry reads `"kind": kindValues.reverse[kind]`, which does not begin with
+its field at all); a class whose two blocks do not line up is left alone rather
+than half-rewritten, and that failure is loud because `sdks/smoke/dart` asserts
+an unset optional never reaches the wire.
 
 **Typed models, JVM.** The two JVM targets are the only ones whose models are NOT
 rendered by quicktype, and the exception is measured rather than stylistic:

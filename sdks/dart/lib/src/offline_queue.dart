@@ -265,10 +265,16 @@ class OfflineQueue {
 
   void enqueue(QueuedMutation entry) {
     _items.add(entry);
+    _evictOverflow();
 
     final store = persistence;
 
-    if (store != null) {
+    // Persisted only if it SURVIVED the eviction that adding it may have
+    // triggered. Persisting first and un-persisting after would race: both calls
+    // are unawaited, so the `remove` could land before its own `append` and
+    // leave the record in durable storage forever, to be replayed by a later
+    // session as a write this one already rejected.
+    if (store != null && _items.contains(entry)) {
       // Fire-and-forget with an explicit error hop: awaiting here would make
       // every queued write pay a storage round-trip before its caller's Future
       // resolves, and the in-memory queue is already authoritative for this
@@ -281,7 +287,6 @@ class OfflineQueue {
       );
     }
 
-    _evictOverflow();
     _notifySize();
   }
 

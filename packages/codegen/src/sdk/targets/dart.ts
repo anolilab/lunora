@@ -51,8 +51,8 @@
  * `image-url` enum); all seven survived.
  *
  * What that output gets WRONG is fixed here rather than by hand-rolling an
- * emitter — see {@link repairOptionals}, and `narrowBareExcept` in
- * `targets/python.ts` for the same pattern.
+ * emitter — see {@link repairOptionals} and {@link guardOptionalFields}, and
+ * `narrowBareExcept` in `targets/python.ts` for the same pattern.
  */
 
 import type { SdkMethod, SdkNamespace } from "../spec";
@@ -169,7 +169,7 @@ const dartLiteral = (value: string): string => stringLiteral(value).replaceAll("
  * an empty array rather than as an absent key, and an absent key decodes to `[]`
  * rather than to null — so "the caller sent no list" and "the caller sent an
  * empty list" become indistinguishable in both directions. Rewritten to `null`,
- * which `LunoraClient.wireValue` then drops from the body.
+ * which {@link guardOptionalFields} then drops from the body outright.
  *
  * **2. An unset optional map THROWS.** quicktype renders `Map.from(field!)` for
  * a `v.record()` — a null-assertion on a field it just declared nullable — so
@@ -186,6 +186,95 @@ const repairOptionals = (models: string): string =>
     models
         .replaceAll(" == null ? [] : List<", " == null ? null : List<")
         .replaceAll(/Map\.from\((?<source>[^()]*?)!\)/gu, "$<source> == null ? null : Map.from($<source>!)");
+
+/** quicktype indents a class member's body two levels, which both blocks below sit at. */
+const INDENT = " ".repeat(8);
+
+/** The blocks {@link guardOptionalFields} reads, in the shape quicktype renders them. */
+const CLASS_BLOCK = /^class \w+ \{\n[\s\S]*?\n\}$/gmu;
+const CONSTRUCTOR_BLOCK = /^ {4}\w+\(\{\n([\s\S]*?)^ {4}\}\);$/mu;
+// No capture groups: the two facts wanted — is it optional, and what is the
+// field called — are read off the matched line below. A grouped form is what
+// this reads most naturally as, but `regexp/no-unused-capturing-group` cannot
+// follow a group through `[...matchAll()].map(…)` and calls it dead.
+const CONSTRUCTOR_PARAMETER = /^ {8}(?:required )?this\.\w+,$/gmu;
+const TO_JSON_BLOCK = /^ {4}Map<String, dynamic> toJson\(\) => \{\n([\s\S]*?)^ {4}\};$/mu;
+const TO_JSON_ENTRY = /^ {8}"(?:[^\\"]|\\.)*": .*,$/gmu;
+
+/**
+ * Make `toJson()` OMIT an unset optional field instead of writing it as null.
+ *
+ * This is the difference between two things quicktype's output cannot tell
+ * apart and the server very much can. `v.optional(v.string())` left unset must
+ * be an ABSENT key — `v.optional()` rejects an explicit null — while
+ * `v.nullable(v.string())` set to null must be a PRESENT key holding null, since
+ * the validator requires it. quicktype writes `"x": x` for both, so whichever
+ * behaviour the transport picks at runtime is wrong for the other half: pruning
+ * nulls (which this target used to do) broke every `v.nullable()` argument, and
+ * not pruning breaks every unset optional.
+ *
+ * Only the model knows which is which, and it does: quicktype marks a required
+ * field `required this.x` in the constructor and an optional one plain
+ * `this.x` — its own explicit signal, the same kind as the `!` that
+ * {@link repairOptionals} keys on. So the guard goes here, and the transport
+ * projects `toJson()` through unchanged.
+ *
+ * Entries are matched to parameters BY POSITION rather than by name: quicktype
+ * emits fields, constructor parameters and `toJson` entries in one alphabetical
+ * order, and the wire key is not derivable from the field name anyway (`some-key`
+ * is `someKey`, and an optional enum's entry reads `"kind": kindValues.reverse[kind]`,
+ * which does not start with its field at all). A class whose two blocks do not
+ * line up is left untouched rather than half-rewritten — and that failure is
+ * loud, because `sdks/smoke/dart` asserts an unset optional never reaches the
+ * wire.
+ */
+const guardOptionalFields = (models: string): string =>
+    models.replaceAll(CLASS_BLOCK, (block: string) => {
+        const [, constructor] = CONSTRUCTOR_BLOCK.exec(block) ?? [];
+        const [, toJson] = TO_JSON_BLOCK.exec(block) ?? [];
+
+        if (constructor === undefined || toJson === undefined) {
+            return block;
+        }
+
+        const parameters = [...constructor.matchAll(CONSTRUCTOR_PARAMETER)].map((match) => {
+            const line = match[0].trim();
+
+            return {
+                field: line.slice(line.indexOf("this.") + "this.".length, -1),
+                optional: !line.startsWith("required "),
+            };
+        });
+        const entries = [...toJson.matchAll(TO_JSON_ENTRY)];
+
+        if (parameters.length === 0 || parameters.length !== entries.length) {
+            return block;
+        }
+
+        let guarded = toJson;
+
+        for (const [index, entry] of entries.entries()) {
+            const parameter = parameters[index];
+
+            if (!parameter?.optional) {
+                continue;
+            }
+
+            // The guard makes any `x == null ? null :` that `repairOptionals`
+            // introduced unreachable, so it comes back out — leaving output the
+            // analyzer has nothing to say about.
+            // The whole line is rewritten rather than split into key and
+            // expression: the guard is a prefix and the now-unreachable null
+            // check is a substring, so neither needs the two apart — and the key
+            // is a JSON string literal that a naive split would mangle.
+            const line = entry[0];
+            const rewritten = line.slice(INDENT.length).replace(`${parameter.field} == null ? null : `, "");
+
+            guarded = guarded.replace(line, `${INDENT}if (${parameter.field} != null) ${rewritten}`);
+        }
+
+        return block.replace(toJson, guarded);
+    });
 
 /** `wireValue` projects a generated model; an untyped argument is already a wire value. */
 const dartPayload = (method: SdkMethod): string => argsChoice(method, { none: "null", typed: () => "LunoraClient.wireValue(args)", untyped: "args" });
@@ -327,7 +416,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         "lib/lunora_api.dart": api,
         "lib/models.dart":
             models.length > 0
-                ? `${GENERATED_HEADER}${repairOptionals(models)}\n`
+                ? `${GENERATED_HEADER}${guardOptionalFields(repairOptionals(models))}\n`
                 : `${GENERATED_HEADER}// No typed argument or result schemas in this deployment.\n`,
         "pubspec.yaml": PUBSPEC,
     };
@@ -349,4 +438,4 @@ const dartTarget: SdkTarget = {
     vendor: [{ from: "lib", to: "lib" }],
 };
 
-export { dartLiteral, dartTarget, memberName, repairOptionals };
+export { dartLiteral, dartTarget, guardOptionalFields, memberName, repairOptionals };

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { OpenRpcDocument } from "../src/sdk";
 import { generateSdk } from "../src/sdk";
-import { dartLiteral, dartTarget, memberName, repairOptionals } from "../src/sdk/targets/dart";
+import { dartLiteral, dartTarget, guardOptionalFields, memberName, repairOptionals } from "../src/sdk/targets/dart";
 
 const fixture = (): OpenRpcDocument =>
     JSON.parse(readFileSync(join(__dirname, "fixtures", "simple", "expected", "_generated", "openrpc.json"), "utf8")) as OpenRpcDocument;
@@ -23,9 +23,11 @@ const optionalsDocument: OpenRpcDocument = {
                         properties: {
                             id: { type: "string" },
                             labels: { items: { type: "string" }, type: "array" },
+                            // `v.nullable(v.string())`: required, and legitimately null.
+                            nickname: { anyOf: [{ type: "string" }, { type: "null" }] },
                             tags: { additionalProperties: { type: "string" }, type: "object" },
                         },
-                        required: ["id"],
+                        required: ["id", "nickname"],
                         type: "object",
                     },
                 },
@@ -96,6 +98,84 @@ describe("repairOptionals", () => {
         const required = 'tags: Map.from(json["tags"]).map((k, v) => MapEntry<String, String>(k, v)),';
 
         expect(repairOptionals(required)).toBe(required);
+    });
+});
+
+describe("guardOptionalFields", () => {
+    it("omits an unset optional and keeps a required null", () => {
+        expect.assertions(3);
+
+        // quicktype's own shape: `required this.x` for a field that must be on
+        // the wire, plain `this.x` for one that may be absent — the only place
+        // the two are still distinguishable.
+        const rendered = [
+            "class Args {",
+            "    final String id;",
+            "    final double? limit;",
+            "    final String? nickname;",
+            "",
+            "    Args({",
+            "        required this.id,",
+            "        this.limit,",
+            "        required this.nickname,",
+            "    });",
+            "",
+            "    Map<String, dynamic> toJson() => {",
+            '        "id": id,',
+            '        "limit": limit,',
+            '        "nickname": nickname,',
+            "    };",
+            "}",
+        ].join("\n");
+
+        const guarded = guardOptionalFields(rendered);
+
+        expect(guarded).toContain('if (limit != null) "limit": limit,');
+        // NOT guarded: `v.nullable()` requires the key present holding null, and
+        // dropping it is a call the server rejects.
+        expect(guarded).toContain('        "nickname": nickname,');
+        expect(guarded).toContain('        "id": id,');
+    });
+
+    it("matches entries to parameters by position, not by name", () => {
+        expect.assertions(2);
+
+        // An optional enum's entry reads `"kind": kindValues.reverse[kind]`, which
+        // does not begin with its field — and a renamed key (`some-key` →
+        // `someKey`) does not resemble it either. Both would defeat a name-based
+        // match, and both are ordinary output.
+        const rendered = [
+            "class Args {",
+            "    final Kind? kind;",
+            "    final String? someKey;",
+            "",
+            "    Args({",
+            "        this.kind,",
+            "        this.someKey,",
+            "    });",
+            "",
+            "    Map<String, dynamic> toJson() => {",
+            '        "kind": kindValues.reverse[kind],',
+            '        "some-key": someKey,',
+            "    };",
+            "}",
+        ].join("\n");
+
+        const guarded = guardOptionalFields(rendered);
+
+        expect(guarded).toContain('if (kind != null) "kind": kindValues.reverse[kind],');
+        expect(guarded).toContain('if (someKey != null) "some-key": someKey,');
+    });
+
+    it("leaves a class alone when its two blocks do not line up", () => {
+        expect.assertions(1);
+
+        // Half-rewriting output whose shape has moved would be worse than not
+        // touching it: the smoke asserts an unset optional never reaches the
+        // wire, so a no-op here fails loudly rather than silently.
+        const rendered = ["class Args {", "    Args({", "        this.a,", "    });", "", "    Map<String, dynamic> toJson() => {", "    };", "}"].join("\n");
+
+        expect(guardOptionalFields(rendered)).toBe(rendered);
     });
 });
 
@@ -183,7 +263,23 @@ describe("generateSdk (dart)", () => {
         // server expects an absent key. Both verified against a real generated
         // SDK, analysed and run.
         expect(models).toContain('tags: json["tags"] == null ? null : Map.from(json["tags"]!)');
-        expect(models).toContain('"tags": tags == null ? null : Map.from(tags!)');
+        // In `toJson` the guard supersedes the null check, which is then dead
+        // code and comes back out.
+        expect(models).toContain('if (tags != null) "tags": Map.from(tags!)');
         expect(models).not.toContain("== null ? [] :");
+    });
+
+    it("omits an unset optional from toJson and keeps a required null", async () => {
+        expect.assertions(3);
+
+        const { files } = await generateSdk(optionalsDocument, dartTarget);
+        const models = files["lib/models.dart"] ?? "";
+
+        // The pair that no runtime rule can get right at once, which is why the
+        // distinction is drawn here: `v.optional()` rejects an explicit null, and
+        // `v.nullable()` requires the key to be there holding one.
+        expect(models).toContain('if (labels != null) "labels": List<dynamic>.from(labels!.map((x) => x)),');
+        expect(models).toContain('        "nickname": nickname,');
+        expect(models).not.toContain("if (nickname != null)");
     });
 });

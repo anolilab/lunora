@@ -363,18 +363,17 @@ void casePokePartsDoNotApplyBeforePokeEnd() {
 
 // ─── Dart-specific cases ─────────────────────────────────────────────────────
 
-/// quicktype's Dart backend emits every field in `toJson()`, so an unset
-/// optional would reach the wire as `"limit": null` — which `v.optional()`
-/// rejects. Two sibling ports shipped exactly that bug. This is the check that
-/// fails if the pruning in `LunoraClient.wireValue` is ever dropped.
-void caseWireValuePrunesUnsetOptionals() {
-  final projected = LunoraClient.wireValue(_ModelWithUnsetOptional());
+/// `wireValue` must hand a model's `toJson()` through UNCHANGED, nulls included.
+///
+/// It used to prune them, which broke every `v.nullable()` argument: the server
+/// requires that key present holding null. An unset `v.optional()` is omitted by
+/// the model itself — `guardOptionalFields` in `targets/dart.ts` puts the
+/// `if (x != null)` there, where the required-versus-optional distinction is
+/// still visible. This case is what fails if that pruning ever comes back.
+void caseWireValuePassesModelJsonThrough() {
+  final projected = LunoraClient.wireValue(_ModelWithRequiredNull());
 
-  equals(
-    canonical(projected),
-    '{"channelId":"chan_1","nested":{"kept":1}}',
-    'wireValue must omit an unset optional rather than send it as null',
-  );
+  equals(canonical(projected), '{"channelId":"chan_1","nickname":null}', 'wireValue must keep an explicit null, which a nullable argument needs');
 }
 
 /// The Flutter binding: a `watch` stream must start the subscription on first
@@ -404,6 +403,68 @@ Future<void> caseWatchStreamUnsubscribesOnCancel() async {
 
   equals(sent.length, 2, 'cancelling must send an unsubscribe frame');
   equals(sent.last['type'], 'unsubscribe', 'the frame sent on cancel is an unsubscribe');
+}
+
+/// A widget tree hands one query's stream to more than one builder, and rebuilds
+/// after cancelling. A single-subscription controller throws on both — "Stream
+/// has already been listened to" — so `watch` gives each listener its own
+/// subscription instead.
+Future<void> caseWatchSupportsManyListenersAndReListening() async {
+  final sent = <Map<String, Object?>>[];
+  final client = LunoraClient(url: 'https://app.example')..attachSocket(sent.add);
+  final stream = client.watch('messages:list');
+  final first = <Object?>[];
+  final second = <Object?>[];
+
+  final a = stream.listen(first.add);
+  final b = stream.listen(second.add);
+
+  equals(sent.length, 2, 'each listener opens its own subscription');
+
+  client
+    ..handleFrame('{"type":"data","id":"sub_1","data":1}')
+    ..handleFrame('{"type":"data","id":"sub_2","data":2}');
+
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(first), canonical(<Object?>[1]), 'the first listener gets its own value');
+  equals(canonical(second), canonical(<Object?>[2]), 'the second listener is unaffected by the first');
+
+  await a.cancel();
+
+  equals(sent.last['type'], 'unsubscribe', 'cancelling one listener unsubscribes only that one');
+  equals(sent.last['id'], 'sub_1', 'and it is the cancelled listener that goes');
+
+  // The rebuild-after-cancel case, which is what actually threw.
+  final c = stream.listen((_) {});
+
+  equals(sent.last['type'], 'subscribe', 're-listening after a cancel opens a fresh subscription');
+
+  await b.cancel();
+  await c.cancel();
+}
+
+/// A call made after `close` must fail fast. It used to be queued against a
+/// client that would never flush again, so its Future never settled — the exact
+/// hang `close` exists to prevent.
+Future<void> caseCallsAfterCloseFailFast() async {
+  final client = LunoraClient(url: 'https://app.example', post: _Poster().call)
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false)
+    ..close();
+
+  try {
+    await client.mutation('messages:send').timeout(const Duration(seconds: 1));
+    _failures.add('a write after close should fail rather than hang');
+  } on LunoraApiException catch (error) {
+    equals(error.code, clientClosed, 'a write after close names why');
+  } on TimeoutException {
+    _failures.add('a write after close hung instead of failing');
+  }
+
+  equals(client.pendingWrites, 0, 'and it did not re-enter the queue close had just drained');
+  check(client.closed, 'the client reports itself closed');
 }
 
 // ─── Optimistic updates ──────────────────────────────────────────────────────
@@ -914,14 +975,11 @@ Future<void> caseCloseRejectsPendingWrites() async {
   }
 }
 
-/// A model standing in for quicktype's output: `toJson()` emits the unset
-/// optional as null, exactly as the generated ones do.
-class _ModelWithUnsetOptional {
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        'channelId': 'chan_1',
-        'limit': null,
-        'nested': <String, dynamic>{'kept': 1, 'dropped': null},
-      };
+/// A model standing in for a generated one carrying a REQUIRED nullable field:
+/// `toJson()` writes its null, and the `if (x != null)` guard the emitter adds
+/// for an OPTIONAL field is deliberately absent here.
+class _ModelWithRequiredNull {
+  Map<String, dynamic> toJson() => <String, dynamic>{'channelId': 'chan_1', 'nickname': null};
 }
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -943,8 +1001,10 @@ Future<void> main() async {
   caseShapeSubscribeFrame();
   casePokeSequenceMaterialisesRows();
   casePokePartsDoNotApplyBeforePokeEnd();
-  caseWireValuePrunesUnsetOptionals();
+  caseWireValuePassesModelJsonThrough();
   await caseWatchStreamUnsubscribesOnCancel();
+  await caseWatchSupportsManyListenersAndReListening();
+  await caseCallsAfterCloseFailFast();
 
   caseOptimisticLayerRebasesOntoAServerFrame();
   await caseOptimisticLayerDropsOnItsCommitCursor();
@@ -979,7 +1039,7 @@ Future<void> main() async {
   }
 
   if (_failures.isEmpty) {
-    stdout.writeln('PASS  ${required.length} manifest cases + 21 dart-specific');
+    stdout.writeln('PASS  ${required.length} manifest cases + 23 dart-specific');
     return;
   }
 
