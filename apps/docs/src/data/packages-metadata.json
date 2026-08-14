@@ -154,6 +154,11 @@
         "displayName": "Node Host",
         "features": ["Durable shard, alarm & socket state", ".global() tables, workflows, fs-backed R2", "Experimental dev/test target"]
     },
+    "platform-rivet": {
+        "description": "The Rivet host: the platform contracts over Rivet Actors and the rivetkit runtime.",
+        "displayName": "Rivet Host",
+        "features": ["Actor-per-shard state, alarms & hibernated sockets", "Runtime cron registration via c.cron", "Experimental \u2014 no dev or deploy target yet"]
+    },
     "queue": {
         "displayName": "Queue",
         "description": "Cloudflare Queues: defineQueue producers + a generated queue() push consumer (or HTTP pull).",

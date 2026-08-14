@@ -1,0 +1,137 @@
+---
+title: "@lunora/platform-rivet"
+description: "The Rivet host for the @lunora/platform contracts — experimental, no lunora dev --target rivet yet, and no SemVer promise until it graduates."
+---
+
+`@lunora/platform-rivet` is the Rivet **host**: the `@lunora/platform` contracts
+— `ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost` —
+implemented over [Rivet Actors](https://rivet.dev/actors) and the `rivetkit`
+runtime.
+
+```ts
+import { createRivetPlatform } from "@lunora/platform-rivet";
+
+// Once per actor wake, from `createVars`.
+const platform = await createRivetPlatform(c, { onAlarm, onDispatch });
+```
+
+## Why a third host looks different from the second
+
+A Rivet Actor is the closest primitive to a Durable Object outside Cloudflare:
+one addressable, single-writer instance per key, with its own SQLite database,
+its own durable schedules, and a sleep/wake lifecycle rather than an
+eviction-and-rehydrate one. Several rows below therefore read `native` where
+`@lunora/platform-node`'s read `emulated` — sharded state, alarms, hibernated
+sockets and the scheduler are things the platform genuinely provides here, not
+things Lunora rebuilds out of `setTimeout` and a table. This host is also the
+first to get `SchedulerHost.cron` — runtime cron registration — from the
+platform rather than from its own bookkeeping.
+
+## The one structural mismatch
+
+`ShardSqlExec.exec` is **synchronous**; every Rivet SQLite entry point is a
+promise, because the actor reaches its database through the runtime. The
+contract anticipates this ("async-backed with a sync facade"), and this package
+is that facade: a `better-sqlite3` working copy in the actor's memory answers
+every read, and the whole database is serialized back into Rivet's SQLite at
+each commit. Correct, bounded by what one actor can hold, and O(database size)
+per committed write — a small-shard strategy, which is what `.shardBy()` is for.
+
+## Status
+
+**Experimental, and narrower than the Node host.** There is no `lunora dev
+--target rivet`, no deploy driver, and no `.global()` table backend. The
+contracts pass `@lunora/platform`'s conformance TCK, but against an in-memory
+Rivet actor double rather than a live engine — see
+[`plans/rivet-host-findings.md`](https://github.com/anolilab/lunora/blob/alpha/plans/rivet-host-findings.md)
+for what that leaves open.
+
+Its API snapshot is gated at the **experimental** tier
+(`scripts/api-snapshot.js`): here is a public-API change and must be reviewed as
+one. This package is Experimental — the snapshot records how its surface moves,
+and carries **no SemVer promise until the package graduates**
+(`ROADMAP.md`'s [graduation bar](https://github.com/anolilab/lunora/blob/alpha/ROADMAP.md#experimental--stable-the-graduation-bar)).
+`scripts/check-roadmap-tiers.js` fails the install if the roadmap and the
+snapshot tier ever disagree.
+
+Read the table below as an honest self-rating, not an invitation to run
+production traffic on it.
+
+## Capability matrix
+
+Reproduced from `RIVET_CAPABILITIES` in `@lunora/platform`
+(`packages/platform/src/capabilities.ts`) — this is the same matrix codegen
+gates `ctx.*` surfaces on, not a second copy of it.
+`pnpm run lint:node-capabilities-docs` fails if this table and the source
+disagree.
+
+| Feature                | Level         | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ---------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `shardedState`         | `native`      | One Rivet Actor per shard key — single-writer by construction (actions on one actor never interleave), with its own SQLite database, durable schedules and a lifecycle that sleeps and wakes rather than being recycled. This is the closest primitive to a Durable Object outside Cloudflare                                                                                                                                                                                                                       |
+| `globalTables`         | `unsupported` | Rivet has no cross-actor SQL product to point @lunora/sql-store at. An actor's SQLite is actor-scoped by design, so a `.global()` table would need an external database (Postgres/PlanetScale) this host does not bind                                                                                                                                                                                                                                                                                              |
+| `websocketHibernation` | `native`      | `options.canHibernateWebSocket: true` lets the actor sleep with its sockets still open and wake on the next frame or close — the same bargain DO hibernation makes. Rivet documents it as beta, and per-connection state that must survive a sleep has to live in `c.conn.state`, not in a closure                                                                                                                                                                                                                  |
+| `durableStreams`       | `unsupported` | Same gap as the Node host: the transcript store is host-neutral (@lunora/shard-engine) but the attach/produce state machine lives in @lunora/do and nothing here mounts it, so a durable stream declared against this target would silently behave as an ephemeral one                                                                                                                                                                                                                                              |
+| `localSql`             | `emulated`    | Rivet's actor SQLite (`c.db.execute`) is async-only, and `ShardSqlExec.exec` is synchronous — the engine's hot path reads rows without awaiting. This host therefore takes the contract's documented "async-backed with a sync facade" route: a better-sqlite3 working copy in the actor's own memory answers every `exec`, and the whole database is serialized back into Rivet's durable SQLite at each commit. Correct, and O(database size) per committed write — a small-shard strategy, not a large-table one |
+| `shardAlarms`          | `native`      | `c.schedule.at` — durable across sleep, restarts, upgrades and crashes, and Rivet wakes a sleeping actor to deliver it. The host keeps the single-slot `ShardAlarms` semantics (set replaces, delete cancels) over Rivet's multi-schedule API by tracking the current schedule id                                                                                                                                                                                                                                   |
+| `shardPlacement`       | `emulated`    | Rivet honours `getOrCreate(key, { createInRegion })` at create time and never migrates an actor afterwards, which is exactly the contract's advisory semantics — but Rivet region slugs are deployment-defined (`atl` on Rivet Cloud, operator-named when self-hosting), so they cannot be derived from Lunora's Cloudflare-shaped `RegionHint` vocabulary. The directory maps through a caller-supplied `resolveRegion`; without one the hint is dropped rather than guessed                                       |
+| `shardReadReplicas`    | `unsupported` | An actor lives in one region and does not migrate; Rivet exposes no follower copy to place in a reader's region, and this host implements no CDC-follow loop of its own                                                                                                                                                                                                                                                                                                                                             |
+| `crossShardFanout`     | `unsupported` | @lunora/runtime's query coordinator needs to enumerate the shard keys holding a table. The RivetKit client addresses actors by key (`getOrCreate`/`getForId`) and offers no key enumeration, so the coordinator has nothing to fan out over — a fan-out query against this target would answer from no shards rather than from all of them, which is why this is unsupported rather than emulated                                                                                                                   |
+| `queues`               | `unsupported` | Rivet actors have a per-actor message queue (`c.queue`), but that is an inbox for one actor rather than a Cloudflare-Queues-shaped producer/consumer with batches, per-message ack/retry and dead-lettering. No queue binding is implemented here                                                                                                                                                                                                                                                                   |
+| `workflows`            | `unsupported` | Rivet ships a durable workflow SDK (`rivetkit/workflow`) that is a credible backing for `defineWorkflow`, but this host does not compile Lunora workflows onto it yet                                                                                                                                                                                                                                                                                                                                               |
+| `scheduler`            | `native`      | `c.schedule.after`/`at` for delayed jobs and `c.cron.set`/`every` for recurring ones, all durable and all registrable at runtime — so this is the second host (after Node) to implement `SchedulerHost.cron`, and the first to get it from the platform rather than from a table it maintains itself. Rivet does not retry a failed run, so at-least-once retry and dead-lettering are this host's own bookkeeping                                                                                                  |
+| `objectStorage`        | `unsupported` | No R2-equivalent binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `objectStorageBackups` | `unsupported` | The backup commands need a bucket to write snapshots to, and this target binds none                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `keyValueStore`        | `native`      | `c.kv` — durable, actor-scoped, with the prefix and range scans `ShardKvStore.list` needs. Rivet marks it a low-level escape hatch kept for compatibility, which is precisely the shape of the record-keeping DO (`SessionDO`) this contract exists for                                                                                                                                                                                                                                                             |
+| `vectorStore`          | `unsupported` | No Vectorize-equivalent binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ai`                   | `unsupported` | No Workers AI-equivalent binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `browser`              | `unsupported` | No headless-browser binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `containers`           | `unsupported` | Rivet has a container runner, but no `defineContainer` binding is implemented against it here                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `analytics`            | `unsupported` | No Analytics Engine-equivalent binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `pipelines`            | `unsupported` | No Pipelines-equivalent binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `mail`                 | `unsupported` | @lunora/mail's queue-backed sends need a queues binding, which this target does not provide                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `secrets`              | `unsupported` | No secrets binding implemented (a real host would likely map this to the runner's environment variables)                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `hyperdrive`           | `unsupported` | No connection-pooling binding implemented                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+
+## Wiring
+
+Rivet delivers schedules by invoking an **action on the actor**, so three
+one-line handlers have to exist on the actor definition. The action names are
+exported constants, because a typo there is an alarm that silently never
+arrives.
+
+```ts
+import { actor, setup } from "rivetkit";
+import { db } from "rivetkit/db";
+import { RIVET_ALARM_ACTION, RIVET_CRON_ACTION, RIVET_SCHEDULER_ACTION, createRivetPlatform } from "@lunora/platform-rivet";
+
+export const shard = actor({
+    db: db({ onMigrate: async () => {} }),
+    options: { canHibernateWebSocket: true },
+    createVars: async (c) => ({ platform: await createRivetPlatform(c, { onAlarm, onDispatch }) }),
+    onWebSocket: (c, ws) => {
+        c.vars.platform.sockets.accept(ws);
+    },
+    onSleep: async (c) => c.vars.platform.close(),
+    actions: {
+        [RIVET_ALARM_ACTION]: async (c) => c.vars.platform.deliverAlarm(),
+        [RIVET_SCHEDULER_ACTION]: async (c, id: string) => c.vars.platform.deliverScheduledJob(id),
+        [RIVET_CRON_ACTION]: async (c, path: string, args: string) => c.vars.platform.deliverCronTick(path, JSON.parse(args)),
+    },
+});
+```
+
+The shard directory lives outside the actor, on a RivetKit client:
+
+```ts
+import { createClient } from "rivetkit/client";
+import { createRivetShardDirectory } from "@lunora/platform-rivet";
+
+const client = createClient<typeof registry>("http://localhost:6420");
+const directory = createRivetShardDirectory(client.shard, {
+    resolveRegion: (hint) => ({ apac: "sin", enam: "atl", weur: "fra" })[hint],
+});
+```
+
+`c.db` is **required**: an actor declared without `db: db({ … })` type-checks
+and then loses every write on sleep, because the shard's durable state is that
+SQLite database.

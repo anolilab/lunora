@@ -55,8 +55,12 @@ target cannot serve, with a `platform_unsupported_feature` diagnostic. `emulated
 emits as-is.
 
 ```ts
-import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
+import { CLOUDFLARE_CAPABILITIES, NODE_CAPABILITIES, RIVET_CAPABILITIES } from "@lunora/platform";
 ```
+
+One matrix per shipping host, each maintained by the host package that has to
+answer for it: `@lunora/platform-cloudflare`, `@lunora/platform-node`,
+`@lunora/platform-rivet`.
 
 ## Conformance
 

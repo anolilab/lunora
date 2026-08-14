@@ -61,10 +61,10 @@ const UNTRACKED_MARKER = "signature not tracked";
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `agent`, `ai`, `container` and `platform-node` ARE covered, at TIER_3, and
- * being covered is NOT a stability promise — see {@link TIER_3}. The rest of the
- * experimental tier (`replica`, `x402`, `react-native`, `angular`, `browser`,
- * `payment`) is not covered yet.
+ * `agent`, `ai`, `container`, `platform-node` and `platform-rivet` ARE covered,
+ * at TIER_3, and being covered is NOT a stability promise — see {@link TIER_3}.
+ * The rest of the experimental tier (`replica`, `x402`, `react-native`,
+ * `angular`, `browser`, `payment`) is not covered yet.
  *
  * `platform-node` was held out entirely while it was a plan-234 spike, on the
  * grounds that its surface was still expected to move. It now implements what it
@@ -75,6 +75,13 @@ const UNTRACKED_MARKER = "signature not tracked";
  * `platform` unnoticed, which is the whole reason those two are gated; TIER_1
  * would have been a 1.0 SemVer promise this package is nowhere near making, and
  * `check-roadmap-tiers` says so at install time.
+ *
+ * `platform-rivet` is covered from its first release, unlike `platform-node`,
+ * which was held out while it was a spike. The reasoning inverted with
+ * experience: what made the Node host worth gating in the end — that a second
+ * host's surface silently drifting from the contracts in `platform` is the exact
+ * failure the platform family exists to prevent — applies to a third host from
+ * the day it exists, and gating it late meant its early drift went unrecorded.
  *
  * `auth-ui` IS covered (TIER_2) despite being `private: true` with no build
  * step — privacy and "no dist" are not exemptions (see `dispatch`, also
@@ -162,7 +169,7 @@ const TIER_2 = [
  * the same way `platform-node` tracks `platform`, which is the case TIER_3
  * exists for.
  */
-const TIER_3 = ["agent", "ai", "container", "platform-node"];
+const TIER_3 = ["agent", "ai", "container", "platform-node", "platform-rivet"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
