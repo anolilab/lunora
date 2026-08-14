@@ -20,6 +20,7 @@ import renderModels from "./models";
 import type { OpenRpcDocument } from "./spec";
 import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunctions, withDeclaredModels } from "./spec";
 import type { SdkTarget } from "./target";
+import { dartTarget } from "./targets/dart";
 import goTarget from "./targets/go";
 import { javaTarget } from "./targets/java";
 import { kotlinTarget } from "./targets/kotlin";
@@ -30,6 +31,7 @@ import { swiftTarget } from "./targets/swift";
 
 /** Every language `lunora sdk generate --lang` accepts, keyed by id. */
 const SDK_TARGETS: Readonly<Record<string, SdkTarget>> = {
+    dart: dartTarget,
     go: goTarget,
     java: javaTarget,
     kotlin: kotlinTarget,

@@ -33,13 +33,29 @@
  * copied — a manifest naming a directory that is absent is a hard SwiftPM error,
  * so shipping it would make every generated package fail to load.
  *
+ * ## A required `v.nullable()` argument
+ *
+ * `LunoraClient.wireValue` projects a model through `JSONEncoder`, and
+ * synthesized `Codable` OMITS a nil — which is right for an unset
+ * `v.optional()` (the validator rejects an explicit null) and wrong for a
+ * required `v.nullable()` (the validator requires the key present holding one).
+ * A struct whose `nickname` is explicitly null encodes to `{"id":"r1"}`,
+ * measured, so that argument could not be sent at all. Nothing in the rendered
+ * struct tells the two apart: both are `T?` with no required marker, and the
+ * generated `init` gives neither a default.
+ *
+ * So the call site passes the paths the SCHEMA says are required-and-nullable
+ * and `wireValue` puts those nulls back. Restoring is exact rather than a guess:
+ * at a REQUIRED path an absent key can only be a nil the encoder dropped. See
+ * `ModelNullPaths` in `spec.ts`, and `Client.swift` for the walk.
+ *
  * Unlike the other targets, this one does NOT pass `just-types` to quicktype:
  * without it the Swift backend omits `Codable`, and `Codable` is how a
  * generated model reaches the wire — `LunoraClient.wireValue` projects it
  * through `JSONEncoder`.
  */
 
-import type { SdkMethod, SdkNamespace } from "../spec";
+import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -154,9 +170,25 @@ const memberName = (raw: string): string => {
     return SWIFT_KEYWORDS.has(camel) ? `\`${camel}\`` : camel;
 };
 
+/** `[["nickname"], ["profile", "bio"]]` — the paths `wireValue` restores nulls at. */
+const swiftPaths = (paths: ReadonlyArray<SchemaPath>): string =>
+    `[${paths.map((path) => `["${path.map((segment) => stringLiteral(segment)).join('", "')}"]`).join(", ")}]`;
+
 // `wireValue` projects a Codable model; an untyped argument is already a wire
 // value and is passed through.
-const swiftPayload = (method: SdkMethod): string => argsChoice(method, { none: "nil", typed: () => "try LunoraClient.wireValue(args)", untyped: "args" });
+const swiftPayload = (method: SdkMethod): string =>
+    argsChoice(method, {
+        none: "nil",
+        // The paths ride the call site because the struct cannot carry them:
+        // synthesized Codable drops a nil from a required nullable exactly as it
+        // does from an unset optional. See `LunoraClient.wireValue`.
+        typed: () => {
+            const { nullable } = method.argsNullPaths;
+
+            return nullable.length === 0 ? "try LunoraClient.wireValue(args)" : `try LunoraClient.wireValue(args, nullablePaths: ${swiftPaths(nullable)})`;
+        },
+        untyped: "args",
+    });
 
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {

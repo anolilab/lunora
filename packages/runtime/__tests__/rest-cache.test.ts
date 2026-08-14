@@ -35,6 +35,19 @@ describe("restCacheHeaders", () => {
         expect(headers?.["cache-control"]).toBe("private, max-age=60");
     });
 
+    it("downgrades scope:public to private for a Cloudflare Access caller carrying no credential header", () => {
+        expect.assertions(2);
+
+        // Under an Access policy attached to the Worker the caller is authenticated
+        // by the edge and their identity arrives on the ExecutionContext — there may
+        // be no Authorization/Cookie/JWT header at all. Labelling that response
+        // `public` would let a shared cache serve one user's data to the next visitor.
+        const context = { access: { getIdentity: () => Promise.resolve({ email: "user@acme.test", sub: "user-1" }) } };
+
+        expect(restCacheHeaders(publicCache, get(), 200, context)?.["cache-control"]).toBe("private, max-age=60");
+        expect(requestCarriesCredentials(get(), publicCache, context)).toBe(true);
+    });
+
     it("includes stale-while-revalidate and a purge tag when declared", () => {
         expect.assertions(2);
 

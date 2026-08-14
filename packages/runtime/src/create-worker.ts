@@ -696,11 +696,15 @@ interface WorkerOptions {
      * The intended producer is `@lunora/cloudflare-access`'s `accessAdminGate(...)`,
      * which verifies the request's `Cf-Access-Jwt-Assertion` JWT and applies an
      * `isAdmin(claims)` predicate — so the Studio can sit behind Cloudflare Access
-     * instead of (or alongside) a shared admin token. It takes only the request
-     * (verification needs static team-domain/aud config + the remote JWKS, no env
-     * binding), so it composes without threading async through every admin route.
+     * instead of (or alongside) a shared admin token. It needs no `env` binding
+     * (verification is static team-domain/aud config + the remote JWKS), so it
+     * composes without threading async through every admin route.
+     *
+     * The second argument is the request's `ExecutionContext`, carrying
+     * `context.access` when the Access policy is attached to the Worker rather
+     * than to a hostname. It is `undefined` when the host supplied no context.
      */
-    adminGate?: (request: Request) => boolean | Promise<boolean>;
+    adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
 
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -1150,8 +1154,16 @@ interface WorkerOptions {
      * forwarded as `x-lunora-identity` so `ctx.auth.getIdentity()` can
      * return them. Returning `null` (or omitting this option) means
      * anonymous — no identity headers are injected.
+     *
+     * The third argument is the request's `ExecutionContext`, forwarded so a
+     * resolver can read identity the platform supplies out-of-band rather than
+     * off the request — `context.access` on a Worker protected by Cloudflare
+     * Access is the one that exists today. It is `undefined` on the paths that
+     * have no context to give (a direct {@link LunoraWorker.serverQuery} call, a
+     * host that mounts the worker without one), so a resolver that uses it must
+     * still handle its absence.
      */
-    resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+    resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
 
     /**
      * Resolve a table's sharding metadata. Required by the import endpoint to
@@ -1713,7 +1725,39 @@ const queueNameOf = (batch: unknown): string => {
     return typeof name === "string" && name.length > 0 ? name : "unknown";
 };
 
-const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
+/**
+ * The `ExecutionContext` of the request currently in flight, so the many places
+ * that resolve identity can hand it to `resolveIdentity` without every one of
+ * them (including the extracted admin-route modules, which take
+ * `resolveForwardContext` as an injected dep) having to thread a fourth argument
+ * through its own signature.
+ *
+ * Recorded once, at the single `fetch` funnel in `handle`, and keyed on the
+ * `Request` object — so an entry cannot outlive its request, cannot be read by a
+ * different one, and needs no eviction policy.
+ *
+ * Unlike the per-worker `accessAdminGrants` WeakSet, this lives at **module**
+ * scope, because `resolveForwardContext` does. That is safe for the same reason
+ * the WeakSet is — the key is a `Request` identity, which no two isolated
+ * requests share — but it does mean two composed workers in one isolate write to
+ * the same map. The only way that matters is a re-entrant mount (an inner
+ * `lunoraHandler` invoked without a context, for a request an outer worker
+ * already recorded) overwriting the entry mid-flight; nothing re-resolves
+ * identity after dispatch today, so it cannot bite yet. A path that resolves
+ * identity for a `Request` this never saw — notably a caller that rebuilds the
+ * request object before calling `serverQuery` — reads `undefined`, which is why
+ * `serverQuery` also accepts the context explicitly.
+ */
+const executionContextByRequest = new WeakMap<Request, ExecutionContextLike>();
+
+const resolveForwardContext = async (
+    request: Request,
+    env: unknown,
+    resolveIdentity: WorkerOptions["resolveIdentity"],
+    // Defaults to the in-flight context recorded by `handle`. Passed explicitly
+    // only by callers that did not reach here through the `fetch` funnel.
+    context: ExecutionContextLike | undefined = executionContextByRequest.get(request),
+): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
     const cookie = request.headers.get("cookie");
@@ -1768,7 +1812,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         return { claims: null, headers, identity: null, userId: null };
     }
 
-    const identity = await resolveIdentity(request, env);
+    const identity = await resolveIdentity(request, env, context);
 
     if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -2198,6 +2242,11 @@ interface LunoraWorker {
      * `__lunoraRef` is the `"namespace:fn"` dispatched.
      * @param args The function arguments.
      * @param options Call options mirroring the RPC envelope.
+     * @param options.context The host's `ExecutionContext`. Required to reach an
+     * identity the platform supplies out-of-band rather than on the
+     * request — `context.access` under a Worker-scoped Cloudflare
+     * Access policy. Omit it there and the call resolves anonymous
+     * while the same user's `/_lunora/rpc` traffic is authenticated.
      * @param options.shardKey Routes to a specific shard (omitted → the worker's
      * `defaultShardKey`).
      * @param options.waitUntil The host's `waitUntil`, so dispatch telemetry
@@ -2208,7 +2257,7 @@ interface LunoraWorker {
         env: unknown,
         reference: unknown,
         args?: Record<string, unknown>,
-        options?: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void },
+        options?: { context?: ExecutionContextLike; shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void },
     ) => Promise<Response>;
 }
 
@@ -4222,6 +4271,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * raw shard {@link Response} (the same object `handleRpc` returns) so callers
      * and tests can compare it byte-for-byte against the HTTP path.
      *
+     * ONE THING THE CALLER MUST SUPPLY. An identity that the platform provides
+     * out-of-band rather than on the request — `context.access` under a
+     * Worker-scoped Cloudflare Access policy — is not reachable from `request`
+     * alone. The HTTP path picks it up from the `fetch` funnel; a direct
+     * `serverQuery` has no funnel, so pass `callOptions.context`. Omit it under
+     * such a policy and this call resolves ANONYMOUS while the same user's
+     * `/_lunora/rpc` traffic is authenticated — an SSR loader renders empty (or
+     * 403s) and then hydrates fine, which is a miserable thing to debug.
+     *
      * Fan-out is intentionally NOT reachable here: it is the cross-shard,
      * coordinator-gated, privileged path. An SSR loader that needs fan-out uses
      * the HTTP `/_lunora/rpc` envelope (with `authorizeFanOut`); this fast-path
@@ -4232,7 +4290,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         env: unknown,
         reference: unknown,
         args: Record<string, unknown> = {},
-        callOptions: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void } = {},
+        callOptions: { context?: ExecutionContextLike; shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void } = {},
     ): Promise<Response> => {
         // Error mapping mirrors the top-level `fetch` catch (`toErrorResponse`)
         // EXACTLY: a thrown `LunoraError` (bad reference, a denied `authorizeShard`
@@ -4249,8 +4307,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             // Resolve identity off the SAME inbound request the HTTP path uses, so
             // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
-            // byte-identical to `handleRpc`'s.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+            // byte-identical to `handleRpc`'s. The context is passed explicitly
+            // because this path has no `fetch` funnel to have recorded it, and an
+            // SSR host may well hand us a rebuilt `Request` object.
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, callOptions.context);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -4592,7 +4652,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            if (await options.adminGate(request)) {
+            if (await options.adminGate(request, executionContextByRequest.get(request))) {
                 accessAdminGrants.add(request);
             }
         } catch {
@@ -4601,6 +4661,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        // Record the context for this request before anything resolves identity:
+        // `resolveIdentity` / `adminGate` read it back through
+        // `executionContextByRequest` to reach platform-supplied identity
+        // (`context.access` under Worker-scoped Cloudflare Access).
+        executionContextByRequest.set(request, context);
+
         const url = new URL(request.url);
 
         // Fast-path reject on a declared `Content-Length` over the cap — cheap
@@ -4938,7 +5004,7 @@ const createLunoraHandler =
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
-export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+export { type AccessContextLike, type AccessIdentityLike, type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 export type {
     AuthAdmin,
     AuthCapabilities,

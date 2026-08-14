@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { ExecutionContextLike } from "../../../shared/execution-context";
+import type { IdentityResolver } from "../src/identity-resolvers";
 import { memoizeIdentity, memoizeIdentityPerRequest } from "../src/memoize-identity";
 
 const authed = (cookie = "session=abc"): Request => new Request("https://app.example/_lunora/rpc", { headers: { cookie }, method: "POST" });
@@ -248,6 +250,54 @@ describe("memoizeIdentity", () => {
 
         // TTL 0 disables the cross-request cache; the per-request layer still applies.
         await Promise.all([memoized(request, {}), memoized(request, {})]);
+
+        expect(resolver).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("memoizeIdentity — platform-supplied Cloudflare Access identity", () => {
+    /** The context Cloudflare hands a Worker its Access policy authenticated. */
+    const accessContext = (sub: string): ExecutionContextLike => {
+        return { access: { getIdentity: () => Promise.resolve({ sub }) } };
+    };
+
+    it("never serves one Access principal's identity to another sharing a credential header", async () => {
+        expect.assertions(3);
+
+        // Both callers present the SAME Authorization header — an app-wide
+        // downstream API key, or any cookie identical across users — so
+        // `credentialKey` yields one non-undefined key for both. Their real
+        // credential is the Access identity, which is NOT on the request, so no
+        // request-derived key could ever tell them apart.
+        const resolver = vi.fn<IdentityResolver>(async (_request, _env, context) => {
+            const identity = await context?.access?.getIdentity();
+
+            return { userId: String(identity?.sub) };
+        });
+        const memoized = memoizeIdentity(resolver);
+        const shared = { authorization: "Bearer shared-downstream-key" }; // secret-scanner:allow -- fake test fixture, not a real credential
+
+        const alice = await memoized(new Request("https://app.example/_lunora/rpc", { headers: shared }), {}, accessContext("alice"));
+        const bob = await memoized(new Request("https://app.example/_lunora/rpc", { headers: shared }), {}, accessContext("bob"));
+
+        expect(alice).toStrictEqual({ userId: "alice" });
+        expect(bob).toStrictEqual({ userId: "bob" });
+        expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
+    it("still collapses duplicate calls within one Access request", async () => {
+        expect.assertions(1);
+
+        const resolver = vi.fn<() => Promise<{ userId: string }>>(async () => {
+            return { userId: "u1" };
+        });
+        const memoized = memoizeIdentity(resolver);
+        const request = authed();
+        const context = accessContext("u1");
+
+        // Bypassing the cross-request cache must not cost the fan-out collapse the
+        // per-request layer exists for.
+        await Promise.all([memoized(request, {}, context), memoized(request, {}, context)]);
 
         expect(resolver).toHaveBeenCalledTimes(1);
     });

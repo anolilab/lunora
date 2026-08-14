@@ -3,7 +3,7 @@ import type { JWTVerifyGetKey } from "jose";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
-import type { AccessClaims, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
+import type { AccessClaims, AccessJwtFallbackOptions, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
 
 /** Cloudflare Access publishes its signing keys at this path under the team domain. */
 const CERTS_PATH = "/cdn-cgi/access/certs";
@@ -107,6 +107,51 @@ const assertVerifyOptions = (options: VerifyAccessJwtOptions): void => {
 };
 
 /**
+ * Resolve the optional JWT-verification half of a primitive's config, for the
+ * primitives that can also authenticate off the platform-supplied `ctx.access`
+ * identity and therefore may legitimately be handed no JWT config at all.
+ *
+ * Returns a fully-configured verify config when both `teamDomain` and `aud` are
+ * supplied, `undefined` when neither key is present at all (run
+ * platform-identity-only, with no `Cf-Access-Jwt-Assertion` fallback), and throws
+ * otherwise.
+ *
+ * **Presence of the key is the signal, not its value.** `createAccessResolver()`
+ * and `createAccessResolver({ mapClaims })` name neither key and mean "no JWT
+ * fallback". `createAccessResolver({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud:
+ * env.CF_ACCESS_AUD })` names both and means "verify JWTs" — so when those
+ * secrets are unset in some environment and both values arrive `undefined`, that
+ * is a broken deployment and it throws, exactly as it did before a missing config
+ * became a legal mode. Reading the *values* instead would turn that worker into
+ * one that boots happily and resolves every caller to anonymous, with nothing in
+ * the logs pointing at Access.
+ */
+const assertJwtFallbackOptions = (options: AccessJwtFallbackOptions | undefined): RequestVerifyOptions | undefined => {
+    if (options === undefined) {
+        return undefined;
+    }
+
+    if (!("aud" in options) && !("teamDomain" in options)) {
+        return undefined;
+    }
+
+    const { aud, teamDomain } = options;
+
+    if (aud === undefined || teamDomain === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/cloudflare-access: `teamDomain` and `aud` must both be set to verify the Cf-Access-Jwt-Assertion JWT (check that CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD are set in this environment) — to authenticate only off the Worker's Cloudflare Access identity, omit both options entirely",
+        );
+    }
+
+    const verifyOptions = { ...options, aud, teamDomain };
+
+    assertVerifyOptions(verifyOptions);
+
+    return verifyOptions;
+};
+
+/**
  * Verify a Cloudflare Access JWT and return its claims.
  *
  * Enforces, in one shot: RS256 signature against the team JWKS, `iss` equal to
@@ -143,15 +188,15 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
 
 /**
  * Read the Access JWT off a request and verify it. Returns the verified claims,
- * or `undefined` when no token is present **or** verification fails — the single
- * fail-closed "no Access identity" signal that both `createAccessResolver` and
- * `accessAdminGate` build their distinct mapping / authorization step on top of.
+ * or `undefined` when no token is present **or** verification fails — the
+ * fail-closed "no Access identity on this request" signal, matching what
+ * `readPlatformIdentity` returns for the other authentication path so callers
+ * treat the two uniformly.
  *
- * This is the package's one place that turns a request into verified claims:
+ * This is the package's one place that turns a *request* into verified claims:
  * header/cookie default resolution, the {@link readToken} read, the
  * {@link verifyAccessJwt} call, and the `onError`-observed fail-closed catch all
- * live here so the resolver and the admin gate carry only their genuinely
- * distinct line. `onError` fires for a present-but-invalid token, never for an
+ * live here. `onError` fires for a present-but-invalid token, never for an
  * absent one.
  */
 const verifyRequest = async (request: Request, options: RequestVerifyOptions): Promise<AccessClaims | undefined> => {
@@ -180,4 +225,4 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions): P
     }
 };
 
-export { accessIssuer, assertVerifyOptions, verifyAccessJwt, verifyRequest };
+export { accessIssuer, assertJwtFallbackOptions, assertVerifyOptions, verifyAccessJwt, verifyRequest };

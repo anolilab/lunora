@@ -112,6 +112,7 @@ interface DirectShardDirectory {
 
 ```ts
 interface ExecutionContextLike {
+    access?: AccessContextLike;
     cache?: {
         purge: (options: {
             purgeEverything?: boolean;

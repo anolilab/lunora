@@ -60,6 +60,7 @@ interface SdkRenderInput {
      * exists only so the declared-model reconciliation reads one shape.
      */
     models: string;
+
     /** Namespaces and their functions, already sorted. */
     namespaces: ReadonlyArray<SdkNamespace>;
 }
@@ -134,8 +135,8 @@ interface SdkTarget {
 
     /**
      * THIRD-PARTY packages a consuming project must still install, reported by
-     * the CLI. Empty for five of the seven — the transport is vendored and those
-     * five reach the wire with only their standard library.
+     * the CLI. Empty for six of the eight — the transport is vendored and those
+     * six reach the wire with only their standard library.
      *
      * A list, and not derivable from the transport, because a target's MODELS can
      * carry a dependency the transport does not: quicktype's Ruby backend emits

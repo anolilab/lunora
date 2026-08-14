@@ -111,3 +111,42 @@ describe("createWorker — adminGate (async Access-style admin authorization)", 
         expect(adminGate).not.toHaveBeenCalled();
     });
 });
+
+describe("createWorker — adminGate execution context", () => {
+    /**
+     * A context shaped like the one Cloudflare hands a Worker protected by an
+     * Access policy attached to the Worker itself: the caller's identity arrives
+     * out-of-band on `ctx.access`, not on the request, so a gate can only reach it
+     * if the worker forwards the context it was invoked with.
+     */
+    const accessContext: ExecutionContextLike = {
+        ...fakeContext,
+        access: { getIdentity: () => Promise.resolve({ email: "admin@acme.test", sub: "user-1" }) },
+    };
+
+    it("hands the gate the ExecutionContext the request was served with", async () => {
+        expect.assertions(3);
+
+        const adminGate = vi.fn<(request: Request, context?: ExecutionContextLike) => Promise<boolean>>(
+            async (_request, context) => (await context?.access?.getIdentity()) !== undefined,
+        );
+        const worker = createWorker({ adminGate, functions: REGISTRY, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request(ADMIN_PATH, { method: "GET" }), {}, accessContext);
+
+        expect(response.status).toBe(200);
+        expect(adminGate).toHaveBeenCalledTimes(1);
+        expect(adminGate.mock.calls[0]?.[1]?.access).toBeDefined();
+    });
+
+    it("denies when the context carries no Access identity", async () => {
+        expect.assertions(1);
+
+        const adminGate = async (_request: Request, context?: ExecutionContextLike): Promise<boolean> => (await context?.access?.getIdentity()) !== undefined;
+        const worker = createWorker({ adminGate, functions: REGISTRY, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request(ADMIN_PATH, { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+});

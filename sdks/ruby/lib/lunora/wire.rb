@@ -207,4 +207,47 @@ module Lunora
 
     WireBytes.new(data.dup.force_encoding(::Encoding::BINARY), ctor)
   end
+
+  # Projects a generated model onto the wire, dropping a nil ONLY where the
+  # schema says the property is optional.
+  #
+  # +optional_paths+ is the generated list of those places, each a run of keys
+  # from the model's root, with "*" standing for every element of an array or
+  # value of a record. It has to be passed in because the model cannot carry it:
+  # quicktype declares an optional field and a required nullable one identically
+  # (+Types::X.optional+), and the two are opposites on the wire — +v.optional+
+  # rejects an explicit null, while a required +v.nullable+ needs the key present
+  # holding one.
+  #
+  # Everything not named by a path is passed through, which a blanket prune could
+  # not do: it dropped every required nullable, and every deliberate nil inside a
+  # record or an array with them.
+  def wire_args(model, optional_paths = [])
+    prune_unset(model.to_dynamic, optional_paths, [])
+  end
+
+  def prune_unset(value, optional_paths, path)
+    case value
+    when ::Hash
+      value.each_with_object({}) do |(key, item), out|
+        child = path + [key.to_s]
+        next if item.nil? && wire_path?(optional_paths, child)
+
+        out[key] = prune_unset(item, optional_paths, child)
+      end
+    when ::Array
+      # No element is ever dropped: an array position is not optional, and
+      # removing one would shift every later element.
+      value.map { |item| prune_unset(item, optional_paths, path + ["*"]) }
+    else value
+    end
+  end
+
+  # Whether +path+ matches one of +paths+, where a "*" segment matches any key.
+  def wire_path?(paths, path)
+    paths.any? do |candidate|
+      candidate.length == path.length &&
+        candidate.each_with_index.all? { |segment, index| segment == "*" || segment == path[index] }
+    end
+  end
 end

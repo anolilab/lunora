@@ -38,7 +38,7 @@
  * values a plain JSON projection could not represent).
  */
 
-import type { SdkMethod, SdkNamespace } from "../spec";
+import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -141,6 +141,18 @@ const memberName = (raw: string): string => {
 const verbConstant = (verb: string): string => `Verb::${toPascalCase(verb)}`;
 
 /** One function as a method posting the RPC envelope. */
+
+/**
+ * `&[&["limit"][..], &["rows", "*", "tag"][..]]` — the paths `from_model_json`
+ * prunes at.
+ *
+ * The `[..]` reslice on each element is load-bearing: two paths of different
+ * lengths are arrays of different TYPES, and only coercing each to `&[&str]`
+ * lets them share one slice.
+ */
+const rustPaths = (paths: ReadonlyArray<SchemaPath>): string =>
+    paths.length === 0 ? "&[]" : `&[${paths.map((path) => `&["${path.map((segment) => stringLiteral(segment)).join('", "')}"][..]`).join(", ")}]`;
+
 const renderCall = (method: SdkMethod): string => {
     // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
     // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
@@ -153,7 +165,8 @@ const renderCall = (method: SdkMethod): string => {
     });
     const payload = argsChoice(method, {
         none: "&WireValue::Object(Vec::new())",
-        typed: () => "&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)",
+        typed: () =>
+            `&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(method.argsNullPaths.optional)})`,
         untyped: "args",
     });
     const call = `self.client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
@@ -187,7 +200,8 @@ const renderSubscribe = (method: SdkMethod): string => {
     const argument = argsChoice(method, { none: "", typed: (type) => `args: &${type}, `, untyped: "args: &WireValue, " });
     const payload = argsChoice(method, {
         none: "WireValue::Object(Vec::new())",
-        typed: () => "from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?)",
+        typed: () =>
+            `from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(method.argsNullPaths.optional)})`,
         untyped: "args.clone()",
     });
 

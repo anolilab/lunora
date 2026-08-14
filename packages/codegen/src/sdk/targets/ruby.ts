@@ -26,7 +26,7 @@
  * `requires` is a list and why it says so.
  */
 
-import type { SdkMethod, SdkNamespace } from "../spec";
+import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { allMethods, argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -88,31 +88,31 @@ const memberName = (raw: string): string => {
 };
 
 /**
- * Projects a model onto the wire, dropping nil-valued fields at every depth.
+ * The generated shim over `Lunora.wire_args`.
  *
- * quicktype's Ruby backend writes an UNSET optional as an explicit null, while
- * `v.optional(x)` parses `undefined`-or-`x` and rejects null — so passing
- * `to_dynamic` straight through fails validation on the server for every call
- * that leaves an optional field unset. The Python backend omits the key itself;
- * this makes Ruby agree with it.
+ * quicktype's Ruby backend writes an UNSET optional as an explicit null, which
+ * `v.optional(x)` rejects — so `to_dynamic` passed straight through fails
+ * validation on every call that leaves one unset. Dropping every nil instead was
+ * wrong the other way: a required `v.nullable()` has to reach the wire AS null,
+ * and quicktype declares both `Types::X.optional`, so the model itself cannot
+ * say which is which.
  *
- * The ceiling: a field the caller means to send AS null is dropped too. That is
- * the same limitation Python's `to_dict` has, and there is nothing in the
- * rendered model to tell the two apart.
+ * So the projection takes the paths the SCHEMA says are optional, and lives in
+ * the transport where it can be unit-tested (`sdks/ruby/test/test_wire_args.rb`)
+ * rather than only through a generated SDK. See `ModelNullPaths` in `spec.ts`.
  */
-const WIRE_ARGS_HELPER = `  def self.wire_args(model)
-    drop_nils(model.to_dynamic)
-  end
-
-  def self.drop_nils(value)
-    case value
-    when ::Hash then value.each_with_object({}) { |(key, item), out| out[key] = drop_nils(item) unless item.nil? }
-    when ::Array then value.map { |item| drop_nils(item) }
-    else value
-    end
+const WIRE_ARGS_HELPER = `  # Delegates to the transport, which owns the projection and its tests — see
+  # \`Lunora.wire_args\`. The path list is generated per model because only the
+  # schema knows which nils may be dropped.
+  def self.wire_args(model, optional_paths = [])
+    Lunora.wire_args(model, optional_paths)
   end
 
 `;
+
+/** `[["limit"], ["rows", "*", "tag"]]` — the paths `wire_args` prunes at. */
+const rubyPaths = (paths: ReadonlyArray<SchemaPath>): string =>
+    `[${paths.map((path) => `[${path.map((segment) => `"${rubyLiteral(segment)}"`).join(", ")}]`).join(", ")}]`;
 
 // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
 // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
@@ -121,7 +121,17 @@ const WIRE_ARGS_HELPER = `  def self.wire_args(model)
 //
 // `wire_args` calls `to_dynamic`, which only a generated model has, so an untyped
 // argument is passed through — it is already the wire-shaped hash.
-const rubyPayload = (method: SdkMethod): string => argsChoice(method, { none: "{}", typed: () => "LunoraApi.wire_args(args)", untyped: "args" });
+//
+// The path list rides the call site because the model cannot carry it: quicktype
+// declares an optional field and a required nullable one identically
+// (`Types::X.optional`), so which nils may be dropped is knowable only from the
+// schema. See `ModelNullPaths`.
+const rubyPayload = (method: SdkMethod): string =>
+    argsChoice(method, {
+        none: "{}",
+        typed: () => `LunoraApi.wire_args(args, ${rubyPaths(method.argsNullPaths.optional)})`,
+        untyped: "args",
+    });
 
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
