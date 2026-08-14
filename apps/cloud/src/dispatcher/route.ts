@@ -1,3 +1,5 @@
+import readJson from "../read-json";
+
 /**
  * Dispatcher routing (CLOUD-PLAN.md §2.1). Resolves an inbound hostname to the
  * dispatch-namespace script that serves it. Tenant scripts are reachable at
@@ -95,8 +97,7 @@ export const createRouteResolver = (options: PlanResolverOptions): ((label: stri
                 return null;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-            const { scriptName } = (await response.json()) as { scriptName?: null | string };
+            const { scriptName } = await readJson<{ scriptName?: null | string }>(response);
             const resolved = typeof scriptName === "string" ? scriptName : null;
 
             cache.set(label, { expires: now() + ttl, scriptName: resolved });
@@ -141,8 +142,7 @@ export const createCustomDomainResolver = (options: PlanResolverOptions): ((host
                 return null;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-            const data = (await response.json()) as CustomDomainRoute;
+            const data = await readJson<CustomDomainRoute>(response);
             const route = data.scriptName || data.redirectTo ? data : null;
 
             cache.set(hostname, { expires: now() + ttl, route });
@@ -181,8 +181,7 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
                 return undefined;
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-            const { plan } = (await response.json()) as { plan?: string };
+            const { plan } = await readJson<{ plan?: string }>(response);
 
             if (typeof plan === "string") {
                 cache.set(scriptName, { expires: now() + ttl, plan });

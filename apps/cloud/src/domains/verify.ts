@@ -1,3 +1,5 @@
+import readJson from "../read-json";
+
 /**
  * Custom-domain DNS verification (GAPS.md B1, Zeitwork's flow adapted). A
  * domain is verified when its `_lunora.&lt;hostname>` TXT record equals the
@@ -32,8 +34,7 @@ export const createDohResolver =
                 return [];
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-            const { Answer: answers } = (await response.json()) as { Answer?: DnsAnswer[] };
+            const { Answer: answers } = await readJson<{ Answer?: DnsAnswer[] }>(response);
 
             return answers ?? [];
         } catch {

@@ -2,6 +2,8 @@ import type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@lunora/cli
 import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 
+import readJson from "../read-json";
+
 /**
  * Server-side data loading for the hosted studio's routes.
  *
@@ -66,8 +68,7 @@ export const loadSession = createServerFn({ method: "GET" }).handler(async (): P
             return null;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `json()` resolves to `any`; the assertion is what documents (and type-checks) the shape null-checked below
-        const body = (await response.json()) as StudioSession | null;
+        const body = await readJson<StudioSession | null>(response);
 
         return body?.user?.id === undefined ? null : body;
     } catch {

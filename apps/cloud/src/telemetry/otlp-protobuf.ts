@@ -15,7 +15,6 @@
  * Field numbers follow opentelemetry-proto (trace/logs/metrics/common v1).
  */
 
-/* eslint-disable no-bitwise -- protobuf IS a bit-level format: base-128 varints, wire-type tags and hex nibbles are DEFINED in terms of shifts and masks. Rewriting them arithmetically would obscure the spec this file implements line-for-line, not improve it. */
 import type { OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "./otlp";
 
 /** Protobuf wire types. */
@@ -24,15 +23,15 @@ const WIRE_FIXED64 = 1;
 const WIRE_LEN = 2;
 const WIRE_FIXED32 = 5;
 
-// eslint-disable-next-line no-secrets/no-secrets -- the lower-hex alphabet, not a credential; flagged purely on character entropy
-const HEX = "0123456789abcdef";
+/** The 32-bit place value used to reassemble a 64-bit field from its two halves. */
+const TWO_POW_32 = 2n ** 32n;
 
 /** Lower-hex encode raw id bytes (OTLP carries trace/span ids as bytes; the decoders expect hex). */
 const toHex = (bytes: Uint8Array): string => {
     let out = "";
 
     for (const byte of bytes) {
-        out += HEX[byte >> 4] + HEX[byte & 0x0f];
+        out += byte.toString(16).padStart(2, "0");
     }
 
     return out;
@@ -77,9 +76,12 @@ class Reader {
             byte = this.bytes[this.pos];
             this.pos += 1;
             read += 1;
-            result |= BigInt(byte & 0x7f) << shift;
+            // Each group occupies its own 7 bits, so `+` is exact here — no
+            // group can carry into the next.
+            result += BigInt(byte % 0x80) * 2n ** shift;
             shift += 7n;
-        } while ((byte & 0x80) !== 0);
+            // The high bit is the continuation flag.
+        } while (byte >= 0x80);
 
         return result;
     }
@@ -95,7 +97,7 @@ class Reader {
         const hi = BigInt(this.view.getUint32(this.pos + 4, true));
         this.pos += 8;
 
-        return ((hi << 32n) | lo).toString();
+        return (hi * TWO_POW_32 + lo).toString();
     }
 
     /** 8 LE bytes as an IEEE-754 double (OTLP `double` / `as_double`). */
@@ -112,7 +114,8 @@ class Reader {
         const hi = BigInt(this.view.getInt32(this.pos + 4, true));
         this.pos += 8;
 
-        return ((hi << 32n) | lo).toString();
+        // `hi` is signed here, which is what makes this the SIGNED reassembly.
+        return (hi * TWO_POW_32 + lo).toString();
     }
 
     /** A length-delimited byte slice. */
@@ -171,8 +174,8 @@ class Reader {
 const eachField = (reader: Reader, onField: (fieldNumber: number, wireType: number) => boolean): void => {
     while (!reader.eof) {
         const tag = reader.varintNumber();
-        const fieldNumber = tag >>> 3;
-        const wireType = tag & 0x07;
+        const fieldNumber = Math.floor(tag / 8);
+        const wireType = tag % 8;
 
         if (!onField(fieldNumber, wireType)) {
             reader.skip(wireType);
@@ -274,20 +277,15 @@ const readStatus = (reader: Reader): { code?: number; message?: string } => {
     return status;
 };
 
-/*
- * A flat field-number dispatch, not branching logic: one arm per protobuf field
- * the span decoder reads. Cognitive-complexity scores the `else if` chain as
- * though the arms interact, but they are independent and mutually exclusive,
- * and a table rewrite only trades this for parameter mutation plus a dead
- * undefined check. The wire-type guard on each arm is load-bearing: a field
- * whose wire type doesn't match is left unhandled so `eachField` skips it and
- * the walk stays in sync.
- */
 const readSpan = (reader: Reader): SpanOut => {
     const span: SpanOut = { attributes: [] };
 
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- see above: a wire-format dispatch table expressed as a chain, not tangled control flow
-    eachField(reader, (field, wire) => {
+    // Two halves of one flat wire-format dispatch, written as closures over
+    // `span` so each stays small and neither takes the row as a parameter it
+    // would then mutate. The wire-type guard on every arm is load-bearing: a
+    // field whose wire type doesn't match is left unhandled, so `eachField`
+    // skips it and the walk stays in sync.
+    const readIdentity = (field: number, wire: number): boolean => {
         if (field === 1 && wire === WIRE_LEN) {
             span.traceId = toHex(reader.readBytes());
         } else if (field === 2 && wire === WIRE_LEN) {
@@ -296,7 +294,15 @@ const readSpan = (reader: Reader): SpanOut => {
             span.parentSpanId = toHex(reader.readBytes());
         } else if (field === 5 && wire === WIRE_LEN) {
             span.name = reader.string();
-        } else if (field === 7 && wire === WIRE_FIXED64) {
+        } else {
+            return false;
+        }
+
+        return true;
+    };
+
+    const readBody = (field: number, wire: number): boolean => {
+        if (field === 7 && wire === WIRE_FIXED64) {
             span.startTimeUnixNano = reader.fixed64String();
         } else if (field === 8 && wire === WIRE_FIXED64) {
             span.endTimeUnixNano = reader.fixed64String();
@@ -309,7 +315,9 @@ const readSpan = (reader: Reader): SpanOut => {
         }
 
         return true;
-    });
+    };
+
+    eachField(reader, (field, wire) => readIdentity(field, wire) || readBody(field, wire));
 
     return span;
 };
@@ -442,8 +450,7 @@ const readScopeLogs = (reader: Reader): Record<string, unknown> => readScopeEnve
 
 const readResourceLogs = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeLogs", readScopeLogs);
 
-/* eslint-disable-next-line no-secrets/no-secrets -- the quoted identifier below is an opentelemetry-proto message name, not a credential; flagged on entropy alone */
-/** Decode an OTLP/protobuf `ExportLogsServiceRequest` into the JSON payload shape. */
+/** Decode an OTLP/protobuf `ExportLogsService` request into the JSON payload shape. */
 export const decodeLogsPayloadProto = (bytes: Uint8Array): OtlpLogsPayload => {
     const resourceLogs: unknown[] = [];
     const root = new Reader(bytes);

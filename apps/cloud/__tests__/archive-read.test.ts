@@ -45,8 +45,7 @@ describe("telemetryStore.readArchivedTrace", () => {
     });
 });
 
-// eslint-disable-next-line no-secrets/no-secrets -- a method name, flagged on character entropy alone
-describe("telemetryStore.readArchivedSpansInWindow", () => {
+describe("readArchivedSpansInWindow", () => {
     it("no-ops to [] without R2-SQL config", async () => {
         await expect(
             createCloudflareTelemetryStore({}).readArchivedSpansInWindow({ from: 0, limit: 50, organizationId: "org_1", to: 100 }),

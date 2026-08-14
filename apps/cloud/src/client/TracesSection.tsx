@@ -264,7 +264,7 @@ const useArchivedSpans = (context: { hotSpansEmpty: boolean; organizationId: Org
 
     useEffect(() => {
         if (!hotSpansEmpty) {
-            return;
+            return undefined;
         }
 
         let cancelled = false;
@@ -283,7 +283,6 @@ const useArchivedSpans = (context: { hotSpansEmpty: boolean; organizationId: Org
             }
         })();
 
-        // eslint-disable-next-line consistent-return -- a `useEffect` callback either returns a cleanup or nothing; the guard above bails before there is anything to clean up
         return () => {
             cancelled = true;
         };

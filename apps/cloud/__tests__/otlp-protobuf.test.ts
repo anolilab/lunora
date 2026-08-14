@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-/* eslint-disable no-bitwise -- these helpers hand-encode protobuf fixtures; varints and wire tags are defined in terms of shifts and masks, exactly like the decoder under test. */
 import { decodeMetricPoints, decodeObservations } from "../src/telemetry/otlp";
 import { decodeMetricsPayloadProto, decodeTracePayloadProto } from "../src/telemetry/otlp-protobuf";
 
@@ -11,20 +10,18 @@ const varint = (value: number): number[] => {
     let remaining = value;
 
     do {
-        let byte = remaining & 0x7f;
-        remaining = Math.floor(remaining / 128);
+        // Low 7 bits, plus the continuation flag while more groups follow —
+        // written arithmetically to mirror the decoder it feeds.
+        const group = remaining % 0x80;
 
-        if (remaining > 0) {
-            byte |= 0x80;
-        }
-
-        out.push(byte);
+        remaining = Math.floor(remaining / 0x80);
+        out.push(remaining > 0 ? group + 0x80 : group);
     } while (remaining > 0);
 
     return out;
 };
 
-const tag = (field: number, wire: number): number[] => varint((field << 3) | wire);
+const tag = (field: number, wire: number): number[] => varint(field * 8 + wire);
 
 /** Length-delimited (wire 2): tag, length, bytes. */
 const lenField = (field: number, bytes: number[]): number[] => [...tag(field, 2), ...varint(bytes.length), ...bytes];
@@ -82,6 +79,36 @@ describe(decodeTracePayloadProto, () => {
             startedAt: 1_700_000_000_000,
             traceId: "0102030405060708090a0b0c0d0e0f10",
         });
+    });
+
+    /**
+     * Guards the arithmetic form of the varint reader. Every field so far fits in
+     * a single 7-bit group, so a decoder that mishandled continuation bytes would
+     * still pass the round-trip above. A name past 127 bytes forces the
+     * length prefix into two groups, and the trace/span ids prove the hex
+     * encoding survives bytes on both sides of 0x0f.
+     */
+    it("decodes a multi-group varint length and both hex nibble ranges", () => {
+        const longName = "n".repeat(300);
+        // A repeating low/high nibble pair: covers both halves of the byte
+        // without a high-entropy literal in the expectation below.
+        const traceId = Array.from({ length: 16 }, (_unused, index) => (index % 2 === 0 ? 0x0f : 0xf0));
+        const spanId = [0x0f, 0xf0, 0x01, 0x10, 0x7f, 0x80, 0x00, 0xff];
+
+        const span = [
+            ...lenField(1, traceId),
+            ...lenField(2, spanId),
+            ...stringField(5, longName),
+            ...fixed64Field(7, 1_700_000_000_000_000_000n),
+            ...fixed64Field(8, 1_700_000_000_000_000_000n),
+        ];
+        const payload = new Uint8Array(lenField(1, lenField(2, [...lenField(1, stringField(1, "@lunora/runtime")), ...lenField(2, span)])));
+
+        const [observation] = decodeObservations(decodeTracePayloadProto(payload));
+
+        expect(observation?.name).toBe(longName);
+        expect(observation?.spanId).toBe("0ff001107f8000ff");
+        expect(observation?.traceId).toBe("0ff0".repeat(8));
     });
 });
 
