@@ -32,6 +32,64 @@ const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
 
 /**
+ * ES reserved words. `emit.ts` interpolates the table name raw into a bare
+ * `const ${name} = sqliteTable(...)` binding (and into `.references((): AnySQLiteColumn => ${name}._id)`
+ * for every FK) — a table named after a keyword produces a syntax error in the
+ * generated Drizzle module, not a type error, so this must be rejected at
+ * discovery time. Kept as a separate set from `RESERVED_TABLE_NAMES`: that one
+ * is about `ctx.db` member shadowing, this one is about generated-code syntax.
+ * If `emit.ts` ever stops emitting table names as bare `const` bindings, this
+ * check becomes unnecessary.
+ */
+const RESERVED_JS_WORDS = new Set([
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+]);
+
+/**
  * Table names are interpolated raw into generated type names (`Doc_${name}`)
  * and unquoted property keys — they must be JS identifiers. Must stay in
  * sync with `IDENTIFIER_RE` in `emit.ts` (the emit-side E1 gate is
@@ -62,6 +120,13 @@ const assertTableNameAllowed = (name: string, node: Node): void => {
         throw diagnosticAt(
             node,
             `table name "${unquoted}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+        );
+    }
+
+    if (RESERVED_JS_WORDS.has(unquoted)) {
+        throw diagnosticAt(
+            node,
+            `table name "${unquoted}" is a reserved JavaScript word — codegen interpolates table names into a bare \`const ${unquoted} = sqliteTable(...)\` binding in the generated Drizzle module, which is a syntax error for a keyword. Rename the table.`,
         );
     }
 
@@ -184,7 +249,20 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
     }
 
     const [tableArgument, optionsExpression] = initializer.getArguments();
-    const table = tableArgument && Node.isStringLiteral(tableArgument) ? tableArgument.getLiteralText() : "_unknown_";
+
+    // The relation's target table feeds straight into the generated
+    // `OneRelation<"...">` / `ManyRelation<"...">` type (see `emit.ts`'s
+    // relation-type emission) — codegen resolves it statically, so a
+    // non-literal (or missing) target must fail loudly rather than degrade to
+    // a placeholder that still compiles.
+    if (!tableArgument || !Node.isStringLiteral(tableArgument)) {
+        throw diagnosticAt(
+            tableArgument ?? initializer,
+            `relation target table must be a string literal — codegen resolves relation targets statically. Got ${tableArgument ? tableArgument.getText() : "no argument"}.`,
+        );
+    }
+
+    const table = tableArgument.getLiteralText();
 
     let field = "_unknown_";
     let references = "_id";
@@ -1079,7 +1157,14 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
             continue;
         }
 
-        tables.push(parseTableBuilder(initializer, property.getName()));
+        const name = property.getName();
+
+        // Validate the extension's BARE name — the user wrote this one; the
+        // eventual `${key}_${bareName}` prefix is codegen's own construction,
+        // so an error about the prefixed name would point at something the
+        // user never typed.
+        assertTableNameAllowed(name, property.getNameNode());
+        tables.push(parseTableBuilder(initializer, name));
     }
 
     return tables;
@@ -1296,6 +1381,7 @@ const rlsModeOf = (defineSchemaCall: CallExpression): SchemaIR["rlsMode"] =>
 /** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
 const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
     const tables: TableIR[] = [];
+    const seenNames = new Set<string>();
 
     for (const property of object.getProperties()) {
         if (!Node.isPropertyAssignment(property)) {
@@ -1308,6 +1394,17 @@ const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
             const name = property.getName();
 
             assertTableNameAllowed(name, property.getNameNode());
+
+            const unquoted = stripQuotes(name);
+
+            if (seenNames.has(unquoted)) {
+                throw diagnosticAt(
+                    property.getNameNode(),
+                    `defineSchema({...}): table "${unquoted}" is declared more than once — the earlier declaration would be silently discarded. Remove the duplicate.`,
+                );
+            }
+
+            seenNames.add(unquoted);
             tables.push(parseTableBuilder(initializer, name));
         }
     }
