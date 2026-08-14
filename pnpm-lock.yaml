@@ -3481,6 +3481,9 @@ importers:
 
   packages/hyperdrive:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3500,9 +3503,6 @@ importers:
       '@electric-sql/pglite-socket':
         specifier: catalog:sql
         version: 0.2.7(@electric-sql/pglite-age@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_hashids@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_ivm@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_textsearch@0.0.6(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_uuidv7@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgtap@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgvector@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite@0.5.4)
-      '@lunora/errors':
-        specifier: workspace:*
-        version: link:../errors
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
