@@ -41,7 +41,7 @@ final class OptimisticOfflineTest {
         optimisticLayerDropsOnCommitCursor();
         optimisticLayerRollsBackOnFailure();
         optimisticCursorlessFramePreservesCursor();
-        offlineQueueFifoAndShardDrain();
+        offlineQueueFifoReplayOrder();
         offlineQueueOverflowEvictsOldest();
         offlineQueuePreconditionDropsStaleWrite();
         offlineQueueHydratesPersistedWrites();
@@ -640,8 +640,8 @@ final class OptimisticOfflineTest {
         return out;
     }
 
-    private static void offlineQueueFifoAndShardDrain() throws IOException {
-        covers("offline_queue_fifo_and_shard_drain");
+    private static void offlineQueueFifoReplayOrder() throws IOException {
+        covers("offline_queue_fifo_replay_order");
 
         Map<String, Object> fifo = scenario("offlineQueue", "fifo");
         List<Integer> sizes = new ArrayList<>();

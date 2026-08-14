@@ -317,8 +317,8 @@ private fun persistedRecords(case: Map<*, *>): List<Map<String, Any?>> = (case["
     )
 }
 
-private fun offlineQueueFifoAndShardDrain() {
-    covers("offline_queue_fifo_and_shard_drain")
+private fun offlineQueueFifoReplayOrder() {
+    covers("offline_queue_fifo_replay_order")
 
     val fifo = scenario("offlineQueue", "fifo")
     val sizes = mutableListOf<Int>()
@@ -886,7 +886,7 @@ internal fun runOptimisticOfflineCases() {
     optimisticLayerDropsOnCommitCursor()
     optimisticLayerRollsBackOnFailure()
     optimisticCursorlessFramePreservesCursor()
-    offlineQueueFifoAndShardDrain()
+    offlineQueueFifoReplayOrder()
     offlineQueueOverflowEvictsOldest()
     offlineQueuePreconditionDropsStaleWrite()
     offlineQueueHydratesPersistedWrites()

@@ -80,7 +80,7 @@ def _discarded(items):
 
 class TestQueueOrdering(unittest.TestCase):
     def test_writes_drain_in_submission_order(self):
-        covers("offline_queue_fifo_and_shard_drain")
+        covers("offline_queue_fifo_replay_order")
         case = FIXTURES["fifo"]
         sizes = []
         queue = OfflineQueue(on_size_change=sizes.append)
@@ -94,7 +94,7 @@ class TestQueueOrdering(unittest.TestCase):
         self.assertEqual(sizes[-1], case["sizeAfterDrain"])
 
     def test_a_predicate_drain_flushes_one_shard_and_leaves_the_rest(self):
-        covers("offline_queue_fifo_and_shard_drain")
+        covers("offline_queue_fifo_replay_order")
         case = FIXTURES["shardDrain"]
         queue = OfflineQueue()
 
@@ -108,7 +108,7 @@ class TestQueueOrdering(unittest.TestCase):
         self.assertEqual(_ids(queue.items()), case["remaining"])
 
     def test_requeue_returns_writes_to_the_front_without_re_persisting(self):
-        covers("offline_queue_fifo_and_shard_drain")
+        covers("offline_queue_fifo_replay_order")
         case = FIXTURES["requeue"]
         store = _Store()
         queue = OfflineQueue(persistence=store)

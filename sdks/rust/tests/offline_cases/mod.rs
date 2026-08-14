@@ -399,7 +399,7 @@ fn queued_ids(queue: &OfflineQueue) -> Vec<String> {
     queue.items().iter().map(|item| item.id.clone()).collect()
 }
 
-pub fn offline_queue_fifo_and_shard_drain() {
+pub fn offline_queue_fifo_replay_order() {
     let case = queue_case("fifo");
     let seen = Arc::new(Mutex::new(Vec::new()));
     let observer = Arc::clone(&seen);

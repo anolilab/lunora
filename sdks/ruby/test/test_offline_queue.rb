@@ -77,7 +77,7 @@ class TestQueueOrdering < Minitest::Test
   include QueueFixtures
 
   def test_writes_drain_in_submission_order
-    ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
+    ConformanceManifest.covers("offline_queue_fifo_replay_order")
     case_data = queue_case("fifo")
     sizes = []
     queue = Lunora::OfflineQueue.new(on_size_change: ->(size) { sizes << size })
@@ -91,7 +91,7 @@ class TestQueueOrdering < Minitest::Test
   end
 
   def test_a_predicate_drain_flushes_one_shard_and_leaves_the_rest
-    ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
+    ConformanceManifest.covers("offline_queue_fifo_replay_order")
     case_data = queue_case("shardDrain")
     queue = Lunora::OfflineQueue.new
 
@@ -108,7 +108,7 @@ class TestQueueOrdering < Minitest::Test
   end
 
   def test_requeue_returns_writes_to_the_front_without_re_persisting
-    ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
+    ConformanceManifest.covers("offline_queue_fifo_replay_order")
     case_data = queue_case("requeue")
     store = MemoryStore.new
     queue = Lunora::OfflineQueue.new(persistence: store)

@@ -111,7 +111,7 @@ class OfflineReplayer {
     final sendable = <QueuedMutation>[];
 
     for (final item in drained) {
-      if (item.identity == identity) {
+      if (item.identityAllowsReplay(identity)) {
         sendable.add(item);
       } else {
         queue.unpersist(item.id);
@@ -200,7 +200,7 @@ class OfflineReplayer {
         encodable.add(item);
       } on Object catch (error) {
         queue.unpersist(item.id);
-        item.reject(LunoraApiException('BAD_REQUEST', 'offline mutation cannot be encoded: $error'));
+        item.reject(LunoraApiException(offlineWriteUnencodable, 'offline mutation cannot be wire-encoded: $error'));
       }
     }
 

@@ -102,7 +102,7 @@ func discardedPairs(discarded []Discarded) []string {
 }
 
 func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
-	covers("offline_queue_fifo_and_shard_drain")
+	covers("offline_queue_fifo_replay_order")
 
 	fifo := fixtureScenario(t, "offlineQueue", "fifo")
 
@@ -150,7 +150,7 @@ func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
 }
 
 func TestOfflineQueueRequeueDoesNotRePersist(t *testing.T) {
-	covers("offline_queue_fifo_and_shard_drain")
+	covers("offline_queue_fifo_replay_order")
 
 	scenario := fixtureScenario(t, "offlineQueue", "requeue")
 	store := &memoryStore{}

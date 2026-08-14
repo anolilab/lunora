@@ -329,7 +329,7 @@ extension ConformanceTests {
         }
     }
 
-    func caseOfflineQueueFifoAndShardDrain() throws {
+    func caseOfflineQueueFifoReplayOrder() throws {
         let fifo = try scenario("offlineQueue", "fifo")
         var sizes: [Int] = []
         let queue = LunoraOfflineQueue()
