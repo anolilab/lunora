@@ -1,5 +1,5 @@
-import type { Signal } from "@angular/core";
-import { DestroyRef, inject, signal } from "@angular/core";
+import type { Injector, Signal } from "@angular/core";
+import { DestroyRef, effect, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 
@@ -23,6 +23,17 @@ export interface LiveQueryOptions {
      * component is destroyed. Pass one explicitly to control the lifetime yourself.
      */
     destroyRef?: DestroyRef;
+
+    /**
+     * `Injector` to create the reactive-args `effect()` from. Only needed when
+     * `args` is a function/`Signal` AND `liveQuery` is called outside an injection
+     * context (an explicit `destroyRef` is also being passed — e.g. from
+     * `ngOnInit`, or from a test with no `TestBed`) — `effect()` cannot resolve an
+     * injector on its own there. Defaults to the ambient injection context, the
+     * same source `inject(DestroyRef)` already relies on. Unused for the static
+     * `args` form, which never creates an `effect()`.
+     */
+    injector?: Injector;
 
     /**
      * Called when the subscription errors after the initial attach — the async
@@ -59,11 +70,18 @@ export interface LiveQueryOptions {
  * short-circuit — no network call, no socket; the signal stays `undefined`. To
  * call outside an injection context (e.g. lazily in `ngOnInit`), supply `client`
  * and `destroyRef` via {@link LiveQueryOptions}.
+ *
+ * `args` also accepts a function/`Signal` — `() => ({ channelId: channelId() })`
+ * — to make the subscription reactive: an args change tears the old
+ * subscription down and opens a fresh one for the new args, mirroring
+ * `@lunora/solid`'s `createQuery`/`@lunora/vue`'s `useQuery`. A static (plain
+ * object) `args` resolves once and never re-runs — no `effect()` is created for
+ * it, so it carries none of the reactive form's DI requirement.
  * @experimental
  */
 export const liveQuery = <F extends FunctionReference>(
     reference: F,
-    args: ArgsOf<F> | "skip",
+    args: ArgsOf<F> | "skip" | (() => ArgsOf<F> | "skip"),
     options: LiveQueryOptions = {},
 ): Signal<ReturnOf<F> | undefined> => {
     const client = resolveLunoraClient(options.client);
@@ -72,14 +90,11 @@ export const liveQuery = <F extends FunctionReference>(
 
     const value = signal<ReturnOf<F> | undefined>(undefined);
 
-    // Skip the socket during SSR: on the Angular server platform the value stays
-    // at its `undefined` seed, matching the "opens its WebSocket lazily in the
-    // browser" contract. The browser render re-runs this and attaches.
-    if (shouldOpenSubscription(fromInjectionContext)) {
+    const open = (currentArgs: ArgsOf<F> | "skip", registerCleanup: (unsubscribe: () => void) => void): void => {
         const unsubscribe = createQuerySubscription<F>(
             client,
             reference,
-            args,
+            currentArgs,
             {
                 onData: (next) => {
                     value.set(next);
@@ -92,7 +107,36 @@ export const liveQuery = <F extends FunctionReference>(
             { shardKey: options.shardKey },
         );
 
-        destroyRef.onDestroy(unsubscribe);
+        registerCleanup(unsubscribe);
+    };
+
+    // Skip the socket during SSR: on the Angular server platform the value stays
+    // at its `undefined` seed, matching the "opens its WebSocket lazily in the
+    // browser" contract. The browser render re-runs this and attaches.
+    if (shouldOpenSubscription(fromInjectionContext)) {
+        if (typeof args === "function") {
+            // Cast: TS can't rule out `ArgsOf<F>` itself being function-shaped for
+            // an unconstrained generic, so `typeof args === "function"` alone
+            // doesn't narrow `args` to a callable type. Same cast Solid's
+            // `createQuery` uses for the same reason.
+            const resolveArgs = args as () => ArgsOf<F> | "skip";
+
+            // Reactive form: `effect()`'s cleanup callback tears the previous
+            // subscription down BEFORE the next run opens the new one — the same
+            // ordering guarantee Solid's `onCleanup` and Vue's `watch` cleanup
+            // give. `manualCleanup: true` keeps teardown unified through our own
+            // `destroyRef` below rather than also relying on whichever ambient
+            // `DestroyRef` the injector happens to resolve.
+            const effectRef = effect((onCleanup) => { open(resolveArgs(), onCleanup); }, { injector: options.injector, manualCleanup: true });
+
+            destroyRef.onDestroy(() => {
+                effectRef.destroy();
+            });
+        } else {
+            // Static form: resolves once, never re-runs — no `effect()`, so no DI
+            // requirement beyond what this function already needed.
+            open(args, (unsubscribe) => destroyRef.onDestroy(unsubscribe));
+        }
     }
 
     return value.asReadonly();
