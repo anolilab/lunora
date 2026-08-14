@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { codeTool, resolveReferences, runToolScript } from "../src/code-tool";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "../src/types";
+import { DurableStepJournal } from "./loop-harness";
 
 const UNKNOWN_REF_PATTERN = /unknown result "missing"/u;
 const UNKNOWN_TOOL_PATTERN = /unknown tool "nope"/u;
 const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
 const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
+const BOOM_PATTERN = /boom/u;
 
 const context = {} as AgentToolContext;
 
@@ -184,6 +186,85 @@ describe(runToolScript, () => {
             { idempotencyKey: "tool:code:call_1:a", toolCallId: "call_1:a" },
             { idempotencyKey: "tool:code:call_1:b", toolCallId: "call_1:b" },
         ]);
+    });
+
+    it("gives each script step its own durable boundary: a mid-script failure retries only the failed step, not steps already committed", async () => {
+        // A faithful in-memory model of Cloudflare Workflows' step.do memoization
+        // (shared with agent-loop.test.ts via loop-harness) — reusing the SAME
+        // journal across two `runToolScript` calls models a crash + resume of the
+        // same workflow instance.
+        const journal = new DurableStepJournal();
+        const callsA: unknown[] = [];
+        const callsB: unknown[] = [];
+        let cAttempts = 0;
+
+        const failsOnce: AgentToolDefinition = {
+            description: "c",
+            execute: () => {
+                cAttempts += 1;
+
+                if (cAttempts === 1) {
+                    throw new Error("boom");
+                }
+
+                return "c-ok";
+            },
+            inputSchema: {} as never,
+            isLunoraAgentTool: true,
+        };
+
+        const tools: Record<string, AnyAgentTool> = { a: fakeTool("a-ok", callsA), b: fakeTool("b-ok", callsB), c: failsOnce };
+        const script = {
+            steps: [
+                { id: "a", tool: "a" },
+                { id: "b", tool: "b" },
+                { id: "c", tool: "c" },
+            ],
+        };
+        const replayContext = { idempotencyKey: "tool:code:call_1", step: journal, toolCallId: "call_1" } as unknown as AgentToolContext;
+
+        // First attempt: step "c" throws — the whole script call rejects.
+        await expect(runToolScript(script, tools, replayContext, 16)).rejects.toThrow(BOOM_PATTERN);
+
+        expect(callsA).toHaveLength(1);
+        expect(callsB).toHaveLength(1);
+        expect(cAttempts).toBe(1);
+
+        // Retry on the SAME journal (a workflow replay after the failure): "a"
+        // and "b"'s nested steps are memoized and are NOT re-run — only "c" (the
+        // step that failed mid-body) retries, at-least-once.
+        const result = await runToolScript(script, tools, replayContext, 16);
+
+        expect(callsA).toHaveLength(1);
+        expect(callsB).toHaveLength(1);
+        expect(cAttempts).toBe(2);
+        expect(result.final).toBe("c-ok");
+    });
+
+    it("still resolves $from references across steps when each step runs inside its own nested step.do", async () => {
+        const ordersCalls: unknown[] = [];
+        const tools: Record<string, AnyAgentTool> = {
+            lookup: fakeTool({ id: "u1", name: "Alice" }),
+            orders: fakeTool(["o1", "o2"], ordersCalls),
+        };
+        const stepContext = { idempotencyKey: "tool:code:call_1", step: new DurableStepJournal(), toolCallId: "call_1" } as unknown as AgentToolContext;
+
+        const result = await runToolScript(
+            {
+                steps: [
+                    { id: "u", input: { email: "a@b.c" }, tool: "lookup" },
+                    { id: "o", input: { userId: { $from: "u", $path: "id" } }, tool: "orders" },
+                ],
+            },
+            tools,
+            stepContext,
+            16,
+        );
+
+        // The nested durable boundary doesn't break sequencing: the second step
+        // still receives the first step's resolved output.
+        expect(ordersCalls).toStrictEqual([{ userId: "u1" }]);
+        expect(result.final).toStrictEqual(["o1", "o2"]);
     });
 });
 

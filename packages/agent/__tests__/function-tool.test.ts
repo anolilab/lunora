@@ -40,8 +40,27 @@ describe(functionTool, () => {
         const tool = functionTool("orders:byId", { description: "Look up an order by id.", inputSchema });
         const output = await tool.execute({ id: "o_42" }, toolContext(run));
 
-        expect(seen).toStrictEqual([{ args: { id: "o_42" }, ref: "orders:byId" }]);
+        // The model input passes through, plus the call's forwarded idempotencyKey (see the dedicated test below).
+        expect(seen).toStrictEqual([{ args: { id: "o_42", idempotencyKey: "tool:lookupOrder:call_1" }, ref: "orders:byId" }]);
         expect(output).toStrictEqual({ id: "o_42", status: "shipped" });
+    });
+
+    it("forwards the call's idempotencyKey to the dispatched function, pinned after the model input", async () => {
+        const seen: (Record<string, unknown> | undefined)[] = [];
+
+        const run: AgentToolContext["run"] = async (_reference, args) => {
+            seen.push(args);
+
+            return null;
+        };
+
+        const tool = functionTool("orders:byId", { description: "Look up an order by id.", inputSchema });
+
+        // The model input tries to smuggle its own `idempotencyKey` — the real
+        // one (from context) must win, not the model-supplied value.
+        await tool.execute({ id: "o_42", idempotencyKey: "model-supplied" } as never, toolContext(run, { idempotencyKey: "tool:lookupOrder:call_7" }));
+
+        expect(seen).toStrictEqual([{ id: "o_42", idempotencyKey: "tool:lookupOrder:call_7" }]);
     });
 
     it("accepts a pre-minted function reference and passes it through unchanged", async () => {
