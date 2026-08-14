@@ -254,7 +254,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
     };
 
-    const toolContext = { env, getState, idempotencyKey: stepName, reportProgress, run, setState, threadKey, toolCallId: call.id };
+    const toolContext = { env, getState, idempotencyKey: stepName, reportProgress, run, setState, step, threadKey, toolCallId: call.id };
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.

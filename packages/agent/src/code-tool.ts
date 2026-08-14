@@ -186,8 +186,21 @@ const runToolScript = async (
             idempotencyKey: `${context.idempotencyKey}:${step.id}`,
             toolCallId: `${context.toolCallId}:${step.id}`,
         };
+
+        const runStep = (): Promise<unknown> => Promise.resolve(tool.execute(input, stepContext));
+
+        // Give each script step its OWN nested durable boundary — named from
+        // the per-step key just derived above — instead of running inside only
+        // the ENCLOSING codeTool call's step.do. Without this a failure at step
+        // 3 retried the whole script, re-running steps 1 and 2's already-
+        // committed side effects (the idempotency keys they mint were derived
+        // correctly but nothing durable was actually keyed on them). Cloudflare
+        // Workflows supports a step.do nested inside another step.do's callback
+        // (the codeTool call's own enclosing step), so this nests cleanly.
+        // Falls back to a plain call when `context.step` is absent — a tool
+        // invoked directly outside the loop (e.g. a unit test).
         // eslint-disable-next-line no-await-in-loop -- steps are sequential by design: a later input can reference an earlier output
-        const output: unknown = await tool.execute(input, stepContext);
+        const output: unknown = await (context.step ? context.step.do(stepContext.idempotencyKey, runStep) : runStep());
 
         // `byId` keeps the FULL output for later `$from` refs; the RETURNED results
         // (persisted as the tool message and re-injected every turn) get each output

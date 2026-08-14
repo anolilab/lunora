@@ -41,10 +41,16 @@ export interface AgentStepLike {
  * `idempotencyKey`.
  *
  * The `idempotencyKey` is the deterministic durable-step name
- * (`tool:<name>:<toolCallId>`). A COMPLETED tool step is never re-run on a
- * workflow replay (native step memoization) — but a step that FAILS mid-body
- * is retried at-least-once, so a side-effecting tool (charge a card, send a
- * mail) must dedupe on this key itself.
+ * (`tool:<name>:<toolCallId>`, further suffixed per script step for a
+ * `codeTool`). A COMPLETED tool step is never re-run on a workflow replay
+ * (native step memoization) — but a step that FAILS mid-body is retried
+ * at-least-once, so a side-effecting tool (charge a card, send a mail) must
+ * dedupe on this key itself. `functionTool` forwards it to the dispatched
+ * function as `args.idempotencyKey` (pinned after the model input, so it
+ * can't be overridden) — a function that wants to dedupe declares
+ * `idempotencyKey: v.optional(v.string())` in its own args and checks it; a
+ * function that ignores it is unaffected (an undeclared arg field is dropped,
+ * not rejected).
  * @experimental
  */
 export interface AgentToolContext {
@@ -104,6 +110,21 @@ export interface AgentToolContext {
      * skip the write when it is already present.
      */
     setState: (state: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * The durable-step handle (`step.do`/`waitForEvent`), present when the tool
+     * is dispatched through the real agent loop (`agent-loop.ts` threads it
+     * into every tool's context). `codeTool` uses it to give each script step
+     * its OWN nested durable boundary — see `code-tool.ts` — so a failure at
+     * script step 3 retries only step 3, not steps 1–2's already-committed
+     * side effects. Cloudflare Workflows supports a `step.do` nested inside
+     * another `step.do`'s callback (the codeTool call's own enclosing step).
+     * Most tools never touch this directly. Absent when `execute` is invoked
+     * directly outside the loop (e.g. a unit test driving `runToolScript` or
+     * a tool's `execute` by hand) — `codeTool` degrades to calling steps
+     * without a nested boundary in that case.
+     */
+    step?: AgentStepLike;
     /** The thread this tool call belongs to. */
     threadKey: string;
     /** The provider-issued tool-call id. */
