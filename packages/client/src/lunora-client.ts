@@ -1886,6 +1886,21 @@ class LunoraClient {
         return state?.lastValue;
     }
 
+    /**
+     * Tri-state variant of {@link peekActiveQueryValue}: reports whether a live
+     * subscription exists at all, not just its value. `peekActiveQueryValue`
+     * collapses "no subscription is active" and "the subscription's value is
+     * `undefined`" into the same `undefined` return, which is ambiguous for a
+     * caller (like the snapshot precondition) that needs to tell "unknown" apart
+     * from "confirmed absent".
+     */
+    public peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): { present: boolean; value: unknown } {
+        const key = SubscriptionRegistry.key(functionPath, args, shardKey);
+        const state = this.subscriptions.get(key);
+
+        return { present: state !== undefined, value: state?.lastValue };
+    }
+
     // --- RPC ---------------------------------------------------------------
 
     public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
