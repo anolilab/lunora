@@ -12,6 +12,8 @@
  * real `ack`/`retry`/`ackAll`/`retryAll`, and a thrown handler error is re-thrown
  * so workerd still retries the batch.
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
@@ -280,6 +282,45 @@ const buildCaptureRecords = (
     });
 };
 
+/** A thrown deterministic dispatch failure resolved to the one message it belongs to. */
+interface AttributedFailure {
+    /** Human-readable text for `CapturedQueueMessage.error`, computed once from the handler's original throw. */
+    errorMessage: string;
+    /** The real (un-proxied) message the failure is scoped to. */
+    message: MessageLike;
+}
+
+/**
+ * When the handler threw a deterministic dispatch failure (400/403/404/422 —
+ * see `isDeterministicDispatchFailure`) that it scoped to one message via
+ * `ctx.run(fn, args, { messageId })`, resolve which message it belongs to —
+ * so the caller can ack just that one instead of retrying the whole batch.
+ * Returns `undefined` for every other case: a non-deterministic failure, a
+ * deterministic failure with no `messageId` (the handler didn't scope its
+ * call — guessing which message it belongs to is unsafe, see plan 338 §1a),
+ * an unrecognized `messageId`, or a message the handler already explicitly
+ * acked/retried (never override a decision it actually made).
+ */
+const resolveAttributedFailure = (harness: CaptureHarness, threw: boolean, handlerError: unknown): AttributedFailure | undefined => {
+    if (!threw || !isDeterministicDispatchFailure(handlerError)) {
+        return undefined;
+    }
+
+    const dispatchMessageId = getDispatchMessageId(handlerError);
+
+    if (dispatchMessageId === undefined) {
+        return undefined;
+    }
+
+    const message = harness.originals.find((candidate) => candidate.id === dispatchMessageId);
+
+    if (message === undefined || harness.dispositions.has(message)) {
+        return undefined;
+    }
+
+    return { errorMessage: describeThrownError(handlerError), message };
+};
+
 /**
  * Look up the handler for `batch.queue` and invoke it with a fresh
  * `QueueRunContext`. Throws a directed error when no push handler is registered
@@ -332,6 +373,21 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         handlerError = error;
     }
 
+    // A failure attributed to one message is that message's problem, not the
+    // rest of the batch's: ack JUST it and skip the whole-batch rethrow below.
+    // Every other case (see resolveAttributedFailure) stays unattributed and
+    // falls through unchanged.
+    const attributed = resolveAttributedFailure(harness, threw, handlerError);
+
+    if (attributed !== undefined) {
+        attributed.message.ack();
+        // The batch no longer failed as a whole — every OTHER message now
+        // resolves through the undecided-message fallback below exactly like a
+        // clean handler return (implicit ack), matching the delivery outcome
+        // (no rethrow below).
+        threw = false;
+    }
+
     // Best-effort by contract: build the records AND run the sink inside one guard
     // so nothing on the capture path can change delivery semantics. If reading a
     // host message or encoding a record throws, a clean batch must still resolve
@@ -339,6 +395,19 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     // still re-throw the handler's ORIGINAL value below — never the capture error.
     try {
         const records = buildCaptureRecords(harness, entry, batch.queue, threw, handlerError);
+
+        // The attributed message was physically acked above (so it never
+        // rejoins the queue), but its capture record must still say "error" —
+        // that's what tells an operator it failed, since it now leaves the DLQ
+        // it used to land in (see plan 338's maintenance notes).
+        if (attributed !== undefined) {
+            const attributedRecord = records.find((record) => record.messageId === attributed.message.id);
+
+            if (attributedRecord !== undefined) {
+                attributedRecord.outcome = "error";
+                attributedRecord.error = attributed.errorMessage;
+            }
+        }
 
         await options.capture(records);
     } catch (captureError) {

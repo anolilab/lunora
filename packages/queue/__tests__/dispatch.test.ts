@@ -431,3 +431,120 @@ describe("dispatchQueueBatch capture", () => {
         }
     });
 });
+
+/**
+ * Fake `fetch` for `ctx.run`'s dispatch POST: fails with `status`/`code` for
+ * the call whose `args.id === failFor`, succeeds for every other call. Models
+ * a handler that scopes each `ctx.run` call to one message (§1a's "adjacent
+ * read and call" shape), so attribution comes from the explicit `messageId`
+ * option the handler passes — never from inference over the request.
+ */
+const dispatchFetchFailingFor = (failFor: string, status: number, code: string) => async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
+
+    if (args?.id === failFor) {
+        return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { status });
+    }
+
+    return Response.json({ ok: true });
+};
+
+/** A handler that scopes its own `ctx.run` call per message via `messageId` — the shape attribution requires. */
+const scopedDispatchQueue = defineQueue({
+    handler: async (context, b) => {
+        for (const m of b.messages) {
+            // eslint-disable-next-line no-await-in-loop -- each message's dispatch must be scoped (messageId) before the next starts, mirroring §1a's adjacent read/call shape
+            await context.run({ __lunoraRef: "fn" }, { id: m.id }, { messageId: m.id });
+        }
+    },
+});
+
+const DISPATCH_ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" };
+
+describe("dispatchQueueBatch — poison message isolation (deterministic dispatch failure)", () => {
+    it("acks the one attributed message on a branded 404 and leaves the rest of the batch alone", async () => {
+        expect.assertions(5);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+            ),
+        ).resolves.toBeUndefined();
+
+        expect(m2.acked).toBe(true);
+        expect(m1.acked).toBe(false);
+        expect(m3.acked).toBe(false);
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+        const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
+
+        expect(byId).toMatchObject({
+            m1: { outcome: "ack" },
+            m2: { error: expect.stringContaining("dispatch failed for m2"), outcome: "error" },
+            m3: { outcome: "ack" },
+        });
+    });
+
+    it("still rethrows the whole batch for a non-deterministic (500) failure — unchanged", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 500, "INTERNAL") },
+            ),
+        ).rejects.toThrow(/dispatch failed for m2/);
+
+        expect(m2.acked).toBe(false);
+    });
+
+    it("still rethrows the whole batch for a 429 (transient — guards against widening the deterministic set)", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 429, "RATE_LIMITED") },
+            ),
+        ).rejects.toThrow(/dispatch failed for m2/);
+
+        expect(m2.acked).toBe(false);
+    });
+
+    it("still rethrows when the handler throws undefined (not a LunoraError, so never attributable)", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const queue = defineQueue({
+            handler: () => {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercise the falsy-throw path: a non-error throw can never satisfy isDeterministicDispatchFailure, so it must stay on the whole-batch rethrow
+                throw undefined;
+            },
+        });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [captureMessage({ id: "m1" }, { id: "m1" })]),
+                { q: { definition: queue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV },
+            ),
+        ).rejects.toBeUndefined();
+    });
+});
