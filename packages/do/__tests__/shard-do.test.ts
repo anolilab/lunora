@@ -1,4 +1,4 @@
-import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
+import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
@@ -135,11 +135,14 @@ class ReexecShard extends ShardDO {
     /** When set, `handleRpc` records this table as changed (simulates a write). */
     public changedTableOnRpc: string | undefined;
 
+    /** When set alongside `changedTableOnRpc`, threaded through as the write's index position. */
+    public changedIndexKeysOnRpc: ReadonlyArray<IndexKeyEntry> | undefined;
+
     public override async handleRpc(): Promise<unknown> {
         this.userIdDuringRpc = this.getCurrentUserId();
 
         if (this.changedTableOnRpc !== undefined) {
-            this.recordChangedTable(this.changedTableOnRpc);
+            this.recordChangedTable(this.changedTableOnRpc, this.changedIndexKeysOnRpc);
         }
 
         return { ok: true };
@@ -180,8 +183,13 @@ class ReexecShard extends ShardDO {
 
         const outcome = this.outcomes.get(functionPath);
 
-        // Clone the table set so the production code can't mutate the fixture.
-        return Promise.resolve(outcome ? { result: outcome.result, tables: new Set(outcome.tables) } : null);
+        // Clone the table set (and ranges, when the fixture supplies them) so
+        // the production code can't mutate the fixture.
+        return Promise.resolve(
+            outcome
+                ? { ranges: outcome.ranges === undefined ? undefined : new Map(outcome.ranges), result: outcome.result, tables: new Set(outcome.tables) }
+                : null,
+        );
     }
 }
 
@@ -331,6 +339,27 @@ describe("shardDO", () => {
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
+    });
+
+    it("broadcastDelta wire-encodes the row, so a bigint column does not throw", () => {
+        expect.assertions(2);
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: { a: { table: "messages" } } });
+
+        // A raw `JSON.stringify` throws on a bare `bigint` — this must not throw,
+        // and the delivered frame must carry the `encodeWire`-tagged form (the
+        // same shape `pushSubscriptionData` sends) rather than dropping/mangling it.
+        expect(() => {
+            shard.emit({ key: "m1", op: "insert", row: { count: 9_007_199_254_740_993n, id: "m1" }, table: "messages" });
+        }).not.toThrow();
+
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({
+            delta: { op: "insert", row: { count: encodeWire(9_007_199_254_740_993n), id: "m1" }, table: "messages" },
+            id: "a",
+            type: "delta",
+        });
     });
 
     it("broadcastDelta filters by query.args — same key matches, different value skips", () => {
@@ -968,6 +997,161 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
         expect(ws.sent.length).toBeGreaterThan(sentBefore);
+    });
+
+    it("refreshes a suppressed (byte-identical) memo's `ranges`, not just its `tables`", async () => {
+        expect.assertions(3);
+
+        // Two disjoint half-open slices of the same index: a write landing in
+        // `rangeB` never touches `rangeA` and vice versa.
+        const rangeA: KeyRange = { hi: "m", index: "byRoom", lo: "a", table: "cursors" };
+        const rangeB: KeyRange = { hi: "z", index: "byRoom", lo: "n", table: "cursors" };
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeA]]]),
+            result: [{ sessionId: "a", x: 0, y: 0 }],
+            tables: new Set(["cursors"]),
+        });
+
+        await subscribe(shard, ws);
+
+        expect(shard.execCount).toBe(1);
+
+        // Write #1: key "c" falls inside `rangeA` (the memo's CURRENT ranges, as
+        // of subscribe), so the range gate re-runs the query regardless of the
+        // bug under test. The outcome swapped in for this re-run is
+        // byte-identical on `result` but carries a DIFFERENT range (`rangeB`) —
+        // the shape a recency-windowed query legitimately produces run-to-run.
+        // Suppressed: no new data frame, but (with the fix) the memo's `ranges`
+        // advance to `rangeB`.
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeB]]]),
+            result: [{ sessionId: "a", x: 0, y: 0 }],
+            tables: new Set(["cursors"]),
+        });
+        shard.changedIndexKeysOnRpc = [{ index: "byRoom", key: "c" }];
+        shard.changedTableOnRpc = "cursors";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(2); // re-ran (rangeA gated it in), but suppressed on the wire
+
+        // Write #2: key "p" falls inside `rangeB` but OUTSIDE `rangeA`. If the
+        // suppressed refresh left the memo's `ranges` stale at `rangeA` (the
+        // bug), the range gate wrongly concludes this write can't have changed
+        // the result and skips the re-run entirely — `execCount` stays at 2 and
+        // no frame goes out, even though the query result actually changes below.
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeB]]]),
+            result: [{ sessionId: "a", x: 99, y: 99 }],
+            tables: new Set(["cursors"]),
+        });
+        shard.changedIndexKeysOnRpc = [{ index: "byRoom", key: "p" }];
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(3); // the refreshed `rangeB` gated write #2 in
+    });
+});
+
+describe("shardDO connect: serializeAttachment failure retry", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    /**
+     * Counts `onConnect` dispatches directly via the protected `dispatchLifecycle`
+     * seam, rather than wiring `lifecycleHookPaths` + a recording `handleRpc` —
+     * the connect-persistence retry under test doesn't touch hook resolution.
+     */
+    class ConnectShard extends ShardDO {
+        public connectDispatches = 0;
+
+        // eslint-disable-next-line class-methods-use-this -- override stub; connect-persistence retry never dispatches through it
+        public override async handleRpc(): Promise<unknown> {
+            return { ok: true };
+        }
+
+        public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
+            return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
+        }
+
+        public registerSocket(ws: FakeWebSocket, attachment?: SocketAttachment): void {
+            this.state.acceptWebSocket(ws as unknown as WebSocket);
+            ws.serializeAttachment(attachment ?? { subs: {} });
+        }
+
+        protected override async dispatchLifecycle(event: "connect" | "disconnect"): Promise<void> {
+            if (event === "connect") {
+                this.connectDispatches += 1;
+            }
+        }
+    }
+
+    const bigConnectEnvelope: SubscriptionEnvelope = { context: { blob: "x".repeat(64) }, id: "connect", type: "connect" };
+
+    /** `serializeAttachment` double that throws only when the value still carries `context`. */
+    const throwsOnContext =
+        (ws: FakeWebSocket) =>
+        (value: unknown): void => {
+            if ((value as SocketAttachment).context !== undefined) {
+                throw new Error("attachment too large to persist");
+            }
+
+            // eslint-disable-next-line no-param-reassign -- the double's purpose is to install the persisted value on the caller's fake socket
+            ws.attachment = value as SocketAttachment | undefined;
+        };
+
+    it("retries without context on a serializeAttachment failure, so onConnect still fires and connected persists", async () => {
+        expect.assertions(4);
+
+        const shard = new ConnectShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        ws.serializeAttachment = throwsOnContext(ws);
+
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        // The hook still fired this turn (the in-memory attachment passed to it
+        // still carries context — only the PERSISTED copy dropped it).
+        expect(shard.connectDispatches).toBe(1);
+        // The retry (without `context`) is what actually reached the socket.
+        expect(ws.attachment).toMatchObject({ connected: true });
+        expect(ws.attachment?.context).toBeUndefined();
+
+        // A second connect frame: `readAttachment` deserializes the PERSISTED
+        // copy, sees `connected: true` (the retry survived), and treats this as
+        // a duplicate — `onConnect` must not fire again.
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        expect(shard.connectDispatches).toBe(1);
+    });
+
+    it("fires no onConnect when even the context-less retry fails to persist", async () => {
+        expect.assertions(2);
+
+        const shard = new ConnectShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        // Every call throws — not even the retry can persist.
+        ws.serializeAttachment = () => {
+            throw new Error("attachment too large to persist");
+        };
+
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        // Nothing persisted, so `connected` never became `true` — the hook must
+        // not fire, or a client that legitimately retries the (unacked, no-ack
+        // frame exists for `connect`) frame would never get another chance to
+        // announce itself once persistence starts working again.
+        expect(shard.connectDispatches).toBe(0);
+        expect(ws.attachment?.connected).not.toBe(true);
     });
 });
 

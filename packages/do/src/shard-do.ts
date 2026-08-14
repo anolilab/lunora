@@ -3253,7 +3253,13 @@ abstract class ShardDO {
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
         // JSON.stringify(...) for every (socket, sub) pair.
-        const deltaJson = JSON.stringify(delta);
+        //
+        // Wire-encode first, matching every sibling outbound path
+        // (`pushSubscriptionData`, poke frames, whisper, stream chunks):
+        // `delta.row` is the fully-decoded document a write just applied, which
+        // can carry `bigint`/`Date`/`ArrayBuffer` — a raw `JSON.stringify` drops
+        // an `ArrayBuffer` to `{}` and throws outright on a `bigint`.
+        const deltaJson = JSON.stringify(encodeWire(delta));
 
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
@@ -4295,15 +4301,51 @@ abstract class ShardDO {
 
             attachment.connected = true;
 
+            // `connected` lives on the SAME object the `try` below persists —
+            // if `context` is what made it too large and the whole attachment
+            // fails to serialize, `connected` doesn't survive either, even
+            // though only `context` was ever documented as at-risk. A resent
+            // `connect` (there's no ack frame for this envelope, so a client may
+            // legitimately retry after a timeout) would then re-enter this
+            // branch and re-fire `onConnect` — `webSocketClose` still only fires
+            // `onDisconnect` once, breaking the symmetry the `connected === true`
+            // check above exists to guarantee.
+            //
+            // Retry once with `context` omitted so `connected`/`clientId`/
+            // `pageDeltas` still persist even when `context` alone is what
+            // doesn't fit. Only if THAT also fails is nothing here persistable;
+            // in that case, don't fire `onConnect` at all — an unpersisted
+            // `connected` flag means the next `deserializeAttachment` read sees
+            // `connected: false`, so a resent `connect` frame correctly re-enters
+            // this branch and retries, rather than silently never firing again.
+            let persisted = true;
+
             try {
                 (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
             } catch {
-                // Over-large context can't be persisted; the hook still runs
-                // with the supplied context this turn, but it won't survive
-                // to disconnect. Never throw out of webSocketMessage.
+                const withoutContext: SocketAttachment = { ...attachment };
+
+                delete withoutContext.context;
+
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(withoutContext);
+                } catch {
+                    // Neither attempt persisted. Roll back the in-memory flip so
+                    // this local `attachment` object agrees with what's actually
+                    // in storage — the same defensive move `subscribe`/
+                    // `unsubscribe` above make on their own serialize failure.
+                    attachment.connected = false;
+                    persisted = false;
+                }
             }
 
-            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+            // The in-memory `attachment` still carries `context` regardless of
+            // which serialize attempt (if any) succeeded, so a persisted-retry
+            // still fires the hook with the caller's supplied context THIS turn
+            // — it just won't survive to `onDisconnect` at close.
+            if (persisted) {
+                await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+            }
 
             return;
         }
@@ -4677,17 +4719,73 @@ abstract class ShardDO {
             // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
             // above), the same source `persistIdempotentResult` reads when it
             // records the row after the handler commits.
-            const cached = this.readIdempotentResult(this.currentRequestMutationId);
+            //
+            // The read and the `handleRpc` call below run inside ONE
+            // `ShardHost.runSerialized` span — the same single-writer gate
+            // `ShardRunner.runInTransaction` composes with `transaction` — so two
+            // concurrent dispatches carrying the same `mutationId` can't both
+            // observe a cache miss and both run the handler. Skipped entirely
+            // when there is no `mutationId` to dedupe (queries, actions, legacy
+            // clients): those have nothing to serialize against and must not pay
+            // the gate's cost.
+            //
+            // `(identity, mutationId)` is captured into LOCALS here and re-pinned
+            // onto the instance fields as the FIRST statement inside the gated
+            // closure. The gate itself only delays entry — while THIS dispatch
+            // waits its turn, another dispatch's prologue (a sibling `fetch()`,
+            // same "concurrent fetches" characteristic the gate exists to guard
+            // against) can run and overwrite these same shared fields before this
+            // closure is admitted. `readIdempotentResult`, and the write-side
+            // calls `handleRpc` makes via `commitMutationBookkeeping` (persisting
+            // the result, advancing the client watermark), all read them
+            // straight off `this`, so without the re-pin a dedup check (or its
+            // commit) could silently run under ANOTHER dispatch's identity —
+            // exactly the kind of corruption this fix exists to close, just moved
+            // one field over. (`dispatchTrace`/`dispatchHeadroom` above capture
+            // the same way, for the same reason, on the other side of `handleRpc`.)
+            const dedupUserId = this.currentRequestUserId;
+            const dedupClientId = this.currentRequestClientId;
+            const dedupClientSeq = this.currentRequestClientSeq;
+            const dedupSystem = this.currentRequestSystem;
+            const dedupMutatorClass = this.currentMutatorClass;
+            const dedupMutationId = this.currentRequestMutationId;
 
-            if (cached !== undefined) {
-                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
+            const dispatchOutcome =
+                dedupMutationId === undefined
+                    ? {
+                          cached: undefined,
+                          // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
+                          // leaves) ONLY for the handler, so `validateArgs` sees real
+                          // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form
+                          // for the request log/metrics below (JSON-safe — a raw `bigint`
+                          // there would throw `JSON.stringify`).
+                          result: await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom),
+                      }
+                    : await this.shardHost.runSerialized(async () => {
+                          this.currentRequestUserId = dedupUserId;
+                          this.currentRequestClientId = dedupClientId;
+                          this.currentRequestClientSeq = dedupClientSeq;
+                          this.currentRequestSystem = dedupSystem;
+                          this.currentMutatorClass = dedupMutatorClass;
+                          this.currentRequestMutationId = dedupMutationId;
+
+                          const cached = this.readIdempotentResult(dedupMutationId);
+
+                          if (cached !== undefined) {
+                              return { cached, result: undefined };
+                          }
+
+                          return {
+                              cached: undefined,
+                              result: await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom),
+                          };
+                      });
+
+            if (dispatchOutcome.cached !== undefined) {
+                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
             }
 
-            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
-            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
-            // values. `payload.args` stays in wire form for the request log/metrics
-            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
-            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+            const { result } = dispatchOutcome;
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -9239,6 +9337,15 @@ abstract class ShardDO {
 
         if (existing?.lastJson === json) {
             existing.tables = outcome.tables;
+            // `ranges` legitimately shifts run-to-run even when the result is
+            // byte-identical (a recency-windowed query is the obvious case) — it's
+            // recomputed per execution from the index slices actually touched, not
+            // derived from the result. Leaving it stale here would violate
+            // `subscription-range-gate`'s "assume touched on any uncertainty" law:
+            // a later write landing in the REFRESHED range but outside the STALE
+            // one would never re-trigger this subscription. Refresh it every run,
+            // suppressed or not — matches the non-suppressed branch below.
+            existing.ranges = outcome.ranges;
 
             // The result is byte-identical to the last frame, so no data/delta
             // frame goes out (frame suppression). But a confirmed write whose
