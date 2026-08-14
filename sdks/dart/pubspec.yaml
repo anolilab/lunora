@@ -1,7 +1,7 @@
-name: lunora
-description: Hand-written Lunora transport for Dart and Flutter — wire codec, stable subscription key, and RPC/WebSocket client.
-version: 0.0.0
-publish_to: none
+name: "lunora"
+description: "Hand-written Lunora transport for Dart and Flutter — wire codec, stable subscription key, and RPC/WebSocket client."
+version: "0.0.0"
+publish_to: "none"
 
 # No `dependencies:` and no `dev_dependencies:`, deliberately. The transport
 # imports only `dart:convert` and `dart:typed_data`, and the conformance suite is
@@ -14,4 +14,4 @@ publish_to: none
 # into a consumer's project, and a transport with dependencies would make the
 # generated SDK's pubspec carry them too.
 environment:
-    sdk: ^3.6.0
+    sdk: "^3.6.0"
