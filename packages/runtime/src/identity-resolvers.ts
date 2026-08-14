@@ -20,6 +20,7 @@
  * separate primitives with distinct names to avoid confusing the two.
  */
 
+import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { LunoraError } from "./errors";
 
 /**
@@ -61,8 +62,13 @@ interface ResolvedIdentity {
  * so `.auth()`'s better-auth session resolver, a signed-preview-link verifier, a
  * per-tenant bearer check, an upstream-JWT reader, … are all just `IdentityResolver`s
  * — the identity layer is generic over every scheme, not coupled to any one.
+ *
+ * The optional third argument is the request's `ExecutionContext`, for a scheme
+ * whose credential the platform supplies out-of-band rather than on the request
+ * (`context.access` under Worker-scoped Cloudflare Access). It is `undefined`
+ * wherever the host gave the worker no context.
  */
-type IdentityResolver = (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+type IdentityResolver = (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
 
 /** Error policy for {@link composeIdentityResolvers} when a participant resolver throws. */
 type ComposeIdentityResolversErrorMode = "fail-closed" | "skip";
@@ -92,13 +98,13 @@ interface ComposeIdentityResolversOptions {
 const composeIdentityResolvers = (resolvers: ReadonlyArray<IdentityResolver>, options: ComposeIdentityResolversOptions = {}): IdentityResolver => {
     const onError: ComposeIdentityResolversErrorMode = options.onError ?? "fail-closed";
 
-    return async (request: Request, env: unknown): Promise<ResolvedIdentity | null> => {
+    return async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<ResolvedIdentity | null> => {
         for (const resolver of resolvers) {
             let resolved: ResolvedIdentity | null;
 
             try {
                 // eslint-disable-next-line no-await-in-loop -- ordered first-match-wins: a later resolver must not run until the earlier one has settled (and short-circuit on the first hit)
-                resolved = await resolver(request, env);
+                resolved = await resolver(request, env, context);
             } catch (error: unknown) {
                 if (onError === "skip") {
                     continue;
@@ -133,7 +139,7 @@ const routeIdentityResolvers = (routes: Record<string, IdentityResolver>): Ident
         .filter((key) => key !== "*")
         .toSorted((a, b) => b.length - a.length);
 
-    return (request: Request, env: unknown): Promise<ResolvedIdentity | null> | ResolvedIdentity | null => {
+    return (request: Request, env: unknown, context?: ExecutionContextLike): Promise<ResolvedIdentity | null> | ResolvedIdentity | null => {
         const { pathname } = new URL(request.url);
         const matched = prefixes.find((prefix) => pathname === prefix || pathname.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`));
         const resolver = matched === undefined ? routes["*"] : routes[matched];
@@ -143,7 +149,7 @@ const routeIdentityResolvers = (routes: Record<string, IdentityResolver>): Ident
             return null;
         }
 
-        return resolver(request, env);
+        return resolver(request, env, context);
     };
 };
 
@@ -191,8 +197,8 @@ const wrapResolverWithContract = (
         return baseResolveIdentity;
     }
 
-    return async (request: Request, env: unknown): Promise<ResolvedIdentity | null> => {
-        const resolved = await baseResolveIdentity(request, env);
+    return async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<ResolvedIdentity | null> => {
+        const resolved = await baseResolveIdentity(request, env, context);
 
         if (!resolved) {
             return resolved;

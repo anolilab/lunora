@@ -3545,6 +3545,14 @@ Re-exported from `@lunora/ratelimit` — signature tracked at its source.
 
 ## `lunorash/runtime`
 
+### `AccessContextLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AccessIdentityLike` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AdminTableResolver` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
