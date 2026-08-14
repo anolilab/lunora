@@ -673,6 +673,9 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+
+    /** Static per-procedure metadata attached via `.meta()`. See {@link RegisteredFunction.meta}. */
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
 }
 

@@ -1584,6 +1584,7 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
 }
 ```
@@ -4686,6 +4687,7 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+    readonly meta?: Record<string, unknown>;
     readonly visibility?: FunctionVisibility;
 }
 ```

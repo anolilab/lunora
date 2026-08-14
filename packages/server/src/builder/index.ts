@@ -105,6 +105,7 @@ const makeStreamHandler =
         args: Args,
         middlewares: ReadonlyArray<Middleware<unknown, unknown>>,
         userHandler: (options: { args: InferArgs<Args>; ctx: unknown; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
+        meta?: Record<string, unknown>,
     ) =>
     (context: unknown, rawArgs: InferArgs<Args>, signal: AbortSignal): AsyncIterable<R> => {
         // Args validation runs synchronously at call time so a bad envelope
@@ -115,7 +116,7 @@ const makeStreamHandler =
         // caller before returning an iterable — defer the chain to the first
         // `next()` pump by wrapping the iterator with an outer async generator.
         return (async function* drive(): AsyncGenerator<R, void, void> {
-            const resolvedContext = await runMiddleware(middlewares, context);
+            const resolvedContext = await runMiddleware(middlewares, withMeta(context, meta));
             const source = userHandler({ args: parsed, ctx: resolvedContext, signal });
             // Drive the source through an explicit iterator so the abort check
             // can gate each `.next()` *before* the producer is resumed — a
@@ -273,9 +274,10 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           args: state.args,
                           ...(durable ? { durable } : {}),
                           ...(state.expose ? { expose: state.expose } : {}),
-                          handler: makeStreamHandler(state.args, state.middlewares, userHandler),
+                          handler: makeStreamHandler(state.args, state.middlewares, userHandler, state.meta),
                           kind: "stream" as const,
                           ...(maskedTables ? { maskedTables } : {}),
+                          ...(state.meta ? { meta: state.meta } : {}),
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
                           ...(state.x402 ? { x402: state.x402 } : {}),
