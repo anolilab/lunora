@@ -36,6 +36,16 @@ export interface SendOptions {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+
+    /**
+     * Stable key for deduping a queued send across Cloudflare Queues' at-least-once
+     * redelivery. Only meaningful for `mailer.queue()` — `mailer.send()` ignores it.
+     * When omitted, `queue()` generates one at enqueue time so it survives redelivery
+     * (a key minted in the consumer would change on every retry, defeating the point).
+     * Not forwarded to the mail provider — a consumer wanting exactly-once delivery
+     * must dedupe against its own store using this key.
+     */
+    idempotencyKey?: string;
     react?: ReactElement;
     replyTo?: string;
     subject: string;

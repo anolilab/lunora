@@ -136,7 +136,14 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         // pattern intentionally works on pre-rendered payloads.
         const payload = await buildPayload(options_);
 
-        await options.queue.send(toQueuedPayload(payload));
+        // Mint the idempotency key HERE, at enqueue time — never inside the
+        // consumer, where Cloudflare Queues' at-least-once redelivery would mint
+        // a fresh key on every retry and defeat dedup entirely. A caller-supplied
+        // key wins; otherwise generate one so every queued send still carries a
+        // stable key a consumer can dedupe against.
+        const idempotencyKey = options_.idempotencyKey ?? crypto.randomUUID();
+
+        await options.queue.send(toQueuedPayload({ ...payload, idempotencyKey }));
 
         return { queued: true };
     };
