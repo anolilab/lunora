@@ -179,6 +179,20 @@ export default defineConfig(async ({ mode }) => {
             // resvg-wasm: load from node_modules at runtime, don't bundle (avoids the
             // bundler resolving its .wasm asset at build time).
             external: ["@resvg/resvg-wasm"],
+            // Bundle c15t into the server output instead of resolving it from
+            // node_modules at runtime.
+            //
+            // `@c15t/react` is imported by `__root.tsx`, so it is in the SSR graph
+            // for every route. Left external, the deployed function imports it by
+            // specifier — and it reaches `@c15t/ui/styles/primitives/*.module.js`
+            // through a wildcard `exports` map, which Netlify's file tracer does
+            // not follow. Those files were therefore never uploaded, and the
+            // function threw ERR_MODULE_NOT_FOUND on cold start: every invocation
+            // returned 502, taking out `/api/og`, the 404 page, and the loader
+            // call behind every client-side navigation. Prerendered pages hid it,
+            // because `preferStatic` serves those without touching the function —
+            // which is why a hard refresh worked and clicking a link did not.
+            noExternal: ["@c15t/react", "@c15t/ui"],
             optimizeDeps: {
                 exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-wasm"],
                 include: ["react", "react-dom"],
