@@ -117,7 +117,9 @@ describe("usePresence", () => {
 
             const id = screen.getByTestId("anon").textContent;
 
-            expect(id).toMatch(/^sess-/);
+            // `randomSessionId`'s fallback paths are unprefixed (shared/random-session-id.ts);
+            // this just asserts the no-`crypto` path yields a non-empty id without throwing.
+            expect(id).toMatch(/^[\da-z]+$/);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
         }
