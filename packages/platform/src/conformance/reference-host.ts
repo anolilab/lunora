@@ -52,6 +52,23 @@ interface ConformanceHost {
     directory: ShardDirectory;
 
     /**
+     * Terminally dispose this host instance, as opposed to {@link
+     * ConformanceHost.cleanup}, which some hosts (Cloudflare's DO-backed
+     * `cleanup`) use as a per-test reset rather than a true teardown — the DO's
+     * storage has no explicit close a test can drive, so `cleanup` there just
+     * disarms the pending alarm and drops socket references for the next run.
+     *
+     * Optional: only a host with a real terminal dispose implements it. Where
+     * it exists, the suite calls it once and then asserts every surface that
+     * documents a post-close behaviour (`ShardHost.alarms`,
+     * `SchedulerHost.schedule`, `SocketHost.accept`/`setTag`/`removeTag`) fails
+     * closed with a `"platform closed: …"` error — the same "report the gap
+     * instead of asserting a false close" pattern `scheduler`/`kv` already use
+     * for hosts that don't implement a surface at all.
+     */
+    disposeTerminally?: () => void;
+
+    /**
      * The durable key-value store under test. Optional: a host that implements
      * only the reactive-engine half (`ShardHost`) has no KV surface to offer,
      * and the suite reports the gap rather than asserting against a stub.

@@ -788,6 +788,67 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
         });
+
+        describe("post-dispose", () => {
+            // Not every host can be driven through a terminal teardown from
+            // inside a test (Cloudflare's DO storage has no explicit close),
+            // so this leg is opt-in via `disposeTerminally` — see its
+            // docstring on `ConformanceHost`. Where a host declares it, this
+            // is the leg plan 347 added after `ShardHost.asyncSql` turned out
+            // to be an unread contract field and `platform-node`'s
+            // `sockets.accept` turned out not to fail closed post-teardown:
+            // the one-line guard fixed the gap found by inspection, this leg
+            // is what catches the next one mechanically instead of by a
+            // repo-wide grep.
+            it("fails closed on every documented surface once the host is terminally disposed", async (context) => {
+                const host = await createHost();
+
+                if (host.disposeTerminally === undefined) {
+                    context.skip(`${name} has no terminal dispose the suite can drive from inside a test`);
+
+                    return;
+                }
+
+                const { removeTag, setTag } = host.socket;
+                const { scheduler } = host;
+
+                expect.assertions(3 + (setTag === undefined ? 0 : 1) + (removeTag === undefined ? 0 : 1) + (scheduler === undefined ? 0 : 1));
+
+                // A live handle to probe setTag/removeTag against, minted
+                // before disposal so the leg exercises "was accepted, then the
+                // platform closed under it" — not "closed before it ever
+                // existed".
+                const handle = host.socket.accept(rawSocket(host), {});
+
+                host.disposeTerminally();
+
+                // Wrapping in an async closure normalizes a synchronous throw
+                // (the guard shape `platform-node` uses) and a rejected
+                // promise into the same `rejects` assertion, since the
+                // contract allows either.
+                const throwsClosed = async (function_: () => unknown): Promise<void> => {
+                    await expect(async () => {
+                        await function_();
+                    }).rejects.toThrow(/platform closed/);
+                };
+
+                await throwsClosed(() => host.shard.alarms.set(Date.now() + 1000));
+                await throwsClosed(() => host.shard.alarms.delete());
+                await throwsClosed(() => host.socket.accept(rawSocket(host), {}));
+
+                if (setTag !== undefined) {
+                    await throwsClosed(() => setTag(handle, "room-a"));
+                }
+
+                if (removeTag !== undefined) {
+                    await throwsClosed(() => removeTag(handle, "room-a"));
+                }
+
+                if (scheduler !== undefined) {
+                    await throwsClosed(() => scheduler.schedule("tasks/remind", {}, { delayMs: 10 }));
+                }
+            });
+        });
     });
 };
 

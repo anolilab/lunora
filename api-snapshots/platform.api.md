@@ -758,6 +758,7 @@ interface ConformanceHost {
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;
+    disposeTerminally?: () => void;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
@@ -817,6 +818,7 @@ interface ConformanceHost {
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;
+    disposeTerminally?: () => void;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
