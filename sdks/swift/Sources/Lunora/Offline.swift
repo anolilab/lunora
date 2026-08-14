@@ -6,8 +6,15 @@ public let lunoraOfflineQueueOverflow = "OFFLINE_QUEUE_OVERFLOW"
 public let lunoraOfflinePreconditionFailed = "OFFLINE_PRECONDITION_FAILED"
 /// The write was queued under a different identity than the one now in effect.
 public let lunoraOfflineIdentityChanged = "OFFLINE_IDENTITY_CHANGED"
+/// The write's arguments cannot be wire-encoded, so it can never replay.
+public let lunoraOfflineWriteUnencodable = "OFFLINE_WRITE_UNENCODABLE"
 /// The client was closed while the write was still queued.
 public let lunoraClientClosed = "CLIENT_CLOSED"
+
+/// The shard a key names. Absent and empty are the SAME shard, so a write
+/// submitted with `shardKey: ""` is drained by a flush for the default shard
+/// rather than sitting in a queue nothing ever flushes.
+public func lunoraShardKey(_ shardKey: String?) -> String { shardKey ?? "" }
 
 /// The coded errors a replay must NOT treat as the server's final word.
 ///
@@ -225,7 +232,7 @@ public func lunoraIsStaleVersion(_ current: String?, _ stamped: String?) -> Bool
 /// storage; and nothing here holds a rejection callback — every method that
 /// discards a write RETURNS the discarded entries and the client reports them.
 public final class LunoraOfflineQueue {
-    private var items: [LunoraQueuedMutation] = []
+    private var entries: [LunoraQueuedMutation] = []
     private let maxItems: Int
     private let persistence: LunoraPersistenceAdapter?
     private let version: String?
@@ -253,10 +260,10 @@ public final class LunoraOfflineQueue {
         self.version = version
     }
 
-    public var size: Int { items.count }
+    public var size: Int { entries.count }
 
     /// A snapshot of the queued writes, oldest first.
-    public func snapshot() -> [LunoraQueuedMutation] { items }
+    public func items() -> [LunoraQueuedMutation] { entries }
 
     /// Adds a write to the back of the queue, persisting it and capping the queue.
     /// Returns whatever the cap evicted, for the caller to report.
@@ -264,7 +271,7 @@ public final class LunoraOfflineQueue {
     public func enqueue(_ entry: LunoraQueuedMutation) -> [LunoraDiscarded] {
         if entry.id.isEmpty { entry.id = lunoraRandomID() }
 
-        items.append(entry)
+        entries.append(entry)
 
         if let persistence {
             persist("append", entry.id) { try persistence.append(try entry.record(version: version)) }
@@ -293,7 +300,7 @@ public final class LunoraOfflineQueue {
         guard let persistence else { return ([], []) }
 
         let persisted = try persistence.load()
-        var seen = Set(items.map(\.id))
+        var seen = Set(entries.map(\.id))
         var restored: [LunoraQueuedMutation] = []
 
         for record in persisted {
@@ -314,7 +321,7 @@ public final class LunoraOfflineQueue {
 
         let restoredIDs = restored.map(\.id)
 
-        items = restored + items
+        entries = restored + entries
 
         // A store holding more than `maxItems` (the cap was lowered between
         // sessions, or writes piled up across restarts) must not bypass it.
@@ -325,11 +332,11 @@ public final class LunoraOfflineQueue {
         // Shard keys are read AFTER eviction, from the entries that actually
         // survived: eviction drops from the front — the oldest restored records —
         // so a key gathered beforehand can name a shard with nothing queued.
-        let survivors = Set(items.map(\.id))
+        let survivors = Set(entries.map(\.id))
         var shardKeys: [String?] = []
 
         for id in restoredIDs where survivors.contains(id) {
-            guard let entry = items.first(where: { $0.id == id }) else { continue }
+            guard let entry = entries.first(where: { $0.id == id }) else { continue }
 
             if !shardKeys.contains(where: { $0 == entry.shardKey }) { shardKeys.append(entry.shardKey) }
         }
@@ -347,16 +354,16 @@ public final class LunoraOfflineQueue {
         var drained: [LunoraQueuedMutation] = []
         var kept: [LunoraQueuedMutation] = []
 
-        for item in items {
-            if predicate(item) {
-                drained.append(item)
+        for entry in entries {
+            if predicate(entry) {
+                drained.append(entry)
             } else {
-                kept.append(item)
+                kept.append(entry)
             }
         }
 
         if !drained.isEmpty {
-            items = kept
+            entries = kept
             notifySize()
         }
 
@@ -367,16 +374,22 @@ public final class LunoraOfflineQueue {
     /// they were never un-persisted, so durable storage still holds them. Used when
     /// a flush aborts on a transient failure and the unreplayed writes must wait
     /// for the next reconnect.
-    public func requeue(_ entries: [LunoraQueuedMutation]) {
-        guard !entries.isEmpty else { return }
+    public func requeue(_ returning: [LunoraQueuedMutation]) {
+        guard !returning.isEmpty else { return }
 
-        items = entries + items
+        entries = returning + entries
         notifySize()
     }
 
     /// Drops the writes whose precondition no longer holds and returns them. Run at
     /// the start of a flush to weed out writes whose assumptions died while the
     /// client was offline; the admitted writes keep their FIFO order.
+    ///
+    /// The predicate is the CONSUMER's, and this evaluates it inline — safe only
+    /// when you own the queue single-threaded. ``LunoraClient`` cannot use it for
+    /// that reason: it would run consumer code inside the non-recursive lock every
+    /// queue mutation is made under, so it evaluates the preconditions first and
+    /// drains on their verdict.
     public func drainConflict() -> [LunoraDiscarded] {
         drain { entry in entry.precondition.map { !$0() } ?? false }
             .map {
@@ -401,14 +414,10 @@ public final class LunoraOfflineQueue {
     /// Durable storage is left INTACT on purpose: closing must not discard writes
     /// a future session will restore. Use the adapter's own `clear` to purge them.
     public func clear() -> [LunoraDiscarded] {
-        let drained = items
-
-        items = []
-        notifySize()
-
-        return drained.map {
-            LunoraDiscarded(entry: $0, code: lunoraClientClosed, message: "client closed with the write still queued")
-        }
+        drain { _ in true }
+            .map {
+                LunoraDiscarded(entry: $0, code: lunoraClientClosed, message: "client closed with the write still queued")
+            }
     }
 
     /// Drops from the FRONT (the oldest) until the queue is within capacity. Shared
@@ -417,8 +426,8 @@ public final class LunoraOfflineQueue {
     private func evictOverflow() -> [LunoraDiscarded] {
         var evicted: [LunoraDiscarded] = []
 
-        while items.count > maxItems {
-            let dropped = items.removeFirst()
+        while entries.count > maxItems {
+            let dropped = entries.removeFirst()
 
             unpersist(dropped.id)
             evicted.append(
@@ -438,6 +447,6 @@ public final class LunoraOfflineQueue {
     }
 
     private func notifySize() {
-        onSizeChange?(items.count)
+        onSizeChange?(entries.count)
     }
 }

@@ -136,3 +136,7 @@ instruments-trend.png
 
 # Per-template logs archived by scripts/template-build-smoke.sh for CI upload.
 .template-smoke-logs/
+
+# Python bytecode from running the sdks/python suite locally.
+__pycache__/
+*.py[cod]

@@ -106,17 +106,40 @@ module Lunora
       # leaving the state untouched, when the transform raises on the value it is
       # first handed: there is nothing to display and nothing to settle.
       def apply_layer(state, transform, deferred)
+        planned = plan(state, transform)
+
+        return nil if planned.nil?
+
+        install([planned], deferred).first
+      end
+
+      # Phase one, run with the caller's lock RELEASED: apply the consumer's
+      # transform to each state's currently displayed value, dropping the states
+      # it raised on. Returns [state, transform, predicted] triples for +install+.
+      #
+      # Split from +install+ because +transform+ is CONSUMER code: running it
+      # inside the client's critical section deadlocks any transform that touches
+      # the client it was handed, since Mutex is not reentrant.
+      def plan_all(states, transform) = states.filter_map { |state| plan(state, transform) }
+
+      def plan(state, transform)
         # Same input as the reference client: the current DISPLAYED value, i.e.
         # server_base already folded through any prior layers.
         predicted = predict(transform, state.last_value)
 
-        return nil if predicted == NO_PREDICTION
+        predicted.equal?(NO_PREDICTION) ? nil : [state, transform, predicted]
+      end
 
-        layer = Layer.new(next_layer_id, transform, nil)
-        state.layers << layer
-        notify(state, predicted, deferred)
+      # Phase two, run with the caller's lock HELD: install the planned layers
+      # and queue the notifications. Touches only guarded state.
+      def install(planned, deferred)
+        planned.map do |state, transform, predicted|
+          layer = Layer.new(next_layer_id, transform, nil)
+          state.layers << layer
+          notify(state, predicted, deferred)
 
-        Handle.new(state, layer)
+          Handle.new(state, layer)
+        end
       end
 
       # The sentinel a transform that raised on first application yields. A plain
@@ -213,26 +236,33 @@ module Lunora
     # A read/write handle over the client's live query cache, handed to a write's
     # +optimistic_update+ so ONE mutation can patch MANY subscribed queries.
     #
-    # Each +set_query+ registers a constant layer through the same engine the
-    # single-query path uses, so the whole batch rebases onto incoming deltas and
-    # settles together — confirmed on the mutation's commit cursor, or rolled
-    # back on failure.
+    # Each +set_query+ PLANS a constant layer for the same engine the single-query
+    # path uses, so the whole batch rebases onto incoming deltas and settles
+    # together — confirmed on the mutation's commit cursor, or rolled back on
+    # failure.
+    #
+    # Planned rather than installed, because +optimistic_update+ is consumer code
+    # and therefore runs with the client's lock RELEASED: the caller installs
+    # +planned+ once it has taken the lock back. An update that raises has
+    # installed nothing at all, so the cache is left exactly as it was found.
     class LocalStore
-      # The settle closures every +set_query+ produced, in application order, for
-      # the caller to run when the mutation settles.
-      attr_reader :confirms, :rollbacks
+      # The [state, transform, value] triples every +set_query+ produced, in
+      # application order, for the caller to install under its lock.
+      attr_reader :planned
 
-      def initialize(find, matching, deferred)
+      def initialize(find, matching)
         @find = find
         @matching = matching
-        @deferred = deferred
-        @confirms = []
-        @rollbacks = []
+        @planned = []
+        @overrides = {}
       end
 
       # The current cached value for a subscribed query, or nil when nothing is
       # subscribed for it. Reflects any override already written in this batch.
       def get_query(function_path, args = nil)
+        key = override_key(function_path, args)
+        return @overrides[key] if @overrides.key?(key)
+
         @find.call(function_path, args).first&.last_value
       end
 
@@ -246,14 +276,15 @@ module Lunora
       # Write an optimistic override for a subscribed query. A no-op when nothing
       # is subscribed for it: you only patch queries the consumer is watching.
       def set_query(function_path, args, value)
-        @find.call(function_path, args).each do |state|
-          handle = Optimistic.apply_layer(state, ->(_current) { value }, @deferred)
-          next if handle.nil?
+        @overrides[override_key(function_path, args)] = value
+        transform = ->(_current) { value }
 
-          @confirms << handle.method(:confirm)
-          @rollbacks << handle.method(:rollback)
-        end
+        @find.call(function_path, args).each { |state| @planned << [state, transform, value] }
       end
+
+      private
+
+      def override_key(function_path, args) = [function_path, Lunora.stable_wire_key(args.nil? ? {} : args)]
     end
   end
 end

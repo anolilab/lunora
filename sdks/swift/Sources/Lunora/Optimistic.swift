@@ -106,6 +106,20 @@ public enum LunoraOptimistic {
         // `serverBase` already folded through any prior layers.
         guard let predicted = transform(state.lastValue) else { return nil }
 
+        return installLayer(state, transform, predicted, &deferred)
+    }
+
+    /// Installs a layer whose first result was ALREADY derived.
+    ///
+    /// The split exists for the write path: a consumer's transform must be run
+    /// against a snapshot with the client UNLOCKED, and the lock taken only to
+    /// install what came back.
+    static func installLayer(
+        _ state: LunoraOptimisticState,
+        _ transform: @escaping Transform,
+        _ predicted: Any,
+        _ deferred: inout Deferred
+    ) -> LunoraOptimisticHandle {
         let layer = LunoraOptimisticLayer(transform: transform)
 
         state.layers.append(layer)
@@ -273,9 +287,23 @@ public struct LunoraQueryEntry {
 /// engine the single-query path uses, so the whole batch rebases onto incoming
 /// deltas and settles together — confirmed on the mutation's commit cursor, or
 /// rolled back on failure.
+///
+/// The consumer's `optimisticUpdate` closure runs with the client UNLOCKED — it
+/// is handed this store, so a closure that reads the client back would deadlock
+/// under a non-recursive lock. ``setQuery(_:args:value:)`` therefore only RECORDS
+/// its override; ``install()`` turns the recorded batch into layers, and the
+/// client calls it with its lock held. Every transform installed there is a
+/// constant, so no consumer code runs inside that critical section.
 public final class LunoraOptimisticLocalStore {
     private let find: (String, Any?) -> [LunoraOptimisticState]
     private let matching: (String) -> [LunoraQueryEntry]
+
+    /// The recorded overrides, in call order, with the states each resolved to.
+    private var writes: [(states: [LunoraOptimisticState], value: Any)] = []
+
+    /// The overrides by (path, args), so a read-back inside the same batch sees
+    /// what this batch already wrote rather than the pre-write server value.
+    private var overrides: [String: Any] = [:]
 
     /// The settle handles every ``setQuery(_:args:value:)`` produced, in
     /// application order, for the caller to settle when the mutation does.
@@ -295,23 +323,49 @@ public final class LunoraOptimisticLocalStore {
     /// The current cached value for a subscribed query, or nil when nothing is
     /// subscribed for it. Reflects any override already written in this batch.
     public func getQuery(_ functionPath: String, args: Any? = nil) -> Any? {
-        find(functionPath, args).first?.lastValue
+        overrides[Self.key(functionPath, args)] ?? find(functionPath, args).first?.lastValue
     }
 
     /// Every loaded subscription on `functionPath` with the args it was subscribed
     /// under — for a write that must patch every variant of a list query without
     /// enumerating their args up front.
     public func getAllQueries(_ functionPath: String) -> [LunoraQueryEntry] {
-        matching(functionPath)
+        matching(functionPath).map { entry in
+            guard let override = overrides[Self.key(functionPath, entry.args)] else { return entry }
+
+            return LunoraQueryEntry(args: entry.args, value: override)
+        }
     }
 
     /// Writes an optimistic override for a subscribed query. A no-op when nothing
     /// is subscribed for it: you only patch queries the consumer is watching.
     public func setQuery(_ functionPath: String, args: Any?, value: Any) {
-        for state in find(functionPath, args) {
-            if let handle = LunoraOptimistic.applyLayer(state, LunoraOptimistic.constant(value), &deferred) {
-                handles.append(handle)
+        let states = find(functionPath, args)
+
+        guard !states.isEmpty else { return }
+
+        writes.append((states, value))
+        overrides[Self.key(functionPath, args)] = value
+    }
+
+    /// Turns the recorded batch into constant layers. Run with the owning client's
+    /// lock held; idempotent, so a second call installs nothing twice.
+    func install() {
+        for write in writes {
+            for state in write.states {
+                if let handle = LunoraOptimistic.applyLayer(state, LunoraOptimistic.constant(write.value), &deferred) {
+                    handles.append(handle)
+                }
             }
         }
+
+        writes = []
+    }
+
+    /// An args-insensitive spelling of one subscribed query. Args that fall outside
+    /// the wire codec key as the empty string, exactly as the client's subscription
+    /// lookup does, so the two agree on what "the same query" means.
+    private static func key(_ functionPath: String, _ args: Any?) -> String {
+        functionPath + "\u{0}" + ((try? Wire.stableWireKey(args ?? [String: Any]())) ?? "")
     }
 }

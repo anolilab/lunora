@@ -8,13 +8,15 @@ other six fails rather than quietly documenting a second behaviour.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora.client import LunoraClient, LunoraError
+from lunora.client import LunoraClient
+from lunora.errors import LunoraError
 from lunora.offline import (
     ABSENT_IDENTITY,
     OfflineQueue,
@@ -23,6 +25,7 @@ from lunora.offline import (
     is_stale_version,
     random_id,
 )
+from lunora.submit import SubmitOptions
 from tests._fixtures import load
 from tests._manifest import covers
 
@@ -141,6 +144,15 @@ class TestQueueOverflow(unittest.TestCase):
         self.assertEqual(_discarded(evicted), [(case["evicted"][0], case["code"])])
         self.assertEqual(store.removed, case["persistRemoveCalls"])
 
+    def test_a_zero_capacity_is_clamped_to_one(self):
+        covers("offline_queue_overflow_evicts_oldest")
+        queue = OfflineQueue(max_items=0)
+
+        # Taken literally, a cap of zero accepts a write and evicts it in the
+        # same call: every submit reports "queued" and then settles OVERFLOW.
+        self.assertEqual(queue.enqueue(_entry("m1")), [])
+        self.assertEqual(_ids(queue.items()), ["m1"])
+
     def test_close_rejects_every_queued_write_but_keeps_the_durable_records(self):
         covers("offline_queue_overflow_evicts_oldest")
         case = FIXTURES["clear"]
@@ -169,7 +181,11 @@ class TestQueuePrecondition(unittest.TestCase):
             verdict = spec["precondition"]
             queue.enqueue(_entry(spec["id"], precondition=lambda held=verdict: held))
 
-        conflicted = queue.drain_conflict()
+        # The client evaluates the consumer's predicates with its lock RELEASED
+        # and hands the queue only the ids that failed, so no consumer code runs
+        # inside the critical section the queue is mutated from.
+        stale = {item.id for item in queue.items() if item.precondition is not None and not item.precondition()}
+        conflicted = queue.drain_conflict(stale)
 
         self.assertEqual(_discarded(conflicted), [(mutation_id, case["code"]) for mutation_id in case["conflicted"]])
         self.assertEqual(_ids(queue.items()), case["remaining"])
@@ -221,6 +237,34 @@ class TestQueueHydration(unittest.TestCase):
         # would send the caller to open a socket with nothing queued behind it.
         self.assertEqual(sorted(shard_keys, key=str), sorted(case["shardKeys"], key=str))
 
+    def test_a_hydrated_write_the_cap_evicts_is_reported_to_the_client(self):
+        covers("offline_queue_hydrate_overflow_settles_discarded")
+        case = FIXTURES["hydrateOverflow"]
+        store = _Store(
+            [
+                {"args": {}, "functionPath": "messages:send", "id": spec["id"], "shardKey": spec["shardKey"], "version": spec["version"]}
+                for spec in case["persisted"]
+            ]
+        )
+        settled = []
+        # Driven through the CLIENT, not the queue: a restored entry has no
+        # settle handler of its own, so a client that reported discards only
+        # through one would un-persist this write and report it to nobody.
+        client = LunoraClient("https://app.example")
+        client.offline_queue = OfflineQueue(max_items=case["maxItems"], persistence=store, version=case["version"])
+        client.on_mutation_settled(settled.append)
+
+        shard_keys = client.hydrate_offline_queue()
+
+        self.assertEqual(_ids(client.offline_queue.items()), case["queuedAfterHydrate"])
+        self.assertEqual(sorted(shard_keys, key=str), sorted(case["shardKeys"], key=str))
+        self.assertEqual([event.mutation_id for event in settled], case["settledFromClient"])
+        self.assertEqual(settled[0].status, "rejected")
+        self.assertEqual(settled[0].error.code, case["settledCode"])
+        # Read from the entry's own live_awaiter, which is what tells a consumer
+        # this is a restored write's ONLY report rather than a second one.
+        self.assertEqual(settled[0].had_awaiter, case["settledHadAwaiter"])
+
     def test_version_gating_is_off_until_a_version_is_configured(self):
         covers("offline_queue_hydrates_persisted_writes")
         self.assertFalse(is_stale_version(None, None))
@@ -265,7 +309,6 @@ class TestIdentityGate(unittest.TestCase):
                 function_path="messages:send",
                 identity="user-a",
                 mutation_id="m1",
-                reject=lambda error: settled.append(error),
                 shard_key=None,
             )
         )
@@ -277,7 +320,7 @@ class TestIdentityGate(unittest.TestCase):
         # Nothing reached the wire: a restart must not push the previous user's
         # queued writes as the current one.
         self.assertEqual(posts, [])
-        self.assertEqual(getattr(settled[0], "code", None), case["code"])
+        self.assertEqual(settled[0].error.code, case["code"])
 
 
 class TestFlushIntegration(unittest.TestCase):
@@ -311,11 +354,11 @@ class TestFlushIntegration(unittest.TestCase):
                 QueuedMutation(
                     args={},
                     client_id="client-1",
+                    # The layer handles ride on the entry as DATA; the settle
+                    # site confirms them against the echoed cursor.
+                    confirms=[lambda cursor, _deferred, mid=mutation_id: confirmed.append((mid, cursor))],
                     function_path="messages:send",
                     mutation_id=mutation_id,
-                    on_commit=lambda cursor, mid=mutation_id: confirmed.append((mid, cursor)),
-                    reject=lambda _error: None,
-                    resolve=lambda _value: None,
                 )
             )
 
@@ -332,6 +375,46 @@ class TestFlushIntegration(unittest.TestCase):
         self.assertEqual(report.requeued, case["queuedAfterFlush"])
         self.assertEqual(store.removed, case["persistRemoveCalls"])
         self.assertEqual(confirmed, [(case["committed"][0], case["confirmedCommitCursor"])])
+
+    def test_an_unencodable_write_settles_terminally_instead_of_looping(self):
+        covers("offline_flush_unencodable_write_settles_terminal")
+        case = FIXTURES["unencodableWrite"]
+        seen_headers = []
+
+        def post(_url, headers, _body):
+            seen_headers.append(headers["x-lunora-mutation-id"])
+            return 200, {"commitCursor": 7, "result": {"ok": True}}
+
+        store = _Store()
+        settled = []
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+        client.on_mutation_settled(settled.append)
+
+        unencodable = set(case["unencodable"])
+        for mutation_id in case["queued"]:
+            client.offline_queue.enqueue(
+                QueuedMutation(
+                    # `object()` has no wire representation, so encode_wire raises
+                    # a TypeError — which carries no code and would therefore be
+                    # classified transient and re-queued at the FRONT forever.
+                    args={"payload": object()} if mutation_id in unencodable else {},
+                    function_path="messages:send",
+                    mutation_id=mutation_id,
+                )
+            )
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        # Never sent, so it cannot block the writes behind it in the FIFO.
+        self.assertEqual(seen_headers, case["mutationIdHeaders"])
+        self.assertEqual(report.rejected, case["rejected"])
+        self.assertEqual(report.committed, case["committed"])
+        self.assertEqual(report.requeued, [])
+        self.assertEqual(_ids(client.offline_queue.items()), case["queuedAfterFlush"])
+        self.assertEqual(store.removed, case["persistRemoveCalls"])
+        self.assertEqual([event.mutation_id for event in settled], case["unencodable"] + case["committed"])
+        self.assertEqual(settled[0].error.code, case["code"])
 
     def test_a_transient_shard_code_requeues_instead_of_dropping(self):
         covers("offline_flush_replays_and_confirms_optimistic")
@@ -367,9 +450,11 @@ class TestFlushIntegration(unittest.TestCase):
 
         outcome = asyncio.run(
             client.submit(
-                "messages:list",
-                {"channel": "general"},
-                optimistic=lambda current: [*(current or []), "c"],
+                SubmitOptions(
+                    args={"channel": "general"},
+                    function_path="messages:list",
+                    optimistic=lambda current: [*(current or []), "c"],
+                )
             )
         )
 
@@ -383,6 +468,9 @@ class TestFlushIntegration(unittest.TestCase):
         asyncio.run(client.flush_offline_queue())
 
         self.assertEqual(len(posts), 1)
+        # The replay is namespaced under the id that ISSUED the write, which is
+        # this instance's minted one rather than a per-language constant.
+        self.assertEqual(posts[0]["x-lunora-client-id"], client.client_id)
         self.assertEqual(client.pending_mutation_count, 0)
         # Still displayed: the overlay is confirmed at cursor 4 and drops only
         # once a frame reaches it.
@@ -391,6 +479,40 @@ class TestFlushIntegration(unittest.TestCase):
         client.handle_frame({"cursor": 4, "data": ["a", "c"], "id": "sub_1", "type": "data"})
 
         self.assertEqual(seen[-1], ["a", "c"])
+
+    def test_an_empty_shard_key_never_reaches_the_wire(self):
+        covers("offline_flush_replays_and_confirms_optimistic")
+        posts = []
+
+        def post(_url, headers, body):
+            posts.append((headers, json.loads(body.decode("utf-8"))))
+            return 200, {"result": None}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.attach_socket(lambda _frame: None)
+        client.detach_socket()
+
+        outcome = asyncio.run(client.submit(SubmitOptions(args={}, function_path="messages:send", shard_key="")))
+
+        self.assertTrue(outcome.queued)
+
+        client.attach_socket(lambda _frame: None)
+        report = asyncio.run(client.flush_offline_queue())
+
+        # `""` and None are ONE shard to this client — it drains on the default
+        # shard's flush — but the runtime takes any string as a NAMED shard and
+        # routes `""` to its own Durable Object. Sending it would replay the
+        # write against a different shard than the subscription it updated,
+        # which is worse than the missed flush the normalisation replaced.
+        self.assertEqual(report.committed, [outcome.mutation_id])
+        self.assertNotIn("shardKey", posts[0][1])
+        self.assertNotIn("shard=", client.ws_url_for("", None))
+
+        # A shard genuinely NAMED "0" is truthy and still goes out.
+        asyncio.run(client.mutation("messages:send", {}, shard_key="0"))
+
+        self.assertEqual(posts[-1][1]["shardKey"], "0")
+        self.assertIn("shard=0", client.ws_url_for("0", None))
 
     def test_a_write_before_the_first_connect_fails_fast_by_default(self):
         covers("offline_flush_replays_and_confirms_optimistic")
@@ -404,12 +526,12 @@ class TestFlushIntegration(unittest.TestCase):
         # surfaces on the first write rather than silently filling a queue that
         # will never flush.
         with self.assertRaises(OSError):
-            asyncio.run(client.submit("messages:send", {"text": "hi"}))
+            asyncio.run(client.submit(SubmitOptions(args={"text": "hi"}, function_path="messages:send")))
 
         self.assertEqual(client.pending_mutation_count, 0)
 
         client.offline_queue = OfflineQueue(queue_before_first_connect=True)
-        outcome = asyncio.run(client.submit("messages:send", {"text": "hi"}))
+        outcome = asyncio.run(client.submit(SubmitOptions(args={"text": "hi"}, function_path="messages:send")))
 
         self.assertEqual(outcome.status, "queued")
         self.assertEqual(client.pending_mutation_count, 1)
@@ -424,7 +546,7 @@ class TestFlushIntegration(unittest.TestCase):
         client.on_mutation_settled(settled.append)
 
         for _ in range(len(case["enqueue"])):
-            asyncio.run(client.submit("messages:send", {}))
+            asyncio.run(client.submit(SubmitOptions(args={}, function_path="messages:send")))
 
         # The queue evicts while the client holds its own lock, and settling the
         # evicted write rolls optimistic layers back — which re-acquires it. The
@@ -448,7 +570,7 @@ class TestFlushIntegration(unittest.TestCase):
         client.handle_frame({"cursor": 1, "data": ["a"], "id": "sub_1", "type": "data"})
 
         with self.assertRaises(LunoraError):
-            asyncio.run(client.submit("messages:list", {}, optimistic=lambda current: [*(current or []), "c"]))
+            asyncio.run(client.submit(SubmitOptions(args={}, function_path="messages:list", optimistic=lambda current: [*(current or []), "c"])))
 
         self.assertEqual(seen[-1], ["a"])
 

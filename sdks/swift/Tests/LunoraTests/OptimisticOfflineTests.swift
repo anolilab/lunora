@@ -46,16 +46,37 @@ extension ConformanceTests {
         }
     }
 
-    /// Applies one server `data` frame the way `LunoraClient.dispatch` does.
-    private func applyFrame(_ state: LunoraOptimisticState, _ frame: [String: Any]) {
-        var deferred: LunoraOptimistic.Deferred = []
+    /// Feeds one `data` frame through the client's REAL frame handler.
+    ///
+    /// Not a transcription of it: these cases used to hand-copy the `data` branch
+    /// into the test, so a suite could stay green over a handler that forgot to
+    /// drop confirmed layers or nulled the tracked cursor. `cursorlessFrame` is
+    /// exactly that bug, and it is why the copy is gone.
+    private func deliver(_ client: LunoraClient, _ frame: [String: Any]) throws {
+        var payload = frame
 
-        state.serverBase = frame["data"] ?? NSNull()
-        state.serverCursor = (frame["cursor"] as? NSNumber)?.intValue
-        LunoraOptimistic.dropConfirmedLayers(state, state.serverCursor)
-        LunoraOptimistic.notify(state, LunoraOptimistic.fold(state.serverBase, state.layers), &deferred)
+        payload["id"] = "sub_1"
+        payload["type"] = "data"
 
-        for call in deferred { call() }
+        let raw = try JSONSerialization.data(withJSONObject: payload)
+
+        _ = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+    }
+
+    /// A client with one live subscription, seeded from `base` through that same
+    /// handler. `sub_1` is its id — the first subscription on a fresh client.
+    private func subscribedClient(
+        base: Any?,
+        onData: @escaping (Any) -> Void = { _ in }
+    ) throws -> (client: LunoraClient, state: LunoraOptimisticState) {
+        let client = LunoraClient(url: "https://app.example")
+
+        client.attachSocket { _ in }
+        client.subscribe("messages:list", args: [String: Any](), onData: onData)
+
+        try deliver(client, ["data": base ?? NSNull()])
+
+        return (client, try XCTUnwrap(client.optimisticState("sub_1")))
     }
 
     // MARK: - Optimistic layers
@@ -63,9 +84,10 @@ extension ConformanceTests {
     func caseOptimisticLayerRebasesOntoServerFrame() throws {
         let testCase = try scenario("optimistic", "rebase")
         var seen: [Any] = []
-        let state = LunoraOptimisticState(base: testCase["base"] ?? NSNull())
+        let (client, state) = try subscribedClient(base: testCase["base"]) { seen.append($0) }
 
-        state.callbacks.append { seen.append($0) }
+        // The seeding frame delivered the base; count only what the layer causes.
+        seen.removeAll()
 
         var deferred: LunoraOptimistic.Deferred = []
 
@@ -80,7 +102,7 @@ extension ConformanceTests {
         )
         XCTAssertEqual(seen.count, 1, "and the handler is told exactly once")
 
-        applyFrame(state, try XCTUnwrap(testCase["frame"] as? [String: Any]))
+        try deliver(client, try XCTUnwrap(testCase["frame"] as? [String: Any]))
 
         // The overlay survived the frame and was RE-FOLDED onto the new base,
         // rather than being clobbered by it.
@@ -114,14 +136,14 @@ extension ConformanceTests {
     func caseOptimisticLayerDropsOnCommitCursor() throws {
         let testCase = try scenario("optimistic", "commitCursorDrop")
         let commitCursor = count(testCase["commitCursor"])
-        let state = LunoraOptimisticState(base: testCase["base"] ?? NSNull())
+        let (client, state) = try subscribedClient(base: testCase["base"])
         var deferred: LunoraOptimistic.Deferred = []
         let handle = try XCTUnwrap(
             LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
         )
 
         handle.confirm(commitCursor, &deferred)
-        applyFrame(state, try XCTUnwrap(testCase["belowFrame"] as? [String: Any]))
+        try deliver(client, try XCTUnwrap(testCase["belowFrame"] as? [String: Any]))
 
         // Below the commit cursor: the write is NOT in the server base yet, so
         // dropping the overlay here would blink the value away and back.
@@ -132,7 +154,7 @@ extension ConformanceTests {
         )
         XCTAssertEqual(state.layers.count, count(testCase["layersAfterBelowFrame"]), "and the layer with it")
 
-        applyFrame(state, try XCTUnwrap(testCase["atFrame"] as? [String: Any]))
+        try deliver(client, try XCTUnwrap(testCase["atFrame"] as? [String: Any]))
 
         // The frame reached the commit cursor: the effect is in the base, so the
         // overlay drops without the value ever double-counting it.
@@ -164,10 +186,11 @@ extension ConformanceTests {
         // The confirming frame beat the RPC response — the common race. The overlay
         // must drop on confirm rather than linger until the next frame.
         let atFrame = try XCTUnwrap(testCase["atFrame"] as? [String: Any])
-        let raced = LunoraOptimisticState(base: atFrame["data"] ?? NSNull())
+        let (racedClient, raced) = try subscribedClient(base: NSNull())
         var racedDeferred: LunoraOptimistic.Deferred = []
 
-        raced.serverCursor = count(atFrame["cursor"])
+        // The cursor is the one the REAL handler tracked off that frame.
+        try deliver(racedClient, atFrame)
 
         let racedHandle = try XCTUnwrap(LunoraOptimistic.applyLayer(raced, appender("x"), &racedDeferred))
 
@@ -204,13 +227,16 @@ extension ConformanceTests {
         // A constant layer is an absolute override: while pending it re-clamps and
         // HIDES the concurrent server change rather than merging with it.
         let mask = try scenario("optimistic", "constantMask")
-        let masked = LunoraOptimisticState(base: mask["base"] ?? NSNull())
+        let (maskClient, masked) = try subscribedClient(base: mask["base"])
         let store = LunoraOptimisticLocalStore(
             find: { _, _ in [masked] },
             matching: { _ in [LunoraQueryEntry(args: [String: Any](), value: masked.lastValue)] }
         )
 
         store.setQuery("messages:list", args: [String: Any](), value: mask["value"] ?? NSNull())
+        // `setQuery` only RECORDS: the consumer's closure runs with the client
+        // unlocked, and the layers it asked for are installed afterwards, under it.
+        store.install()
 
         for call in store.deferred { call() }
 
@@ -225,7 +251,7 @@ extension ConformanceTests {
             "and getQuery reads it back"
         )
 
-        applyFrame(masked, try XCTUnwrap(mask["frame"] as? [String: Any]))
+        try deliver(maskClient, try XCTUnwrap(mask["frame"] as? [String: Any]))
 
         XCTAssertEqual(
             canonical(masked.lastValue),
@@ -244,14 +270,50 @@ extension ConformanceTests {
         )
     }
 
+    /// A frame may omit `cursor` (see `protocol/README.md`), and one that does must
+    /// leave the tracked cursor where it was — it is what a later `commitCursor` is
+    /// compared against, so nulling it keeps an overlay the confirm should have
+    /// dropped and the write renders twice.
+    func caseOptimisticCursorlessFramePreservesCursor() throws {
+        let testCase = try scenario("optimistic", "cursorlessFrame")
+        let (client, state) = try subscribedClient(base: testCase["base"])
+        var deferred: LunoraOptimistic.Deferred = []
+        let handle = try XCTUnwrap(
+            LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
+        )
+
+        try deliver(client, try XCTUnwrap(testCase["cursoredFrame"] as? [String: Any]))
+        try deliver(client, try XCTUnwrap(testCase["cursorlessFrame"] as? [String: Any]))
+
+        XCTAssertEqual(
+            state.serverCursor,
+            count(testCase["cursorAfterCursorlessFrame"]),
+            "a cursorless frame leaves the tracked cursor alone"
+        )
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterCursorlessFrame"]),
+            "and still rebases the pending layer onto its payload"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterCursorlessFrame"]), "which is still pending")
+
+        handle.confirm(count(testCase["commitCursor"]), &deferred)
+
+        XCTAssertEqual(
+            state.layers.count,
+            count(testCase["layersAfterConfirm"]),
+            "so the confirm has a cursor to compare against and drops the overlay"
+        )
+    }
+
     // MARK: - Offline queue
 
-    private func entry(_ id: String, shardKey: String? = nil) -> LunoraQueuedMutation {
-        LunoraQueuedMutation(id: id, functionPath: "messages:send", args: [String: Any](), shardKey: shardKey)
+    private func entry(_ id: String, shardKey: String? = nil, args: Any = [String: Any]()) -> LunoraQueuedMutation {
+        LunoraQueuedMutation(id: id, functionPath: "messages:send", args: args, shardKey: shardKey)
     }
 
     private func queuedIDs(_ queue: LunoraOfflineQueue) -> [String?] {
-        queue.snapshot().map { $0.id }
+        queue.items().map { $0.id }
     }
 
     /// A fixture's `persisted` list, as durable records.
@@ -295,12 +357,38 @@ extension ConformanceTests {
 
         let target = shard["drainShardKey"] as? String
 
+        // Normalised, exactly as the client's flush drains: a write submitted with
+        // `shardKey: ""` belongs to the default shard, and comparing the two
+        // strictly leaves it queued for a shard nothing ever flushes.
         XCTAssertEqual(
-            sharded.drain { $0.shardKey == target }.map { $0.id },
+            sharded.drain { lunoraShardKey($0.shardKey) == lunoraShardKey(target) }.map { $0.id },
             ids(shard["drained"]).compactMap { $0 },
-            "one shard's writes drained"
+            "one shard's writes drained, an empty key counting as the null one"
         )
         XCTAssertEqual(queuedIDs(sharded), ids(shard["remaining"]), "and the rest stay queued in order")
+
+        // The same normalisation through the CLIENT, which is where a strict
+        // comparison actually strands the write: the flush is the only thing that
+        // ever names a shard.
+        var replayed: [String?] = []
+        let flushing = LunoraClient(
+            url: "https://app.example",
+            post: { _, headers, _ in
+                replayed.append(headers["x-lunora-mutation-id"])
+
+                return (200, Data("{\"result\":null}".utf8))
+            }
+        )
+
+        for spec in shard["entries"] as? [[String: Any]] ?? [] {
+            flushing.offlineQueue.enqueue(
+                entry(try XCTUnwrap(spec["id"] as? String), shardKey: spec["shardKey"] as? String)
+            )
+        }
+
+        flushing.flushOfflineQueue(shardKey: target)
+
+        XCTAssertEqual(replayed, ids(shard["drained"]), "an empty shard key replays on the default shard's flush")
 
         let requeue = try scenario("offlineQueue", "requeue")
         let store = MemoryPersistence()
@@ -463,6 +551,15 @@ extension ConformanceTests {
         for _ in 0..<2000 { minted.insert(lunoraRandomID()) }
 
         XCTAssertEqual(minted.count, 2000, "minted ids must not collide")
+
+        // Same reason the client id is minted per instance rather than being a
+        // per-language constant: it namespaces an anonymous caller's idempotency
+        // rows, so a shared value lets one client's mutation id suppress another's.
+        XCTAssertNotEqual(
+            LunoraClient(url: "https://app.example").clientID,
+            LunoraClient(url: "https://app.example").clientID,
+            "each client mints its own id"
+        )
     }
 
     func caseOfflineQueueIdentityGateRejectsReplay() throws {
@@ -700,6 +797,150 @@ extension ConformanceTests {
         )
         XCTAssertEqual(canonical(seen.last), canonical(["a"]), "and the overlay is gone")
     }
+
+    /// A restored write evicted on overflow reports to the CLIENT's observers.
+    ///
+    /// Driven through ``LunoraClient/hydrateOfflineQueue()`` rather than the
+    /// queue's own `hydrate`, which is the test that misses the bug: a hydrated
+    /// entry has no settle handler of its own, so a client that reported a discard
+    /// through the entry alone would un-persist a durable write and tell nobody.
+    func caseOfflineQueueHydrateOverflowSettlesDiscarded() throws {
+        let testCase = try scenario("offlineQueue", "hydrateOverflow")
+        let store = MemoryPersistence(records: persistedRecords(testCase))
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(url: "https://app.example")
+
+        client.offlineQueue = LunoraOfflineQueue(
+            maxItems: count(testCase["maxItems"]),
+            persistence: store,
+            version: testCase["version"] as? String
+        )
+        client.onMutationSettled { settled.append($0) }
+
+        let shardKeys = try client.hydrateOfflineQueue()
+
+        XCTAssertEqual(shardKeys.map { $0 ?? "" }, ids(testCase["shardKeys"]).map { $0 ?? "" })
+        XCTAssertEqual(
+            settled.map { $0.mutationID },
+            ids(testCase["settledFromClient"]).compactMap { $0 },
+            "the evicted durable write settles through the client-level observer"
+        )
+        XCTAssertEqual(settled.first?.status, .rejected, "as a rejection")
+        XCTAssertEqual(
+            (settled.first?.error as? LunoraAPIError)?.code,
+            testCase["settledCode"] as? String,
+            "carrying the documented code"
+        )
+        // Read from the entry's own `liveAwaiter`, never restated at the settle
+        // site: it is what tells a restored write's only report from a live
+        // caller's second one.
+        XCTAssertEqual(
+            settled.first?.hadAwaiter,
+            testCase["settledHadAwaiter"] as? Bool,
+            "and stamped as having no awaiter, because the caller did not survive the restart"
+        )
+    }
+
+    /// A queued write whose args cannot be wire-encoded settles TERMINALLY.
+    ///
+    /// A codec error carries no code, so the transient rule would re-queue it on
+    /// every reconnect forever — never settling its caller, never rolling its
+    /// overlay back, and blocking every write behind it in the FIFO.
+    func caseOfflineFlushUnencodableWriteSettlesTerminal() throws {
+        let testCase = try scenario("offlineQueue", "unencodableWrite")
+        var seenHeaders: [String?] = []
+        var settled: [LunoraMutationSettled] = []
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, headers, _ in
+                seenHeaders.append(headers["x-lunora-mutation-id"])
+
+                return (200, Data("{\"commitCursor\":4,\"result\":{\"ok\":true}}".utf8))
+            }
+        )
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+        client.onMutationSettled { settled.append($0) }
+
+        let unencodable = Set(ids(testCase["unencodable"]).compactMap { $0 })
+
+        for id in ids(testCase["queued"]).compactMap({ $0 }) {
+            let args: [String: Any] = unencodable.contains(id) ? ["blob": UnencodableArgument()] : [:]
+
+            client.offlineQueue.enqueue(entry(id, args: args))
+        }
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(seenHeaders, ids(testCase["mutationIdHeaders"]), "only the encodable write reaches the wire")
+        XCTAssertEqual(report.rejected, ids(testCase["rejected"]).compactMap { $0 }, "the other one is dropped")
+        XCTAssertEqual(report.committed, ids(testCase["committed"]).compactMap { $0 })
+        XCTAssertTrue(report.requeued.isEmpty, "and nothing is re-queued to poison the next flush")
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(testCase["queuedAfterFlush"]))
+        XCTAssertEqual(store.removed, ids(testCase["persistRemoveCalls"]).compactMap { $0 }, "both are un-persisted")
+        XCTAssertEqual(
+            (settled.first(where: { $0.status == .rejected })?.error as? LunoraAPIError)?.code,
+            testCase["code"] as? String,
+            "with the documented code"
+        )
+    }
+
+    /// A consumer closure that reads the client back must not deadlock it.
+    ///
+    /// `optimisticUpdate` is handed a store over this very client and
+    /// `precondition` is evaluated mid-flush; run either inside the non-recursive
+    /// lock the queue is mutated under and the calling thread wedges forever.
+    ///
+    /// The work runs off-thread against a timeout, and NOTHING after the wait
+    /// touches the client — a regression must fail this test rather than hang the
+    /// suite behind a lock the wedged thread still holds.
+    func testConsumerCallbacksDoNotDeadlock() {
+        let client = LunoraClient(url: "https://app.example", post: { _, _, _ in (200, Data("{\"result\":null}".utf8)) })
+        let finished = expectation(description: "a re-entrant consumer callback returns")
+        let drained = DrainedFlag()
+
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true)
+        client.subscribe("messages:list", args: [String: Any](), onData: { _ in })
+
+        DispatchQueue.global().async {
+            _ = try? client.submit(
+                LunoraSubmitOptions(
+                    functionPath: "messages:list",
+                    args: [String: Any](),
+                    optimisticUpdate: { store, _ in
+                        // Both of these take the client's lock.
+                        _ = client.pendingMutationCount
+                        _ = client.identity
+                        store.setQuery("messages:list", args: [String: Any](), value: ["queued"])
+                    },
+                    precondition: { client.online }
+                )
+            )
+            client.flushOfflineQueue()
+            // The precondition read `online` — false with no socket attached — so
+            // the flush dropped the write instead of replaying it.
+            drained.value = client.pendingMutationCount == 0
+            finished.fulfill()
+        }
+
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [finished], timeout: 10),
+            .completed,
+            "a consumer callback that reads the client back must not deadlock it"
+        )
+        XCTAssertTrue(drained.value, "and the flush ran to completion")
+    }
+}
+
+/// A value outside the wire codec — neither a JSON primitive, a collection, nor
+/// one of the `Wire*` wrappers — so encoding it throws.
+private struct UnencodableArgument {}
+
+/// Carries one verdict off the worker thread; a plain captured `var` would not
+/// compile under strict concurrency.
+private final class DrainedFlag {
+    var value = false
 }
 
 /// A persistence adapter that records every call.

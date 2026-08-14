@@ -43,6 +43,7 @@ construction (Go asserts on its race detector, Swift under TSan).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import threading
@@ -52,10 +53,13 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import LunoraClient
+from lunora.offline import OfflineQueue
+from lunora.submit import SubmitOptions
 
 THREADS = 4
 PER_THREAD = 1000
 STRESS_SWITCH_INTERVAL = 1e-6
+CALLBACK_TIMEOUT = 5.0
 
 
 class TestClientConcurrency(unittest.TestCase):
@@ -107,6 +111,67 @@ class TestClientConcurrency(unittest.TestCase):
         client.resend_subscriptions()
 
         self.assertEqual(len(resent), THREADS * PER_THREAD, "every concurrent subscribe survived with a distinct id")
+
+
+def _finishes(work) -> bool:
+    """Whether ``work`` returns at all, rather than blocking forever.
+
+    A deadlock is not an exception, so the assertion has to be a timeout: the
+    work runs on its own daemon thread and the test fails if that thread is still
+    inside the client when the clock runs out.
+    """
+
+    done = threading.Event()
+
+    def run() -> None:
+        work()
+        done.set()
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=CALLBACK_TIMEOUT)
+
+    return done.is_set()
+
+
+class TestConsumerCallbacksAreNotHeldUnderTheLock(unittest.TestCase):
+    """``threading.Lock`` is not reentrant, so a consumer callback invoked inside
+    the client's critical section hard-deadlocks the thread that called it the
+    moment that callback touches the client it was handed."""
+
+    def _client(self):
+        client = LunoraClient("https://app.example", http_post=lambda _url, _headers, _body: (200, {"result": None}))
+        client.offline_queue = OfflineQueue(queue_before_first_connect=True)
+
+        return client
+
+    def test_an_optimistic_update_may_read_the_client_back(self):
+        client = self._client()
+        seen: list = []
+
+        def update(store, _args):
+            seen.append((client.pending_mutation_count, client.online))
+            store.set_query("messages:list", {}, ["z"])
+
+        submit = client.submit(SubmitOptions(args={}, function_path="messages:send", optimistic_update=update))
+
+        self.assertTrue(_finishes(lambda: asyncio.run(submit)), "optimistic_update must run with the client's lock released")
+        self.assertEqual(seen, [(0, False)])
+
+    def test_a_precondition_may_read_the_client_back(self):
+        client = self._client()
+        seen: list = []
+
+        def precondition() -> bool:
+            seen.append(client.pending_mutation_count)
+
+            return True
+
+        asyncio.run(client.submit(SubmitOptions(args={}, function_path="messages:send", precondition=precondition)))
+        client.attach_socket(lambda _frame: None)
+
+        self.assertTrue(_finishes(lambda: asyncio.run(client.flush_offline_queue())), "a precondition must run with the client's lock released")
+        self.assertEqual(seen, [1])
 
 
 if __name__ == "__main__":

@@ -6,9 +6,10 @@ use std::fmt;
 
 use serde_json::{json, Map, Value};
 
-use crate::offline::{OfflineQueue, SettledHandler};
+use crate::offline::{random_id, same_shard, OfflineQueue, SettledHandler};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
+use crate::submit::{args_key, matches};
 use crate::wire::{decode_wire, encode_wire, WireError, WireValue};
 
 /// The single endpoint every query/mutation/action posts to.
@@ -107,7 +108,13 @@ pub fn build_rpc_body(function_path: &str, args: &WireValue, shard_key: Option<&
     body.insert("args".into(), encode_wire(args)?);
     body.insert("functionPath".into(), json!(function_path));
 
-    if let Some(key) = shard_key {
+    // Empty means absent, not "the shard named `\"\"`". The runtime disagrees — it
+    // takes any string as a named shard and routes `""` to its own Durable Object
+    // (`packages/runtime/src/create-worker.ts`) — while this client treats `""` and
+    // `None` as one shard everywhere it matches a subscription or drains the queue.
+    // Sending it would split those two views: a write submitted with `""` would
+    // replay against a different shard than the subscription it updated.
+    if let Some(key) = shard_key.filter(|key| !key.is_empty()) {
         body.insert("shardKey".into(), json!(key));
     }
 
@@ -311,6 +318,17 @@ pub struct Client {
     /// Identifies this client to the shard. It rides every write that carries an
     /// idempotency key, because an anonymous caller has no server-minted user id
     /// to namespace its de-duplication rows by.
+    ///
+    /// It defaults to a FRESH id per instance ([`random_id`]), never a per-language
+    /// constant: the shard keys an anonymous write's idempotency row by
+    /// `(client id, mutation id)`, so a shared default makes two unauthenticated
+    /// callers collide on a caller-supplied mutation id — the second write
+    /// short-circuits to the first one's cached result and never runs.
+    ///
+    /// Assign your own to PIN it, which a consumer running a DURABLE queue should:
+    /// a write restored after a restart replays under the id that issued it (the
+    /// record carries it), and a per-device id keeps that namespace stable across
+    /// sessions instead of minting a new one on every boot.
     pub client_id: String,
     /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
     /// not a bearer token. It is persisted alongside every queued write and
@@ -337,7 +355,7 @@ impl Client {
         Self {
             auth_token: None,
             base_url: base_url.into(),
-            client_id: "rust-client".to_string(),
+            client_id: format!("client-{}", random_id()),
             closed: false,
             identity: None,
             next_id: 0,
@@ -374,6 +392,54 @@ impl Client {
     /// Whether a socket is currently attached.
     pub fn online(&self) -> bool {
         self.send.is_some()
+    }
+
+    /// How many writes are waiting for the socket.
+    pub fn pending_mutation_count(&self) -> usize {
+        self.offline_queue.size()
+    }
+
+    /// Rejects every queued write so no caller waits on a dead client. Durable
+    /// storage is untouched: the next session restores those writes.
+    pub fn close(&mut self) {
+        self.closed = true;
+        self.send = None;
+
+        let discarded = self.offline_queue.clear();
+
+        self.report_discarded(discarded);
+    }
+
+    /// The current displayed value for a subscribed query, or `None` when nothing
+    /// is subscribed for it. Reflects any pending optimistic override.
+    pub fn query_value(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>) -> Option<&WireValue> {
+        let key = args_key(args);
+
+        self.subscriptions
+            .values()
+            .find(|entry| matches(entry, function_path, &key, shard_key))
+            .map(|entry| &entry.state.last_value)
+    }
+
+    /// Every loaded subscription on `function_path` with the args it was
+    /// subscribed under — for a write that must patch every variant of a list
+    /// query without enumerating their args up front.
+    pub fn all_queries(&self, function_path: &str, shard_key: Option<&str>) -> Vec<(&WireValue, &WireValue)> {
+        self.subscriptions
+            .values()
+            .filter(|entry| entry.function_path == function_path && same_shard(entry.shard_key.as_deref(), shard_key))
+            .map(|entry| (&entry.args, &entry.state.last_value))
+            .collect()
+    }
+
+    /// One subscription's layered state: the authoritative base, the tracked CDC
+    /// cursor and the optimistic layers still pending on it.
+    ///
+    /// [`Client::query_value`] answers "what is displayed"; this answers "why",
+    /// which a consumer needs to tell a value that is still predicted from one the
+    /// server has confirmed.
+    pub fn subscription_state(&self, subscription_id: &str) -> Option<&OptimisticState> {
+        self.subscriptions.get(subscription_id).map(|entry| &entry.state)
     }
 
     pub fn query(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>) -> Result<WireValue, ClientError> {
@@ -576,14 +642,24 @@ impl Client {
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
                     advance(entry, &frame);
                     entry.state.server_base = value;
-                    let cursor = frame.get("cursor").and_then(Value::as_i64);
 
-                    entry.state.server_cursor = cursor;
+                    // `cursor` is OPTIONAL on a data/delta frame. Advance the
+                    // tracked one only when the frame carries one — nulling it
+                    // strands every pending layer, because the tracked cursor is
+                    // what a write's commit cursor is compared against, so a
+                    // confirm that should drop an overlay keeps it and the write
+                    // renders twice.
+                    if let Some(cursor) = frame.get("cursor").and_then(Value::as_i64) {
+                        entry.state.server_cursor = Some(cursor);
+                    }
+
                     // Drop the overlays this frame has caught up with, then
                     // RE-FOLD the rest onto the new authoritative base rather
                     // than clobbering them: a still-queued write's predicted
                     // value has to survive an unrelated delta on the same query.
-                    drop_confirmed_layers(&mut entry.state, cursor);
+                    let reached = entry.state.server_cursor;
+
+                    drop_confirmed_layers(&mut entry.state, reached);
 
                     let displayed = fold(&entry.state.server_base, &entry.state.layers);
 
@@ -778,7 +854,8 @@ impl Client {
 
         let mut params = Vec::new();
 
-        if let Some(key) = shard_key {
+        // Empty is absent, matching `build_rpc_body` — see its comment.
+        if let Some(key) = shard_key.filter(|key| !key.is_empty()) {
             params.push(format!("shard={}", percent_encode(key)));
         }
 

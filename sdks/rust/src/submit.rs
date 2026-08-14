@@ -7,13 +7,13 @@
 //! calls it and a typed wrapper must keep returning a typed result.
 //! [`Client::submit`] is the write path that survives a dropped socket.
 
-use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::client::{ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
-    identity_allows_replay, random_id, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED,
-    TRANSIENT_ERROR_CODES,
+    identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
@@ -169,44 +169,6 @@ impl Client {
         self.settled_listeners.push(listener);
     }
 
-    /// How many writes are waiting for the socket.
-    pub fn pending_mutation_count(&self) -> usize {
-        self.offline_queue.size()
-    }
-
-    /// Rejects every queued write so no caller waits on a dead client. Durable
-    /// storage is untouched: the next session restores those writes.
-    pub fn close(&mut self) {
-        self.closed = true;
-        self.send = None;
-
-        let discarded = self.offline_queue.clear();
-
-        self.report_discarded(discarded);
-    }
-
-    /// The current displayed value for a subscribed query, or `None` when nothing
-    /// is subscribed for it. Reflects any pending optimistic override.
-    pub fn query_value(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>) -> Option<&WireValue> {
-        let key = args_key(args);
-
-        self.subscriptions
-            .values()
-            .find(|entry| matches(entry, function_path, &key, shard_key))
-            .map(|entry| &entry.state.last_value)
-    }
-
-    /// Every loaded subscription on `function_path` with the args it was
-    /// subscribed under — for a write that must patch every variant of a list
-    /// query without enumerating their args up front.
-    pub fn all_queries(&self, function_path: &str, shard_key: Option<&str>) -> Vec<(&WireValue, &WireValue)> {
-        self.subscriptions
-            .values()
-            .filter(|entry| entry.function_path == function_path && entry.shard_key.as_deref() == shard_key)
-            .map(|entry| (&entry.args, &entry.state.last_value))
-            .collect()
-    }
-
     /// Writes, sending it now or queueing it until the socket is back.
     ///
     /// It returns as soon as the write is either committed or durably queued. A
@@ -281,7 +243,16 @@ impl Client {
     /// every unreplayed one, in order, for the next attempt.
     pub fn flush_offline_queue(&mut self, shard_key: Option<&str>) -> FlushReport {
         let mut report = FlushReport::default();
-        let conflicted = self.offline_queue.drain_conflict();
+        // The consumer's predicates run HERE, never inside the queue: they are the
+        // consumer's code, so the queue only ever sees the verdicts.
+        let stale: HashSet<String> = self
+            .offline_queue
+            .items()
+            .iter()
+            .filter(|item| item.precondition.as_ref().is_some_and(|check| !check()))
+            .map(|item| item.id.clone())
+            .collect();
+        let conflicted = self.offline_queue.drain_conflict(&stale);
 
         for discarded in &conflicted {
             self.offline_queue.unpersist(&discarded.entry.id);
@@ -291,8 +262,7 @@ impl Client {
 
         self.report_discarded(conflicted);
 
-        let owned = shard_key.map(str::to_string);
-        let drained = self.offline_queue.drain(|item| item.shard_key == owned);
+        let drained = self.offline_queue.drain(|item| same_shard(item.shard_key.as_deref(), shard_key));
 
         if drained.is_empty() {
             return report;
@@ -319,9 +289,45 @@ impl Client {
             }]);
         }
 
-        self.replay(sendable, &mut report);
+        let encodable = self.encodable_or_settle_terminal(sendable, &mut report);
+
+        self.replay(encodable, &mut report);
 
         report
+    }
+
+    /// Splits gated writes into the ones that can reach the wire and the ones that
+    /// never can, settling the latter TERMINALLY.
+    ///
+    /// A write whose args are outside the wire codec fails deterministically, not
+    /// transiently — but a codec error carries no code, so the transient rule
+    /// ("anything uncoded is a blip, re-queue it") would retry it on every
+    /// reconnect forever: never settling its caller, never rolling back its
+    /// overlay, and — because a requeue goes to the FRONT — blocking every write
+    /// behind it in the FIFO. Encoding is cheap and the flush is the slow
+    /// reconnect path, so it happens up front.
+    fn encodable_or_settle_terminal(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) -> Vec<QueuedMutation> {
+        let mut encodable = Vec::with_capacity(sendable.len());
+
+        for entry in sendable {
+            let Err(error) = encode_wire(&entry.args) else {
+                encodable.push(entry);
+
+                continue;
+            };
+
+            self.offline_queue.unpersist(&entry.id);
+            self.rollback_layers(&entry.layers);
+            report.rejected.push(entry.id.clone());
+            self.emit_settled(
+                &entry,
+                MutationStatus::Rejected,
+                WireValue::Null,
+                Some(coded(CODE_OFFLINE_WRITE_UNENCODABLE, &format!("offline mutation cannot be encoded: {error}"))),
+            );
+        }
+
+        encodable
     }
 
     fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
@@ -473,7 +479,12 @@ impl Client {
         // Bound at enqueue time, so the write can only ever replay as whoever
         // made it.
         let identity: Identity = Some(self.identity.clone());
-        let encoded = encode_wire(&options.args).unwrap_or(Value::Null);
+        // Never a substitute value: a record persisted as `args: null` hydrates
+        // after a restart as a write that replays SUCCESSFULLY with empty args,
+        // which is corruption rather than failure. The queue reports the failed
+        // append and keeps the write in memory with its real args, and the next
+        // flush settles it terminally.
+        let encoded = encode_wire(&options.args).map_err(|error| error.to_string());
         let entry = QueuedMutation {
             args: options.args,
             client_id: Some(self.client_id.clone()),
@@ -497,7 +508,7 @@ impl Client {
     /// Every discard path funnels through here, so an eviction can never drop a
     /// durable write in silence — which matters most for a hydrated record, whose
     /// original caller did not survive the restart.
-    fn report_discarded(&mut self, discarded: Vec<Discarded>) {
+    pub(crate) fn report_discarded(&mut self, discarded: Vec<Discarded>) {
         for item in discarded {
             self.rollback_layers(&item.entry.layers);
             self.emit_settled(&item.entry, MutationStatus::Rejected, WireValue::Null, Some(coded(item.code, item.message)));
@@ -525,12 +536,18 @@ impl Client {
 
 /// Whether a failed replay may be retried rather than dropped.
 ///
-/// A transport or codec error is the network, not the server: no verdict was
-/// reached, so the write is still good.
+/// A transport error is the network, not the server: no verdict was reached, so
+/// the write is still good. A CODEC error is the opposite — the value cannot be
+/// encoded now and will not encode any better on the next reconnect, so retrying
+/// it is a poison loop that also blocks every write behind it. (The flush already
+/// weeds those out before the replay loop; this keeps the classification honest
+/// for anything the encode pass could not see, such as a response that fails to
+/// decode.)
 pub fn is_transient(error: &ClientError) -> bool {
     match error {
         ClientError::Api(inner) => TRANSIENT_ERROR_CODES.contains(&inner.code.as_str()),
-        _ => true,
+        ClientError::Wire(_) => false,
+        ClientError::Transport(_) => true,
     }
 }
 
@@ -540,12 +557,15 @@ pub fn is_transient(error: &ClientError) -> bool {
 /// which simply means no optimistic write targets that subscription. Never a
 /// wrong match: a write's key is derived the same way, and a write whose args
 /// cannot be encoded cannot be sent either.
-fn args_key(args: &WireValue) -> String {
+pub(crate) fn args_key(args: &WireValue) -> String {
     stable_wire_key(args).unwrap_or_default()
 }
 
-/// A `None` shard key and the subscription's `None` are the same shard, so a
-/// write fired without one matches a subscription registered without one.
-fn matches(entry: &Subscription, function_path: &str, args_key: &str, shard_key: Option<&str>) -> bool {
-    entry.function_path == function_path && entry.args_key == args_key && entry.shard_key.as_deref() == shard_key
+/// Whether one write's optimistic overlay targets this subscription.
+///
+/// Shard keys compare through [`same_shard`], so an absent key and an empty one
+/// are one shard: a write submitted with `""` must still find the subscription
+/// registered without one, or its overlay silently fails to target.
+pub(crate) fn matches(entry: &Subscription, function_path: &str, args_key: &str, shard_key: Option<&str>) -> bool {
+    entry.function_path == function_path && entry.args_key == args_key && same_shard(entry.shard_key.as_deref(), shard_key)
 }

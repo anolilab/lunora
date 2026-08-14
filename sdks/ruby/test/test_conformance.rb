@@ -91,6 +91,27 @@ class TestRpc < Minitest::Test
     end
   end
 
+  # An empty shard key is the DEFAULT shard to this client (Lunora.same_shard?
+  # merges it with nil for the drain predicate and the subscription lookup), but
+  # a NAMED shard with its own Durable Object to the runtime. Sending it would
+  # make a write submitted with "" drain on the default shard's flush and then
+  # replay against a different shard from the subscription its overlay updated.
+  def test_an_empty_shard_key_is_omitted_from_the_wire
+    ConformanceManifest.covers("rpc_request_bodies")
+
+    body = Lunora.build_rpc_body("messages:send", { "text" => "hi" }, "")
+
+    refute body.key?("shardKey")
+    assert_equal canonical(Lunora.build_rpc_body("messages:send", { "text" => "hi" })), canonical(body)
+
+    url = Lunora::Client.new("https://app.example").send(:ws_url, "")
+
+    refute_includes url, "shard="
+    # A real named shard still rides both.
+    assert_equal "room-1", Lunora.build_rpc_body("messages:send", {}, "room-1")["shardKey"]
+    assert_includes Lunora::Client.new("https://app.example").send(:ws_url, "room-1"), "shard=room-1"
+  end
+
   # protocol/README.md §4.2: a non-2xx whose body carries no +error+ envelope is
   # an INTERNAL transport error. Without the status check the call returns nil and
   # raises nothing, so the caller believes its mutation committed.

@@ -63,6 +63,18 @@
             "displayedAfterRollback": ["a"],
             "layersAfterRollback": 0
         },
+        "cursorlessFrame": {
+            "$comment": "`cursor` is OPTIONAL on data/delta/resume frames (see protocol/README.md), and a frame that omits it must LEAVE the tracked cursor where it was. Nulling it strands every pending layer: the tracked cursor is what a later commitCursor is compared against, so a confirm that should have dropped the overlay instead keeps it, and the write renders twice until some later cursored frame happens to land.",
+            "base": ["a"],
+            "appended": "c",
+            "cursoredFrame": { "cursor": 9, "data": ["a", "b"] },
+            "cursorlessFrame": { "data": ["a", "b", "c"] },
+            "cursorAfterCursorlessFrame": 9,
+            "displayedAfterCursorlessFrame": ["a", "b", "c", "c"],
+            "layersAfterCursorlessFrame": 1,
+            "commitCursor": 9,
+            "layersAfterConfirm": 0
+        },
         "constantMask": {
             "$comment": "The multi-query local-store path registers a CONSTANT layer per setQuery. While pending it re-clamps to its predicted value on every frame — it masks a concurrent server change to that query rather than merging it, which is the intended absolute-override semantics.",
             "base": ["a"],
@@ -82,15 +94,16 @@
             "sizeAfterDrain": 0
         },
         "shardDrain": {
-            "$comment": "A predicate drain flushes one shard's writes when its socket reconnects while other shards are still down, and leaves the rest queued in order. A null shardKey and an empty one are the same shard.",
+            "$comment": "A predicate drain flushes one shard's writes when its socket reconnects while other shards are still down, and leaves the rest queued in order. A null shardKey and an empty one are the SAME shard — `m5` below is the assertion, not the prose: a port that compares the two strictly leaves it queued forever, because nothing ever flushes the shard named `\"\"`.",
             "entries": [
                 { "id": "m1", "shardKey": null },
                 { "id": "m2", "shardKey": "room-1" },
                 { "id": "m3", "shardKey": null },
-                { "id": "m4", "shardKey": "room-2" }
+                { "id": "m4", "shardKey": "room-2" },
+                { "id": "m5", "shardKey": "" }
             ],
             "drainShardKey": null,
-            "drained": ["m1", "m3"],
+            "drained": ["m1", "m3", "m5"],
             "remaining": ["m2", "m4"]
         },
         "requeue": {
@@ -152,7 +165,22 @@
             ],
             "queuedAfterHydrate": ["p2", "p3"],
             "evicted": ["p1"],
-            "shardKeys": ["room-1"]
+            "shardKeys": ["room-1"],
+            "$settledComment": "Driven through the CLIENT, not the queue: a hydrated entry has no awaiter, so a client that reports a discard through the entry's own reject handler reports this eviction to nobody — the durable write is un-persisted and vanishes silently. The discard must reach the client-level settled listener regardless, stamped `hadAwaiter: false` so a consumer can tell a restored write's only report from a live caller's second one.",
+            "settledFromClient": ["p1"],
+            "settledCode": "OFFLINE_QUEUE_OVERFLOW",
+            "settledHadAwaiter": false
+        },
+        "unencodableWrite": {
+            "$comment": "A queued write whose args cannot be wire-encoded can never succeed, so it must settle TERMINALLY on the first flush. A codec error carries no `code`, so the transient rule ('anything uncoded is a transport blip, re-queue it') would loop it forever: never settling its caller, never rolling back its overlay, and blocking every write behind it in the FIFO. Encodability is therefore checked BEFORE the replay loop, and the survivors alone are sent.",
+            "queued": ["m1", "m2"],
+            "unencodable": ["m1"],
+            "rejected": ["m1"],
+            "committed": ["m2"],
+            "queuedAfterFlush": [],
+            "code": "OFFLINE_WRITE_UNENCODABLE",
+            "mutationIdHeaders": ["m2"],
+            "persistRemoveCalls": ["m1", "m2"]
         },
         "identityGate": {
             "$comment": "A write stamped under one identity must never replay under another — a reload must not push the previous user's queued writes as the current one. `null` is the signed-out identity and is a real value, not 'unstamped': a write queued signed out replays signed out. A record with NO stamp (persisted before stamps existed) replays ambiently.",

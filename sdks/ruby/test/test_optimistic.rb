@@ -5,6 +5,7 @@
 # that file so this port and the other six assert the same values rather than
 # each documenting its own behaviour.
 
+require "json"
 require "minitest/autorun"
 
 require_relative "../lib/lunora"
@@ -14,9 +15,10 @@ require_relative "manifest"
 module OptimisticFixtures
   include FixtureLoader
 
-  def scenario(name)
-    fixture("offline-optimistic.json").fetch("optimistic").fetch(name)
-  end
+  SUBSCRIPTION_ID = "sub_1"
+  QUERY = "messages:list"
+
+  def optimistic_case(name) = scenario("optimistic", name)
 
   # The one transform primitive the fixtures use: push onto a COPY of the list.
   #
@@ -28,12 +30,34 @@ module OptimisticFixtures
     Lunora::Optimistic::State.build(base, seen.nil? ? [] : [->(value) { seen << value }])
   end
 
-  # Apply one server data frame the way Client#deliver does.
-  def apply_frame(state, frame, deferred)
-    state.server_base = frame["data"]
-    state.server_cursor = frame["cursor"]
-    Lunora::Optimistic.drop_confirmed?(state, state.server_cursor)
-    Lunora::Optimistic.notify(state, Lunora::Optimistic.fold(state.server_base, state.layers), deferred)
+  # A client with one live subscription primed to +base+, plus the list every
+  # value delivered to that subscription lands in.
+  #
+  # The frames below go through +Client#handle_frame+ — the PRODUCTION path. The
+  # suite used to drive a hand-copied transcription of its `data` branch instead,
+  # which is why a `handleFrame` that forgot to advance the cursor, or to drop
+  # confirmed layers, would have kept all nine conformance names green.
+  def primed_client(base, cursor: 1, responses: nil)
+    seen = []
+    poster = responses.nil? ? nil : ->(_url, _headers, _body) { [200, responses] }
+    client = Lunora::Client.new("https://app.example", http_post: poster)
+
+    client.attach_socket(->(_frame) {})
+    client.subscribe(QUERY, {}, ->(value) { seen << value })
+    deliver(client, { "cursor" => cursor, "data" => base })
+
+    [client, seen]
+  end
+
+  def deliver(client, frame)
+    client.handle_frame(JSON.generate(frame.merge("id" => SUBSCRIPTION_ID, "type" => "data")))
+  end
+
+  # The subscription's tracked cursor and live layer count. Read through the
+  # registry because neither is public API — and neither should be; they are
+  # internal state the fixture pins so a rebase cannot quietly stop rebasing.
+  def tracked(client)
+    client.instance_variable_get(:@subscriptions).fetch(SUBSCRIPTION_ID)
   end
 end
 
@@ -42,31 +66,52 @@ class TestOptimisticRebase < Minitest::Test
 
   def test_layer_rebases_onto_a_later_server_frame
     ConformanceManifest.covers("optimistic_layer_rebases_onto_server_frame")
-    case_data = scenario("rebase")
-    seen = []
-    state = build_state(case_data["base"], seen)
+    case_data = optimistic_case("rebase")
+    client, seen = primed_client(case_data["base"])
+    # Offline, so the write QUEUES and its overlay stays pending across the frame.
+    client.detach_socket
 
-    deferred = []
-    Lunora::Optimistic.apply_layer(state, appender(case_data["appended"]), deferred)
-    deferred.each(&:call)
+    client.submit(QUERY, {}, optimistic: appender(case_data["appended"]))
 
-    assert_equal case_data["displayedAfterApply"], state.last_value
-    assert_equal [case_data["displayedAfterApply"]], seen
+    assert_equal case_data["displayedAfterApply"], seen.last
 
-    deferred = []
-    apply_frame(state, case_data["frame"], deferred)
-    deferred.each(&:call)
+    deliver(client, case_data["frame"])
 
     # The overlay survived the frame and was RE-FOLDED onto the new base, rather
     # than being clobbered by it.
-    assert_equal case_data["displayedAfterFrame"], state.last_value
-    assert_equal case_data["layersAfterFrame"], state.layers.length
     assert_equal case_data["displayedAfterFrame"], seen.last
+    assert_equal case_data["layersAfterFrame"], tracked(client)[:state].layers.length
+  end
+
+  # `cursor` is OPTIONAL on a data frame, and one that omits it must leave the
+  # tracked cursor where it was: the cursor is what a later commitCursor is
+  # compared against, so nulling it strands every pending layer and the write
+  # renders twice until some later cursored frame happens to land.
+  def test_a_cursorless_frame_leaves_the_tracked_cursor_alone
+    ConformanceManifest.covers("optimistic_cursorless_frame_preserves_cursor")
+    case_data = optimistic_case("cursorlessFrame")
+    client, seen = primed_client(case_data["base"], responses: { "commitCursor" => case_data["commitCursor"], "result" => nil })
+    client.detach_socket
+
+    client.submit(QUERY, {}, optimistic: appender(case_data["appended"]))
+    deliver(client, case_data["cursoredFrame"])
+    deliver(client, case_data["cursorlessFrame"])
+
+    assert_equal case_data["cursorAfterCursorlessFrame"], tracked(client)[:cursor]
+    assert_equal case_data["displayedAfterCursorlessFrame"], seen.last
+    assert_equal case_data["layersAfterCursorlessFrame"], tracked(client)[:state].layers.length
+
+    client.attach_socket(->(_frame) {})
+    client.flush_offline_queue
+
+    # Only reachable because the cursor survived: confirm compares the write's
+    # commit cursor against it.
+    assert_equal case_data["layersAfterConfirm"], tracked(client)[:state].layers.length
   end
 
   def test_a_raising_layer_is_skipped_not_fatal
     ConformanceManifest.covers("optimistic_layer_rebases_onto_server_frame")
-    case_data = scenario("throwingLayerSkipped")
+    case_data = optimistic_case("throwingLayerSkipped")
     state = build_state(case_data["base"])
 
     # Registered directly rather than through apply_layer, which refuses a
@@ -89,36 +134,28 @@ class TestOptimisticCommitCursor < Minitest::Test
 
   def test_layer_drops_only_once_a_frame_reaches_the_commit_cursor
     ConformanceManifest.covers("optimistic_layer_drops_on_commit_cursor")
-    case_data = scenario("commitCursorDrop")
-    state = build_state(case_data["base"])
+    case_data = optimistic_case("commitCursorDrop")
+    client, seen = primed_client(case_data["base"], responses: { "commitCursor" => case_data["commitCursor"], "result" => nil })
 
-    deferred = []
-    handle = Lunora::Optimistic.apply_layer(state, appender(case_data["appended"]), deferred)
-    handle.confirm(case_data["commitCursor"], deferred)
-    deferred.each(&:call)
-
-    deferred = []
-    apply_frame(state, case_data["belowFrame"], deferred)
-    deferred.each(&:call)
+    client.submit(QUERY, {}, optimistic: appender(case_data["appended"]))
+    deliver(client, case_data["belowFrame"])
 
     # Below the commit cursor: the write is NOT in the server base yet, so
     # dropping the overlay here would blink the value away and back.
-    assert_equal case_data["displayedAfterBelowFrame"], state.last_value
-    assert_equal case_data["layersAfterBelowFrame"], state.layers.length
+    assert_equal case_data["displayedAfterBelowFrame"], seen.last
+    assert_equal case_data["layersAfterBelowFrame"], tracked(client)[:state].layers.length
 
-    deferred = []
-    apply_frame(state, case_data["atFrame"], deferred)
-    deferred.each(&:call)
+    deliver(client, case_data["atFrame"])
 
     # The frame reached the commit cursor: the effect is in the base, so the
     # overlay drops without the value ever double-counting it.
-    assert_equal case_data["displayedAfterAtFrame"], state.last_value
-    assert_equal case_data["layersAfterAtFrame"], state.layers.length
+    assert_equal case_data["displayedAfterAtFrame"], seen.last
+    assert_equal case_data["layersAfterAtFrame"], tracked(client)[:state].layers.length
   end
 
   def test_confirm_without_a_cursor_drops_without_reverting
     ConformanceManifest.covers("optimistic_layer_drops_on_commit_cursor")
-    case_data = scenario("confirmWithoutCursor")
+    case_data = optimistic_case("confirmWithoutCursor")
     state = build_state(case_data["base"])
 
     deferred = []
@@ -134,7 +171,7 @@ class TestOptimisticCommitCursor < Minitest::Test
 
   def test_a_confirmed_cursor_already_passed_drops_immediately
     ConformanceManifest.covers("optimistic_layer_drops_on_commit_cursor")
-    case_data = scenario("commitCursorDrop")
+    case_data = optimistic_case("commitCursorDrop")
     state = build_state(case_data["atFrame"]["data"])
     state.server_cursor = case_data["atFrame"]["cursor"]
 
@@ -155,7 +192,7 @@ class TestOptimisticRollback < Minitest::Test
 
   def test_rollback_restores_the_server_value
     ConformanceManifest.covers("optimistic_layer_rolls_back_on_failure")
-    case_data = scenario("rollback")
+    case_data = optimistic_case("rollback")
     seen = []
     state = build_state(case_data["base"], seen)
 
@@ -171,33 +208,30 @@ class TestOptimisticRollback < Minitest::Test
 
   def test_a_constant_layer_masks_concurrent_server_changes
     ConformanceManifest.covers("optimistic_layer_rolls_back_on_failure")
-    case_data = scenario("constantMask")
-    state = build_state(case_data["base"])
-    deferred = []
-    store = Lunora::Optimistic::LocalStore.new(
-      ->(_path, _args) { [state] },
-      ->(_path) { [[{}, state.last_value]] },
-      deferred
-    )
+    case_data = optimistic_case("constantMask")
+    client, seen = primed_client(case_data["base"])
+    client.detach_socket
+    read_back = nil
 
-    store.set_query("messages:list", {}, case_data["value"])
-    deferred.each(&:call)
+    client.submit("messages:send", {}, optimistic_update: lambda { |store, _args|
+      store.set_query(QUERY, {}, case_data["value"])
+      # Reflects the override already written in this batch, before anything is
+      # installed on the subscription.
+      read_back = store.get_query(QUERY, {})
+    })
 
-    assert_equal case_data["displayedAfterApply"], state.last_value
-    assert_equal case_data["displayedAfterApply"], store.get_query("messages:list", {})
+    assert_equal case_data["displayedAfterApply"], seen.last
+    assert_equal case_data["displayedAfterApply"], read_back
 
-    deferred = []
-    apply_frame(state, case_data["frame"], deferred)
-    deferred.each(&:call)
+    deliver(client, case_data["frame"])
 
     # An absolute override: while pending it re-clamps and HIDES the concurrent
     # server change rather than merging with it.
-    assert_equal case_data["displayedAfterFrame"], state.last_value
+    assert_equal case_data["displayedAfterFrame"], seen.last
 
-    deferred = []
-    Lunora::Optimistic.rollback_all(store.rollbacks, deferred)
-    deferred.each(&:call)
+    # Closing rejects the still-queued write, which unwinds its layers.
+    client.close
 
-    assert_equal case_data["displayedAfterRollback"], state.last_value
+    assert_equal case_data["displayedAfterRollback"], seen.last
   end
 end

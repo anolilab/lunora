@@ -34,6 +34,13 @@ module FixtureLoader
     JSON.parse(File.read(File.join(fixtures_dir, name)))
   end
 
+  # One golden scenario from the shared offline/optimistic fixture. Both write
+  # suites read through this rather than each defining its own +scenario+, which
+  # is how the two drifted into taking a different section apiece.
+  def scenario(section, name)
+    fixture("offline-optimistic.json").fetch(section).fetch(name)
+  end
+
   # Re-serialise so two structures compare as text with a canonical key order,
   # independent of the order the fixture file happens to use.
   def canonical(value)

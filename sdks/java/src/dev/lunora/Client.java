@@ -1,11 +1,11 @@
 package dev.lunora;
 
-import dev.lunora.Offline.Identity;
-import dev.lunora.Offline.OfflineException;
 import dev.lunora.Offline.OfflineQueue;
-import dev.lunora.Offline.QueuedMutation;
-import dev.lunora.Optimistic.LocalStore;
 import dev.lunora.Optimistic.QueryEntry;
+import dev.lunora.Submit.FlushReport;
+import dev.lunora.Submit.MutationOutcome;
+import dev.lunora.Submit.MutationSettled;
+import dev.lunora.Submit.SubmitOptions;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -13,9 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 /**
  * A Lunora deployment client.
@@ -91,9 +89,9 @@ public final class Client {
      * consumer owns, and holding the lock across a callback would let one slow consumer stall the
      * socket reader.
      */
-    private final Object lock = new Object();
+    final Object lock = new Object();
 
-    private FrameSender sender;
+    FrameSender sender;
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, Map<String, List<Map<String, Object>>>> pokes = new LinkedHashMap<>();
@@ -158,8 +156,18 @@ public final class Client {
      * Identifies this client to the shard. It rides every write that carries an idempotency key,
      * because an anonymous caller has no server-minted user id to namespace its de-duplication rows
      * by.
+     *
+     * <p>Minted PER INSTANCE, from the same generator that mints mutation ids. A per-language
+     * constant would put every anonymous client in the process — and in every other process running
+     * this SDK — into ONE de-duplication namespace: two signed-out users calling the same mutation
+     * with the same caller-supplied mutation id would collide, and the second write would
+     * short-circuit to the first user's cached result without ever running.
+     *
+     * <p>Assign it to pin a stable per-device id, which a consumer using a DURABLE offline queue
+     * should do: a write replays under the id that ISSUED it, so an id that changes every process
+     * start makes each restored write its own namespace.
      */
-    public volatile String clientId = "java-client";
+    public volatile String clientId = Offline.randomId();
 
     /**
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id, not a bearer token.
@@ -169,10 +177,10 @@ public final class Client {
      */
     public volatile String identity;
 
-    private OfflineQueue offlineQueue = new OfflineQueue();
-    private boolean wasEverConnected;
-    private boolean closed;
-    private final List<Consumer<MutationSettled>> settledListeners = new ArrayList<>();
+    OfflineQueue offlineQueue = new OfflineQueue();
+    boolean wasEverConnected;
+    boolean closed;
+    final List<Consumer<MutationSettled>> settledListeners = new ArrayList<>();
 
     public Client(String baseUrl, HttpPoster poster) {
         this.baseUrl = baseUrl;
@@ -251,18 +259,29 @@ public final class Client {
      * the next session restores those writes.
      */
     public void close() {
-        OfflineQueue queue;
+        List<Offline.Discarded> discarded;
 
+        // Emptied under the monitor, settled outside it: `clear` mutates the same list every other
+        // queue call does, while settling rolls optimistic layers back and notifies listeners.
         synchronized (lock) {
             closed = true;
             sender = null;
-            queue = offlineQueue;
+            discarded = offlineQueue.clear();
         }
 
-        reportDiscarded(queue.clear());
+        Submit.reportDiscarded(this, discarded);
     }
 
-    /** Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when null. */
+    /**
+     * Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when absent OR empty.
+     *
+     * <p>Empty as well as null, because the two are the same shard to this client (see {@link
+     * Offline#sameShard}) but NOT to the runtime, which treats {@code ""} as a valid named shard
+     * and routes it to its own Durable Object. Sending it through would mean a write that drains on
+     * the default shard's flush lands on a different shard from the subscription whose overlay it
+     * just updated — so the client resolves the ambiguity at the wire boundary, once, where every
+     * call goes past.
+     */
     public static Map<String, Object> buildRpcBody(
             String functionPath, Object args, String shardKey) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -270,7 +289,7 @@ public final class Client {
         body.put("args", Wire.encode(args == null ? new LinkedHashMap<String, Object>() : args));
         body.put("functionPath", functionPath);
 
-        if (shardKey != null) {
+        if (shardKey != null && !shardKey.isEmpty()) {
             body.put("shardKey", shardKey);
         }
 
@@ -673,10 +692,16 @@ public final class Client {
 
                     advance(entry, frame);
                     entry.state.serverBase = value;
-                    entry.state.serverCursor =
-                            frame.get("cursor") instanceof Number number
-                                    ? number.longValue()
-                                    : null;
+
+                    // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
+                    // tracked cursor where it was. Nulling it strands every pending layer: the
+                    // tracked cursor is what a write's commitCursor is compared against, so a
+                    // confirm that should drop the overlay keeps it instead and the write renders
+                    // twice until some later cursored frame happens to land.
+                    if (frame.get("cursor") instanceof Number number) {
+                        entry.state.serverCursor = number.longValue();
+                    }
+
                     // Drop the overlays this frame has caught up with, then RE-FOLD the rest onto
                     // the new authoritative base rather than clobbering them: a still-queued
                     // write's predicted value has to survive an unrelated delta on this query.
@@ -902,6 +927,11 @@ public final class Client {
     /**
      * The socket URL: the origin with its scheme swapped, plus the shard and credential query
      * parameters when present.
+     *
+     * <p>{@code shard=} is omitted for an empty key as well as an absent one, for the same reason
+     * {@link #buildRpcBody} omits it: {@code ""} is the default shard here and a distinct named
+     * shard to the runtime, and a socket opened against the wrong one would deliver frames for a
+     * shard the writes never reach.
      */
     public String wsUrl(String shardKey, String token) {
         String endpoint = join(WS_PATH);
@@ -914,7 +944,7 @@ public final class Client {
 
         List<String> params = new ArrayList<>();
 
-        if (shardKey != null) {
+        if (shardKey != null && !shardKey.isEmpty()) {
             params.add("shard=" + URLEncoder.encode(shardKey, StandardCharsets.UTF_8));
         }
 
@@ -930,126 +960,9 @@ public final class Client {
     }
 
     // --- Offline-capable writes ------------------------------------------------------------
-
-    /** What {@link #submit} did with a write. */
-    public enum MutationStatus {
-        /** The write went out and the server answered. */
-        COMMITTED,
-        /** The socket was down and the write was enqueued for replay. */
-        QUEUED,
-        /** A settled verdict, never a submit outcome. */
-        REJECTED
-    }
-
-    /**
-     * What {@link #submit} did with a write.
-     *
-     * <p>This is the deliberate divergence from {@code @lunora/client}, whose {@code mutation()}
-     * returns a promise that stays PENDING until a queued write finally replays. A pending promise
-     * is a fine thing to hold in a browser event loop and a bad thing to hold on a pooled JVM
-     * thread, so the ports return the outcome immediately and report the eventual verdict through
-     * {@code onSettled} (per write) or {@link #onMutationSettled} (per client). A caller that must
-     * not report success early checks {@code status}.
-     */
-    public record MutationOutcome(
-            MutationStatus status, String mutationId, Object value, Long commitCursor) {}
-
-    /**
-     * The terminal verdict on a queued write, once it replays.
-     *
-     * <p>{@code hadAwaiter} is false for a write restored from durable storage: the caller that
-     * submitted it is gone, so this event is the ONLY report it produces.
-     */
-    public record MutationSettled(
-            String mutationId,
-            MutationStatus status,
-            Object value,
-            RuntimeException error,
-            boolean hadAwaiter) {}
-
-    /** What one {@link #flushOfflineQueue} pass achieved. */
-    public static final class FlushReport {
-        /** The ids the server accepted. */
-        public final List<String> committed = new ArrayList<>();
-
-        /** The ids dropped on a verdict, an identity change, or a stale precondition. */
-        public final List<String> rejected = new ArrayList<>();
-
-        /** The ids left queued for the next reconnect. */
-        public final List<String> requeued = new ArrayList<>();
-
-        /** The ids dropped because their precondition no longer held. */
-        public final List<String> conflicted = new ArrayList<>();
-    }
-
-    /** One offline-capable write. */
-    public static final class SubmitOptions {
-        public final String functionPath;
-        public final Object args;
-
-        /** Null routes to the default shard. */
-        public String shardKey;
-
-        /** The idempotency key; minted when null. */
-        public String mutationId;
-
-        /**
-         * The single-query shortcut: the transform is layered onto every subscription registered
-         * under the SAME (functionPath, args, shardKey) as this write, mirroring {@code
-         * @lunora/client}'s per-call {@code optimistic}.
-         */
-        public Optimistic.Transform optimistic;
-
-        /**
-         * The general form — it receives a {@link LocalStore} and may patch any number of
-         * subscribed queries. Both settle together, against the same commit cursor.
-         */
-        public BiConsumer<LocalStore, Object> optimisticUpdate;
-
-        /**
-         * Re-evaluated just before a QUEUED write replays; false drops it rather than replaying a
-         * write that can only fail.
-         */
-        public Supplier<Boolean> precondition;
-
-        /** Reports the eventual verdict on a queued write. */
-        public Consumer<MutationSettled> onSettled;
-
-        public SubmitOptions(String functionPath, Object args) {
-            this.functionPath = functionPath;
-            this.args = args;
-        }
-
-        public SubmitOptions shardKey(String shardKey) {
-            this.shardKey = shardKey;
-
-            return this;
-        }
-
-        public SubmitOptions optimistic(Optimistic.Transform optimistic) {
-            this.optimistic = optimistic;
-
-            return this;
-        }
-
-        public SubmitOptions optimisticUpdate(BiConsumer<LocalStore, Object> optimisticUpdate) {
-            this.optimisticUpdate = optimisticUpdate;
-
-            return this;
-        }
-
-        public SubmitOptions precondition(Supplier<Boolean> precondition) {
-            this.precondition = precondition;
-
-            return this;
-        }
-
-        public SubmitOptions onSettled(Consumer<MutationSettled> onSettled) {
-            this.onSettled = onSettled;
-
-            return this;
-        }
-    }
+    //
+    // The write path itself lives in {@link Submit}; what follows is the client-facing surface it
+    // hangs off, plus the two lookups it needs into the subscription registry.
 
     /**
      * Writes, sending it now or queueing it until the socket is back.
@@ -1059,55 +972,7 @@ public final class Client {
      * frame; a failed one rolls back.
      */
     public MutationOutcome submit(SubmitOptions options) {
-        List<BiConsumer<Long, List<Runnable>>> confirms;
-        List<Consumer<List<Runnable>>> rollbacks;
-        boolean queueIt;
-        String stamp;
-        OfflineQueue queue;
-        String issuingClientId;
-        List<Runnable> deferred = new ArrayList<>();
-
-        synchronized (lock) {
-            if (closed) {
-                throw new OfflineException(Offline.CLIENT_CLOSED, "client is closed");
-            }
-
-            LayerSettlers settlers = applyOptimistic(options, deferred);
-
-            confirms = settlers.confirms();
-            rollbacks = settlers.rollbacks();
-            queueIt = sender == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect);
-            stamp = identity;
-            queue = offlineQueue;
-            issuingClientId = clientId;
-        }
-
-        runDeferred(deferred);
-
-        String writeId = options.mutationId != null ? options.mutationId : Offline.randomId();
-
-        if (queueIt) {
-            enqueueWrite(queue, options, writeId, issuingClientId, stamp, confirms, rollbacks);
-
-            return new MutationOutcome(MutationStatus.QUEUED, writeId, null, null);
-        }
-
-        RpcReply reply;
-
-        try {
-            reply = rpcFull(options.functionPath, options.args, options.shardKey, writeId, null);
-        } catch (RuntimeException error) {
-            settleLayers(List.of(), rollbacks, null);
-
-            throw error;
-        }
-
-        // Confirmed against the write's COMMITTED cursor, so the overlay drops when (or once) a
-        // frame at that cursor lands — never on this call's return, which races the broadcast.
-        settleLayers(confirms, List.of(), reply.commitCursor());
-
-        return new MutationOutcome(
-                MutationStatus.COMMITTED, writeId, reply.result(), reply.commitCursor());
+        return Submit.submit(this, options);
     }
 
     /**
@@ -1117,20 +982,7 @@ public final class Client {
      * live caller, so its verdict arrives only through {@link #onMutationSettled}.
      */
     public List<String> hydrateOfflineQueue() {
-        OfflineQueue queue = offlineQueue();
-        OfflineQueue.Hydrated hydrated = queue.hydrate();
-
-        for (QueuedMutation item : queue.items()) {
-            if (item.resolve == null && item.reject == null) {
-                attachHydratedSettlers(item);
-            }
-        }
-
-        // Restored records the cap dropped never get settlers of their own, so they are reported
-        // directly rather than through one.
-        reportDiscarded(hydrated.evicted());
-
-        return hydrated.shardKeys();
+        return Submit.hydrate(this);
     }
 
     /**
@@ -1144,354 +996,75 @@ public final class Client {
      * re-queues that write and every unreplayed one, in order, for the next attempt.
      */
     public FlushReport flushOfflineQueue(String shardKey) {
-        FlushReport report = new FlushReport();
-        OfflineQueue queue;
-        String current;
-
-        synchronized (lock) {
-            queue = offlineQueue;
-            current = identity;
-        }
-
-        List<Offline.Discarded> conflicted = queue.drainConflict();
-
-        for (Offline.Discarded discarded : conflicted) {
-            queue.unpersist(discarded.entry().id);
-            report.conflicted.add(discarded.entry().id);
-            report.rejected.add(discarded.entry().id);
-        }
-
-        reportDiscarded(conflicted);
-
-        List<QueuedMutation> drained =
-                queue.drain(
-                        item ->
-                                shardKey == null
-                                        ? item.shardKey == null
-                                        : shardKey.equals(item.shardKey));
-
-        if (drained.isEmpty()) {
-            return report;
-        }
-
-        // Gated against ONE identity snapshot: a flush is a single authenticated burst, so every
-        // write in it necessarily runs under one identity.
-        List<QueuedMutation> sendable = new ArrayList<>();
-
-        for (QueuedMutation item : drained) {
-            if (Offline.identityAllowsReplay(item.identity, current)) {
-                sendable.add(item);
-
-                continue;
-            }
-
-            queue.unpersist(item.id);
-            report.rejected.add(item.id);
-            reportDiscarded(
-                    List.of(
-                            new Offline.Discarded(
-                                    item,
-                                    Offline.OFFLINE_IDENTITY_CHANGED,
-                                    "offline mutation skipped: auth identity changed before"
-                                            + " replay")));
-        }
-
-        replay(queue, sendable, report);
-
-        return report;
+        return Submit.flush(this, shardKey);
     }
 
-    private void replay(OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
-        for (int index = 0; index < sendable.size(); index++) {
-            QueuedMutation item = sendable.get(index);
-            RpcReply reply;
-
-            try {
-                reply =
-                        rpcFull(
-                                item.functionPath,
-                                item.args,
-                                item.shardKey,
-                                item.id,
-                                item.clientId);
-            } catch (RuntimeException error) {
-                if (!isTransient(error)) {
-                    queue.unpersist(item.id);
-                    settleRejected(item, error);
-                    report.rejected.add(item.id);
-
-                    continue;
-                }
-
-                // Nothing after this write may go out ahead of it: replaying out of order is how a
-                // durable queue corrupts the data it was protecting.
-                List<QueuedMutation> pending =
-                        new ArrayList<>(sendable.subList(index, sendable.size()));
-
-                queue.requeue(pending);
-
-                for (QueuedMutation entry : pending) {
-                    report.requeued.add(entry.id);
-                }
-
-                return;
-            }
-
-            queue.unpersist(item.id);
-            settleCommitted(item, reply.result(), reply.commitCursor());
-            report.committed.add(item.id);
-        }
-    }
+    /** One matching subscription's layer state, paired with the value it displays right now. */
+    record StateSnapshot(Optimistic.State state, Object value) {}
 
     /**
-     * Whether a failed replay may be retried rather than dropped.
-     *
-     * <p>A raw exception from the injected poster is the network, not the server: no verdict was
-     * reached, so the write is still good.
-     */
-    static boolean isTransient(RuntimeException error) {
-        if (error instanceof ApiException api) {
-            return Offline.TRANSIENT_ERROR_CODES.contains(api.code);
-        }
-
-        return !(error instanceof OfflineException);
-    }
-
-    /** The settle closures one write's optimistic layers produced. */
-    private record LayerSettlers(
-            List<BiConsumer<Long, List<Runnable>>> confirms,
-            List<Consumer<List<Runnable>>> rollbacks) {}
-
-    /** Registers both optimistic APIs' layers. Runs with the monitor held. */
-    private LayerSettlers applyOptimistic(SubmitOptions options, List<Runnable> deferred) {
-        List<BiConsumer<Long, List<Runnable>>> confirms = new ArrayList<>();
-        List<Consumer<List<Runnable>>> rollbacks = new ArrayList<>();
-
-        if (options.optimistic != null) {
-            for (Subscription entry :
-                    findSubscriptions(options.functionPath, options.args, options.shardKey)) {
-                Optimistic.Handle handle =
-                        Optimistic.applyLayer(entry.state, options.optimistic, deferred);
-
-                if (handle != null) {
-                    confirms.add(handle::confirm);
-                    rollbacks.add(handle::rollback);
-                }
-            }
-        }
-
-        if (options.optimisticUpdate == null) {
-            return new LayerSettlers(confirms, rollbacks);
-        }
-
-        LocalStore store =
-                new LocalStore(
-                        target ->
-                                findSubscriptions(
-                                                target.functionPath(),
-                                                target.args(),
-                                                options.shardKey)
-                                        .stream()
-                                        .map(entry -> entry.state)
-                                        .toList(),
-                        path -> matchingQueries(path, options.shardKey),
-                        deferred);
-
-        try {
-            options.optimisticUpdate.accept(store, options.args);
-            confirms.addAll(store.confirms);
-            rollbacks.addAll(store.rollbacks);
-        } catch (RuntimeException ignored) {
-            // A throwing update unwinds only its OWN writes, so the cache is left exactly as it was
-            // found, and the write itself proceeds.
-            Optimistic.rollbackAll(store.rollbacks, deferred);
-        }
-
-        return new LayerSettlers(confirms, rollbacks);
-    }
-
-    /**
-     * The live subscriptions registered under exactly this (path, args, shard).
+     * Every subscription registered under exactly this (path, args, shard), with what it displays.
      *
      * <p>A linear scan, unlike {@code @lunora/client}'s keyed registry, and deliberately: this
      * client does not de-duplicate subscriptions, so several can share one triple and all of them
      * must receive the overlay. The scan is over a handful of entries on the write path, never the
      * frame path.
+     *
+     * <p>The displayed value is read HERE, under the monitor, rather than by the caller afterwards:
+     * the write path runs a consumer's transform against it with the monitor released, and a value
+     * read outside would be torn against a concurrent frame rather than merely stale.
      */
-    private List<Subscription> findSubscriptions(
-            String functionPath, Object args, String shardKey) {
+    List<StateSnapshot> snapshotStates(String functionPath, Object args, String shardKey) {
         String argsKey =
                 Key.stableWireKey(args == null ? new LinkedHashMap<String, Object>() : args);
-        List<Subscription> matches = new ArrayList<>();
+        List<StateSnapshot> matches = new ArrayList<>();
 
-        for (Subscription entry : subscriptions.values()) {
-            if (entry.functionPath.equals(functionPath)
-                    && entry.argsKey.equals(argsKey)
-                    && java.util.Objects.equals(entry.shardKey, shardKey)) {
-                matches.add(entry);
+        synchronized (lock) {
+            for (Subscription entry : subscriptions.values()) {
+                if (entry.functionPath.equals(functionPath)
+                        && entry.argsKey.equals(argsKey)
+                        && Offline.sameShard(entry.shardKey, shardKey)) {
+                    matches.add(new StateSnapshot(entry.state, entry.state.lastValue));
+                }
             }
         }
 
         return matches;
     }
 
-    private List<QueryEntry> matchingQueries(String functionPath, String shardKey) {
+    /** Every subscribed query on {@code functionPath}, whatever args it was subscribed under. */
+    List<QueryEntry> matchingQueries(String functionPath, String shardKey) {
         List<QueryEntry> matches = new ArrayList<>();
 
-        for (Subscription entry : subscriptions.values()) {
-            if (entry.functionPath.equals(functionPath)
-                    && java.util.Objects.equals(entry.shardKey, shardKey)) {
-                matches.add(new QueryEntry(entry.args, entry.state.lastValue));
+        synchronized (lock) {
+            for (Subscription entry : subscriptions.values()) {
+                if (entry.functionPath.equals(functionPath)
+                        && Offline.sameShard(entry.shardKey, shardKey)) {
+                    matches.add(new QueryEntry(entry.args, entry.state.lastValue));
+                }
             }
         }
 
         return matches;
     }
 
-    private void enqueueWrite(
-            OfflineQueue queue,
-            SubmitOptions options,
-            String writeId,
-            String issuingClientId,
-            String stamp,
-            List<BiConsumer<Long, List<Runnable>>> confirms,
-            List<Consumer<List<Runnable>>> rollbacks) {
-        QueuedMutation entry =
-                new QueuedMutation(options.functionPath, options.args, options.shardKey, writeId);
-
-        entry.clientId = issuingClientId;
-        // Bound at enqueue time, so the write can only ever replay as whoever made it.
-        entry.identity = stamp == null ? Identity.signedOut() : Identity.of(stamp);
-        entry.liveAwaiter = true;
-        entry.precondition = options.precondition;
-        entry.onCommit = cursor -> settleLayers(confirms, List.of(), cursor);
-        entry.resolve =
-                value ->
-                        emitSettled(
-                                new MutationSettled(
-                                        writeId, MutationStatus.COMMITTED, value, null, true),
-                                options.onSettled);
-        entry.reject =
-                error -> {
-                    settleLayers(List.of(), rollbacks, null);
-                    emitSettled(
-                            new MutationSettled(
-                                    writeId, MutationStatus.REJECTED, null, error, true),
-                            options.onSettled);
-                };
-
-        List<Offline.Discarded> evicted;
-
-        // Safe under the monitor now that `enqueue` invokes no callback: it returns what the cap
-        // evicted instead, and those settle below.
-        synchronized (lock) {
-            evicted = queue.enqueue(entry);
-        }
-
-        reportDiscarded(evicted);
-    }
-
     /**
-     * Settles every write the queue let go of without sending it.
+     * The layered value behind one subscription id, or null when it is gone.
      *
-     * <p>Runs with the monitor RELEASED: a rejection rolls optimistic layers back, and a consumer's
-     * callback must never run inside the critical section that guards the subscription registry.
-     * Every discard path funnels through here, so an eviction can never drop a durable write in
-     * silence — which matters most for a hydrated record, whose original caller did not survive the
-     * restart.
+     * <p>Package-private, for the conformance suite: the tracked cursor and the pending-layer count
+     * are internal state with no consumer-facing accessor, and asserting on them is what holds the
+     * real frame handler to the shared fixture rather than a transcription of it.
      */
-    private void reportDiscarded(List<Offline.Discarded> discarded) {
-        for (Offline.Discarded item : discarded) {
-            settleRejected(item.entry(), item.error());
-        }
-    }
-
-    /** Gives a restored write the observer-only settlers it lost in the restart. */
-    private void attachHydratedSettlers(QueuedMutation item) {
-        String id = item.id;
-
-        item.liveAwaiter = false;
-        item.resolve =
-                value ->
-                        emitSettled(
-                                new MutationSettled(
-                                        id, MutationStatus.COMMITTED, value, null, false),
-                                null);
-        item.reject =
-                error ->
-                        emitSettled(
-                                new MutationSettled(
-                                        id, MutationStatus.REJECTED, null, error, false),
-                                null);
-    }
-
-    /**
-     * Confirms the overlay BEFORE the caller is told, so the gapless drop is already in place when
-     * the confirming frame lands.
-     */
-    private static void settleCommitted(QueuedMutation item, Object value, Long commitCursor) {
-        if (item.onCommit != null) {
-            item.onCommit.accept(commitCursor);
-        }
-
-        if (item.resolve != null) {
-            item.resolve.accept(value);
-        }
-    }
-
-    private static void settleRejected(QueuedMutation item, RuntimeException error) {
-        if (item.reject == null) {
-            return;
-        }
-
-        try {
-            item.reject.accept(error);
-        } catch (RuntimeException ignored) {
-            // A consumer's rejection handler throwing is not this client's failure.
-        }
-    }
-
-    /**
-     * Runs a write's confirms or rollbacks under the monitor and delivers the resulting
-     * notifications outside it.
-     */
-    private void settleLayers(
-            List<BiConsumer<Long, List<Runnable>>> confirms,
-            List<Consumer<List<Runnable>>> rollbacks,
-            Long commitCursor) {
-        List<Runnable> deferred = new ArrayList<>();
-
+    Optimistic.State subscriptionState(String id) {
         synchronized (lock) {
-            Optimistic.confirmAll(confirms, commitCursor, deferred);
-            Optimistic.rollbackAll(rollbacks, deferred);
-        }
+            Subscription entry = subscriptions.get(id);
 
-        runDeferred(deferred);
-    }
-
-    private void emitSettled(MutationSettled event, Consumer<MutationSettled> onSettled) {
-        List<Consumer<MutationSettled>> listeners = new ArrayList<>();
-
-        if (onSettled != null) {
-            listeners.add(onSettled);
-        }
-
-        synchronized (lock) {
-            listeners.addAll(settledListeners);
-        }
-
-        for (Consumer<MutationSettled> listener : listeners) {
-            try {
-                listener.accept(event);
-            } catch (RuntimeException ignored) {
-                // A write's terminal verdict is the only report a restored write ever produces, so
-                // one bad observer must not stop the rest being told.
-            }
+            return entry == null ? null : entry.state;
         }
     }
 
     /** Runs the notifications queued while the monitor was held. */
-    private static void runDeferred(List<Runnable> deferred) {
+    static void runDeferred(List<Runnable> deferred) {
         for (Runnable call : deferred) {
             call.run();
         }

@@ -79,6 +79,9 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_hydrates_persisted_writes": try caseOfflineQueueHydratesPersistedWrites()
             case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
             case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
+            case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
+            case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
+            case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -215,6 +218,17 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(apiError.message, testCase["message"] as? String)
             }
         }
+
+        commitCursorExcludesBooleans()
+    }
+
+    /// `NSNumber` bridges JSON `true` to `1`, so a peer sending a boolean cursor
+    /// would otherwise confirm every pending optimistic layer at cursor 1.
+    private func commitCursorExcludesBooleans() {
+        XCTAssertEqual(LunoraClient.parseCommitCursor(["commitCursor": 4]), 4)
+        XCTAssertNil(LunoraClient.parseCommitCursor(["commitCursor": true]))
+        XCTAssertNil(LunoraClient.parseCommitCursor(["commitCursor": "4"]))
+        XCTAssertNil(LunoraClient.parseCommitCursor([:]))
     }
 
     func caseNon2xxWithoutErrorEnvelopeThrows() {

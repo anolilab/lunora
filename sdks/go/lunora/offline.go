@@ -44,6 +44,9 @@ const (
 	CodeOfflineIdentityChanged = "OFFLINE_IDENTITY_CHANGED"
 	// CodeClientClosed marks a write still queued when the client was closed.
 	CodeClientClosed = "CLIENT_CLOSED"
+	// CodeOfflineWriteUnencodable marks a queued write whose arguments cannot be
+	// wire-encoded, so no replay of it can ever reach the server.
+	CodeOfflineWriteUnencodable = "OFFLINE_WRITE_UNENCODABLE"
 )
 
 // DefaultMaxQueuedMutations bounds the queue when no capacity is configured.
@@ -113,8 +116,7 @@ type PersistenceAdapter interface {
 // Returned rather than rejected in place, which is the whole point: the client
 // calls into this queue with its own mutex held (see OfflineQueue), and a
 // rejection handler rolls optimistic layers back — which needs that same mutex.
-// Invoking it here re-enters a sync.Mutex, which is not reentrant: it
-// self-deadlocked this port outright, and had the Ruby one swallow the verdict.
+// sync.Mutex is not reentrant, so invoking a rejection here deadlocks the caller.
 // The caller settles these once it has unlocked.
 type Discarded struct {
 	Entry   *QueuedMutation
@@ -144,17 +146,24 @@ type QueuedMutation struct {
 	Identity Identity
 	// LiveAwaiter is false for a write restored from storage after a restart —
 	// its original caller is gone, so the settle observer is the only report it
-	// will ever produce.
+	// will ever produce. Read straight into MutationSettled.HadAwaiter, never
+	// restated at the settle site, so the two cannot desync.
 	LiveAwaiter bool
 	// Precondition is evaluated just before replay; false drops the write instead
 	// of replaying one that can only fail (the row it edited was deleted while
-	// the client was offline).
+	// the client was offline). It is the CONSUMER's code, so the client evaluates
+	// it with its mutex released.
 	Precondition func() bool
 	// OnCommit fires on a successful replay with the echoed commit cursor, so a
 	// pending optimistic layer drops gaplessly once a frame reaches it.
 	OnCommit func(commitCursor *int64)
-	Resolve  func(value any)
-	Reject   func(err error)
+	// OnRollback unwinds the write's optimistic layers when it settles rejected.
+	OnRollback func()
+	// OnSettled is the per-write verdict handler the submitting caller supplied.
+	// Nil for a restored write, and nil is not "report nothing": the client's own
+	// settled listeners fire either way, which is what keeps an eviction from
+	// dropping a durable write in silence.
+	OnSettled func(MutationSettled)
 }
 
 // Record is the durable form. Callback fields are deliberately not persisted.
@@ -186,8 +195,9 @@ func (m *QueuedMutation) Record(version string) map[string]any {
 
 // mutationFromRecord rebuilds a queued write from durable storage.
 //
-// The restored entry carries no Resolve/Reject: the caller that submitted it did
-// not survive the restart. A missing identity key restores as absent (a legacy
+// The restored entry carries no OnSettled handler and no live awaiter: the
+// caller that submitted it did not survive the restart, so the client's own
+// settled listeners are its only report. A missing identity key restores as absent (a legacy
 // record); a stored null restores as signed out — the distinction the identity
 // gate turns on.
 func mutationFromRecord(record map[string]any) *QueuedMutation {
@@ -282,10 +292,12 @@ type OfflineQueueOptions struct {
 // gets built. Call these with the owning client's mutex held — which is what
 // Client does — or from one goroutine.
 //
-// Nothing here invokes a consumer's callback, which is what makes calling it
-// under that mutex safe: every method that lets go of a write RETURNS it as a
-// Discarded instead, and the client settles those once it has unlocked. See
-// Discarded for what the alternative cost.
+// Nothing here settles a write, which is what makes calling it under that mutex
+// safe: every method that lets go of one RETURNS it as a Discarded instead, and
+// the client settles those once it has unlocked. See Discarded for what the
+// alternative cost. The consumer code that does run under the lock is bounded to
+// the persistence adapter and OnSizeChange; the client evaluates a write's
+// Precondition BEFORE it takes the lock and drains on the verdict.
 type OfflineQueue struct {
 	options OfflineQueueOptions
 	items   []*QueuedMutation
@@ -456,38 +468,24 @@ func (q *OfflineQueue) Requeue(items []*QueuedMutation) {
 	q.notifySize()
 }
 
-// DrainConflict drops and returns the writes whose precondition no longer holds.
-// Run at the start of a flush to weed out writes whose assumptions died while the
-// client was offline; the admitted writes keep their FIFO order.
-func (q *OfflineQueue) DrainConflict() []Discarded {
-	var conflicted, kept []*QueuedMutation
-
-	for _, item := range q.items {
-		if item.Precondition != nil && !item.Precondition() {
-			conflicted = append(conflicted, item)
-		} else {
-			kept = append(kept, item)
-		}
-	}
-
-	if len(conflicted) == 0 {
+// DrainConflict drops and returns the writes whose precondition no longer holds,
+// named by id. Run at the start of a flush to weed out writes whose assumptions
+// died while the client was offline; the admitted writes keep their FIFO order.
+//
+// Verdicts in, not predicates: the precondition is the CONSUMER's code, so the
+// client evaluates it before taking its mutex and passes the ids here. Otherwise
+// this method — which mutates the queue, and so must run under that mutex — would
+// call back into consumer code inside the critical section.
+func (q *OfflineQueue) DrainConflict(staleIDs map[string]bool) []Discarded {
+	if len(staleIDs) == 0 {
 		return nil
 	}
 
-	q.items = kept
-	q.notifySize()
-
-	discarded := make([]Discarded, 0, len(conflicted))
-
-	for _, item := range conflicted {
-		discarded = append(discarded, Discarded{
-			Code:    CodeOfflinePreconditionFailed,
-			Entry:   item,
-			Message: "offline mutation skipped: precondition failed before replay",
-		})
-	}
-
-	return discarded
+	return discardAll(
+		q.Drain(func(item *QueuedMutation) bool { return staleIDs[item.ID] }),
+		CodeOfflinePreconditionFailed,
+		"offline mutation skipped: precondition failed before replay",
+	)
 }
 
 // Unpersist forgets one write's durable record, after it has terminally settled.
@@ -505,18 +503,15 @@ func (q *OfflineQueue) Unpersist(mutationID string) {
 // Durable storage is left INTACT on purpose: closing must not discard writes a
 // future session will restore. Use the adapter's own Clear to purge them.
 func (q *OfflineQueue) Clear() []Discarded {
-	drained := q.items
-	q.items = nil
-	q.notifySize()
+	return discardAll(q.Drain(nil), CodeClientClosed, "client closed with the write still queued")
+}
 
-	discarded := make([]Discarded, 0, len(drained))
+// discardAll stamps drained writes with the coded reason they were let go of.
+func discardAll(items []*QueuedMutation, code string, message string) []Discarded {
+	discarded := make([]Discarded, 0, len(items))
 
-	for _, item := range drained {
-		discarded = append(discarded, Discarded{
-			Code:    CodeClientClosed,
-			Entry:   item,
-			Message: "client closed with the write still queued",
-		})
+	for _, item := range items {
+		discarded = append(discarded, Discarded{Code: code, Entry: item, Message: message})
 	}
 
 	return discarded
@@ -530,20 +525,16 @@ func (q *OfflineQueue) Clear() []Discarded {
 // no live caller, so the caller reporting them is the only thing that keeps an
 // eviction from dropping a durable write in total silence.
 func (q *OfflineQueue) evictOverflow() []Discarded {
-	var evicted []Discarded
+	var dropped []*QueuedMutation
 
 	for len(q.items) > q.options.MaxItems {
-		dropped := q.items[0]
+		oldest := q.items[0]
 		q.items = q.items[1:]
-		q.Unpersist(dropped.ID)
-		evicted = append(evicted, Discarded{
-			Code:    CodeOfflineQueueOverflow,
-			Entry:   dropped,
-			Message: "offline queue overflow",
-		})
+		q.Unpersist(oldest.ID)
+		dropped = append(dropped, oldest)
 	}
 
-	return evicted
+	return discardAll(dropped, CodeOfflineQueueOverflow, "offline queue overflow")
 }
 
 func (q *OfflineQueue) report(operation string, err error, mutationID string) {

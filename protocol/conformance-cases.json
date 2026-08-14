@@ -53,6 +53,9 @@
         "offline_queue_precondition_drops_stale_write",
         "offline_queue_hydrates_persisted_writes",
         "offline_queue_identity_gate_rejects_replay",
-        "offline_flush_replays_and_confirms_optimistic"
+        "offline_flush_replays_and_confirms_optimistic",
+        "optimistic_cursorless_frame_preserves_cursor",
+        "offline_queue_hydrate_overflow_settles_discarded",
+        "offline_flush_unencodable_write_settles_terminal"
     ]
 }

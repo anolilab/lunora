@@ -14,15 +14,17 @@ use std::sync::{Arc, Mutex};
 
 use lunora::client::{Client, ClientError};
 use lunora::offline::{
-    identity_allows_replay, is_stale_version, random_id, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    identity_allows_replay, is_stale_version, random_id, same_shard, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNENCODABLE,
 };
-use lunora::optimistic::{apply_layer, confirm_layer, drop_confirmed_layers, fold, rollback_layer, OptimisticLayer, OptimisticState, Transform};
 use lunora::submit::{MutationStatus, SubmitOptions};
-use lunora::wire::{decode_wire, WireValue};
+use lunora::wire::{decode_wire, WireValue, MAX_DEPTH};
 use serde_json::{json, Value};
 
 use crate::fixture;
+
+/// The function path every case here subscribes and writes under.
+const FUNCTION: &str = "messages:list";
 
 /// One named scenario from the fixture's `optimistic` block.
 fn optimistic_case(name: &str) -> Value {
@@ -49,15 +51,15 @@ fn ids(value: &Value) -> Vec<String> {
         .collect()
 }
 
+/// A fixture count.
+fn count(value: &Value) -> u64 {
+    value.as_u64().expect("count")
+}
+
 /// The one transform primitive the fixtures use: push onto a COPY of the list.
 ///
 /// A copy, not an in-place push: a transform is re-run on every rebase, so one
 /// that mutated its input would compound its own effect on each server frame.
-fn appender(item: WireValue) -> Transform {
-    lunora::optimistic::shared(&shared_appender(item))
-}
-
-/// `appender` in the form [`SubmitOptions::with_optimistic`] takes.
 fn shared_appender(item: WireValue) -> lunora::optimistic::SharedTransform {
     Arc::new(move |current: &WireValue| {
         let mut next = match current {
@@ -71,118 +73,252 @@ fn shared_appender(item: WireValue) -> lunora::optimistic::SharedTransform {
     })
 }
 
-/// Applies one server `data` frame the way `Client::handle_frame` does.
-fn apply_frame(state: &mut OptimisticState, frame: &Value) {
-    state.server_base = wire(&frame["data"]);
-    state.server_cursor = frame["cursor"].as_i64();
-    drop_confirmed_layers(state, state.server_cursor);
-    state.last_value = fold(&state.server_base, &state.layers);
+/// The args every case here subscribes and writes under.
+fn args() -> WireValue {
+    WireValue::Object(Vec::new())
+}
+
+/// One `data` frame as the server sends it, from a fixture's `{ data, cursor? }`.
+///
+/// A frame with no `cursor` key stays cursorless: it is protocol-legal, and the
+/// point of the `cursorlessFrame` case.
+fn frame(id: &str, spec: &Value) -> String {
+    let mut built = json!({ "data": spec["data"], "id": id, "type": "data" });
+
+    if let Some(cursor) = spec.get("cursor") {
+        built["cursor"] = cursor.clone();
+    }
+
+    built.to_string()
+}
+
+/// A client whose poster answers every write with `body`, subscribed to
+/// [`FUNCTION`], with the values delivered to that subscription recorded.
+///
+/// Every optimistic case below drives this — the REAL `Client::handle_frame` and
+/// the real write path — rather than a transcription of the frame handler. A
+/// transcribed one asserts what the test believes the client does; this asserts
+/// what it does. No network is involved: the poster and the frame sender are
+/// injected, which is the whole reason they are.
+fn recording_client(body: Value) -> (Client, String, Arc<Mutex<Vec<WireValue>>>) {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, _body| Ok((200, serde_json::to_vec(&body).expect("body"))))),
+    );
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let id = client.subscribe(
+        FUNCTION,
+        args(),
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+
+    (client, id, seen)
+}
+
+/// [`recording_client`] with `base` already delivered as the authoritative value.
+fn primed(body: Value, base: &Value) -> (Client, String, Arc<Mutex<Vec<WireValue>>>) {
+    let (mut client, id, seen) = recording_client(body);
+
+    client.handle_frame(&frame(&id, &json!({ "cursor": 1, "data": base }))).expect("prime");
+
+    (client, id, seen)
+}
+
+/// The value most recently delivered to the subscription's handler.
+fn displayed(seen: &Arc<Mutex<Vec<WireValue>>>) -> WireValue {
+    seen.lock().expect("seen").last().cloned().expect("a delivered value")
+}
+
+/// How many optimistic layers are still pending on a subscription.
+fn layers(client: &Client, id: &str) -> u64 {
+    client.subscription_state(id).expect("subscription").layers.len() as u64
+}
+
+/// Queues one write carrying an appending optimistic transform.
+fn submit_appending(client: &mut Client, appended: WireValue) -> Result<lunora::submit::MutationOutcome, ClientError> {
+    client.submit(SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(appended)))
 }
 
 pub fn optimistic_layer_rebases_onto_server_frame() {
     let case = optimistic_case("rebase");
-    let mut state = OptimisticState::new(wire(&case["base"]));
+    let (mut client, id, seen) = primed(json!({ "result": null }), &case["base"]);
 
-    apply_layer(&mut state, appender(wire(&case["appended"]))).expect("layer applied");
+    // Queued rather than sent, so the layer is still pending when the frame
+    // lands — installed by the write path a consumer would use.
+    client.detach_socket();
 
-    assert_eq!(state.last_value, wire(&case["displayedAfterApply"]), "displayed after apply");
+    let outcome = submit_appending(&mut client, wire(&case["appended"])).expect("queued");
 
-    apply_frame(&mut state, &case["frame"]);
+    assert_eq!(outcome.status, MutationStatus::Queued);
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterApply"]), "displayed after apply");
+
+    client.handle_frame(&frame(&id, &case["frame"])).expect("frame");
 
     // The overlay survived the frame and was RE-FOLDED onto the new base, rather
     // than being clobbered by it.
-    assert_eq!(state.last_value, wire(&case["displayedAfterFrame"]), "displayed after frame");
-    assert_eq!(state.layers.len() as u64, case["layersAfterFrame"].as_u64().expect("count"));
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterFrame"]), "displayed after frame");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterFrame"]));
 
-    // A layer that declines the value it is handed is skipped by the fold, not
-    // fatal to it: one optimistic update that cannot apply must not blank the
-    // query for every other layer. Built directly, because `apply_layer` refuses
-    // a transform that declines on first application — this is the other case, a
-    // layer that worked once and declines on a later rebase.
-    let skipped = optimistic_case("throwingLayerSkipped");
-    let mut state = OptimisticState::new(wire(&skipped["base"]));
+    declining_layer_is_skipped();
+}
 
-    state.layers.push(OptimisticLayer::new(Box::new(|_current| None)));
-    apply_layer(&mut state, appender(wire(&skipped["appended"]))).expect("layer applied");
+/// A layer that declines the value it is handed is skipped by the fold, not fatal
+/// to it: one optimistic update that cannot apply must not blank the query for
+/// every other layer.
+///
+/// The declining layer is installed while the subscription still displays its
+/// pre-frame value and declines only once a list arrives, because `apply_layer`
+/// refuses a transform that declines on FIRST application — this is the other
+/// case, a layer that worked once and declines on a later rebase.
+fn declining_layer_is_skipped() {
+    let case = optimistic_case("throwingLayerSkipped");
+    let (mut client, id, seen) = recording_client(json!({ "result": null }));
 
-    assert_eq!(state.layers.len() as u64, skipped["layers"].as_u64().expect("count"));
-    state.last_value = fold(&state.server_base, &state.layers);
+    client.detach_socket();
+    client
+        .submit(
+            SubmitOptions::new(FUNCTION, args()).with_optimistic(Arc::new(|current: &WireValue| match current {
+                WireValue::Array(_) => None,
+                other => Some(other.clone()),
+            })),
+        )
+        .expect("queued");
+    client.handle_frame(&frame(&id, &json!({ "cursor": 1, "data": case["base"] }))).expect("frame");
+    submit_appending(&mut client, wire(&case["appended"])).expect("queued");
 
-    assert_eq!(state.last_value, wire(&skipped["displayed"]), "a declined layer is skipped");
+    assert_eq!(layers(&client, &id), count(&case["layers"]));
+    assert_eq!(displayed(&seen), wire(&case["displayed"]), "a declined layer is skipped");
 }
 
 pub fn optimistic_layer_drops_on_commit_cursor() {
     let case = optimistic_case("commitCursorDrop");
     let commit_cursor = case["commitCursor"].as_i64().expect("cursor");
-    let mut state = OptimisticState::new(wire(&case["base"]));
-    let layer_id = apply_layer(&mut state, appender(wire(&case["appended"]))).expect("layer applied");
+    let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["base"]);
+    let outcome = submit_appending(&mut client, wire(&case["appended"])).expect("committed");
 
-    confirm_layer(&mut state, layer_id, Some(commit_cursor));
-    apply_frame(&mut state, &case["belowFrame"]);
+    assert_eq!(outcome.status, MutationStatus::Committed);
+
+    client.handle_frame(&frame(&id, &case["belowFrame"])).expect("below frame");
 
     // Below the commit cursor: the write is NOT in the server base yet, so
     // dropping the overlay here would blink the value away and back.
-    assert_eq!(state.last_value, wire(&case["displayedAfterBelowFrame"]), "below the commit cursor");
-    assert_eq!(state.layers.len() as u64, case["layersAfterBelowFrame"].as_u64().expect("count"));
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterBelowFrame"]), "below the commit cursor");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterBelowFrame"]));
 
-    apply_frame(&mut state, &case["atFrame"]);
+    client.handle_frame(&frame(&id, &case["atFrame"])).expect("at frame");
 
     // The frame reached the commit cursor: the effect is in the base, so the
     // overlay drops without the value ever double-counting it.
-    assert_eq!(state.last_value, wire(&case["displayedAfterAtFrame"]), "at the commit cursor");
-    assert_eq!(state.layers.len() as u64, case["layersAfterAtFrame"].as_u64().expect("count"));
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterAtFrame"]), "at the commit cursor");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterAtFrame"]));
 
-    // CDC off on this shard: no cursor to gate on, so the layer goes but the
-    // display does not revert — the write DID commit.
-    let without = optimistic_case("confirmWithoutCursor");
-    let mut state = OptimisticState::new(wire(&without["base"]));
-    let layer_id = apply_layer(&mut state, appender(wire(&without["appended"]))).expect("layer applied");
+    confirm_without_a_cursor();
+    confirm_after_the_frame_arrived(&case, commit_cursor);
+}
 
-    confirm_layer(&mut state, layer_id, None);
+/// CDC off on this shard: no cursor to gate on, so the layer goes but the display
+/// does not revert — the write DID commit.
+fn confirm_without_a_cursor() {
+    let case = optimistic_case("confirmWithoutCursor");
+    let (mut client, id, seen) = primed(json!({ "result": { "ok": true } }), &case["base"]);
 
-    assert_eq!(state.last_value, wire(&without["displayedAfterConfirm"]), "confirm with no cursor");
-    assert_eq!(state.layers.len() as u64, without["layersAfterConfirm"].as_u64().expect("count"));
+    submit_appending(&mut client, wire(&case["appended"])).expect("committed");
 
-    // The confirming frame beat the RPC response — the common race. The overlay
-    // must drop on confirm rather than linger until the next frame.
-    let mut state = OptimisticState::new(wire(&case["atFrame"]["data"]));
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterConfirm"]), "confirm with no cursor");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterConfirm"]));
+}
 
-    state.server_cursor = case["atFrame"]["cursor"].as_i64();
+/// The confirming frame beat the RPC response — the common race. The overlay must
+/// drop on confirm rather than linger until the next frame.
+fn confirm_after_the_frame_arrived(case: &Value, commit_cursor: i64) {
+    let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["atFrame"]["data"]);
 
-    let layer_id = apply_layer(&mut state, appender(WireValue::String("x".into()))).expect("layer applied");
+    client.handle_frame(&frame(&id, &case["atFrame"])).expect("at frame");
+    submit_appending(&mut client, WireValue::String("x".into())).expect("committed");
 
-    confirm_layer(&mut state, layer_id, Some(commit_cursor));
-
-    assert!(state.layers.is_empty(), "a cursor already reached drops the layer now");
-    assert_eq!(state.last_value, wire(&case["atFrame"]["data"]), "displayed reverts to the base");
+    assert_eq!(layers(&client, &id), 0, "a cursor already reached drops the layer now");
+    assert_eq!(displayed(&seen), wire(&case["atFrame"]["data"]), "displayed reverts to the base");
 }
 
 pub fn optimistic_layer_rolls_back_on_failure() {
     let case = optimistic_case("rollback");
-    let mut state = OptimisticState::new(wire(&case["base"]));
-    let layer_id = apply_layer(&mut state, appender(wire(&case["appended"]))).expect("layer applied");
+    let (mut client, id, seen) = primed(json!({ "error": { "code": "NOT_FOUND", "message": "gone" } }), &case["base"]);
+    let failed = submit_appending(&mut client, wire(&case["appended"]));
 
-    rollback_layer(&mut state, layer_id);
+    assert!(matches!(failed, Err(ClientError::Api(_))), "the verdict reaches the caller");
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterRollback"]), "displayed after rollback");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterRollback"]));
 
-    assert_eq!(state.last_value, wire(&case["displayedAfterRollback"]), "displayed after rollback");
-    assert_eq!(state.layers.len() as u64, case["layersAfterRollback"].as_u64().expect("count"));
+    constant_layer_masks_the_frame();
+}
 
-    // A constant layer is an absolute override: while pending it re-clamps and
-    // HIDES the concurrent server change rather than merging with it.
-    let mask = optimistic_case("constantMask");
-    let mut state = OptimisticState::new(wire(&mask["base"]));
-    let value = wire(&mask["value"]);
-    let layer_id = apply_layer(&mut state, lunora::optimistic::constant(value)).expect("layer applied");
+/// A constant layer is an absolute override: while pending it re-clamps and HIDES
+/// the concurrent server change rather than merging with it.
+fn constant_layer_masks_the_frame() {
+    let case = optimistic_case("constantMask");
+    let (mut client, id, seen) = primed(json!({ "error": { "code": "NOT_FOUND", "message": "gone" } }), &case["base"]);
 
-    assert_eq!(state.last_value, wire(&mask["displayedAfterApply"]), "displayed after set");
+    client.detach_socket();
+    client
+        .submit(SubmitOptions::new(FUNCTION, args()).with_optimistic_query(FUNCTION, args(), wire(&case["value"])))
+        .expect("queued");
 
-    apply_frame(&mut state, &mask["frame"]);
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterApply"]), "displayed after set");
 
-    assert_eq!(state.last_value, wire(&mask["displayedAfterFrame"]), "the override masks the frame");
+    client.handle_frame(&frame(&id, &case["frame"])).expect("frame");
 
-    rollback_layer(&mut state, layer_id);
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterFrame"]), "the override masks the frame");
 
-    assert_eq!(state.last_value, wire(&mask["displayedAfterRollback"]), "displayed after rollback");
+    // The replay's coded verdict is terminal, which is what takes the override
+    // down — the same path a failed write takes.
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.rejected.len(), 1, "the coded verdict is terminal");
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterRollback"]), "displayed after rollback");
+    assert_eq!(layers(&client, &id), 0);
+}
+
+/// `cursor` is OPTIONAL on a data frame, and one that omits it must leave the
+/// tracked cursor where it was.
+///
+/// Nulling it strands every pending layer: the tracked cursor is what a write's
+/// commit cursor is compared against, so the confirm that should drop the overlay
+/// keeps it and the row renders twice until some later cursored frame lands.
+pub fn optimistic_cursorless_frame_preserves_cursor() {
+    let case = optimistic_case("cursorlessFrame");
+    let commit_cursor = case["commitCursor"].as_i64().expect("cursor");
+    let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["base"]);
+
+    client.detach_socket();
+    submit_appending(&mut client, wire(&case["appended"])).expect("queued");
+    client.handle_frame(&frame(&id, &case["cursoredFrame"])).expect("cursored frame");
+    client.handle_frame(&frame(&id, &case["cursorlessFrame"])).expect("cursorless frame");
+
+    assert_eq!(
+        client.subscription_state(&id).expect("subscription").server_cursor,
+        case["cursorAfterCursorlessFrame"].as_i64(),
+        "the cursorless frame left the tracked cursor alone"
+    );
+    assert_eq!(
+        displayed(&seen),
+        wire(&case["displayedAfterCursorlessFrame"]),
+        "the overlay re-folded onto the new base"
+    );
+    assert_eq!(layers(&client, &id), count(&case["layersAfterCursorlessFrame"]));
+
+    client.attach_socket(Box::new(|_frame| {}));
+    client.flush_offline_queue(None);
+
+    // With the cursor preserved the commit cursor has already been reached, so
+    // the overlay drops on confirm. Nulled, it never can.
+    assert_eq!(layers(&client, &id), count(&case["layersAfterConfirm"]));
 }
 
 /// A persistence adapter that records every call.
@@ -272,7 +408,7 @@ pub fn offline_queue_fifo_and_shard_drain() {
     queue.on_size_change = Some(Box::new(move |size| observer.lock().expect("sizes").push(size)));
 
     for id in ids(&case["enqueue"]) {
-        queue.enqueue(entry(&id, None), json!({}));
+        queue.enqueue(entry(&id, None), Ok(json!({})));
     }
 
     assert_eq!(queue.size() as u64, case["sizeAfterEnqueue"].as_u64().expect("count"));
@@ -290,11 +426,18 @@ pub fn offline_queue_fifo_and_shard_drain() {
     let mut queue = OfflineQueue::new();
 
     for spec in shard["entries"].as_array().expect("entries") {
-        queue.enqueue(entry(spec["id"].as_str().expect("id"), spec["shardKey"].as_str()), json!({}));
+        queue.enqueue(entry(spec["id"].as_str().expect("id"), spec["shardKey"].as_str()), Ok(json!({})));
     }
 
-    let target = shard["drainShardKey"].as_str().map(str::to_string);
-    let drained: Vec<String> = queue.drain(|item| item.shard_key == target).into_iter().map(|item| item.id).collect();
+    // `same_shard`, not `==`: an absent shard key and an empty one are the SAME
+    // shard, so `m5` below drains with the null-shard writes. This is the
+    // predicate `Client::flush_offline_queue` uses.
+    let target = shard["drainShardKey"].as_str();
+    let drained: Vec<String> = queue
+        .drain(|item| same_shard(item.shard_key.as_deref(), target))
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
 
     assert_eq!(drained, ids(&shard["drained"]), "one shard's writes drained");
     assert_eq!(queued_ids(&queue), ids(&shard["remaining"]), "the rest stay queued in order");
@@ -306,7 +449,7 @@ pub fn offline_queue_fifo_and_shard_drain() {
     let mut queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
 
     for id in ids(&requeue["enqueue"]) {
-        queue.enqueue(entry(&id, None), json!({}));
+        queue.enqueue(entry(&id, None), Ok(json!({})));
     }
 
     let wanted = ids(&requeue["requeued"]);
@@ -327,7 +470,7 @@ pub fn offline_queue_overflow_evicts_oldest() {
     let mut evicted = Vec::new();
 
     for id in ids(&case["enqueue"]) {
-        for discarded in queue.enqueue(entry(&id, None), json!({})) {
+        for discarded in queue.enqueue(entry(&id, None), Ok(json!({}))) {
             assert_eq!(discarded.code, CODE_OFFLINE_QUEUE_OVERFLOW, "the eviction is coded");
             evicted.push(discarded.entry.id);
         }
@@ -345,7 +488,7 @@ pub fn offline_queue_overflow_evicts_oldest() {
     let enqueued = ids(&clear["enqueue"]);
 
     for id in &enqueued {
-        queue.enqueue(entry(id, None), json!({}));
+        queue.enqueue(entry(id, None), Ok(json!({})));
     }
 
     let discarded = queue.clear();
@@ -356,19 +499,27 @@ pub fn offline_queue_overflow_evicts_oldest() {
     assert_eq!(store.records(), enqueued.len(), "the durable records survive the close");
 }
 
-pub fn offline_queue_precondition_drops_stale_write() {
-    let case = queue_case("precondition");
-    let mut queue = OfflineQueue::new();
-
+/// Queues the fixture's entries, each carrying its verdict as a precondition.
+fn queue_precondition_entries(queue: &mut OfflineQueue, case: &Value) {
     for spec in case["entries"].as_array().expect("entries") {
         let verdict = spec["precondition"].as_bool().expect("verdict");
         let mut item = entry(spec["id"].as_str().expect("id"), None);
 
         item.precondition = Some(Box::new(move || verdict));
-        queue.enqueue(item, json!({}));
+        queue.enqueue(item, Ok(json!({})));
     }
+}
 
-    let conflicted = queue.drain_conflict();
+pub fn offline_queue_precondition_drops_stale_write() {
+    let case = queue_case("precondition");
+    let mut queue = OfflineQueue::new();
+
+    queue_precondition_entries(&mut queue, &case);
+
+    // The queue takes the VERDICTS, not the predicates — the consumer's code runs
+    // outside it, in the client, exactly as in the other six ports.
+    let stale: std::collections::HashSet<String> = ids(&case["conflicted"]).into_iter().collect();
+    let conflicted = queue.drain_conflict(&stale);
 
     assert_eq!(
         conflicted.iter().map(|item| item.entry.id.clone()).collect::<Vec<_>>(),
@@ -377,6 +528,34 @@ pub fn offline_queue_precondition_drops_stale_write() {
     );
     assert!(conflicted.iter().all(|item| item.code == CODE_OFFLINE_PRECONDITION_FAILED));
     assert_eq!(queued_ids(&queue), ids(&case["remaining"]), "the valid writes keep their order");
+
+    client_evaluates_the_preconditions(&case);
+}
+
+/// The flush is what calls each `precondition` and hands the queue the ids that
+/// failed, so a stale write never reaches the wire.
+fn client_evaluates_the_preconditions(case: &Value) {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&sent);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, _body| {
+            recorder
+                .lock()
+                .expect("sent")
+                .push(headers.get("x-lunora-mutation-id").cloned().unwrap_or_default());
+
+            Ok((200, br#"{"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+
+    queue_precondition_entries(&mut client.offline_queue, case);
+
+    let report = client.flush_offline_queue(None);
+
+    assert_eq!(report.conflicted, ids(&case["conflicted"]), "the stale write is dropped by the flush");
+    assert_eq!(*sent.lock().expect("sent"), ids(&case["remaining"]), "and never reaches the wire");
+    assert_eq!(report.committed, ids(&case["remaining"]));
 }
 
 /// A fixture's `persisted` list, as durable records.
@@ -398,7 +577,7 @@ pub fn offline_queue_hydrates_persisted_writes() {
 
     // Submitted during the boot window, BEFORE the durable load returns.
     for id in ids(&case["liveEnqueue"]) {
-        queue.enqueue(entry(&id, None), json!({}));
+        queue.enqueue(entry(&id, None), Ok(json!({})));
     }
 
     let (mut shard_keys, evicted) = queue.hydrate(|raw| decode_wire(raw).unwrap_or(WireValue::Null)).expect("hydrate");
@@ -457,6 +636,15 @@ pub fn offline_queue_hydrates_persisted_writes() {
     let minted: std::collections::HashSet<String> = (0..2000).map(|_| random_id()).collect();
 
     assert_eq!(minted.len(), 2000, "minted ids must not collide");
+
+    // The client id is minted per INSTANCE for the same reason: the shard
+    // namespaces an anonymous write's idempotency row by it, so a per-language
+    // constant would let one client's mutation id suppress another client's write.
+    assert_ne!(
+        Client::new("https://app.example", None).client_id,
+        Client::new("https://app.example", None).client_id,
+        "each client mints its own id"
+    );
 }
 
 pub fn offline_queue_identity_gate_rejects_replay() {
@@ -496,7 +684,7 @@ pub fn offline_queue_identity_gate_rejects_replay() {
     let mut queued = entry("m1", None);
 
     queued.identity = Some(Some("user-a".to_string()));
-    client.offline_queue.enqueue(queued, json!({}));
+    client.offline_queue.enqueue(queued, Ok(json!({})));
 
     let settled = Arc::new(Mutex::new(Vec::new()));
     let observer = Arc::clone(&settled);
@@ -560,7 +748,7 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
         let mut item = entry(&id, None);
 
         item.client_id = Some("client-1".to_string());
-        client.offline_queue.enqueue(item, json!({}));
+        client.offline_queue.enqueue(item, Ok(json!({})));
     }
 
     let report = client.flush_offline_queue(None);
@@ -578,8 +766,196 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
 
     submit_queues_while_offline(case["confirmedCommitCursor"].as_i64().expect("cursor"));
     submit_before_first_connect_fails_fast();
-    submit_rolls_back_a_rejected_write();
     overflow_during_submit_settles();
+}
+
+/// Args the wire codec cannot encode: nested past its depth cap.
+///
+/// The one deterministic encode failure this codec has, and the shape of every
+/// other port's: a value the caller can construct and the wire cannot carry.
+fn unencodable_args() -> WireValue {
+    let mut nested = WireValue::String("leaf".into());
+
+    for _ in 0..(MAX_DEPTH + 2) {
+        nested = WireValue::Array(vec![nested]);
+    }
+
+    nested
+}
+
+/// A queued write whose args cannot be encoded settles TERMINALLY on the first
+/// flush instead of looping forever.
+///
+/// A codec error carries no code, so the transient rule ("anything uncoded is a
+/// blip, re-queue it") would retry it on every reconnect: never settling its
+/// caller, never rolling back its overlay, and blocking every write behind it in
+/// the FIFO. It must also never have been persisted as a substitute value — a
+/// record holding `args: null` hydrates after a restart as a write that replays
+/// SUCCESSFULLY with the wrong arguments.
+pub fn offline_flush_unencodable_write_settles_terminal() {
+    let case = queue_case("unencodableWrite");
+    let unencodable = ids(&case["unencodable"]);
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&sent);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, headers, _body| {
+            recorder.lock().expect("sent").push((
+                headers.get("x-lunora-mutation-id").cloned().unwrap_or_default(),
+                headers.get("x-lunora-client-id").cloned().unwrap_or_default(),
+            ));
+
+            Ok((200, br#"{"commitCursor":4,"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+
+    let persistence_errors = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&persistence_errors);
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&settled);
+
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+    client.offline_queue.on_persistence_error = Some(Box::new(move |operation, _error, mutation_id| {
+        observer
+            .lock()
+            .expect("errors")
+            .push((operation.to_string(), mutation_id.unwrap_or_default().to_string()));
+    }));
+    client.on_mutation_settled(Box::new(move |event| {
+        recorder.lock().expect("settled").push((
+            event.mutation_id.clone(),
+            event.status,
+            event.error.as_ref().map(|error| error.code.clone()).unwrap_or_default(),
+        ));
+    }));
+
+    // Connected once, then offline, so the writes queue rather than fail fast.
+    client.attach_socket(Box::new(|_frame| {}));
+    client.detach_socket();
+
+    for id in ids(&case["queued"]) {
+        let mut options = SubmitOptions::new(
+            "messages:send",
+            if unencodable.contains(&id) {
+                unencodable_args()
+            } else {
+                WireValue::Object(Vec::new())
+            },
+        );
+
+        options.mutation_id = Some(id);
+        client.submit(options).expect("queued");
+    }
+
+    // Reported as the durable append it prevented, and never written: a record
+    // that cannot hold the real args must hold nothing.
+    assert_eq!(
+        *persistence_errors.lock().expect("errors"),
+        unencodable.iter().map(|id| ("append".to_string(), id.clone())).collect::<Vec<_>>(),
+        "the unencodable write's failed append is reported"
+    );
+    assert_eq!(
+        store.appended(),
+        ids(&case["queued"]).len() - unencodable.len(),
+        "and no substitute record was persisted"
+    );
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let report = client.flush_offline_queue(None);
+
+    // The replay carries this INSTANCE's client id, which is what the shard
+    // namespaces the idempotency row by — a per-language constant there would let
+    // two anonymous clients collide on a caller-supplied mutation id.
+    assert_eq!(
+        *sent.lock().expect("sent"),
+        ids(&case["mutationIdHeaders"])
+            .into_iter()
+            .map(|id| (id, client.client_id.clone()))
+            .collect::<Vec<_>>(),
+        "only the encodable write is replayed, under this client's id"
+    );
+    assert_eq!(report.rejected, ids(&case["rejected"]));
+    assert_eq!(report.committed, ids(&case["committed"]));
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&case["queuedAfterFlush"]),
+        "nothing loops back into the queue"
+    );
+    assert_eq!(store.removed(), ids(&case["persistRemoveCalls"]));
+    assert_eq!(
+        *settled.lock().expect("settled"),
+        vec![
+            (
+                unencodable[0].clone(),
+                MutationStatus::Rejected,
+                case["code"].as_str().expect("code").to_string()
+            ),
+            (ids(&case["committed"])[0].clone(), MutationStatus::Committed, String::new()),
+        ],
+        "the unencodable write settles terminally, with the documented code"
+    );
+    assert_eq!(case["code"].as_str(), Some(CODE_OFFLINE_WRITE_UNENCODABLE));
+}
+
+/// A hydrated write evicted on overflow reports through the CLIENT.
+///
+/// It has no live caller to reject — the process that submitted it is gone — so a
+/// client that reported a discard only through the entry's own handler would
+/// un-persist a durable write and tell nobody. The client-level settled listener
+/// hears it regardless, stamped `had_awaiter: false` so a consumer can tell a
+/// restored write's only report from a live caller's second one.
+pub fn offline_queue_hydrate_overflow_settles_discarded() {
+    let case = queue_case("hydrateOverflow");
+    let store = MemoryStore::seeded(persisted_records(&case));
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&settled);
+    let mut client = Client::new("https://app.example", None);
+
+    client.offline_queue = OfflineQueue::new()
+        .with_max_items(case["maxItems"].as_u64().expect("cap") as usize)
+        .with_persistence(Box::new(store.clone()))
+        .with_version(case["version"].as_str().expect("version"));
+    client.on_mutation_settled(Box::new(move |event| {
+        observer.lock().expect("settled").push((
+            event.mutation_id.clone(),
+            event.status,
+            event.error.as_ref().map(|error| error.code.clone()).unwrap_or_default(),
+            event.had_awaiter,
+        ));
+    }));
+
+    let shard_keys = client.hydrate_offline_queue().expect("hydrate");
+
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&case["queuedAfterHydrate"]),
+        "hydration respects the cap"
+    );
+    assert_eq!(
+        shard_keys,
+        case["shardKeys"]
+            .as_array()
+            .expect("shard keys")
+            .iter()
+            .map(|entry| entry.as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        *settled.lock().expect("settled"),
+        ids(&case["settledFromClient"])
+            .into_iter()
+            .map(|id| (
+                id,
+                MutationStatus::Rejected,
+                case["settledCode"].as_str().expect("code").to_string(),
+                case["settledHadAwaiter"].as_bool().expect("awaiter")
+            ))
+            .collect::<Vec<_>>(),
+        "the evicted durable write reaches the client-level listener"
+    );
+    assert_eq!(store.removed(), ids(&case["evicted"]), "and it is un-persisted");
 }
 
 /// An eviction raised from inside `submit` settles exactly once.
@@ -698,36 +1074,4 @@ fn submit_before_first_connect_fails_fast() {
 
     assert_eq!(outcome.status, MutationStatus::Queued);
     assert_eq!(client.pending_mutation_count(), 1);
-}
-
-/// A rejected write takes its optimistic overlay down with it.
-fn submit_rolls_back_a_rejected_write() {
-    let mut client = Client::new(
-        "https://app.example",
-        Some(Box::new(|_url, _headers, _body| {
-            Ok((200, br#"{"error":{"code":"NOT_FOUND","message":"gone"}}"#.to_vec()))
-        })),
-    );
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let observer = Arc::clone(&seen);
-
-    client.attach_socket(Box::new(|_frame| {}));
-    client.subscribe(
-        "messages:list",
-        WireValue::Object(Vec::new()),
-        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
-        None,
-    );
-    client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
-
-    let failed =
-        client.submit(SubmitOptions::new("messages:list", WireValue::Object(Vec::new())).with_optimistic(shared_appender(WireValue::String("c".into()))));
-
-    assert!(matches!(failed, Err(ClientError::Api(_))), "the verdict reaches the caller");
-    assert_eq!(
-        seen.lock().expect("seen").last(),
-        Some(&WireValue::Array(vec![WireValue::String("a".into())])),
-        "and the overlay is gone"
-    );
 }

@@ -43,8 +43,21 @@ module Lunora
   # The terminal verdict on a queued write, once it replays.
   #
   # +had_awaiter+ is false for a write restored from durable storage: the caller
-  # that submitted it is gone, so this event is the ONLY report it produces.
+  # that submitted it is gone, so this event is the ONLY report it produces. It
+  # is always read from the entry's +live_awaiter+ rather than restated at the
+  # settle site, so the two cannot drift apart.
   MutationSettled = Struct.new(:mutation_id, :status, :value, :error, :had_awaiter, keyword_init: true)
+
+  # Everything +Client#submit+ was asked to do with one write.
+  #
+  # A struct rather than a parameter list threaded through three private methods:
+  # a new option is then one field here instead of three signature edits, and the
+  # write path reads the same in every port.
+  SubmitOptions = Struct.new(
+    :function_path, :args, :shard_key, :mutation_id, :optimistic,
+    :optimistic_update, :precondition, :on_settled,
+    keyword_init: true
+  )
 
   # What one +Client#flush_offline_queue+ pass achieved: the ids the server
   # accepted, the ids dropped on a verdict/identity change/stale precondition,
@@ -56,11 +69,18 @@ module Lunora
 
   module_function
 
-  # Build the POST /_lunora/rpc body. +shard_key+ is omitted when nil, which
-  # routes to the default shard.
+  # Build the POST /_lunora/rpc body. +shard_key+ is omitted when nil OR empty,
+  # which routes to the default shard.
+  #
+  # Empty is omitted rather than sent: the runtime treats an empty string as a
+  # valid NAMED shard with its own Durable Object, while this client treats it as
+  # the default one (+same_shard?+). Sending it would flush a write on the
+  # default shard's socket and then replay it against a different shard from the
+  # subscription its optimistic overlay updated.
   def build_rpc_body(function_path, args = nil, shard_key = nil)
     body = { "args" => encode_wire(args.nil? ? {} : args), "functionPath" => function_path }
-    body["shardKey"] = shard_key unless shard_key.nil?
+    key = normalize_shard_key(shard_key)
+    body["shardKey"] = key unless key.nil?
     body
   end
 
@@ -147,11 +167,21 @@ module Lunora
     # The durable write queue backing +submit+.
     attr_accessor :offline_queue
 
-    def initialize(url, http_post: nil, auth_token: nil, client_id: "ruby-client", offline_queue: nil, identity: nil)
+    # +client_id+ defaults to a FRESH id per client instance, and must: the shard
+    # namespaces an anonymous caller's idempotency rows by it
+    # (+anon:<clientId>+), so a per-language constant would put every
+    # unauthenticated user of this SDK in one key space — two of them submitting
+    # the same caller-supplied +mutation_id+ and the second write silently
+    # short-circuits to the first user's cached result.
+    #
+    # Pin one when the queue is DURABLE: a write replays under the id that issued
+    # it, which is persisted with the record, and a stable per-device id is what
+    # keeps a restarted client's de-duplication namespace the one it wrote under.
+    def initialize(url, http_post: nil, auth_token: nil, client_id: nil, offline_queue: nil, identity: nil)
       @url = url
       @http_post = http_post
       @auth_token = auth_token
-      @client_id = client_id
+      @client_id = client_id || Lunora.random_id
       @offline_queue = offline_queue || OfflineQueue.new
       @identity = identity
       @send = nil
@@ -199,13 +229,13 @@ module Lunora
     # Reject every queued write so no caller waits on a dead client. Durable
     # storage is untouched: the next session restores those writes.
     def close
-      queue = @mutex.synchronize do
+      discarded = @mutex.synchronize do
         @closed = true
         @send = nil
-        @offline_queue
+        @offline_queue.clear
       end
 
-      report_discarded(queue.clear)
+      report_discarded(discarded)
     end
 
     def query(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
@@ -331,26 +361,47 @@ module Lunora
     # Returns as soon as the write is either committed or durably queued.
     def submit(function_path, args = nil, shard_key: nil, mutation_id: nil, optimistic: nil,
                optimistic_update: nil, precondition: nil, on_settled: nil)
-      raise OfflineError.new(CLIENT_CLOSED, "client is closed") if @mutex.synchronize { @closed }
+      options = SubmitOptions.new(
+        args: args, function_path: function_path, mutation_id: mutation_id || Lunora.random_id,
+        on_settled: on_settled, optimistic: optimistic, optimistic_update: optimistic_update,
+        precondition: precondition, shard_key: shard_key
+      )
 
-      write_id = mutation_id || Lunora.random_id
+      # The consumer's transforms run with the lock RELEASED. Mutex is not
+      # reentrant, so one that touches the client it was handed — another submit,
+      # +pending_mutation_count+, +identity+ — would otherwise deadlock its own
+      # thread.
+      planned = plan_optimistic(options)
       deferred = []
+      entry = nil
 
-      confirms, rollbacks, queue_it, identity, queue = @mutex.synchronize do
-        settlers = apply_optimistic(function_path, args, shard_key, optimistic, optimistic_update, deferred)
-        [settlers[0], settlers[1], @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect),
-         @identity, @offline_queue]
+      confirms, rollbacks, evicted = @mutex.synchronize do
+        # Checked here rather than on the way in, so a close cannot land between
+        # the check and the enqueue and strand the write in a queue that was just
+        # emptied.
+        raise OfflineError.new(CLIENT_CLOSED, "client is closed") if @closed
+
+        handles = Optimistic.install(planned, deferred)
+        confirmers = handles.map { |handle| handle.method(:confirm) }
+        rollbackers = handles.map { |handle| handle.method(:rollback) }
+
+        # ONE critical section for the offline decision AND the enqueue: a socket
+        # that attaches between the two carries its flush past this write, which
+        # then sits in a queue nothing will drain until the next disconnect —
+        # after +submit+ has already answered "queued".
+        next [confirmers, rollbackers, []] unless @send.nil? && (@was_ever_connected || @offline_queue.queue_before_first_connect)
+
+        entry = queued_write(options, confirmers, rollbackers)
+        [confirmers, rollbackers, @offline_queue.enqueue(entry)]
       end
 
       deferred.each(&:call)
+      report_discarded(evicted)
 
-      if queue_it
-        enqueue_write(queue, function_path, args, shard_key, write_id, identity, precondition, confirms, rollbacks, on_settled)
-        return MutationOutcome.new(mutation_id: write_id, status: :queued)
-      end
+      return MutationOutcome.new(mutation_id: options.mutation_id, status: :queued) unless entry.nil?
 
       begin
-        value, commit_cursor = rpc_full(function_path, args, shard_key, write_id)
+        value, commit_cursor = rpc_full(options.function_path, options.args, options.shard_key, options.mutation_id)
       rescue StandardError
         settle_layers([], rollbacks, nil)
         raise
@@ -361,24 +412,19 @@ module Lunora
       # which races the socket broadcast.
       settle_layers(confirms, [], commit_cursor)
 
-      MutationOutcome.new(commit_cursor: commit_cursor, mutation_id: write_id, status: :committed, value: value)
+      MutationOutcome.new(commit_cursor: commit_cursor, mutation_id: options.mutation_id, status: :committed, value: value)
     end
 
     # Restore writes persisted in a prior session; returns their shard keys.
     #
     # Open a socket for each returned key and flush it to replay them. A restored
     # write has no live caller, so its verdict arrives only through
-    # +on_mutation_settled+.
+    # +on_mutation_settled+ — including one the capacity cap drops here, which is
+    # why the eviction is reported rather than left to a per-entry handler a
+    # restored record does not have.
     def hydrate_offline_queue
-      queue = @mutex.synchronize { @offline_queue }
-      restored, evicted = queue.hydrate
+      restored, evicted = @mutex.synchronize { @offline_queue.hydrate }
 
-      queue.items.each do |item|
-        attach_hydrated_settlers(item) if item.on_resolve.nil? && item.on_reject.nil?
-      end
-
-      # Restored records the cap dropped never get settlers of their own, so they
-      # are reported directly rather than through one.
       report_discarded(evicted)
 
       restored
@@ -394,24 +440,31 @@ module Lunora
     # a transient failure — a raw transport error, or one of
     # TRANSIENT_ERROR_CODES — stops the flush and re-queues that write and every
     # unreplayed one, in order, for the next attempt.
+    #
+    # A queued write whose args cannot be wire-encoded is settled terminally
+    # first: a codec failure is deterministic, so classifying it as transient
+    # would re-queue it on every reconnect forever, never settling its caller,
+    # never rolling its overlay back, and — since a requeue goes to the FRONT —
+    # blocking every write behind it in the FIFO.
     def flush_offline_queue(shard_key = nil)
       report = FlushReport.empty
       queue, current_identity = @mutex.synchronize { [@offline_queue, @identity] }
 
-      conflicted = queue.drain_conflict
+      conflicted = drain_conflicted(queue)
 
+      @mutex.synchronize { conflicted.each { |discarded| queue.unpersist(discarded.entry.id) } }
       conflicted.each do |discarded|
-        queue.unpersist(discarded.entry.id)
         report.conflicted << discarded.entry.id
         report.rejected << discarded.entry.id
       end
-
       report_discarded(conflicted)
 
-      drained = queue.drain { |item| item.shard_key == shard_key }
+      drained = @mutex.synchronize { queue.drain { |item| Lunora.same_shard?(item.shard_key, shard_key) } }
       return report if drained.empty?
 
-      replay(queue, gate_identity(queue, drained, current_identity, report), report)
+      gated = gate_identity(queue, drained, current_identity, report)
+
+      replay(queue, encodable(queue, gated, report), report)
     end
 
     private
@@ -586,9 +639,13 @@ module Lunora
 
     # The socket URL: the origin with its scheme swapped, plus the shard and
     # credential query parameters when present.
+    #
+    # An empty shard key is omitted, for the reason +build_rpc_body+ gives: to
+    # the runtime it names its own shard, to this client it is the default one.
     def ws_url(shard_key = nil, token = nil)
       endpoint = join_url(WS_PATH).sub(%r{\Ahttps://}, "wss://").sub(%r{\Ahttp://}, "ws://")
       params = []
+      shard_key = Lunora.normalize_shard_key(shard_key)
       params << "shard=#{URI.encode_www_form_component(shard_key)}" unless shard_key.nil?
       params << "token=#{URI.encode_www_form_component(token)}" unless token.nil?
       return endpoint if params.empty?
@@ -600,6 +657,18 @@ module Lunora
 
     # --- Offline-capable writes ------------------------------------------
 
+    # Drop the queued writes whose precondition no longer holds.
+    #
+    # The predicates are the CONSUMER's, so they are evaluated with the lock
+    # RELEASED; only the drain that acts on their verdicts runs under it.
+    def drain_conflicted(queue)
+      pending = @mutex.synchronize { queue.items }
+      failed = pending.select { |item| !item.precondition.nil? && !item.precondition.call }
+      return [] if failed.empty?
+
+      @mutex.synchronize { queue.drain_conflict(failed.map(&:id)) }
+    end
+
     # Partition already-drained writes by the identity gate, rejecting the ones
     # stamped under another identity.
     #
@@ -609,12 +678,32 @@ module Lunora
       drained.select do |item|
         next true if Lunora.identity_allows_replay?(item.identity, current_identity)
 
-        queue.unpersist(item.id)
-        settle_rejected(item, OfflineError.new(OFFLINE_IDENTITY_CHANGED,
-                                               "offline mutation skipped: auth identity changed before replay"))
-        report.rejected << item.id
+        settle_terminal(queue, item, OfflineError.new(OFFLINE_IDENTITY_CHANGED,
+                                                      "offline mutation skipped: auth identity changed before replay"), report)
         false
       end
+    end
+
+    # Partition already-gated writes into the encodable ones (returned) and
+    # settle the rest terminally. Encoding is cheap and the flush is the slow
+    # reconnect path, so it is checked BEFORE the replay loop rather than being
+    # discovered as an uncoded — and so transient-looking — mid-flush raise.
+    def encodable(queue, gated, report)
+      gated.select do |item|
+        failure = encoding_failure(item)
+        next true if failure.nil?
+
+        settle_terminal(queue, item, failure, report)
+        false
+      end
+    end
+
+    # The coded error a write's args settle with, or nil when they encode.
+    def encoding_failure(item)
+      Lunora.encode_wire(item.args.nil? ? {} : item.args)
+      nil
+    rescue WireFormatError => e
+      OfflineError.new(OFFLINE_WRITE_UNENCODABLE, "offline mutation dropped: its args cannot be wire-encoded (#{e.message})")
     end
 
     def replay(queue, sendable, report)
@@ -623,26 +712,31 @@ module Lunora
           value, commit_cursor = rpc_full(item.function_path, item.args, item.shard_key, item.id, item.client_id)
         rescue StandardError => e
           unless transient?(e)
-            queue.unpersist(item.id)
-            settle_rejected(item, e)
-            report.rejected << item.id
+            settle_terminal(queue, item, e, report)
             next
           end
 
           # Nothing after this write may go out ahead of it: replaying out of
           # order is how a durable queue corrupts the data it was protecting.
           pending = sendable[index..]
-          queue.requeue(pending)
+          @mutex.synchronize { queue.requeue(pending) }
           report.requeued.concat(pending.map(&:id))
           return report
         end
 
-        queue.unpersist(item.id)
+        @mutex.synchronize { queue.unpersist(item.id) }
         settle_committed(item, value, commit_cursor)
         report.committed << item.id
       end
 
       report
+    end
+
+    # Forget a write's durable record under the lock, then settle it outside one.
+    def settle_terminal(queue, item, error, report)
+      @mutex.synchronize { queue.unpersist(item.id) }
+      settle_rejected(item, error)
+      report.rejected << item.id
     end
 
     # Whether a failed replay may be retried rather than dropped.
@@ -655,40 +749,36 @@ module Lunora
       true
     end
 
-    # Register both optimistic APIs' layers. Runs with the lock held.
-    def apply_optimistic(function_path, args, shard_key, optimistic, optimistic_update, deferred)
-      confirms = []
-      rollbacks = []
+    # Run both optimistic APIs' CONSUMER code and return the layers to install.
+    #
+    # Runs with the lock RELEASED, and takes it only for the short registry reads
+    # the store performs: a transform or an +optimistic_update+ that touches the
+    # client it was handed must not deadlock on a non-reentrant Mutex.
+    def plan_optimistic(options)
+      planned = []
 
-      unless optimistic.nil?
-        find_states(function_path, args, shard_key).each do |state|
-          handle = Optimistic.apply_layer(state, optimistic, deferred)
-          next if handle.nil?
-
-          confirms << handle.method(:confirm)
-          rollbacks << handle.method(:rollback)
-        end
+      unless options.optimistic.nil?
+        states = @mutex.synchronize { find_states(options.function_path, options.args, options.shard_key) }
+        planned.concat(Optimistic.plan_all(states, options.optimistic))
       end
 
-      return [confirms, rollbacks] if optimistic_update.nil?
+      return planned if options.optimistic_update.nil?
 
       store = Optimistic::LocalStore.new(
-        ->(path, query_args) { find_states(path, query_args, shard_key) },
-        ->(path) { matching_queries(path, shard_key) },
-        deferred
+        ->(path, query_args) { @mutex.synchronize { find_states(path, query_args, options.shard_key) } },
+        ->(path) { @mutex.synchronize { matching_queries(path, options.shard_key) } }
       )
 
       begin
-        optimistic_update.call(store, args)
-        confirms.concat(store.confirms)
-        rollbacks.concat(store.rollbacks)
+        options.optimistic_update.call(store, options.args)
+        planned.concat(store.planned)
       rescue StandardError
-        # A raising update unwinds only its OWN writes, so the cache is left
-        # exactly as it was found, and the write itself proceeds.
-        Optimistic.rollback_all(store.rollbacks, deferred)
+        # A raising update installs NOTHING — its writes were only planned — so
+        # the cache is left exactly as it was found and the write itself proceeds.
+        nil
       end
 
-      [confirms, rollbacks]
+      planned
     end
 
     # The live subscriptions registered under exactly this (path, args, shard).
@@ -700,61 +790,54 @@ module Lunora
     def find_states(function_path, args, shard_key)
       args_key = Lunora.stable_wire_key(args.nil? ? {} : args)
       matches = @subscriptions.each_value.select do |entry|
-        entry[:function_path] == function_path && entry[:args_key] == args_key && entry[:shard_key] == shard_key
+        entry[:function_path] == function_path && entry[:args_key] == args_key &&
+          Lunora.same_shard?(entry[:shard_key], shard_key)
       end
 
       matches.map { |entry| entry[:state] }
     end
 
     def matching_queries(function_path, shard_key)
-      matches = @subscriptions.each_value.select { |entry| entry[:function_path] == function_path && entry[:shard_key] == shard_key }
+      matches = @subscriptions.each_value.select do |entry|
+        entry[:function_path] == function_path && Lunora.same_shard?(entry[:shard_key], shard_key)
+      end
 
       matches.map { |entry| [entry[:args], entry[:state].last_value] }
     end
 
-    def enqueue_write(queue, function_path, args, shard_key, write_id, identity, precondition, confirms, rollbacks, on_settled)
-      entry = QueuedMutation.new(
-        args: args,
+    # The durable form of a write, built under the lock so its identity stamp and
+    # the enqueue that follows cannot straddle a sign-in.
+    def queued_write(options, confirms, rollbacks)
+      QueuedMutation.new(
+        args: options.args,
         client_id: @client_id,
-        function_path: function_path,
-        id: write_id,
+        confirms: confirms,
+        function_path: options.function_path,
+        id: options.mutation_id,
         # Bound at enqueue time, so the write can only ever replay as whoever
         # made it.
-        identity: identity,
+        identity: @identity,
         live_awaiter: true,
-        on_commit: ->(commit_cursor) { settle_layers(confirms, [], commit_cursor) },
-        precondition: precondition,
-        on_reject: lambda { |error|
-          settle_layers([], rollbacks, nil)
-          emit_settled(MutationSettled.new(error: error, had_awaiter: true, mutation_id: write_id, status: :rejected), on_settled)
-        },
-        on_resolve: lambda { |value|
-          emit_settled(MutationSettled.new(had_awaiter: true, mutation_id: write_id, status: :committed, value: value), on_settled)
-        },
-        shard_key: shard_key
+        on_settled: options.on_settled,
+        precondition: options.precondition,
+        rollbacks: rollbacks,
+        shard_key: options.shard_key
       )
-
-      # Safe under the lock now that +enqueue+ invokes no callback: it returns what
-      # the cap evicted instead, and those settle below.
-      report_discarded(@mutex.synchronize { queue.enqueue(entry) })
-    end
-
-    # Give a restored write the observer-only settlers it lost in the restart.
-    def attach_hydrated_settlers(item)
-      id = item.id
-      item.live_awaiter = false
-      item.on_reject = ->(error) { emit_settled(MutationSettled.new(error: error, mutation_id: id, status: :rejected), nil) }
-      item.on_resolve = ->(value) { emit_settled(MutationSettled.new(mutation_id: id, status: :committed, value: value), nil) }
     end
 
     # Confirm the overlay BEFORE the caller is told, so the gapless drop is
     # already in place when the confirming frame lands.
     def settle_committed(item, value, commit_cursor)
-      item.on_commit&.call(commit_cursor)
-      item.on_resolve&.call(value)
+      settle_layers(item.confirms || [], [], commit_cursor)
+      emit_settled(MutationSettled.new(had_awaiter: item.awaited?, mutation_id: item.id, status: :committed, value: value),
+                   item.on_settled)
     end
 
-    def settle_rejected(item, error) = item.on_reject&.call(error)
+    def settle_rejected(item, error)
+      settle_layers([], item.rollbacks || [], nil)
+      emit_settled(MutationSettled.new(error: error, had_awaiter: item.awaited?, mutation_id: item.id, status: :rejected),
+                   item.on_settled)
+    end
 
     # Settle every write the queue let go of without sending it.
     #
@@ -762,7 +845,7 @@ module Lunora
     # re-acquires it, and Ruby's Mutex is not reentrant. Every discard path funnels
     # through here, so an eviction can never drop a durable write in silence —
     # which matters most for a hydrated record, whose original caller did not
-    # survive the restart.
+    # survive the restart and which therefore has no per-entry handler at all.
     def report_discarded(discarded)
       discarded.each { |item| settle_rejected(item.entry, item.error) }
     end

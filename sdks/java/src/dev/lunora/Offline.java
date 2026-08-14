@@ -51,6 +51,27 @@ public final class Offline {
     public static final String CLIENT_CLOSED = "CLIENT_CLOSED";
 
     /**
+     * The write's arguments cannot be wire-encoded, so it can never succeed.
+     *
+     * <p>Terminal, deliberately. A codec failure carries no server code, so the transient rule
+     * ("anything uncoded is a transport blip, re-queue it") would replay the write on every
+     * reconnect forever — never settling its caller, never rolling its overlay back, and blocking
+     * every write behind it in the FIFO.
+     */
+    public static final String OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE";
+
+    /**
+     * Whether two shard keys name the same shard: an ABSENT key and an EMPTY one do.
+     *
+     * <p>A consumer that submits with {@code shardKey: ""} means the default shard, the same one
+     * {@code null} names. Comparing the two strictly queues the write under a shard nothing ever
+     * flushes, and points its optimistic overlay at a subscription that does not exist.
+     */
+    public static boolean sameShard(String left, String right) {
+        return (left == null ? "" : left).equals(right == null ? "" : right);
+    }
+
+    /**
      * The coded errors a replay must NOT treat as the server's final word.
      *
      * <p>The shard was momentarily unreachable, so the identical call under the same idempotency
@@ -170,8 +191,14 @@ public final class Offline {
         public Identity identity = Identity.absent();
 
         /**
-         * False for a write restored from storage after a restart — its original caller is gone, so
-         * the settle observer is the only report it will ever produce.
+         * Whether a live caller is waiting on this write. False by default, which is exactly right
+         * for one restored from storage after a restart — its original caller is gone, so the
+         * client-level settle observer is the only report it will ever produce.
+         *
+         * <p>Read at the settle site and stamped onto the {@link Submit.MutationSettled} event, so
+         * a consumer can tell a restored write's only report from a live caller's second one. It is
+         * the single source of that truth: restating it as a literal inside a settle closure is how
+         * the two copies desync.
          */
         public boolean liveAwaiter;
 
@@ -187,8 +214,18 @@ public final class Offline {
          */
         public Consumer<Long> onCommit;
 
-        public Consumer<Object> resolve;
+        /**
+         * Takes this write's optimistic overlay back down when it settles as a rejection. Null for
+         * a restored write, which has no overlay: the session that displayed one is gone.
+         */
         public Consumer<RuntimeException> reject;
+
+        /**
+         * The submitting caller's per-write settle handler, carried as data rather than baked into
+         * a closure so the terminal event is built once, at the settle site, from the entry's own
+         * fields. Null for a restored write.
+         */
+        public Consumer<Submit.MutationSettled> onSettled;
 
         public QueuedMutation(String functionPath, Object args, String shardKey, String id) {
             this.args = args;
@@ -513,18 +550,15 @@ public final class Offline {
          * admitted writes keep their FIFO order.
          */
         public List<Discarded> drainConflict() {
-            List<Discarded> conflicted = new ArrayList<>();
-
-            for (QueuedMutation item :
-                    drain(item -> item.precondition != null && !item.precondition.get())) {
-                conflicted.add(
-                        new Discarded(
-                                item,
-                                OFFLINE_PRECONDITION_FAILED,
-                                "offline mutation skipped: precondition failed before replay"));
-            }
-
-            return conflicted;
+            return drain(item -> item.precondition != null && !item.precondition.get()).stream()
+                    .map(
+                            item ->
+                                    new Discarded(
+                                            item,
+                                            OFFLINE_PRECONDITION_FAILED,
+                                            "offline mutation skipped: precondition failed before"
+                                                    + " replay"))
+                    .toList();
         }
 
         /** Forgets one write's durable record, after it has terminally settled. */
@@ -544,18 +578,14 @@ public final class Offline {
          * session will restore. Use the adapter's own {@code clear} to purge them.
          */
         public List<Discarded> clear() {
-            List<Discarded> discarded = new ArrayList<>();
-
-            for (QueuedMutation item : new ArrayList<>(items)) {
-                discarded.add(
-                        new Discarded(
-                                item, CLIENT_CLOSED, "client closed with the write still queued"));
-            }
-
-            items.clear();
-            notifySize();
-
-            return discarded;
+            return drain(null).stream()
+                    .map(
+                            item ->
+                                    new Discarded(
+                                            item,
+                                            CLIENT_CLOSED,
+                                            "client closed with the write still queued"))
+                    .toList();
         }
 
         /**

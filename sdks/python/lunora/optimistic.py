@@ -198,25 +198,30 @@ class OptimisticLocalStore:
     """Read/write handle over the client's live query cache.
 
     Handed to a mutation's ``optimistic_update`` callback so a single write can
-    patch MANY subscribed queries at once. Each :meth:`set_query` registers a
+    patch MANY subscribed queries at once. Each :meth:`set_query` becomes a
     constant layer through the same engine the single-query path uses, so the
     whole batch rebases onto incoming deltas and settles together — confirmed on
     the mutation's commit cursor, or rolled back on failure.
+
+    It RECORDS the overrides in :attr:`writes` rather than installing them. The
+    callback is the consumer's own code and is handed this store, so it may well
+    read the client back (``pending_mutation_count``, ``online``); running it
+    inside the client's non-reentrant critical section would deadlock the calling
+    thread. The client therefore runs the callback unlocked and installs what
+    came back under the lock.
     """
 
-    __slots__ = ("_deferred", "_find", "_matching", "confirms", "rollbacks")
+    __slots__ = ("_find", "_matching", "writes")
 
     def __init__(
         self,
         find: Callable[[str, Any], list],
         matching: Callable[[str], list],
-        deferred: Deferred,
     ) -> None:
         self._find = find
         self._matching = matching
-        self._deferred = deferred
-        self.confirms: list = []
-        self.rollbacks: list = []
+        #: The recorded ``(subscription, value)`` overrides, in call order.
+        self.writes: list = []
 
     def get_query(self, function_path: str, args: Any = None) -> Any:
         """Current cached value for a subscribed query, or ``None`` if not subscribed.
@@ -225,7 +230,8 @@ class OptimisticLocalStore:
         """
 
         matches = self._find(function_path, args)
-        return matches[0].last_value if matches else None
+
+        return self._pending(matches[0]) if matches else None
 
     def get_all_queries(self, function_path: str) -> list:
         """Every loaded subscription on ``function_path`` as ``(args, value)`` pairs.
@@ -234,7 +240,7 @@ class OptimisticLocalStore:
         channels, all filters) without enumerating their args up front.
         """
 
-        return [(sub.args, sub.last_value) for sub in self._matching(function_path)]
+        return [(sub.args, self._pending(sub)) for sub in self._matching(function_path)]
 
     def set_query(self, function_path: str, args: Any, value: Any) -> None:
         """Write an optimistic override for a subscribed query.
@@ -244,10 +250,16 @@ class OptimisticLocalStore:
         """
 
         for sub in self._find(function_path, args):
-            handle = apply_optimistic_layer(sub, lambda _current, held=value: held, self._deferred)
-            if handle is not None:
-                self.confirms.append(handle.confirm)
-                self.rollbacks.append(handle.rollback)
+            self.writes.append((sub, value))
+
+    def _pending(self, sub: Any) -> Any:
+        """This batch's own override for ``sub``, or the displayed value."""
+
+        for target, value in reversed(self.writes):
+            if target is sub:
+                return value
+
+        return sub.last_value
 
 
 def confirm_all(confirms: list, commit_cursor: Optional[int], deferred: Deferred) -> None:

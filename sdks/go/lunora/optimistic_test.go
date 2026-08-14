@@ -6,27 +6,11 @@ package lunora
 // each documenting its own behaviour.
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
 )
-
-// optimisticFixture is one named scenario from the fixture's `optimistic` block.
-func optimisticFixture(t *testing.T, name string) map[string]any {
-	t.Helper()
-
-	block, ok := loadFixture(t, "offline-optimistic.json")["optimistic"].(map[string]any)
-	if !ok {
-		t.Fatalf("offline-optimistic.json has no optimistic block")
-	}
-
-	scenario, ok := block[name].(map[string]any)
-	if !ok {
-		t.Fatalf("offline-optimistic.json has no optimistic scenario %q", name)
-	}
-
-	return scenario
-}
 
 // appender is the one transform primitive the fixtures use: push onto a COPY of
 // the list it is handed.
@@ -41,27 +25,58 @@ func appender(item any) Transform {
 	}
 }
 
-// applyFrame applies one server data frame the way Client.HandleFrame does.
-func applyFrame(state *OptimisticState, frame map[string]any, deferred *[]func()) {
-	state.ServerBase = frame["data"]
-	state.ServerCursor = asCursor(frame["cursor"])
-	DropConfirmedLayers(state, state.ServerCursor)
-	NotifySubscription(state, FoldOptimistic(state.ServerBase, state.Layers), deferred)
-}
-
 func newState(base any) *OptimisticState {
 	return &OptimisticState{LastValue: base, ServerBase: base}
+}
+
+// subscribedState opens a live subscription on a network-free client and returns
+// the client's OWN optimistic state for it, plus the values its handler saw.
+//
+// Every frame below then goes through Client.HandleFrame. A hand-copied
+// transcription of that handler's data branch is what these cases used to drive,
+// which is why a production cursor bug sat under three conformance names that
+// claimed to cover it.
+func subscribedState(t *testing.T, base any) (*Client, *OptimisticState, *[]any) {
+	t.Helper()
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	seen := &[]any{}
+
+	client.Subscribe("messages:list", map[string]any{}, func(value any) { *seen = append(*seen, value) }, nil, "")
+
+	entry := client.subscriptions["sub_1"]
+	entry.state.LastValue = base
+	entry.state.ServerBase = base
+
+	return client, &entry.state, seen
+}
+
+// deliverFrame sends one fixture frame to the client's real frame handler.
+func deliverFrame(t *testing.T, client *Client, frame map[string]any) {
+	t.Helper()
+
+	payload := map[string]any{"id": "sub_1", "type": "data"}
+	for key, value := range frame {
+		payload[key] = value
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal frame: %v", err)
+	}
+
+	if _, err := client.HandleFrame(raw); err != nil {
+		t.Fatalf("handle frame: %v", err)
+	}
 }
 
 func TestOptimisticLayerRebasesOntoServerFrame(t *testing.T) {
 	covers("optimistic_layer_rebases_onto_server_frame")
 
-	scenario := optimisticFixture(t, "rebase")
-
-	var seen []any
-
-	state := newState(scenario["base"])
-	state.Callbacks = []func(any){func(value any) { seen = append(seen, value) }}
+	scenario := fixtureScenario(t, "optimistic", "rebase")
+	client, state, seen := subscribedState(t, scenario["base"])
 
 	var deferred []func()
 
@@ -72,10 +87,8 @@ func TestOptimisticLayerRebasesOntoServerFrame(t *testing.T) {
 		t.Fatalf("after apply: got %v, want %v", state.LastValue, scenario["displayedAfterApply"])
 	}
 
-	deferred = nil
 	frame, _ := scenario["frame"].(map[string]any)
-	applyFrame(state, frame, &deferred)
-	runDeferred(deferred)
+	deliverFrame(t, client, frame)
 
 	// The overlay survived the frame and was RE-FOLDED onto the new base, rather
 	// than being clobbered by it.
@@ -87,15 +100,66 @@ func TestOptimisticLayerRebasesOntoServerFrame(t *testing.T) {
 		t.Fatalf("layers after frame: got %d, want %d", len(state.Layers), want)
 	}
 
-	if len(seen) == 0 || !reflect.DeepEqual(seen[len(seen)-1], scenario["displayedAfterFrame"]) {
-		t.Fatalf("handler saw %v, want %v last", seen, scenario["displayedAfterFrame"])
+	if len(*seen) == 0 || !reflect.DeepEqual((*seen)[len(*seen)-1], scenario["displayedAfterFrame"]) {
+		t.Fatalf("handler saw %v, want %v last", *seen, scenario["displayedAfterFrame"])
+	}
+}
+
+// TestOptimisticCursorlessFrameKeepsTheTrackedCursor covers the protocol's
+// OPTIONAL `cursor`: a frame without one must leave the tracked cursor alone.
+//
+// Nulling it strands every pending layer — the tracked cursor is what a later
+// commitCursor is compared against, so the confirm that should drop the overlay
+// keeps it and the write renders twice until some later cursored frame lands.
+func TestOptimisticCursorlessFrameKeepsTheTrackedCursor(t *testing.T) {
+	covers("optimistic_cursorless_frame_preserves_cursor")
+
+	scenario := fixtureScenario(t, "optimistic", "cursorlessFrame")
+	client, state, _ := subscribedState(t, scenario["base"])
+
+	var deferred []func()
+
+	handle := ApplyOptimisticLayer(state, appender(scenario["appended"]), &deferred)
+	runDeferred(deferred)
+
+	cursored, _ := scenario["cursoredFrame"].(map[string]any)
+	deliverFrame(t, client, cursored)
+
+	cursorless, _ := scenario["cursorlessFrame"].(map[string]any)
+	deliverFrame(t, client, cursorless)
+
+	want := int64(scenario["cursorAfterCursorlessFrame"].(float64))
+	if state.ServerCursor == nil || *state.ServerCursor != want {
+		t.Fatalf("tracked cursor: got %v, want %d", state.ServerCursor, want)
+	}
+
+	if !reflect.DeepEqual(state.LastValue, scenario["displayedAfterCursorlessFrame"]) {
+		t.Fatalf("displayed: got %v, want %v", state.LastValue, scenario["displayedAfterCursorlessFrame"])
+	}
+
+	if want := int(scenario["layersAfterCursorlessFrame"].(float64)); len(state.Layers) != want {
+		t.Fatalf("layers after the cursorless frame: got %d, want %d", len(state.Layers), want)
+	}
+
+	// The write commits at a cursor the tracked one has already reached, so the
+	// overlay drops on confirm — which it cannot do against a nulled cursor.
+	deferred = nil
+	commitCursor := int64(scenario["commitCursor"].(float64))
+
+	client.mu.Lock()
+	handle.Confirm(&commitCursor, &deferred)
+	client.mu.Unlock()
+	runDeferred(deferred)
+
+	if want := int(scenario["layersAfterConfirm"].(float64)); len(state.Layers) != want {
+		t.Fatalf("layers after confirm: got %d, want %d", len(state.Layers), want)
 	}
 }
 
 func TestOptimisticThrowingLayerIsSkipped(t *testing.T) {
 	covers("optimistic_layer_rebases_onto_server_frame")
 
-	scenario := optimisticFixture(t, "throwingLayerSkipped")
+	scenario := fixtureScenario(t, "optimistic", "throwingLayerSkipped")
 	state := newState(scenario["base"])
 
 	// Registered directly rather than through ApplyOptimisticLayer, which refuses
@@ -123,8 +187,8 @@ func TestOptimisticThrowingLayerIsSkipped(t *testing.T) {
 func TestOptimisticLayerDropsOnCommitCursor(t *testing.T) {
 	covers("optimistic_layer_drops_on_commit_cursor")
 
-	scenario := optimisticFixture(t, "commitCursorDrop")
-	state := newState(scenario["base"])
+	scenario := fixtureScenario(t, "optimistic", "commitCursorDrop")
+	client, state, _ := subscribedState(t, scenario["base"])
 	commitCursor := int64(scenario["commitCursor"].(float64))
 
 	var deferred []func()
@@ -133,10 +197,8 @@ func TestOptimisticLayerDropsOnCommitCursor(t *testing.T) {
 	handle.Confirm(&commitCursor, &deferred)
 	runDeferred(deferred)
 
-	deferred = nil
 	below, _ := scenario["belowFrame"].(map[string]any)
-	applyFrame(state, below, &deferred)
-	runDeferred(deferred)
+	deliverFrame(t, client, below)
 
 	// Below the commit cursor: the write is NOT in the server base yet, so
 	// dropping the overlay here would blink the value away and back.
@@ -148,10 +210,8 @@ func TestOptimisticLayerDropsOnCommitCursor(t *testing.T) {
 		t.Fatalf("layers below cursor: got %d, want %d", len(state.Layers), want)
 	}
 
-	deferred = nil
 	at, _ := scenario["atFrame"].(map[string]any)
-	applyFrame(state, at, &deferred)
-	runDeferred(deferred)
+	deliverFrame(t, client, at)
 
 	// The frame reached the commit cursor: the effect is in the base, so the
 	// overlay drops without the value ever double-counting it.
@@ -167,7 +227,7 @@ func TestOptimisticLayerDropsOnCommitCursor(t *testing.T) {
 func TestOptimisticConfirmWithoutCursorDoesNotRevert(t *testing.T) {
 	covers("optimistic_layer_drops_on_commit_cursor")
 
-	scenario := optimisticFixture(t, "confirmWithoutCursor")
+	scenario := fixtureScenario(t, "optimistic", "confirmWithoutCursor")
 	state := newState(scenario["base"])
 
 	var deferred []func()
@@ -190,10 +250,11 @@ func TestOptimisticConfirmWithoutCursorDoesNotRevert(t *testing.T) {
 func TestOptimisticConfirmAfterTheFrameAlreadyLandedDropsNow(t *testing.T) {
 	covers("optimistic_layer_drops_on_commit_cursor")
 
-	scenario := optimisticFixture(t, "commitCursorDrop")
+	scenario := fixtureScenario(t, "optimistic", "commitCursorDrop")
 	at, _ := scenario["atFrame"].(map[string]any)
-	state := newState(at["data"])
-	state.ServerCursor = asCursor(at["cursor"])
+	client, state, _ := subscribedState(t, scenario["base"])
+	deliverFrame(t, client, at)
+
 	commitCursor := int64(scenario["commitCursor"].(float64))
 
 	var deferred []func()
@@ -216,7 +277,7 @@ func TestOptimisticConfirmAfterTheFrameAlreadyLandedDropsNow(t *testing.T) {
 func TestOptimisticRollbackRestoresTheServerValue(t *testing.T) {
 	covers("optimistic_layer_rolls_back_on_failure")
 
-	scenario := optimisticFixture(t, "rollback")
+	scenario := fixtureScenario(t, "optimistic", "rollback")
 
 	var seen []any
 
@@ -245,8 +306,8 @@ func TestOptimisticRollbackRestoresTheServerValue(t *testing.T) {
 func TestOptimisticConstantLayerMasksConcurrentChanges(t *testing.T) {
 	covers("optimistic_layer_rolls_back_on_failure")
 
-	scenario := optimisticFixture(t, "constantMask")
-	state := newState(scenario["base"])
+	scenario := fixtureScenario(t, "optimistic", "constantMask")
+	client, state, _ := subscribedState(t, scenario["base"])
 
 	var deferred []func()
 
@@ -267,10 +328,8 @@ func TestOptimisticConstantLayerMasksConcurrentChanges(t *testing.T) {
 		t.Fatalf("GetQuery: got %v, want %v", got, scenario["displayedAfterApply"])
 	}
 
-	deferred = nil
 	frame, _ := scenario["frame"].(map[string]any)
-	applyFrame(state, frame, &deferred)
-	runDeferred(deferred)
+	deliverFrame(t, client, frame)
 
 	// An absolute override: while pending it re-clamps and HIDES the concurrent
 	// server change rather than merging with it.

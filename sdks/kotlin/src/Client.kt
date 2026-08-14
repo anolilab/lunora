@@ -25,82 +25,6 @@ data class SubscriptionError(val code: String?, val message: String)
 /** One HTTP response: the status matters, see [Client.parseRpcResponse]. */
 data class HttpResponse(val status: Int, val body: String)
 
-/** What [Client.submit] did with a write. */
-enum class MutationStatus { COMMITTED, QUEUED, REJECTED }
-
-/**
- * What [Client.submit] did with a write.
- *
- * This is the deliberate divergence from `@lunora/client`, whose `mutation()`
- * returns a promise that stays PENDING until a queued write finally replays. A
- * pending promise is a fine thing to hold in a browser event loop and a bad thing
- * to hold on a pooled JVM thread, so the ports return the outcome immediately and
- * report the eventual verdict through `onSettled` (per write) or
- * [Client.onMutationSettled] (per client). A caller that must not report success
- * early checks [status].
- */
-data class MutationOutcome(val status: MutationStatus, val mutationId: String, val value: WireValue? = null, val commitCursor: Long? = null)
-
-/**
- * The terminal verdict on a queued write, once it replays.
- *
- * [hadAwaiter] is false for a write restored from durable storage: the caller that
- * submitted it is gone, so this event is the ONLY report it produces.
- */
-data class MutationSettled(
-    val mutationId: String,
-    val status: MutationStatus,
-    val value: WireValue? = null,
-    val error: RuntimeException? = null,
-    val hadAwaiter: Boolean = false,
-)
-
-/** What one [Client.flushOfflineQueue] pass achieved. */
-class FlushReport {
-    /** The ids the server accepted. */
-    val committed = mutableListOf<String>()
-
-    /** The ids dropped on a verdict, an identity change, or a stale precondition. */
-    val rejected = mutableListOf<String>()
-
-    /** The ids left queued for the next reconnect. */
-    val requeued = mutableListOf<String>()
-
-    /** The ids dropped because their precondition no longer held. */
-    val conflicted = mutableListOf<String>()
-}
-
-/** One offline-capable write. */
-class SubmitOptions(val functionPath: String, val args: WireValue? = null) {
-    /** Null routes to the default shard. */
-    var shardKey: String? = null
-
-    /** The idempotency key; minted when null. */
-    var mutationId: String? = null
-
-    /**
-     * The single-query shortcut: the transform is layered onto every subscription
-     * registered under the SAME (functionPath, args, shardKey) as this write,
-     * mirroring `@lunora/client`'s per-call `optimistic`.
-     */
-    var optimistic: ((WireValue) -> WireValue)? = null
-
-    /**
-     * The general form — it receives an [Optimistic.LocalStore] and may patch any
-     * number of subscribed queries. Both settle together, against one cursor.
-     */
-    var optimisticUpdate: ((Optimistic.LocalStore, WireValue?) -> Unit)? = null
-
-    /**
-     * Re-evaluated just before a QUEUED write replays; false drops it rather than
-     * replaying a write that can only fail.
-     */
-    var precondition: (() -> Boolean)? = null
-
-    /** Reports the eventual verdict on a queued write. */
-    var onSettled: ((MutationSettled) -> Unit)? = null
-}
-
 /**
  * A Lunora deployment client.
  *
@@ -116,8 +40,20 @@ class Client(
      * Identifies this client to the shard. It rides every write that carries an
      * idempotency key, because an anonymous caller has no server-minted user id to
      * namespace its de-duplication rows by.
+     *
+     * Minted PER INSTANCE, from the same generator that mints mutation ids. A
+     * per-language constant would put every anonymous client in a process — and in
+     * a fleet — into one namespace, so two unauthenticated callers passing the same
+     * [SubmitOptions.mutationId] would collide on `(anon:<clientId>, <mutationId>)`
+     * and the second write would short-circuit to the first one's cached result
+     * without ever running.
+     *
+     * Pin a stable per-device value when the offline queue is DURABLE: a replayed
+     * write namespaces under the id that ISSUED it (persisted on the record), and a
+     * consumer that also wants pre-restart and post-restart writes to share one
+     * namespace has to supply that continuity itself.
      */
-    @Volatile var clientId: String = "kotlin-client",
+    @Volatile var clientId: String = "client-${randomId()}",
     /**
      * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
      * not a bearer token. It is persisted alongside every queued write and
@@ -140,17 +76,22 @@ class Client(
      * Frames and user callbacks are dispatched OUTSIDE the lock: a sender writes a
      * socket the consumer owns, and holding the lock across a callback would let
      * one slow consumer stall the socket reader.
+     *
+     * `internal` rather than private, along with the state below it, because the
+     * write path lives in `Submit.kt` as extension functions and must take the same
+     * monitor — a second lock over one logical operation is how a deadlock gets
+     * built. Nothing outside this module sees them.
      */
-    private val lock = Any()
+    internal val lock = Any()
 
-    private var send: ((Map<String, Any?>) -> Unit)? = null
-    private val subscriptions = LinkedHashMap<String, Subscription>()
+    internal var send: ((Map<String, Any?>) -> Unit)? = null
+    internal val subscriptions = LinkedHashMap<String, Subscription>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, LinkedHashMap<String, MutableList<Map<String, Any?>>>>()
     private var nextId = 0
     private var nextShapeId = 0
 
-    private class Subscription(
+    internal class Subscription(
         val functionPath: String,
         val args: WireValue,
         val shardKey: String?,
@@ -181,16 +122,30 @@ class Client(
     }
 
     companion object {
-        /** Builds the `POST /_lunora/rpc` body. [shardKey] is omitted when null. */
+        /**
+         * Builds the `POST /_lunora/rpc` body. [shardKey] is omitted when null —
+         * and when EMPTY.
+         *
+         * The runtime treats an empty string as a valid NAMED shard
+         * (`idFromName("")` is its own Durable Object), while this client treats
+         * absent and empty as the default shard throughout — see [sameShard],
+         * which is what makes a `""` write drain on a null-shard flush and target
+         * a null-shard subscription. Sending the key would split those two apart
+         * at the boundary: the write would land on a shard neither the overlay nor
+         * the flush ever refers to.
+         */
         fun buildRpcBody(functionPath: String, args: WireValue?, shardKey: String? = null): Map<String, Any?> {
             val body = LinkedHashMap<String, Any?>()
 
             body["args"] = Wire.encode(args ?: WireValue.Obj(emptyList()))
             body["functionPath"] = functionPath
-            shardKey?.let { body["shardKey"] = it }
+            namedShard(shardKey)?.let { body["shardKey"] = it }
 
             return body
         }
+
+        /** The shard key as the wire carries it: null for the default shard, empty included. */
+        internal fun namedShard(shardKey: String?): String? = shardKey?.takeIf { it.isNotEmpty() }
 
         /**
          * Returns the decoded result, or throws [ApiException].
@@ -288,10 +243,17 @@ class Client(
          *
          * A raw exception from the injected poster is the network, not the server:
          * no verdict was reached, so the write is still good.
+         *
+         * A codec failure is the exception to that: it carries no code but is not
+         * a blip either — the same arguments will fail to encode on every attempt,
+         * so treating it as transient re-queues the write at the FRONT of the FIFO
+         * forever. [flushOfflineQueue] settles such writes before the replay loop;
+         * this arm is what keeps one surfacing from anywhere else terminal too.
          */
         fun isTransient(error: RuntimeException): Boolean = when (error) {
             is ApiException -> error.code in TRANSIENT_ERROR_CODES
             is OfflineException -> false
+            is WireFormatException -> false
             else -> true
         }
     }
@@ -299,9 +261,9 @@ class Client(
     /** The durable write queue backing [submit]. */
     var offlineQueue: OfflineQueue = OfflineQueue()
 
-    private var wasEverConnected = false
-    private var closed = false
-    private val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
+    internal var wasEverConnected = false
+    internal var closed = false
+    internal val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
 
     /**
      * Registers the sender used for subscription frames. Call once the socket is
@@ -347,13 +309,13 @@ class Client(
      * storage is untouched: the next session restores those writes.
      */
     fun close() {
-        val queue = synchronized(lock) {
+        val discarded = synchronized(lock) {
             closed = true
             send = null
-            offlineQueue
+            offlineQueue.clear()
         }
 
-        reportDiscarded(queue.clear())
+        reportDiscarded(discarded)
     }
 
     fun query(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue = rpc(functionPath, args, shardKey, null)
@@ -538,7 +500,13 @@ class Client(
                     subscriptions[id]?.let { entry ->
                         advance(entry, frame)
                         entry.state.serverBase = value
-                        entry.state.serverCursor = (frame["cursor"] as? Number)?.toLong()
+                        // `cursor` is OPTIONAL on data/delta frames, and a frame
+                        // without one must LEAVE the tracked cursor where it is:
+                        // nulling it strands every pending layer, because the
+                        // tracked cursor is what a later commit cursor is compared
+                        // against, so the write renders twice until some later
+                        // cursored frame happens to land.
+                        if (frame.containsKey("cursor")) entry.state.serverCursor = (frame["cursor"] as? Number)?.toLong()
                         // Drop the overlays this frame has caught up with, then
                         // RE-FOLD the rest onto the new authoritative base rather
                         // than clobbering them: a still-queued write's predicted
@@ -575,307 +543,24 @@ class Client(
     }
 
     // --- Offline-capable writes ---------------------------------------------
-
-    /**
-     * Writes, sending it now or queueing it until the socket is back.
-     *
-     * It returns as soon as the write is either committed or durably queued. A
-     * queued write's optimistic overlay stays displayed until the replay's commit
-     * cursor is reached by a server frame; a failed one rolls back.
-     */
-    fun submit(options: SubmitOptions): MutationOutcome {
-        val deferred = mutableListOf<() -> Unit>()
-        val writeId = options.mutationId ?: randomId()
-        val settlers: LayerSettlers
-        val queueIt: Boolean
-        val stamp: String?
-        val queue: OfflineQueue
-        val issuingClientId: String
-
-        synchronized(lock) {
-            if (closed) throw OfflineException(CLIENT_CLOSED, "client is closed")
-
-            settlers = applyOptimistic(options, deferred)
-            queueIt = send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect)
-            stamp = identity
-            queue = offlineQueue
-            issuingClientId = clientId
-        }
-
-        for (call in deferred) call()
-
-        if (queueIt) {
-            enqueueWrite(queue, options, writeId, issuingClientId, stamp, settlers)
-
-            return MutationOutcome(MutationStatus.QUEUED, writeId)
-        }
-
-        val reply = try {
-            rpcFull(options.functionPath, options.args, options.shardKey, writeId)
-        } catch (error: RuntimeException) {
-            settleLayers(emptyList(), settlers.rollbacks, null)
-
-            throw error
-        }
-
-        // Confirmed against the write's COMMITTED cursor, so the overlay drops when
-        // (or once) a frame at that cursor lands — never on this call's return,
-        // which races the socket broadcast.
-        settleLayers(settlers.confirms, emptyList(), reply.commitCursor)
-
-        return MutationOutcome(MutationStatus.COMMITTED, writeId, reply.result, reply.commitCursor)
-    }
+    //
+    // The write path itself (submit, the flush, the optimistic settle helpers)
+    // lives in `Submit.kt` as extension functions over this class.
 
     /**
      * Restores writes persisted in a prior session; returns their shard keys.
      *
      * Open a socket for each returned key and flush it to replay them. A restored
-     * write has no live caller, so its verdict arrives only through
-     * [onMutationSettled].
+     * write has no live caller and no settle handler of its own, so its verdict —
+     * including an eviction the capacity cap makes during the restore — arrives
+     * only through [onMutationSettled], stamped `hadAwaiter = false`.
      */
     fun hydrateOfflineQueue(): List<String?> {
-        val queue = synchronized(lock) { offlineQueue }
-        val hydrated = queue.hydrate()
+        val hydrated = synchronized(lock) { offlineQueue.hydrate() }
 
-        for (item in queue.items()) {
-            if (item.resolve == null && item.reject == null) attachHydratedSettlers(item)
-        }
-
-        // Restored records the cap dropped never get settlers of their own, so they
-        // are reported directly rather than through one.
         reportDiscarded(hydrated.evicted)
 
         return hydrated.shardKeys
-    }
-
-    /**
-     * Replays one shard's queued writes, in order, over HTTP. Call it when that
-     * shard's socket comes back.
-     *
-     * Each write replays under its own idempotency key, so one the server already
-     * committed is de-duplicated rather than applied twice. Per write: success
-     * confirms its optimistic overlay against the ECHOED commit cursor; a coded
-     * verdict is terminal; a transient failure — a raw transport error, or one of
-     * [TRANSIENT_ERROR_CODES] — stops the flush and re-queues that write and every
-     * unreplayed one, in order, for the next attempt.
-     */
-    fun flushOfflineQueue(shardKey: String? = null): FlushReport {
-        val report = FlushReport()
-        val queue: OfflineQueue
-        val current: String?
-
-        synchronized(lock) {
-            queue = offlineQueue
-            current = identity
-        }
-
-        val conflicted = queue.drainConflict()
-
-        for (discarded in conflicted) {
-            queue.unpersist(discarded.entry.id)
-            report.conflicted.add(discarded.entry.id)
-            report.rejected.add(discarded.entry.id)
-        }
-
-        reportDiscarded(conflicted)
-
-        val drained = queue.drain { it.shardKey == shardKey }
-
-        if (drained.isEmpty()) return report
-
-        // Gated against ONE identity snapshot: a flush is a single authenticated
-        // burst, so every write in it necessarily runs under one identity.
-        val sendable = mutableListOf<QueuedMutation>()
-
-        for (item in drained) {
-            if (identityAllowsReplay(item.identity, current)) {
-                sendable.add(item)
-
-                continue
-            }
-
-            queue.unpersist(item.id)
-            report.rejected.add(item.id)
-            reportDiscarded(
-                listOf(Discarded(item, OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")),
-            )
-        }
-
-        replay(queue, sendable, report)
-
-        return report
-    }
-
-    private fun replay(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport) {
-        for ((index, item) in sendable.withIndex()) {
-            val reply = try {
-                rpcFull(item.functionPath, item.args, item.shardKey, item.id, item.clientId)
-            } catch (error: RuntimeException) {
-                if (!isTransient(error)) {
-                    queue.unpersist(item.id)
-                    item.reject?.invoke(error)
-                    report.rejected.add(item.id)
-
-                    continue
-                }
-
-                // Nothing after this write may go out ahead of it: replaying out of
-                // order is how a durable queue corrupts the data it was protecting.
-                val pending = sendable.subList(index, sendable.size).toList()
-
-                queue.requeue(pending)
-                pending.mapTo(report.requeued) { it.id }
-
-                return
-            }
-
-            queue.unpersist(item.id)
-            // The overlay is confirmed BEFORE the caller is told, so the gapless
-            // drop is already in place when the confirming frame lands.
-            item.onCommit?.invoke(reply.commitCursor)
-            item.resolve?.invoke(reply.result)
-            report.committed.add(item.id)
-        }
-    }
-
-    /** The settle closures one write's optimistic layers produced. */
-    private class LayerSettlers(val confirms: List<(Long?, MutableList<() -> Unit>) -> Unit>, val rollbacks: List<(MutableList<() -> Unit>) -> Unit>)
-
-    /** Registers both optimistic APIs' layers. Runs with the monitor held. */
-    private fun applyOptimistic(options: SubmitOptions, deferred: MutableList<() -> Unit>): LayerSettlers {
-        val confirms = mutableListOf<(Long?, MutableList<() -> Unit>) -> Unit>()
-        val rollbacks = mutableListOf<(MutableList<() -> Unit>) -> Unit>()
-
-        options.optimistic?.let { transform ->
-            for (entry in findSubscriptions(options.functionPath, options.args, options.shardKey)) {
-                val handle = Optimistic.applyLayer(entry.state, transform, deferred) ?: continue
-
-                confirms.add(handle::confirm)
-                rollbacks.add(handle::rollback)
-            }
-        }
-
-        val update = options.optimisticUpdate ?: return LayerSettlers(confirms, rollbacks)
-        val store = Optimistic.LocalStore(
-            { path, args -> findSubscriptions(path, args, options.shardKey).map { it.state } },
-            { path -> matchingQueries(path, options.shardKey) },
-            deferred,
-        )
-
-        try {
-            update(store, options.args)
-            confirms.addAll(store.confirms)
-            rollbacks.addAll(store.rollbacks)
-        } catch (error: RuntimeException) {
-            // A throwing update unwinds only its OWN writes, so the cache is left
-            // exactly as it was found, and the write itself proceeds.
-            Optimistic.rollbackAll(store.rollbacks, deferred)
-        }
-
-        return LayerSettlers(confirms, rollbacks)
-    }
-
-    /**
-     * The live subscriptions registered under exactly this (path, args, shard).
-     *
-     * A linear scan, unlike `@lunora/client`'s keyed registry, and deliberately:
-     * this client does not de-duplicate subscriptions, so several can share one
-     * triple and all of them must receive the overlay. The scan is over a handful
-     * of entries on the write path, never the frame path.
-     */
-    private fun findSubscriptions(functionPath: String, args: WireValue?, shardKey: String?): List<Subscription> {
-        val argsKey = Key.stableWireKey(args ?: WireValue.Obj(emptyList()))
-
-        return subscriptions.values.filter { it.functionPath == functionPath && it.argsKey == argsKey && it.shardKey == shardKey }
-    }
-
-    private fun matchingQueries(functionPath: String, shardKey: String?): List<Optimistic.QueryEntry> = subscriptions.values
-        .filter { it.functionPath == functionPath && it.shardKey == shardKey }
-        .map { Optimistic.QueryEntry(it.args, it.state.lastValue) }
-
-    private fun enqueueWrite(queue: OfflineQueue, options: SubmitOptions, writeId: String, issuingClientId: String, stamp: String?, settlers: LayerSettlers) {
-        val entry = QueuedMutation(writeId, options.functionPath, options.args ?: WireValue.Obj(emptyList()), options.shardKey)
-
-        entry.clientId = issuingClientId
-        // Bound at enqueue time, so the write can only ever replay as whoever made it.
-        entry.identity = Identity.stamp(stamp)
-        entry.liveAwaiter = true
-        entry.precondition = options.precondition
-        entry.onCommit = { cursor -> settleLayers(settlers.confirms, emptyList(), cursor) }
-        entry.resolve = { value ->
-            emitSettled(MutationSettled(writeId, MutationStatus.COMMITTED, value, null, true), options.onSettled)
-        }
-        entry.reject = { error ->
-            settleLayers(emptyList(), settlers.rollbacks, null)
-            emitSettled(MutationSettled(writeId, MutationStatus.REJECTED, null, error, true), options.onSettled)
-        }
-
-        // Safe under the monitor now that `enqueue` invokes no callback: it returns
-        // what the cap evicted instead, and those settle below.
-        reportDiscarded(synchronized(lock) { queue.enqueue(entry) })
-    }
-
-    /**
-     * Settles every write the queue let go of without sending it.
-     *
-     * Runs with the monitor RELEASED: a rejection rolls optimistic layers back, and
-     * a consumer's callback must never run inside the critical section that guards
-     * the subscription registry. Every discard path funnels through here, so an
-     * eviction can never drop a durable write in silence — which matters most for a
-     * hydrated record, whose original caller did not survive the restart.
-     */
-    private fun reportDiscarded(discarded: List<Discarded>) {
-        for (item in discarded) {
-            try {
-                item.entry.reject?.invoke(item.error())
-            } catch (error: RuntimeException) {
-                // A consumer's rejection handler throwing is not this client's failure.
-            }
-        }
-    }
-
-    /** Gives a restored write the observer-only settlers it lost in the restart. */
-    private fun attachHydratedSettlers(item: QueuedMutation) {
-        val id = item.id
-
-        item.liveAwaiter = false
-        item.resolve = { value -> emitSettled(MutationSettled(id, MutationStatus.COMMITTED, value), null) }
-        item.reject = { error -> emitSettled(MutationSettled(id, MutationStatus.REJECTED, null, error), null) }
-    }
-
-    /**
-     * Runs a write's confirms or rollbacks under the monitor and delivers the
-     * resulting notifications outside it.
-     */
-    private fun settleLayers(
-        confirms: List<(Long?, MutableList<() -> Unit>) -> Unit>,
-        rollbacks: List<(MutableList<() -> Unit>) -> Unit>,
-        commitCursor: Long?,
-    ) {
-        val deferred = mutableListOf<() -> Unit>()
-
-        synchronized(lock) {
-            Optimistic.confirmAll(confirms, commitCursor, deferred)
-            Optimistic.rollbackAll(rollbacks, deferred)
-        }
-
-        for (call in deferred) call()
-    }
-
-    private fun emitSettled(event: MutationSettled, onSettled: ((MutationSettled) -> Unit)?) {
-        val listeners = mutableListOf<(MutationSettled) -> Unit>()
-
-        onSettled?.let { listeners.add(it) }
-        synchronized(lock) { listeners.addAll(settledListeners) }
-
-        for (listener in listeners) {
-            try {
-                listener(event)
-            } catch (error: RuntimeException) {
-                // A write's terminal verdict is the only report a restored write
-                // ever produces, so one bad observer must not stop the rest.
-            }
-        }
     }
 
     private fun advance(entry: Subscription, frame: Map<*, *>) {
@@ -955,7 +640,10 @@ class Client(
         }
 
         val params = buildList {
-            shardKey?.let { add("shard=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
+            // Omitted when empty, for the same reason [buildRpcBody] omits it: the
+            // runtime would open a socket against a shard named "" rather than the
+            // default one this client resolves an empty key to.
+            namedShard(shardKey)?.let { add("shard=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
             token?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
         }
 

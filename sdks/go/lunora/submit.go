@@ -97,6 +97,54 @@ type SubmitOptions struct {
 // ErrClientClosed is returned by Submit after Close.
 var ErrClientClosed = OfflineError{Code: CodeClientClosed, Message: "client is closed"}
 
+// SetOfflineQueue replaces the write queue — to configure capacity, a
+// persistence adapter, or an app version. Call it before the first write.
+func (c *Client) SetOfflineQueue(queue *OfflineQueue) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.offline = queue
+}
+
+// OfflineQueue returns the write queue backing Submit.
+//
+// Its methods carry no lock of their own, so mutating the returned queue from a
+// second goroutine while the client is running is the caller's problem. The
+// client itself only ever touches it with its own mutex held.
+func (c *Client) OfflineQueue() *OfflineQueue {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.offline
+}
+
+// PendingMutationCount is how many writes are waiting for the socket.
+func (c *Client) PendingMutationCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.offline.Size()
+}
+
+// OnMutationSettled observes every queued write's terminal verdict, returning an
+// unsubscribe. This is the ONLY report a write restored from durable storage
+// produces — its original caller did not survive the restart.
+func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
+	c.mu.Lock()
+	index := len(c.settledListeners)
+	c.settledListeners = append(c.settledListeners, listener)
+	c.mu.Unlock()
+
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if index < len(c.settledListeners) {
+			c.settledListeners[index] = nil
+		}
+	}
+}
+
 // Submit writes, sending it now or queueing it until the socket is back.
 //
 // It returns as soon as the write is either committed or durably queued. A queued
@@ -104,10 +152,10 @@ var ErrClientClosed = OfflineError{Code: CodeClientClosed, Message: "client is c
 // reached by a server frame; a failed one rolls back.
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
 
-	if c.closed {
-		c.mu.Unlock()
-
+	if closed {
 		return MutationOutcome{}, ErrClientClosed
 	}
 
@@ -116,24 +164,35 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 		writeID = RandomID()
 	}
 
-	var deferred []func()
+	confirms, rollbacks := c.applyOptimistic(options)
 
-	confirms, rollbacks := c.applyOptimisticLocked(options, &deferred)
-	queueIt := c.send == nil && (c.wasEverConnected || c.offline.QueueBeforeFirstConnect())
-	identity := c.Identity
+	// The offline decision and the enqueue are ONE critical section. Split, a
+	// socket that attaches in the gap lets a flush run to completion between
+	// them, and the write lands in a queue nothing will drain until the next
+	// disconnect — after Submit has already answered "queued".
+	c.mu.Lock()
 	queue := c.offline
-	clientID := c.ClientID
-	c.mu.Unlock()
+	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
 
-	runDeferred(deferred)
+	var evicted []Discarded
 
 	if queueIt {
-		c.enqueueWrite(queue, options, writeID, clientID, identity, confirms, rollbacks)
+		evicted = queue.Enqueue(c.newQueuedWriteLocked(options, writeID, confirms, rollbacks))
+	}
+
+	c.mu.Unlock()
+
+	if queueIt {
+		// The cap's eviction comes back as a value precisely so it can settle
+		// here, with the mutex released.
+		c.reportDiscarded(evicted)
 
 		return MutationOutcome{MutationID: writeID, Status: MutationQueued}, nil
 	}
 
-	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, clientID)
+	// No client id argument: rpcFull falls back to Client.ClientID, which is the
+	// id issuing this write.
+	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "")
 	if err != nil {
 		c.settleLayers(nil, rollbacks, nil)
 
@@ -156,22 +215,16 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 // OnMutationSettled.
 func (c *Client) HydrateOfflineQueue() ([]string, error) {
 	c.mu.Lock()
-	queue := c.offline
+	shardKeys, evicted, err := c.offline.Hydrate()
 	c.mu.Unlock()
 
-	shardKeys, evicted, err := queue.Hydrate()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, item := range queue.Items() {
-		if item.Resolve == nil && item.Reject == nil {
-			c.attachHydratedSettlers(item)
-		}
-	}
-
-	// Restored records the cap dropped never get settlers of their own, so they
-	// are reported directly rather than through one.
+	// A restored record has no per-write handler, which is exactly why the settle
+	// must not be routed through one: the client's own listeners report it, or a
+	// durable write the cap dropped disappears in silence.
 	c.reportDiscarded(evicted)
 
 	return shardKeys, nil
@@ -194,17 +247,19 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	identity := c.Identity
 	c.mu.Unlock()
 
-	conflicted := queue.DrainConflict()
+	conflicted := c.dropStalePreconditions(queue)
 
 	for _, discarded := range conflicted {
-		queue.Unpersist(discarded.Entry.ID)
 		report.Conflicted = append(report.Conflicted, discarded.Entry.ID)
 		report.Rejected = append(report.Rejected, discarded.Entry.ID)
 	}
 
 	c.reportDiscarded(conflicted)
 
+	c.mu.Lock()
 	drained := queue.Drain(func(item *QueuedMutation) bool { return item.ShardKey == shardKey })
+	c.mu.Unlock()
+
 	if len(drained) == 0 {
 		return report
 	}
@@ -220,19 +275,33 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 			continue
 		}
 
-		queue.Unpersist(item.ID)
 		report.Rejected = append(report.Rejected, item.ID)
-		c.reportDiscarded([]Discarded{{
-			Code:    CodeOfflineIdentityChanged,
-			Entry:   item,
-			Message: "offline mutation skipped: auth identity changed before replay",
-		}})
+		c.dropTerminally(queue, item, CodeOfflineIdentityChanged, "offline mutation skipped: auth identity changed before replay")
 	}
 
-	for index, item := range sendable {
+	replayable := make([]*QueuedMutation, 0, len(sendable))
+
+	for _, item := range sendable {
+		// A write whose arguments cannot be wire-encoded can never reach the
+		// server, and a codec failure carries no code — so the transient rule
+		// ("anything uncoded is a transport blip, re-queue it") would replay it on
+		// every reconnect forever, never settling its caller, never rolling its
+		// overlay back, and blocking the whole FIFO behind it. Partitioned BEFORE
+		// the replay loop so only the survivors are sent.
+		if _, err := EncodeWire(argsOrEmpty(item.Args)); err != nil {
+			report.Rejected = append(report.Rejected, item.ID)
+			c.dropTerminally(queue, item, CodeOfflineWriteUnencodable, "offline mutation dropped: its arguments cannot be wire-encoded: "+err.Error())
+
+			continue
+		}
+
+		replayable = append(replayable, item)
+	}
+
+	for index, item := range replayable {
 		value, commitCursor, err := c.rpcFull(item.FunctionPath, item.Args, item.ShardKey, item.ID, item.ClientID)
 		if err == nil {
-			queue.Unpersist(item.ID)
+			c.unpersist(queue, item.ID)
 			c.settleCommitted(item, value, commitCursor)
 			report.Committed = append(report.Committed, item.ID)
 
@@ -242,21 +311,74 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 		if isTransient(err) {
 			// Nothing after this write may go out ahead of it: replaying out of
 			// order is how a durable queue corrupts the data it was protecting.
-			queue.Requeue(sendable[index:])
+			c.mu.Lock()
+			queue.Requeue(replayable[index:])
+			c.mu.Unlock()
 
-			for _, pending := range sendable[index:] {
+			for _, pending := range replayable[index:] {
 				report.Requeued = append(report.Requeued, pending.ID)
 			}
 
 			return report
 		}
 
-		queue.Unpersist(item.ID)
+		c.unpersist(queue, item.ID)
 		c.settleRejected(item, err)
 		report.Rejected = append(report.Rejected, item.ID)
 	}
 
 	return report
+}
+
+// dropStalePreconditions weeds out the writes whose assumptions died while the
+// client was offline, before anything replays.
+//
+// Two phases on purpose. The predicate is the CONSUMER's, so it is evaluated
+// with the mutex released; the drop that acts on its verdict then runs under the
+// mutex, because a queue mutated with the lock down loses whatever another
+// goroutine enqueued between the partition and the reassignment.
+func (c *Client) dropStalePreconditions(queue *OfflineQueue) []Discarded {
+	c.mu.Lock()
+	pending := queue.Items()
+	c.mu.Unlock()
+
+	stale := map[string]bool{}
+
+	for _, item := range pending {
+		if item.Precondition != nil && !item.Precondition() {
+			stale[item.ID] = true
+		}
+	}
+
+	if len(stale) == 0 {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	conflicted := queue.DrainConflict(stale)
+
+	for _, discarded := range conflicted {
+		queue.Unpersist(discarded.Entry.ID)
+	}
+
+	return conflicted
+}
+
+// dropTerminally un-persists a write that must never replay and settles it.
+func (c *Client) dropTerminally(queue *OfflineQueue, item *QueuedMutation, code string, message string) {
+	c.unpersist(queue, item.ID)
+	c.reportDiscarded([]Discarded{{Code: code, Entry: item, Message: message}})
+}
+
+// unpersist forgets one durable record with the mutex held, so a concurrent
+// enqueue cannot interleave with the queue's persistence bookkeeping.
+func (c *Client) unpersist(queue *OfflineQueue, mutationID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	queue.Unpersist(mutationID)
 }
 
 // reportDiscarded settles every write the queue let go of without sending it.
@@ -272,10 +394,23 @@ func (c *Client) reportDiscarded(discarded []Discarded) {
 	}
 }
 
+// settleRejected is a write's terminal failure verdict.
+//
+// The client-level emission is UNCONDITIONAL, and the per-write handler rides
+// along with it rather than replacing it. Reporting only through the entry's own
+// handler is what made an evicted hydrated write settle to nobody: it has no
+// handler, having been restored from storage rather than submitted.
 func (c *Client) settleRejected(entry *QueuedMutation, err error) {
-	if entry.Reject != nil {
-		entry.Reject(err)
+	if entry.OnRollback != nil {
+		entry.OnRollback()
 	}
+
+	c.emitSettled(MutationSettled{
+		Err:        err,
+		HadAwaiter: entry.LiveAwaiter,
+		MutationID: entry.ID,
+		Status:     MutationRejected,
+	}, entry.OnSettled)
 }
 
 // isTransient reports whether a failed replay may be retried rather than dropped.
@@ -292,21 +427,31 @@ func isTransient(err error) bool {
 	return true
 }
 
-// applyOptimisticLocked registers both optimistic APIs' layers. Runs with the
-// mutex held.
-func (c *Client) applyOptimisticLocked(options SubmitOptions, deferred *[]func()) ([]func(*int64, *[]func()), []func(*[]func())) {
+// applyOptimistic registers both optimistic APIs' layers and delivers the
+// resulting notifications.
+//
+// It takes and releases the mutex itself rather than running inside the caller's
+// critical section: OptimisticUpdate is a consumer closure, and one that touched
+// the client it was handed would deadlock on a mutex Submit was holding. The
+// store it is given re-takes the lock per operation instead.
+func (c *Client) applyOptimistic(options SubmitOptions) ([]func(*int64, *[]func()), []func(*[]func())) {
 	var (
 		confirms  []func(*int64, *[]func())
 		rollbacks []func(*[]func())
+		deferred  []func()
 	)
 
 	if options.Optimistic != nil {
+		c.mu.Lock()
+
 		for _, state := range c.findStatesLocked(options.FunctionPath, options.Args, options.ShardKey) {
-			if handle := ApplyOptimisticLayer(state, options.Optimistic, deferred); handle != nil {
+			if handle := ApplyOptimisticLayer(state, options.Optimistic, &deferred); handle != nil {
 				confirms = append(confirms, handle.Confirm)
 				rollbacks = append(rollbacks, handle.Rollback)
 			}
 		}
+
+		c.mu.Unlock()
 	}
 
 	if options.OptimisticUpdate != nil {
@@ -325,8 +470,14 @@ func (c *Client) applyOptimisticLocked(options SubmitOptions, deferred *[]func()
 
 				return entries
 			},
-			deferred,
+			&deferred,
 		)
+		store.guard = func(operation func()) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
+			operation()
+		}
 
 		if runUpdate(store, options) {
 			confirms = append(confirms, store.Confirms...)
@@ -334,9 +485,13 @@ func (c *Client) applyOptimisticLocked(options SubmitOptions, deferred *[]func()
 		} else {
 			// A panicking update unwinds only its OWN writes, so the cache is
 			// left exactly as it was found, and the write itself proceeds.
-			RollbackAll(store.Rollbacks, deferred)
+			c.mu.Lock()
+			RollbackAll(store.Rollbacks, &deferred)
+			c.mu.Unlock()
 		}
 	}
+
+	runDeferred(deferred)
 
 	return confirms, rollbacks
 }
@@ -378,23 +533,22 @@ func (c *Client) findStatesLocked(functionPath string, args any, shardKey string
 	return matches
 }
 
-func (c *Client) enqueueWrite(
-	queue *OfflineQueue,
+// newQueuedWriteLocked builds the durable record of one write. Runs with the
+// mutex held: it reads the identity and client id the write is stamped with.
+func (c *Client) newQueuedWriteLocked(
 	options SubmitOptions,
 	writeID string,
-	clientID string,
-	identity *string,
 	confirms []func(*int64, *[]func()),
 	rollbacks []func(*[]func()),
-) {
+) *QueuedMutation {
 	stamped := SignedOut()
-	if identity != nil {
-		stamped = IdentityOf(*identity)
+	if c.Identity != nil {
+		stamped = IdentityOf(*c.Identity)
 	}
 
-	entry := &QueuedMutation{
+	return &QueuedMutation{
 		Args:         options.Args,
-		ClientID:     clientID,
+		ClientID:     c.ClientID,
 		FunctionPath: options.FunctionPath,
 		ID:           writeID,
 		// Bound at enqueue time, so the write can only ever replay as whoever
@@ -404,36 +558,10 @@ func (c *Client) enqueueWrite(
 		OnCommit: func(commitCursor *int64) {
 			c.settleLayers(confirms, nil, commitCursor)
 		},
+		OnRollback:   func() { c.settleLayers(nil, rollbacks, nil) },
+		OnSettled:    options.OnSettled,
 		Precondition: options.Precondition,
-		Reject: func(err error) {
-			c.settleLayers(nil, rollbacks, nil)
-			c.emitSettled(MutationSettled{Err: err, HadAwaiter: true, MutationID: writeID, Status: MutationRejected}, options.OnSettled)
-		},
-		Resolve: func(value any) {
-			c.emitSettled(MutationSettled{HadAwaiter: true, MutationID: writeID, Status: MutationCommitted, Value: value}, options.OnSettled)
-		},
-		ShardKey: options.ShardKey,
-	}
-
-	c.mu.Lock()
-	// Safe under the mutex now that Enqueue invokes no callback: it returns what
-	// the cap evicted instead, and those settle below.
-	evicted := queue.Enqueue(entry)
-	c.mu.Unlock()
-
-	c.reportDiscarded(evicted)
-}
-
-// attachHydratedSettlers gives a restored write the observer-only settlers it
-// lost in the restart.
-func (c *Client) attachHydratedSettlers(item *QueuedMutation) {
-	id := item.ID
-	item.LiveAwaiter = false
-	item.Reject = func(err error) {
-		c.emitSettled(MutationSettled{Err: err, MutationID: id, Status: MutationRejected}, nil)
-	}
-	item.Resolve = func(value any) {
-		c.emitSettled(MutationSettled{MutationID: id, Status: MutationCommitted, Value: value}, nil)
+		ShardKey:     options.ShardKey,
 	}
 }
 
@@ -444,9 +572,12 @@ func (c *Client) settleCommitted(item *QueuedMutation, value any, commitCursor *
 		item.OnCommit(commitCursor)
 	}
 
-	if item.Resolve != nil {
-		item.Resolve(value)
-	}
+	c.emitSettled(MutationSettled{
+		HadAwaiter: item.LiveAwaiter,
+		MutationID: item.ID,
+		Status:     MutationCommitted,
+		Value:      value,
+	}, item.OnSettled)
 }
 
 // settleLayers runs a write's confirms or rollbacks under the mutex and delivers

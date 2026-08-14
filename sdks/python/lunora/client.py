@@ -9,7 +9,8 @@ Implements the transport documented in ``protocol/README.md``:
 - An async WS token provider mirroring the TS ``WsTokenProvider``.
 - ``submit`` — the offline-capable write path: optimistic layers over the live
   subscriptions (``lunora.optimistic``) plus the durable replay queue
-  (``lunora.offline``).
+  (``lunora.offline``). It lives in ``lunora.submit``; this file keeps the
+  socket, the subscription registry and the frame dispatch.
 
 The wire framing (frame builders + the inbound-frame dispatcher) is factored into
 pure functions/methods so it is unit-testable against the shared golden fixtures
@@ -20,7 +21,6 @@ loop uses the ``websockets`` package when present.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import threading
@@ -29,21 +29,18 @@ from collections.abc import Awaitable
 from functools import partial
 from typing import Any, Callable, Optional, Union
 
-from .offline import (
-    OFFLINE_IDENTITY_CHANGED,
-    OfflineError,
-    OfflineQueue,
-    QueuedMutation,
-    identity_allows_replay,
-    random_id,
-)
-from .optimistic import (
-    OptimisticLocalStore,
-    apply_optimistic_layer,
-    confirm_all,
-    drop_confirmed_layers,
-    fold_optimistic,
-    rollback_all,
+from .errors import LunoraError, SubscriptionError
+from .offline import OfflineQueue, random_id
+from .optimistic import drop_confirmed_layers, fold_optimistic
+from .submit import (
+    FlushReport,
+    MutationOutcome,
+    MutationSettled,
+    SubmitOptions,
+    close_queue,
+    flush_queue,
+    hydrate_queue,
+    submit_write,
 )
 from .wire import decode_wire, encode_wire, stable_wire_key
 
@@ -56,50 +53,30 @@ WS_PATH = "/_lunora/ws"
 # `LunoraClient(..., timeout=...)` for a longer-running one.
 DEFAULT_HTTP_TIMEOUT = 30.0
 
-#: Error codes a replay must NOT treat as the server's final word on a write.
-#: The shard was momentarily unreachable, so the same call under the same
-#: idempotency key is expected to succeed later; dropping it would lose a durable
-#: write to a transient condition. Everything else coded is a verdict — replaying
-#: it would only re-trigger the same failure (a poison-message loop).
-TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
-
 # A WS token provider: a value, a callable returning a value, or an async callable.
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
 Callback = Callable[[Any], None]
-ErrorCallback = Callable[["SubscriptionError"], None]
+ErrorCallback = Callable[[SubscriptionError], None]
 Unsubscribe = Callable[[], None]
-
-
-class LunoraError(Exception):
-    """A coded error raised from an RPC ``{ "error": { code, message, data } }`` envelope."""
-
-    def __init__(self, code: str, message: str, data: Any = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.data = data
-
-
-class SubscriptionError:
-    """A subscription-scoped error frame the server pushed."""
-
-    def __init__(self, message: str, code: Optional[str] = None) -> None:
-        self.message = message
-        self.code = code
-
-    def __repr__(self) -> str:  # pragma: no cover - trivial
-        return f"SubscriptionError(code={self.code!r}, message={self.message!r})"
 
 
 # --- Pure framing helpers (no I/O; fixture-tested) --------------------------
 
 
 def build_rpc_body(function_path: str, args: Any, shard_key: Optional[str] = None) -> dict:
-    """Build the ``POST /_lunora/rpc`` JSON body. ``shard_key`` is omitted when ``None``."""
+    """Build the ``POST /_lunora/rpc`` JSON body. ``shard_key`` is omitted when empty.
+
+    Empty means absent, not "the shard named ``''``". The runtime disagrees — it
+    takes any string as a named shard and routes ``""`` to its own Durable Object
+    (``packages/runtime/src/create-worker.ts``) — while this client treats ``""``
+    and ``None`` as one shard everywhere it matches a subscription or drains the
+    queue. Sending it would split those two views: a write submitted with ``""``
+    would replay against a different shard than the subscription it updated.
+    """
 
     body: dict[str, Any] = {"args": encode_wire(args if args is not None else {}), "functionPath": function_path}
-    if shard_key is not None:
+    if shard_key:
         body["shardKey"] = shard_key
     return body
 
@@ -188,21 +165,6 @@ def build_shape_subscribe_frame(
     return frame
 
 
-def _is_transient(error: BaseException) -> bool:
-    """Whether a failed replay may be retried rather than dropped.
-
-    A raw exception from the injected poster is the network, not the server: no
-    verdict was reached, so the write is still good. A coded error IS a verdict —
-    except for the shard-level codes, which say the shard was momentarily
-    unreachable and the identical call is expected to succeed later.
-    """
-
-    if isinstance(error, LunoraError):
-        return error.code in TRANSIENT_ERROR_CODES
-
-    return True
-
-
 def _derive_ws_url(url: str) -> str:
     if url.startswith("https://"):
         return "wss://" + url[len("https://") :]
@@ -243,74 +205,6 @@ class _Subscription:
         self.error_callbacks: list[ErrorCallback] = []
 
 
-class MutationOutcome:
-    """What :meth:`LunoraClient.submit` did with a write.
-
-    ``status`` is ``"committed"`` when the write went out and the server answered,
-    or ``"queued"`` when the socket was down and it was enqueued for replay.
-
-    This is the deliberate divergence from ``@lunora/client``, whose ``mutation()``
-    returns a Promise that stays PENDING until a queued write finally replays.
-    A pending promise is a fine thing to hold in a browser event loop and a bad
-    thing to hold in a Go goroutine, a Ruby thread or a JVM thread pool, so the
-    ports return the outcome immediately and report the eventual verdict through
-    ``on_settled`` (per call) or ``LunoraClient.on_mutation_settled`` (per client)
-    instead. A caller that must not report success early checks ``status``.
-    """
-
-    __slots__ = ("commit_cursor", "mutation_id", "status", "value")
-
-    def __init__(self, status: str, mutation_id: str, value: Any = None, commit_cursor: Optional[int] = None) -> None:
-        self.status = status
-        self.mutation_id = mutation_id
-        self.value = value
-        self.commit_cursor = commit_cursor
-
-    @property
-    def queued(self) -> bool:
-        return self.status == "queued"
-
-    def __repr__(self) -> str:  # pragma: no cover - trivial
-        return f"MutationOutcome(status={self.status!r}, mutation_id={self.mutation_id!r})"
-
-
-class MutationSettled:
-    """The terminal verdict on a queued write, delivered once it replays.
-
-    ``had_awaiter`` is ``False`` for a write restored from durable storage after a
-    restart: the caller that submitted it is gone, so this event is the ONLY
-    report that write will ever produce.
-    """
-
-    __slots__ = ("error", "had_awaiter", "mutation_id", "status", "value")
-
-    def __init__(self, mutation_id: str, status: str, value: Any = None, error: Optional[Exception] = None, had_awaiter: bool = False) -> None:
-        self.mutation_id = mutation_id
-        self.status = status
-        self.value = value
-        self.error = error
-        self.had_awaiter = had_awaiter
-
-    def __repr__(self) -> str:  # pragma: no cover - trivial
-        return f"MutationSettled(mutation_id={self.mutation_id!r}, status={self.status!r})"
-
-
-class FlushReport:
-    """What one :meth:`LunoraClient.flush_offline_queue` pass achieved."""
-
-    __slots__ = ("committed", "conflicted", "rejected", "requeued")
-
-    def __init__(self) -> None:
-        #: Ids the server accepted.
-        self.committed: list[str] = []
-        #: Ids dropped on a server verdict, an identity change, or a stale precondition.
-        self.rejected: list[str] = []
-        #: Ids left queued for the next reconnect after a transient failure.
-        self.requeued: list[str] = []
-        #: Ids dropped because their precondition no longer held.
-        self.conflicted: list[str] = []
-
-
 class _ShapeSubscription:
     def __init__(self, shape_id: str, name: str, args: Any, shard_key: Optional[str]) -> None:
         self.id = shape_id
@@ -331,7 +225,7 @@ class LunoraClient:
         ws_url: Optional[str] = None,
         auth_token: Optional[str] = None,
         ws_token: WsToken = None,
-        client_id: str = "python-client",
+        client_id: Optional[str] = None,
         http_post: Optional[Callable[[str, dict, bytes], tuple[int, dict]]] = None,
         timeout: float = DEFAULT_HTTP_TIMEOUT,
         offline_queue: Optional[OfflineQueue] = None,
@@ -341,7 +235,17 @@ class LunoraClient:
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
         self.auth_token = auth_token
         self.ws_token = ws_token
-        self.client_id = client_id
+        #: Minted PER INSTANCE when not given, from the same helper that mints
+        #: mutation ids. It is not cosmetic: the shard namespaces an anonymous
+        #: caller's idempotency rows by this value, so a constant shared by every
+        #: client in the language means two unauthenticated users submitting the
+        #: same caller-supplied ``mutation_id`` collide — the second write
+        #: short-circuits to the first user's cached result and never runs.
+        #:
+        #: Pin one when the offline queue is DURABLE: a write replays under the
+        #: id that issued it (the record carries it), and a stable per-device id
+        #: keeps a restored write in the same namespace it was submitted in.
+        self.client_id = client_id if client_id is not None else f"client-{random_id()}"
         # `timeout` only applies to the default transport: a caller who injects
         # their own `http_post` keeps whatever timeout semantics it already has.
         self._http_post = http_post if http_post is not None else partial(_urllib_post, timeout=timeout)
@@ -437,12 +341,7 @@ class LunoraClient:
         Durable storage is untouched: the next session restores those writes.
         """
 
-        with self._lock:
-            self._closed = True
-            self._send = None
-            queue = self.offline_queue
-
-        self._report_discarded(queue.clear())
+        close_queue(self)
 
     # --- HTTP RPC -----------------------------------------------------------
 
@@ -505,341 +404,28 @@ class LunoraClient:
         return parse_rpc_response(parsed, status), parse_commit_cursor(parsed)
 
     # --- Offline-capable writes ---------------------------------------------
+    #
+    # The write path itself lives in `lunora.submit` — it is a third of this
+    # client and has its own locking discipline (see that module's docstring).
 
-    async def submit(
-        self,
-        function_path: str,
-        args: Any = None,
-        shard_key: Optional[str] = None,
-        mutation_id: Optional[str] = None,
-        optimistic: Optional[Callable[[Any], Any]] = None,
-        optimistic_update: Optional[Callable[[OptimisticLocalStore, Any], None]] = None,
-        precondition: Optional[Callable[[], bool]] = None,
-        on_settled: Optional[Callable[[MutationSettled], None]] = None,
-    ) -> MutationOutcome:
+    async def submit(self, options: SubmitOptions) -> MutationOutcome:
         """Write, sending it now or queueing it until the socket is back.
 
-        ``optimistic`` is the single-query shortcut: the transform is layered onto
-        the subscription registered under the SAME ``(function_path, args,
-        shard_key)`` as this write, mirroring ``@lunora/client``'s per-call
-        ``optimistic``. ``optimistic_update`` is the general form — it receives an
-        :class:`~lunora.optimistic.OptimisticLocalStore` and may patch any number
-        of subscribed queries. Both settle together, against the same commit
-        cursor.
-
-        ``precondition`` is re-evaluated just before a QUEUED write replays; a
-        ``False`` verdict drops it (the row it edited was deleted meanwhile)
-        rather than replaying a write that can only fail.
-
-        Returns as soon as the write is either committed or durably queued — see
-        :class:`MutationOutcome` for why this does not block like the browser
-        client's promise. ``on_settled`` reports the eventual verdict on a queued
-        write.
+        See :class:`~lunora.submit.SubmitOptions` for the per-write knobs and
+        :func:`~lunora.submit.submit_write` for what each outcome means.
         """
 
-        if self._closed:
-            raise OfflineError("CLIENT_CLOSED", "client is closed")
-
-        write_id = mutation_id if mutation_id is not None else random_id()
-        deferred: list = []
-
-        with self._lock:
-            confirms, rollbacks = self._apply_optimistic(function_path, args, shard_key, optimistic, optimistic_update, deferred)
-            queue_it = self._send is None and (self._was_ever_connected or self.offline_queue.queue_before_first_connect)
-            identity = self.identity
-
-        self._drain(deferred)
-
-        if queue_it:
-            self._enqueue_write(function_path, args, shard_key, write_id, identity, precondition, confirms, rollbacks, on_settled)
-
-            return MutationOutcome("queued", write_id)
-
-        try:
-            value, commit_cursor = await self._rpc_full(function_path, args, shard_key, write_id)
-        except Exception:
-            settle: list = []
-            with self._lock:
-                rollback_all(rollbacks, settle)
-            self._drain(settle)
-            raise
-
-        settle = []
-        with self._lock:
-            # Confirmed against the write's COMMITTED cursor, so the overlay drops
-            # when (or once) a frame at that cursor lands — never on this call's
-            # resolve timing, which races the socket broadcast.
-            confirm_all(confirms, commit_cursor, settle)
-        self._drain(settle)
-
-        return MutationOutcome("committed", write_id, value, commit_cursor)
+        return await submit_write(self, options)
 
     def hydrate_offline_queue(self) -> list:
-        """Restore writes persisted in a prior session; returns their shard keys.
+        """Restore writes persisted in a prior session; returns their shard keys."""
 
-        Open a socket for each returned shard key (and then flush it) to replay
-        them. A restored write has no live caller, so its verdict arrives only
-        through :meth:`on_mutation_settled`.
-        """
-
-        with self._lock:
-            queue = self.offline_queue
-
-        restored, evicted = queue.hydrate()
-
-        for item in queue.items():
-            if item.reject is None and item.resolve is None:
-                self._attach_hydrated_settlers(item)
-
-        # Restored records that the cap dropped never get settlers of their own,
-        # so they are reported directly rather than through one.
-        self._report_discarded(evicted)
-
-        return restored
+        return hydrate_queue(self)
 
     async def flush_offline_queue(self, shard_key: Optional[str] = None) -> FlushReport:
-        """Replay one shard's queued writes, in order, over HTTP.
+        """Replay one shard's queued writes, in order, over HTTP."""
 
-        Call it when that shard's socket comes back. Each write replays under its
-        own idempotency key, so one the server already committed is de-duplicated
-        rather than applied twice.
-
-        Classification per write: success confirms its optimistic overlay against
-        the ECHOED commit cursor; a coded verdict is terminal (replaying it would
-        only re-trigger the same failure); a transient failure — a raw transport
-        error, or one of :data:`TRANSIENT_ERROR_CODES` — stops the flush and
-        re-queues that write and every unreplayed one, in order, for the next
-        attempt.
-        """
-
-        report = FlushReport()
-
-        with self._lock:
-            queue = self.offline_queue
-            current_identity = self.identity
-
-        conflicted = queue.drain_conflict()
-
-        for discarded in conflicted:
-            queue.unpersist(discarded.entry.id)
-            report.conflicted.append(discarded.entry.id)
-            report.rejected.append(discarded.entry.id)
-
-        self._report_discarded(conflicted)
-
-        key = shard_key or ""
-        drained = queue.drain(lambda item: (item.shard_key or "") == key)
-
-        if not drained:
-            return report
-
-        # Gated against ONE identity snapshot: a flush is a single authenticated
-        # burst, so every write in it necessarily runs under one identity.
-        sendable: list = []
-
-        for item in drained:
-            if identity_allows_replay(item.identity, current_identity):
-                sendable.append(item)
-                continue
-
-            queue.unpersist(item.id)
-            error = OfflineError(OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")
-            self._settle_rejected(item, error)
-            report.rejected.append(item.id)
-
-        for index, item in enumerate(sendable):
-            try:
-                value, commit_cursor = await self._rpc_full(
-                    item.function_path,
-                    item.args,
-                    item.shard_key,
-                    item.id,
-                    client_id=item.client_id,
-                )
-            except Exception as error:
-                if _is_transient(error):
-                    # Nothing after this write may go out ahead of it: replaying
-                    # out of order is how a durable queue corrupts the data it was
-                    # protecting.
-                    queue.requeue(sendable[index:])
-                    report.requeued.extend(entry.id for entry in sendable[index:])
-
-                    return report
-
-                queue.unpersist(item.id)
-                self._settle_rejected(item, error)
-                report.rejected.append(item.id)
-
-                continue
-
-            queue.unpersist(item.id)
-            self._settle_committed(item, value, commit_cursor)
-            report.committed.append(item.id)
-
-        return report
-
-    # --- Offline/optimistic internals ---------------------------------------
-
-    def _find_subscriptions(self, function_path: str, args: Any, shard_key: Optional[str]) -> list:
-        """Live subscriptions registered under exactly this ``(path, args, shard)``.
-
-        A linear scan, unlike ``@lunora/client``'s keyed registry, and
-        deliberately: this client does not de-duplicate subscriptions, so several
-        can share one triple and all of them must receive the overlay. The scan
-        is over a handful of entries on the write path, not the frame path.
-
-        A ``None`` shard key and an empty one are the same shard, so a write fired
-        without one matches a subscription registered without one either way.
-        """
-
-        args_key = stable_wire_key(args if args is not None else {})
-        key = shard_key or ""
-
-        return [sub for sub in self._subs.values() if sub.function_path == function_path and sub.args_key == args_key and (sub.shard_key or "") == key]
-
-    def _apply_optimistic(
-        self,
-        function_path: str,
-        args: Any,
-        shard_key: Optional[str],
-        optimistic: Optional[Callable[[Any], Any]],
-        optimistic_update: Optional[Callable[[OptimisticLocalStore, Any], None]],
-        deferred: list,
-    ) -> tuple:
-        """Register both optimistic APIs' layers. Runs with the lock held."""
-
-        confirms: list = []
-        rollbacks: list = []
-
-        if optimistic is not None:
-            for sub in self._find_subscriptions(function_path, args, shard_key):
-                handle = apply_optimistic_layer(sub, optimistic, deferred)
-                if handle is not None:
-                    confirms.append(handle.confirm)
-                    rollbacks.append(handle.rollback)
-
-        if optimistic_update is not None:
-            store = OptimisticLocalStore(
-                lambda path, query_args: self._find_subscriptions(path, query_args, shard_key),
-                lambda path: [sub for sub in self._subs.values() if sub.function_path == path and (sub.shard_key or "") == (shard_key or "")],
-                deferred,
-            )
-
-            try:
-                optimistic_update(store, args)
-            except Exception:
-                # Unwind only this callback's own writes, so a throwing update
-                # leaves the cache exactly as it found it.
-                rollback_all(store.rollbacks, deferred)
-            else:
-                confirms.extend(store.confirms)
-                rollbacks.extend(store.rollbacks)
-
-        return confirms, rollbacks
-
-    def _enqueue_write(
-        self,
-        function_path: str,
-        args: Any,
-        shard_key: Optional[str],
-        write_id: str,
-        identity: Optional[str],
-        precondition: Optional[Callable[[], bool]],
-        confirms: list,
-        rollbacks: list,
-        on_settled: Optional[Callable[[MutationSettled], None]],
-    ) -> None:
-        def on_commit(commit_cursor: Optional[int]) -> None:
-            deferred: list = []
-            with self._lock:
-                confirm_all(confirms, commit_cursor, deferred)
-            self._drain(deferred)
-
-        def resolve(value: Any) -> None:
-            self._emit_settled(MutationSettled(write_id, "committed", value=value, had_awaiter=True), on_settled)
-
-        def reject(error: Exception) -> None:
-            deferred: list = []
-            with self._lock:
-                rollback_all(rollbacks, deferred)
-            self._drain(deferred)
-            self._emit_settled(MutationSettled(write_id, "rejected", error=error, had_awaiter=True), on_settled)
-
-        entry = QueuedMutation(
-            args=args,
-            client_id=self.client_id,
-            function_path=function_path,
-            # Bound at enqueue time, so the write can only ever replay as whoever
-            # made it.
-            identity=identity,
-            live_awaiter=True,
-            mutation_id=write_id,
-            on_commit=on_commit,
-            precondition=precondition,
-            reject=reject,
-            resolve=resolve,
-            shard_key=shard_key,
-        )
-
-        with self._lock:
-            queue = self.offline_queue
-            # Safe under the lock now that `enqueue` invokes no callback: it
-            # returns what the cap evicted instead, and those settle below.
-            evicted = queue.enqueue(entry)
-
-        self._report_discarded(evicted)
-
-    def _attach_hydrated_settlers(self, item: QueuedMutation) -> None:
-        """Give a restored write the observer-only settlers it lost in the restart."""
-
-        item.live_awaiter = False
-        item.resolve = lambda value, mutation_id=item.id: self._emit_settled(MutationSettled(mutation_id, "committed", value=value))
-        item.reject = lambda error, mutation_id=item.id: self._emit_settled(MutationSettled(mutation_id, "rejected", error=error))
-
-    def _report_discarded(self, discarded: list) -> None:
-        """Settle every write the queue let go of without sending it.
-
-        Runs with the lock RELEASED: a rejection rolls optimistic layers back,
-        which re-acquires it. Every discard path funnels through here, so an
-        eviction can never drop a durable write in silence — which matters most
-        for a hydrated record, whose original caller did not survive the restart.
-        """
-
-        for item in discarded:
-            self._settle_rejected(item.entry, item.error())
-
-    def _settle_committed(self, item: QueuedMutation, value: Any, commit_cursor: Optional[int]) -> None:
-        # The overlay is confirmed BEFORE the caller is told, so the gapless drop
-        # is already in place when the confirming frame lands.
-        if item.on_commit is not None:
-            item.on_commit(commit_cursor)
-        if item.resolve is not None:
-            item.resolve(value)
-
-    def _settle_rejected(self, item: QueuedMutation, error: Exception) -> None:
-        if item.reject is not None:
-            item.reject(error)
-
-    def _emit_settled(self, event: MutationSettled, on_settled: Optional[Callable[[MutationSettled], None]] = None) -> None:
-        with self._lock:
-            listeners = list(self._settled_listeners)
-
-        if on_settled is not None:
-            listeners.insert(0, on_settled)
-
-        for listener in listeners:
-            # One observer raising must not stop the rest from being told: a
-            # write's terminal verdict is the only report a restored write ever
-            # produces.
-            with contextlib.suppress(Exception):
-                listener(event)
-
-    @staticmethod
-    def _drain(deferred: list) -> None:
-        """Run notifications queued while the lock was held."""
-
-        for call in deferred:
-            call()
+        return await flush_queue(self, shard_key)
 
     # --- WS credential ------------------------------------------------------
 
@@ -856,7 +442,8 @@ class LunoraClient:
 
     def ws_url_for(self, shard_key: Optional[str], token: Optional[str]) -> str:
         params = []
-        if shard_key is not None:
+        # Empty is absent, matching `build_rpc_body` — see its docstring.
+        if shard_key:
             params.append("shard=" + _percent(shard_key))
         if token is not None:
             params.append("token=" + _percent(token))

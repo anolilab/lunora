@@ -42,8 +42,10 @@ async def main():
         url="https://my-app.example.com",
         auth_token="…",  # bearer for HTTP RPC (optional)
         ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
-        client_id="python-client",
         timeout=30,  # seconds; the default transport's `urlopen` timeout, raise for slow actions
+        # client_id is minted per instance when omitted. Pin a stable per-device
+        # one only when the offline queue is durable — a replayed write is
+        # namespaced server-side under the id that issued it.
     )
 
     # HTTP RPC
@@ -69,7 +71,7 @@ it queues the write, shows a predicted value immediately, and replays in order
 once the socket is back.
 
 ```python
-from lunora import LunoraClient, OfflineQueue
+from lunora import LunoraClient, OfflineQueue, SubmitOptions
 
 client = LunoraClient(url="https://my-app.example.com", identity=current_user_id)
 # Capacity, an app version, and a durable store are all optional; the default is
@@ -79,16 +81,19 @@ client.offline_queue = OfflineQueue(max_items=500, persistence=my_store, version
 client.subscribe("messages:list", {"channel": "general"}, render)
 
 outcome = await client.submit(
-    "messages:send",
-    {"channel": "general", "text": "hi"},
-    # Layered onto the subscription registered under the same (path, args, shard).
-    # Re-run on every server frame, so derive from `current` rather than closing
-    # over a value.
-    optimistic=lambda current: [*(current or []), {"text": "hi", "pending": True}],
-    # Re-checked just before a QUEUED write replays: False drops it instead of
-    # replaying a write that can only fail.
-    precondition=lambda: channel_still_exists("general"),
-    on_settled=lambda event: print(event.status, event.mutation_id),
+    SubmitOptions(
+        function_path="messages:send",
+        args={"channel": "general", "text": "hi"},
+        # Layered onto the subscription registered under the same (path, args,
+        # shard). Re-run on every server frame, so derive from `current` rather
+        # than closing over a value — and keep it pure: the fold runs inside the
+        # client's lock.
+        optimistic=lambda current: [*(current or []), {"text": "hi", "pending": True}],
+        # Re-checked just before a QUEUED write replays: False drops it instead
+        # of replaying a write that can only fail.
+        precondition=lambda: channel_still_exists("general"),
+        on_settled=lambda event: print(event.status, event.mutation_id),
+    )
 )
 
 if outcome.queued:
@@ -100,6 +105,11 @@ The overlay drops the moment a frame whose `cursor` reaches the write's echoed
 write rolls back. `client.flush_offline_queue(shard_key)` replays a shard's queued
 writes when its socket returns (`connect_and_run` does it for you), and
 `client.hydrate_offline_queue()` restores what a prior session persisted.
+
+A queued write whose args cannot be wire-encoded settles terminally on the first
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
+discard — including one the capacity cap evicts out of a _restored_ queue, which
+has no caller left to tell — is reported to `client.on_mutation_settled`.
 
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write

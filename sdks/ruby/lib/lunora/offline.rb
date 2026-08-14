@@ -11,6 +11,8 @@ module Lunora
   OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
   # The client was closed while the write was still queued.
   CLIENT_CLOSED = "CLIENT_CLOSED"
+  # The write's args cannot be wire-encoded, so no replay of it can ever succeed.
+  OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE"
 
   # The coded errors a replay must NOT treat as the server's final word.
   #
@@ -62,15 +64,21 @@ module Lunora
   # after a restart: its original caller is gone, so the settle observer is the
   # only report it will ever produce.
   #
-  # The settle callbacks are +on_resolve+/+on_reject+ rather than the sibling
-  # ports' +resolve+/+reject+: a Struct member named +reject+ shadows
-  # +Struct#reject+, which every enumerable helper in this file would then reach
-  # through this entry rather than through Enumerable.
+  # The settle state is carried as DATA, not as verdict closures: +confirms+ and
+  # +rollbacks+ are the write's optimistic-layer handles and +on_settled+ its
+  # per-write observer. The client builds the MutationSettled at the settle site
+  # from these, so there is exactly ONE place that decides what a terminal
+  # verdict looks like — and an entry with no handles at all (a hydrated record)
+  # still reports through the client-level listeners rather than to nobody.
   QueuedMutation = Struct.new(
     :id, :function_path, :args, :shard_key, :client_id, :identity,
-    :live_awaiter, :precondition, :on_commit, :on_resolve, :on_reject,
+    :live_awaiter, :precondition, :confirms, :rollbacks, :on_settled,
     keyword_init: true
   ) do
+    # Whether a caller is still waiting on this write. False for a restored
+    # record, and read — never restated — wherever a settle event is stamped.
+    def awaited? = live_awaiter == true
+
     # The durable form. Callback fields are deliberately not persisted.
     def to_record(version = nil)
       record = { "args" => args, "functionPath" => function_path, "id" => id }
@@ -83,7 +91,7 @@ module Lunora
 
     # Rebuild a queued write from durable storage.
     #
-    # The restored entry carries no resolve/reject: the caller that submitted it
+    # The restored entry carries no settle handles: the caller that submitted it
     # did not survive the restart. A missing "identity" key restores as
     # ABSENT_IDENTITY (a legacy record) while a stored null restores as nil
     # (queued signed out) — the distinction the identity gate turns on.
@@ -110,6 +118,18 @@ module Lunora
   # that collided would share one watermark namespace and each could suppress the
   # other's writes.
   def random_id = SecureRandom.hex(20)
+
+  # The canonical form of a shard key: an absent key and an empty one name the
+  # SAME shard (the default one), because +ws_url+ omits an empty +?shard=+ and
+  # the server routes both to the same place.
+  def normalize_shard_key(key) = key.nil? || key.empty? ? nil : key
+
+  # Whether two shard keys name the same shard.
+  #
+  # Compared normalised rather than strictly: a write submitted with
+  # +shard_key: ""+ would otherwise queue under a shard no flush ever names, so
+  # it never replays and its optimistic overlay never targets a subscription.
+  def same_shard?(left, right) = normalize_shard_key(left) == normalize_shard_key(right)
 
   # Whether a persisted record should be dropped and purged on hydrate.
   #
@@ -148,10 +168,17 @@ module Lunora
   # with the owning client's lock held (which is what Client does) or from one
   # thread.
   #
-  # Nothing here invokes a consumer's callback, which is what makes calling it
-  # under that lock safe: every method that lets go of a write RETURNS it as a
-  # Discarded instead, and the client settles those once it has released the
-  # lock. See Discarded for what the alternative cost.
+  # No SETTLE path here invokes a consumer's callback, which is what makes
+  # calling it under that lock safe: every method that lets go of a write RETURNS
+  # it as a Discarded instead, and the client settles those once it has released
+  # the lock. See Discarded for what the alternative cost. A precondition is the
+  # consumer's too, so +drain_conflict+ takes the ids its caller already decided
+  # rather than evaluating one here.
+  #
+  # +on_size_change+ and +on_persistence_error+ are the exception: they fire
+  # INSIDE that critical section, because every call that can move the size is
+  # made under it. Keep them to bookkeeping — one that calls back into the owning
+  # client deadlocks on a Mutex that is not reentrant.
   #
   # The persistence adapter is any object answering +append+, +load+, +remove+
   # and +clear+, SYNCHRONOUSLY. The browser client's is async because IndexedDB
@@ -285,17 +312,19 @@ module Lunora
       notify_size
     end
 
-    # Drop and return the writes whose precondition no longer holds. Run at the
-    # start of a flush to weed out writes whose assumptions died while the client
-    # was offline; the admitted writes keep their FIFO order.
-    def drain_conflict
-      conflicted, kept = @items.partition { |item| !item.precondition.nil? && !item.precondition.call }
-      return [] if conflicted.empty?
+    # Drop and return the writes named by +conflicted_ids+, whose preconditions no
+    # longer held. Run at the start of a flush to weed out writes whose
+    # assumptions died while the client was offline; the admitted writes keep
+    # their FIFO order.
+    #
+    # The verdicts arrive as ids rather than being computed here: a precondition
+    # is the CONSUMER's predicate, and this queue is called with the owning
+    # client's lock held. Evaluating one here would run consumer code inside that
+    # critical section, which is what Discarded exists to avoid.
+    def drain_conflict(conflicted_ids)
+      wanted = conflicted_ids.to_h { |id| [id, true] }
 
-      @items = kept
-      notify_size
-
-      conflicted.map do |item|
+      drain { |item| wanted.key?(item.id) }.map do |item|
         Discarded.new(item, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay")
       end
     end
@@ -313,11 +342,7 @@ module Lunora
     # Durable storage is left INTACT on purpose: closing must not discard writes
     # a future session will restore. Use the adapter's own +clear+ to purge them.
     def clear
-      drained = @items
-      @items = []
-      notify_size
-
-      drained.map { |item| Discarded.new(item, CLIENT_CLOSED, "client closed with the write still queued") }
+      drain.map { |item| Discarded.new(item, CLIENT_CLOSED, "client closed with the write still queued") }
     end
 
     private

@@ -44,9 +44,7 @@ end
 module QueueFixtures
   include FixtureLoader
 
-  def scenario(name)
-    fixture("offline-optimistic.json").fetch("offlineQueue").fetch(name)
-  end
+  def queue_case(name) = scenario("offlineQueue", name)
 
   def entry(id, shard_key: nil, precondition: nil, identity: Lunora::ABSENT_IDENTITY)
     Lunora::QueuedMutation.new(
@@ -80,7 +78,7 @@ class TestQueueOrdering < Minitest::Test
 
   def test_writes_drain_in_submission_order
     ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
-    case_data = scenario("fifo")
+    case_data = queue_case("fifo")
     sizes = []
     queue = Lunora::OfflineQueue.new(on_size_change: ->(size) { sizes << size })
 
@@ -94,13 +92,16 @@ class TestQueueOrdering < Minitest::Test
 
   def test_a_predicate_drain_flushes_one_shard_and_leaves_the_rest
     ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
-    case_data = scenario("shardDrain")
+    case_data = queue_case("shardDrain")
     queue = Lunora::OfflineQueue.new
 
     case_data["entries"].each { |spec| queue.enqueue(entry(spec["id"], shard_key: spec["shardKey"])) }
 
+    # Normalised, not compared strictly: an absent shard key and an empty one are
+    # the SAME shard, so `m5` (queued under `""`) has to drain on a null flush or
+    # nothing ever replays it.
     target = case_data["drainShardKey"]
-    drained = queue.drain { |item| item.shard_key == target }
+    drained = queue.drain { |item| Lunora.same_shard?(item.shard_key, target) }
 
     assert_equal case_data["drained"], ids(drained)
     assert_equal case_data["remaining"], ids(queue.items)
@@ -108,7 +109,7 @@ class TestQueueOrdering < Minitest::Test
 
   def test_requeue_returns_writes_to_the_front_without_re_persisting
     ConformanceManifest.covers("offline_queue_fifo_and_shard_drain")
-    case_data = scenario("requeue")
+    case_data = queue_case("requeue")
     store = MemoryStore.new
     queue = Lunora::OfflineQueue.new(persistence: store)
 
@@ -127,7 +128,7 @@ class TestQueueOverflow < Minitest::Test
 
   def test_overflow_evicts_the_oldest_write
     ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
-    case_data = scenario("overflow")
+    case_data = queue_case("overflow")
     evicted = []
     store = MemoryStore.new
     queue = Lunora::OfflineQueue.new(max_items: case_data["maxItems"], persistence: store)
@@ -144,7 +145,7 @@ class TestQueueOverflow < Minitest::Test
 
   def test_close_rejects_every_queued_write_but_keeps_the_durable_records
     ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
-    case_data = scenario("clear")
+    case_data = queue_case("clear")
     store = MemoryStore.new
     queue = Lunora::OfflineQueue.new(persistence: store)
 
@@ -164,7 +165,7 @@ class TestQueuePrecondition < Minitest::Test
 
   def test_a_stale_write_is_dropped_before_it_replays
     ConformanceManifest.covers("offline_queue_precondition_drops_stale_write")
-    case_data = scenario("precondition")
+    case_data = queue_case("precondition")
     queue = Lunora::OfflineQueue.new
 
     case_data["entries"].each do |spec|
@@ -172,10 +173,32 @@ class TestQueuePrecondition < Minitest::Test
       queue.enqueue(entry(spec["id"], precondition: -> { verdict }))
     end
 
-    conflicted = queue.drain_conflict
+    # The verdicts are computed by the caller and handed in as ids: a precondition
+    # is the consumer's predicate, and the queue is called with the client's lock
+    # held.
+    failed = queue.items.reject { |item| item.precondition.call }
+    conflicted = queue.drain_conflict(failed.map(&:id))
 
     assert_equal case_data["conflicted"].map { |id| [id, case_data["code"]] }, discarded_pairs(conflicted)
     assert_equal case_data["remaining"], ids(queue.items)
+  end
+
+  # The client evaluates the predicates OUTSIDE its lock, so one that calls back
+  # into the client cannot deadlock the flush.
+  def test_a_precondition_may_re_enter_the_client
+    ConformanceManifest.covers("offline_queue_precondition_drops_stale_write")
+    case_data = queue_case("precondition")
+    client = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, _body) { [200, { "result" => nil }] })
+
+    case_data["entries"].each do |spec|
+      verdict = spec["precondition"]
+      client.offline_queue.enqueue(entry(spec["id"], precondition: -> { client.pending_mutation_count.positive? && verdict }))
+    end
+
+    report = client.flush_offline_queue
+
+    assert_equal case_data["conflicted"], report.conflicted
+    assert_equal case_data["remaining"], report.committed
   end
 end
 
@@ -184,7 +207,7 @@ class TestQueueHydration < Minitest::Test
 
   def test_restored_writes_land_ahead_of_boot_time_writes
     ConformanceManifest.covers("offline_queue_hydrates_persisted_writes")
-    case_data = scenario("hydrate")
+    case_data = queue_case("hydrate")
     store = MemoryStore.new(persisted_records(case_data))
     queue = Lunora::OfflineQueue.new(persistence: store, version: case_data["version"])
 
@@ -205,7 +228,7 @@ class TestQueueHydration < Minitest::Test
 
   def test_hydration_respects_the_capacity_cap
     ConformanceManifest.covers("offline_queue_hydrates_persisted_writes")
-    case_data = scenario("hydrateOverflow")
+    case_data = queue_case("hydrateOverflow")
     store = MemoryStore.new(persisted_records(case_data))
     queue = Lunora::OfflineQueue.new(
       max_items: case_data["maxItems"],
@@ -222,6 +245,34 @@ class TestQueueHydration < Minitest::Test
     # Only the shards whose writes SURVIVED — a key gathered before eviction
     # would send the caller to open a socket with nothing queued behind it.
     assert_equal case_data["shardKeys"], shard_keys
+  end
+
+  # Driven through the CLIENT, not through +OfflineQueue#hydrate+ — the direct
+  # call is the test above, and it is exactly the one that misses this: a
+  # restored record has no per-entry reject handler, so a client that reports a
+  # discard through one reports this eviction to NOBODY while still un-persisting
+  # the durable write.
+  def test_a_hydrated_write_the_cap_dropped_settles_through_the_client
+    ConformanceManifest.covers("offline_queue_hydrate_overflow_settles_discarded")
+    case_data = queue_case("hydrateOverflow")
+    store = MemoryStore.new(persisted_records(case_data))
+    settled = []
+
+    client = Lunora::Client.new("https://app.example")
+    client.offline_queue = Lunora::OfflineQueue.new(
+      max_items: case_data["maxItems"], persistence: store, version: case_data["version"]
+    )
+    client.on_mutation_settled(->(event) { settled << event })
+
+    shard_keys = client.hydrate_offline_queue
+
+    assert_equal case_data["shardKeys"], shard_keys
+    assert_equal case_data["queuedAfterHydrate"], ids(client.offline_queue.items)
+    assert_equal case_data["settledFromClient"], settled.map(&:mutation_id)
+    assert_equal case_data["settledCode"], settled.first.error.code
+    # Read from the entry's own live_awaiter, never restated here: it is the one
+    # field that tells a restored write's ONLY report from a live caller's second.
+    assert_equal case_data["settledHadAwaiter"], settled.first.had_awaiter
   end
 
   def test_version_gating_is_off_until_a_version_is_configured
@@ -250,7 +301,7 @@ class TestIdentityGate < Minitest::Test
 
   def test_a_write_only_replays_under_the_identity_that_made_it
     ConformanceManifest.covers("offline_queue_identity_gate_rejects_replay")
-    case_data = scenario("identityGate")
+    case_data = queue_case("identityGate")
 
     case_data["cases"].each do |spec|
       stamped = spec["stamped"] == "absent" ? Lunora::ABSENT_IDENTITY : spec["stamped"]
@@ -261,7 +312,7 @@ class TestIdentityGate < Minitest::Test
 
   def test_flush_rejects_a_write_stamped_under_another_identity
     ConformanceManifest.covers("offline_queue_identity_gate_rejects_replay")
-    case_data = scenario("identityGate")
+    case_data = queue_case("identityGate")
     posts = []
     codes = []
 
@@ -276,7 +327,7 @@ class TestIdentityGate < Minitest::Test
     client.offline_queue.enqueue(
       Lunora::QueuedMutation.new(
         args: {}, function_path: "messages:send", id: "m1", identity: "user-a",
-        on_reject: ->(error) { codes << error.code }
+        on_settled: ->(event) { codes << event.error.code }
       )
     )
 
@@ -296,7 +347,7 @@ class TestFlushIntegration < Minitest::Test
 
   def test_a_flush_replays_in_order_and_confirms_the_optimistic_overlay
     ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
-    case_data = scenario("flushReplay")
+    case_data = queue_case("flushReplay")
     by_id = case_data["responses"].to_h { |spec| [spec["id"], spec] }
     seen_headers = []
     confirmed = []
@@ -323,8 +374,8 @@ class TestFlushIntegration < Minitest::Test
     case_data["queued"].each do |id|
       client.offline_queue.enqueue(
         Lunora::QueuedMutation.new(
-          args: {}, client_id: "client-1", function_path: "messages:send", id: id,
-          on_commit: ->(cursor) { confirmed << [id, cursor] }, on_reject: ->(_error) {}, on_resolve: ->(_value) {}
+          args: {}, client_id: "client-1", confirms: [->(cursor, _deferred) { confirmed << [id, cursor] }],
+          function_path: "messages:send", id: id
         )
       )
     end
@@ -429,7 +480,7 @@ class TestFlushIntegration < Minitest::Test
   # and never settled.
   def test_an_overflow_during_submit_settles_rather_than_re_entering_the_lock
     ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
-    case_data = scenario("overflow")
+    case_data = queue_case("overflow")
     settled = []
 
     client = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, _body) { [200, { "result" => nil }] })
@@ -441,6 +492,101 @@ class TestFlushIntegration < Minitest::Test
     assert_equal [:rejected], settled.map(&:status)
     assert_equal case_data["code"], settled.first.error.code
     assert_equal case_data["maxItems"], client.pending_mutation_count
+  end
+
+  # The shard namespaces an anonymous caller's idempotency rows by the client id
+  # (`anon:<clientId>`). A per-language constant would put every unauthenticated
+  # user of this SDK in ONE key space: two of them submitting the same
+  # caller-supplied mutation id, and the second write short-circuits to the
+  # first user's cached result without ever running.
+  def test_each_client_mints_its_own_id_on_the_wire_and_in_the_durable_record
+    ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
+    sent = []
+    post = lambda { |_url, headers, _body|
+      sent << headers["x-lunora-client-id"]
+      [200, { "result" => nil }]
+    }
+
+    2.times { Lunora::Client.new("https://app.example", http_post: post).mutation("messages:send", {}, nil, mutation_id: "order-1") }
+
+    refute_includes sent, nil
+    refute_equal sent[0], sent[1]
+
+    # And it is the INSTANCE id that is persisted, so a replay after a restart
+    # namespaces under the id that issued the write.
+    persisted = Array.new(2).map do
+      store = MemoryStore.new
+      client = Lunora::Client.new(
+        "https://app.example",
+        offline_queue: Lunora::OfflineQueue.new(persistence: store, queue_before_first_connect: true)
+      )
+      client.submit("messages:send", {})
+      store.appended.first["clientId"]
+    end
+
+    refute_includes persisted, nil
+    refute_equal persisted[0], persisted[1]
+  end
+
+  def test_an_unencodable_write_settles_terminally_instead_of_looping_forever
+    ConformanceManifest.covers("offline_flush_unencodable_write_settles_terminal")
+    case_data = queue_case("unencodableWrite")
+    seen_headers = []
+    settled = []
+    store = MemoryStore.new
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      http_post: lambda { |_url, headers, _body|
+        seen_headers << headers["x-lunora-mutation-id"]
+        [200, { "commitCursor" => 4, "result" => { "ok" => true } }]
+      }
+    )
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: store)
+    client.on_mutation_settled(->(event) { settled << event })
+
+    case_data["queued"].each do |id|
+      # A bare Object is the smallest value the codec refuses; the real case is a
+      # Regexp or a class instance handed to a `v.any()` field.
+      args = case_data["unencodable"].include?(id) ? { "bad" => Object.new } : { "n" => id }
+      client.offline_queue.enqueue(Lunora::QueuedMutation.new(args: args, function_path: "messages:send", id: id))
+    end
+
+    report = client.flush_offline_queue
+
+    # Partitioned BEFORE the replay loop: a codec error carries no code, so the
+    # transient rule would re-queue it at the FRONT on every reconnect forever —
+    # never settling its caller and blocking every write behind it.
+    assert_equal case_data["mutationIdHeaders"], seen_headers
+    assert_equal case_data["rejected"], report.rejected
+    assert_equal case_data["committed"], report.committed
+    assert_equal case_data["queuedAfterFlush"], ids(client.offline_queue.items)
+    assert_equal case_data["persistRemoveCalls"], store.removed
+    assert_equal case_data["code"], settled.first.error.code
+  end
+
+  # +optimistic_update+ is consumer code and must run with the lock RELEASED:
+  # Ruby's Mutex is not reentrant, so a callback reading the client it was handed
+  # would otherwise hard-deadlock its own thread.
+  def test_an_optimistic_update_may_re_enter_the_client
+    ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
+    seen = []
+    observed = nil
+
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    client.subscribe("messages:list", {}, ->(value) { seen << value })
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+    client.detach_socket
+
+    outcome = client.submit("messages:send", {}, optimistic_update: lambda { |store, _args|
+      observed = [client.pending_mutation_count, client.online?, store.get_query("messages:list", {})]
+      store.set_query("messages:list", {}, %w[a z])
+    })
+
+    assert_equal :queued, outcome.status
+    assert_equal [0, false, %w[a]], observed
+    assert_equal %w[a z], seen.last
   end
 
   def test_a_failed_online_write_rolls_its_overlay_back

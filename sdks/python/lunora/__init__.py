@@ -5,13 +5,7 @@ implements, and ``sdks/python/README.md`` for usage.
 """
 
 from .client import (
-    TRANSIENT_ERROR_CODES,
-    FlushReport,
     LunoraClient,
-    LunoraError,
-    MutationOutcome,
-    MutationSettled,
-    SubscriptionError,
     build_connect_frame,
     build_rpc_body,
     build_shape_subscribe_frame,
@@ -20,12 +14,14 @@ from .client import (
     parse_commit_cursor,
     parse_rpc_response,
 )
+from .errors import LunoraError, SubscriptionError
 from .offline import (
     ABSENT_IDENTITY,
     CLIENT_CLOSED,
     OFFLINE_IDENTITY_CHANGED,
     OFFLINE_PRECONDITION_FAILED,
     OFFLINE_QUEUE_OVERFLOW,
+    OFFLINE_WRITE_UNENCODABLE,
     Discarded,
     OfflineError,
     OfflineQueue,
@@ -45,6 +41,13 @@ from .optimistic import (
     fold_optimistic,
     notify_subscription,
     rollback_all,
+)
+from .submit import (
+    TRANSIENT_ERROR_CODES,
+    FlushReport,
+    MutationOutcome,
+    MutationSettled,
+    SubmitOptions,
 )
 from .wire import (
     TAG,
@@ -68,6 +71,7 @@ __all__ = [
     "OFFLINE_IDENTITY_CHANGED",
     "OFFLINE_PRECONDITION_FAILED",
     "OFFLINE_QUEUE_OVERFLOW",
+    "OFFLINE_WRITE_UNENCODABLE",
     "TAG",
     "TRANSIENT_ERROR_CODES",
     "UNDEFINED",
@@ -84,6 +88,7 @@ __all__ = [
     "OptimisticLocalStore",
     "PersistenceAdapter",
     "QueuedMutation",
+    "SubmitOptions",
     "SubscriptionError",
     "WireBigInt",
     "WireBytes",

@@ -42,6 +42,8 @@ pub const CODE_OFFLINE_QUEUE_OVERFLOW: &str = "OFFLINE_QUEUE_OVERFLOW";
 pub const CODE_OFFLINE_PRECONDITION_FAILED: &str = "OFFLINE_PRECONDITION_FAILED";
 /// The write was queued under a different identity than the one now in effect.
 pub const CODE_OFFLINE_IDENTITY_CHANGED: &str = "OFFLINE_IDENTITY_CHANGED";
+/// The write's args cannot be wire-encoded, so it can never replay.
+pub const CODE_OFFLINE_WRITE_UNENCODABLE: &str = "OFFLINE_WRITE_UNENCODABLE";
 /// The client was closed while the write was still queued.
 pub const CODE_CLIENT_CLOSED: &str = "CLIENT_CLOSED";
 
@@ -78,6 +80,16 @@ pub type SizeHandler = Box<dyn Fn(usize) + Send>;
 
 /// Re-evaluated just before a queued write replays.
 pub type Precondition = Box<dyn Fn() -> bool + Send>;
+
+/// Whether two shard keys name the same shard.
+///
+/// An absent key and an empty one are the SAME shard — an empty string names no
+/// shard, so both mean "the default one". Comparing them strictly leaves a write
+/// submitted with `""` queued forever, because nothing ever flushes a shard named
+/// `""`, and makes its optimistic overlay miss the subscription it targets.
+pub fn same_shard(left: Option<&str>, right: Option<&str>) -> bool {
+    left.unwrap_or_default() == right.unwrap_or_default()
+}
 
 /// Whether a write stamped `stamped` may replay under `current`.
 pub fn identity_allows_replay(stamped: &Identity, current: Option<&str>) -> bool {
@@ -199,7 +211,8 @@ impl QueuedMutation {
 
 static RANDOM_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Mints a process-unique, collision-resistant id.
+/// Mints a process-unique id — for a mutation's idempotency key, and for the
+/// per-instance [`crate::client::Client::client_id`].
 ///
 /// It must be globally unique rather than merely locally distinct: the server
 /// scopes a replayed write's de-duplication watermark by `(identity, clientId)`,
@@ -207,12 +220,19 @@ static RANDOM_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// collided would share one watermark namespace and each could suppress the
 /// other's writes.
 ///
-/// The entropy is `RandomState`, the standard library's randomly-seeded hasher
-/// factory; a fresh one per call is seeded from the process's own random source
-/// and advanced per thread, which is exactly the "unpredictable per call" this
-/// needs. It avoids a `rand` dependency in a crate whose one dependency is
-/// deliberate. Timestamp and counter guarantee ordering-independence within the
-/// process even if that entropy were poor.
+/// UNIQUENESS is what this guarantees, and it comes from the `nanos:sequence`
+/// prefix alone: the counter is process-global and monotonic, so no two ids from
+/// one process can be equal whatever the suffix does. Across processes the
+/// timestamp separates them, and the `RandomState` suffix separates two processes
+/// that started within the same nanosecond.
+///
+/// UNPREDICTABILITY is what it does NOT guarantee, and no caller may rely on it.
+/// `RandomState::new()` draws from a thread-local key that is bumped by one per
+/// call, so successive ids on a thread are SipHash of a known counter under
+/// linearly-related keys — an observer who has seen a few can narrow the next.
+/// Nothing here is a capability: an id is an idempotency key or a client stamp,
+/// both of which the server treats as a namespace label rather than a secret. A
+/// use that needs an unguessable value wants a CSPRNG, not this.
 pub fn random_id() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_nanos() as u64);
     let sequence = RANDOM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -312,13 +332,29 @@ impl OfflineQueue {
 
     /// Adds a write to the back of the queue, persisting it and capping the
     /// queue. Returns whatever the cap evicted, for the caller to report.
-    pub fn enqueue(&mut self, entry: QueuedMutation, encoded_args: Value) -> Vec<Discarded> {
-        let record = entry.record(self.version.as_deref(), encoded_args);
+    ///
+    /// `encoded_args` is a RESULT because a write's args may be outside the wire
+    /// codec, and the two failures must not be confused: such a write is still
+    /// queued (an in-memory replay in this session carries the real value and is
+    /// correct) but must NOT be persisted, because the durable record could only
+    /// hold a substitute — and a substitute replays after a restart as a
+    /// successful write with the wrong arguments. The failure is reported through
+    /// [`OfflineQueue::on_persistence_error`] as the `append` it prevented, and
+    /// the write settles terminally on the next flush.
+    pub fn enqueue(&mut self, entry: QueuedMutation, encoded_args: Result<Value, String>) -> Vec<Discarded> {
         let id = entry.id.clone();
+        let record = match encoded_args {
+            Ok(args) => Some(entry.record(self.version.as_deref(), args)),
+            Err(error) => {
+                report(&self.on_persistence_error, "append", &error, Some(&id));
+
+                None
+            }
+        };
 
         self.items.push(entry);
 
-        if let Some(store) = self.persistence.as_mut() {
+        if let (Some(store), Some(record)) = (self.persistence.as_mut(), record) {
             if let Err(error) = store.append(&record) {
                 report(&self.on_persistence_error, "append", &error, Some(&id));
             }
@@ -453,20 +489,24 @@ impl OfflineQueue {
         self.notify_size();
     }
 
-    /// Drops the writes whose precondition no longer holds and returns them. Run
-    /// at the start of a flush to weed out writes whose assumptions died while the
-    /// client was offline; the admitted writes keep their FIFO order.
-    pub fn drain_conflict(&mut self) -> Vec<Discarded> {
-        let conflicted = self.drain(|item| item.precondition.as_ref().is_some_and(|check| !check()));
+    /// Drops the writes named in `stale` and returns them. Run at the start of a
+    /// flush to weed out writes whose assumptions died while the client was
+    /// offline; the admitted writes keep their FIFO order.
+    ///
+    /// It takes the VERDICTS, not the predicates: the consumer's `precondition` is
+    /// its code, and every port evaluates it outside the queue so it can never run
+    /// where the queue is mid-mutation. Rust needs no lock to make that safe —
+    /// `&mut self` is the exclusion — but this surface is deliberately identical
+    /// across all seven ports, and a signature that means something different here
+    /// is exactly the drift that sameness exists to prevent.
+    pub fn drain_conflict(&mut self, stale: &HashSet<String>) -> Vec<Discarded> {
+        let conflicted = self.drain(|item| stale.contains(&item.id));
 
-        conflicted
-            .into_iter()
-            .map(|entry| Discarded {
-                code: CODE_OFFLINE_PRECONDITION_FAILED,
-                entry,
-                message: "offline mutation skipped: precondition failed before replay",
-            })
-            .collect()
+        discard(
+            conflicted,
+            CODE_OFFLINE_PRECONDITION_FAILED,
+            "offline mutation skipped: precondition failed before replay",
+        )
     }
 
     /// Forgets one write's durable record, after it has terminally settled.
@@ -485,19 +525,10 @@ impl OfflineQueue {
     ///
     /// Durable storage is left INTACT on purpose: closing must not discard writes
     /// a future session will restore. Use the adapter's own `clear` to purge them.
+    /// [`OfflineQueue::drain`] is likewise storage-neutral, which is why this is
+    /// expressed in terms of it rather than emptying the vector a second way.
     pub fn clear(&mut self) -> Vec<Discarded> {
-        let drained: Vec<QueuedMutation> = self.items.drain(..).collect();
-
-        self.notify_size();
-
-        drained
-            .into_iter()
-            .map(|entry| Discarded {
-                code: CODE_CLIENT_CLOSED,
-                entry,
-                message: "client closed with the write still queued",
-            })
-            .collect()
+        discard(self.drain(|_| true), CODE_CLIENT_CLOSED, "client closed with the write still queued")
     }
 
     /// Drops from the FRONT (the oldest) until the queue is within capacity.
@@ -525,6 +556,11 @@ impl OfflineQueue {
             observer(self.items.len());
         }
     }
+}
+
+/// Stamps drained writes with the coded reason they were discarded.
+fn discard(entries: Vec<QueuedMutation>, code: &'static str, message: &'static str) -> Vec<Discarded> {
+    entries.into_iter().map(|entry| Discarded { code, entry, message }).collect()
 }
 
 fn report(observer: &Option<PersistenceErrorHandler>, operation: &str, error: &str, mutation_id: Option<&str>) {

@@ -10,25 +10,11 @@ import (
 	"errors"
 	"reflect"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
-
-// queueFixture is one named scenario from the fixture's `offlineQueue` block.
-func queueFixture(t *testing.T, name string) map[string]any {
-	t.Helper()
-
-	block, ok := loadFixture(t, "offline-optimistic.json")["offlineQueue"].(map[string]any)
-	if !ok {
-		t.Fatalf("offline-optimistic.json has no offlineQueue block")
-	}
-
-	scenario, ok := block[name].(map[string]any)
-	if !ok {
-		t.Fatalf("offline-optimistic.json has no offlineQueue scenario %q", name)
-	}
-
-	return scenario
-}
 
 // strings narrows a fixture's JSON array to the ids it names. A JSON null shard
 // key becomes "", which is how this package spells the default shard.
@@ -118,7 +104,7 @@ func discardedPairs(discarded []Discarded) []string {
 func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
 	covers("offline_queue_fifo_and_shard_drain")
 
-	fifo := queueFixture(t, "fifo")
+	fifo := fixtureScenario(t, "offlineQueue", "fifo")
 
 	var sizes []int
 
@@ -140,7 +126,7 @@ func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
 		t.Fatalf("last observed size: got %d, want %d", sizes[len(sizes)-1], want)
 	}
 
-	shard := queueFixture(t, "shardDrain")
+	shard := fixtureScenario(t, "offlineQueue", "shardDrain")
 	queue = NewOfflineQueue(OfflineQueueOptions{})
 	entries, _ := shard["entries"].([]any)
 
@@ -166,7 +152,7 @@ func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
 func TestOfflineQueueRequeueDoesNotRePersist(t *testing.T) {
 	covers("offline_queue_fifo_and_shard_drain")
 
-	scenario := queueFixture(t, "requeue")
+	scenario := fixtureScenario(t, "offlineQueue", "requeue")
 	store := &memoryStore{}
 	queue := NewOfflineQueue(OfflineQueueOptions{Persistence: store})
 
@@ -203,7 +189,7 @@ func TestOfflineQueueRequeueDoesNotRePersist(t *testing.T) {
 func TestOfflineQueueOverflowEvictsOldest(t *testing.T) {
 	covers("offline_queue_overflow_evicts_oldest")
 
-	scenario := queueFixture(t, "overflow")
+	scenario := fixtureScenario(t, "offlineQueue", "overflow")
 
 	store := &memoryStore{}
 	queue := NewOfflineQueue(OfflineQueueOptions{MaxItems: int(scenario["maxItems"].(float64)), Persistence: store})
@@ -236,7 +222,7 @@ func TestOfflineQueueOverflowEvictsOldest(t *testing.T) {
 func TestOfflineQueueClearKeepsDurableRecords(t *testing.T) {
 	covers("offline_queue_overflow_evicts_oldest")
 
-	scenario := queueFixture(t, "clear")
+	scenario := fixtureScenario(t, "offlineQueue", "clear")
 
 	store := &memoryStore{}
 	queue := NewOfflineQueue(OfflineQueueOptions{Persistence: store})
@@ -271,9 +257,10 @@ func TestOfflineQueueClearKeepsDurableRecords(t *testing.T) {
 func TestOfflineQueuePreconditionDropsStaleWrite(t *testing.T) {
 	covers("offline_queue_precondition_drops_stale_write")
 
-	scenario := queueFixture(t, "precondition")
+	scenario := fixtureScenario(t, "offlineQueue", "precondition")
 
-	queue := NewOfflineQueue(OfflineQueueOptions{})
+	client := NewClient("https://app.example", nil)
+	queue := client.OfflineQueue()
 	entries, _ := scenario["entries"].([]any)
 
 	for _, raw := range entries {
@@ -285,7 +272,10 @@ func TestOfflineQueuePreconditionDropsStaleWrite(t *testing.T) {
 		queue.Enqueue(entry)
 	}
 
-	conflicted := queue.DrainConflict()
+	// Driven through the client's own weeding step: the predicate is the
+	// CONSUMER's code, so it is evaluated with the mutex released and only the
+	// drop it justifies runs under it.
+	conflicted := client.dropStalePreconditions(queue)
 	code, _ := scenario["code"].(string)
 
 	want := make([]string, 0, 1)
@@ -324,7 +314,7 @@ func persistedRecords(scenario map[string]any) []map[string]any {
 func TestOfflineQueueHydratesPersistedWrites(t *testing.T) {
 	covers("offline_queue_hydrates_persisted_writes")
 
-	scenario := queueFixture(t, "hydrate")
+	scenario := fixtureScenario(t, "offlineQueue", "hydrate")
 	version, _ := scenario["version"].(string)
 	store := &memoryStore{records: persistedRecords(scenario)}
 	queue := NewOfflineQueue(OfflineQueueOptions{Persistence: store, Version: version})
@@ -371,7 +361,7 @@ func TestOfflineQueueHydratesPersistedWrites(t *testing.T) {
 func TestOfflineQueueHydrationRespectsCapacity(t *testing.T) {
 	covers("offline_queue_hydrates_persisted_writes")
 
-	scenario := queueFixture(t, "hydrateOverflow")
+	scenario := fixtureScenario(t, "offlineQueue", "hydrateOverflow")
 	version, _ := scenario["version"].(string)
 
 	store := &memoryStore{records: persistedRecords(scenario)}
@@ -403,6 +393,134 @@ func TestOfflineQueueHydrationRespectsCapacity(t *testing.T) {
 	// would send the caller to open a socket with nothing queued behind it.
 	if got, want := shardKeys, fixtureStrings(scenario["shardKeys"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("shard keys: got %v, want %v", got, want)
+	}
+}
+
+// TestHydrateOverflowSettlesTheDiscardedWrite drives the eviction through the
+// CLIENT's hydrate path, which is the only place the bug was visible: a restored
+// record has no per-write handler, so a client that reports a discard through one
+// un-persists the write and tells nobody at all.
+func TestHydrateOverflowSettlesTheDiscardedWrite(t *testing.T) {
+	covers("offline_queue_hydrate_overflow_settles_discarded")
+
+	scenario := fixtureScenario(t, "offlineQueue", "hydrateOverflow")
+	version, _ := scenario["version"].(string)
+	store := &memoryStore{records: persistedRecords(scenario)}
+
+	client := NewClient("https://app.example", nil)
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{
+		MaxItems:    int(scenario["maxItems"].(float64)),
+		Persistence: store,
+		Version:     version,
+	}))
+
+	var settled []MutationSettled
+
+	client.OnMutationSettled(func(event MutationSettled) { settled = append(settled, event) })
+
+	shardKeys, err := client.HydrateOfflineQueue()
+	if err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+
+	if got, want := shardKeys, fixtureStrings(scenario["shardKeys"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("shard keys: got %v, want %v", got, want)
+	}
+
+	reported := make([]string, 0, len(settled))
+	for _, event := range settled {
+		reported = append(reported, event.MutationID)
+	}
+
+	if want := fixtureStrings(scenario["settledFromClient"]); !reflect.DeepEqual(reported, want) {
+		t.Fatalf("settled through the client: got %v, want %v", reported, want)
+	}
+
+	var offline OfflineError
+
+	if !errors.As(settled[0].Err, &offline) || offline.Code != scenario["settledCode"] {
+		t.Fatalf("settled error: got %v, want code %v", settled[0].Err, scenario["settledCode"])
+	}
+
+	// Read from the entry's own LiveAwaiter, so a restored write's ONLY report is
+	// distinguishable from a live caller's second one.
+	if want, _ := scenario["settledHadAwaiter"].(bool); settled[0].HadAwaiter != want {
+		t.Fatalf("hadAwaiter: got %v, want %v", settled[0].HadAwaiter, want)
+	}
+}
+
+// TestFlushSettlesAnUnencodableWriteTerminally pins the poison-message guard: a
+// write whose args cannot be wire-encoded can never succeed, and a codec error
+// carries no code — so classifying it transient re-queues it on every reconnect
+// forever, in front of every write behind it.
+func TestFlushSettlesAnUnencodableWriteTerminally(t *testing.T) {
+	covers("offline_flush_unencodable_write_settles_terminal")
+
+	scenario := fixtureScenario(t, "offlineQueue", "unencodableWrite")
+
+	unencodable := map[string]bool{}
+	for _, id := range fixtureStrings(scenario["unencodable"]) {
+		unencodable[id] = true
+	}
+
+	var seenHeaders []string
+
+	client := NewClient("https://app.example", func(_ string, headers map[string]string, _ []byte) (int, []byte, error) {
+		seenHeaders = append(seenHeaders, headers["x-lunora-mutation-id"])
+
+		return 200, []byte(`{"commitCursor":4,"result":{"ok":true}}`), nil
+	})
+
+	store := &memoryStore{}
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store}))
+
+	var settled []MutationSettled
+
+	client.OnMutationSettled(func(event MutationSettled) { settled = append(settled, event) })
+
+	for _, id := range fixtureStrings(scenario["queued"]) {
+		args := any(map[string]any{"body": "hello"})
+		if unencodable[id] {
+			// A channel has no wire representation, and never will: the failure is
+			// deterministic, not a transport blip.
+			args = map[string]any{"body": make(chan int)}
+		}
+
+		client.OfflineQueue().Enqueue(&QueuedMutation{
+			Args:         args,
+			FunctionPath: "messages:send",
+			ID:           id,
+			LiveAwaiter:  true,
+		})
+	}
+
+	report := client.FlushOfflineQueue("")
+
+	if got, want := report.Rejected, fixtureStrings(scenario["rejected"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rejected: got %v, want %v", got, want)
+	}
+
+	if got, want := report.Committed, fixtureStrings(scenario["committed"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed: got %v, want %v", got, want)
+	}
+
+	// Only the survivors reached the wire, and nothing was left to loop on.
+	if got, want := seenHeaders, fixtureStrings(scenario["mutationIdHeaders"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("idempotency keys: got %v, want %v", got, want)
+	}
+
+	if got, want := queuedIDs(client.OfflineQueue().Items()), fixtureStrings(scenario["queuedAfterFlush"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("queued after flush: got %v, want %v", got, want)
+	}
+
+	if got, want := store.removed, fixtureStrings(scenario["persistRemoveCalls"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("un-persisted: got %v, want %v", got, want)
+	}
+
+	var offline OfflineError
+
+	if len(settled) == 0 || !errors.As(settled[0].Err, &offline) || offline.Code != scenario["code"] {
+		t.Fatalf("settled: got %+v, want first rejected with code %v", settled, scenario["code"])
 	}
 }
 
@@ -441,10 +559,65 @@ func TestOfflineQueueVersionGateAndIDs(t *testing.T) {
 	}
 }
 
+// TestClientIDIsPerInstanceAndRidesEveryWrite pins the id the shard namespaces
+// anonymous idempotency by.
+//
+// A per-language constant makes every anonymous client in that language share one
+// de-duplication key space: two unauthenticated callers passing the same mutation
+// id collide, and the second write short-circuits to the first caller's cached
+// result without ever running.
+func TestClientIDIsPerInstanceAndRidesEveryWrite(t *testing.T) {
+	first := NewClient("https://app.example", nil)
+	second := NewClient("https://app.example", nil)
+
+	if first.ClientID == "" || first.ClientID == second.ClientID {
+		t.Fatalf("client ids %q and %q, want two distinct non-empty ids", first.ClientID, second.ClientID)
+	}
+
+	var sentClientID string
+
+	first.Post = func(_ string, headers map[string]string, _ []byte) (int, []byte, error) {
+		sentClientID = headers["x-lunora-client-id"]
+
+		return 200, []byte(`{"result":null}`), nil
+	}
+
+	store := &memoryStore{}
+	first.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store, QueueBeforeFirstConnect: true}))
+
+	if _, err := first.Submit(SubmitOptions{FunctionPath: "messages:send"}); err != nil {
+		t.Fatalf("queued submit: %v", err)
+	}
+
+	// Persisted with the record: a replay after a restart must namespace under
+	// the id that ISSUED the write, not whatever the new session minted.
+	if got, _ := store.appended[0]["clientId"].(string); got != first.ClientID {
+		t.Fatalf("persisted clientId: got %q, want %q", got, first.ClientID)
+	}
+
+	first.AttachSocket(func(map[string]any) error { return nil })
+	first.FlushOfflineQueue("")
+
+	if sentClientID != first.ClientID {
+		t.Fatalf("replayed client id header: got %q, want %q", sentClientID, first.ClientID)
+	}
+
+	// And on the direct path, where the header comes from the rpcFull fallback.
+	sentClientID = ""
+
+	if _, err := first.Submit(SubmitOptions{FunctionPath: "messages:send"}); err != nil {
+		t.Fatalf("direct submit: %v", err)
+	}
+
+	if sentClientID != first.ClientID {
+		t.Fatalf("direct client id header: got %q, want %q", sentClientID, first.ClientID)
+	}
+}
+
 func TestOfflineQueueIdentityGate(t *testing.T) {
 	covers("offline_queue_identity_gate_rejects_replay")
 
-	scenario := queueFixture(t, "identityGate")
+	scenario := fixtureScenario(t, "offlineQueue", "identityGate")
 	cases, _ := scenario["cases"].([]any)
 
 	for _, raw := range cases {
@@ -479,7 +652,7 @@ func TestOfflineQueueIdentityGate(t *testing.T) {
 func TestFlushRejectsAWriteStampedUnderAnotherIdentity(t *testing.T) {
 	covers("offline_queue_identity_gate_rejects_replay")
 
-	scenario := queueFixture(t, "identityGate")
+	scenario := fixtureScenario(t, "offlineQueue", "identityGate")
 
 	var posts int
 
@@ -498,10 +671,10 @@ func TestFlushRejectsAWriteStampedUnderAnotherIdentity(t *testing.T) {
 		FunctionPath: "messages:send",
 		ID:           "m1",
 		Identity:     IdentityOf("user-a"),
-		Reject: func(err error) {
+		OnSettled: func(event MutationSettled) {
 			var offline OfflineError
 
-			if errors.As(err, &offline) {
+			if errors.As(event.Err, &offline) {
 				codes = append(codes, offline.Code)
 			}
 		},
@@ -528,7 +701,7 @@ func TestFlushRejectsAWriteStampedUnderAnotherIdentity(t *testing.T) {
 func TestFlushReplaysInOrderAndConfirmsOptimistic(t *testing.T) {
 	covers("offline_flush_replays_and_confirms_optimistic")
 
-	scenario := queueFixture(t, "flushReplay")
+	scenario := fixtureScenario(t, "offlineQueue", "flushReplay")
 	responses, _ := scenario["responses"].([]any)
 	bySlot := map[string]map[string]any{}
 
@@ -741,7 +914,7 @@ func TestSubmitBeforeTheFirstConnectFailsFast(t *testing.T) {
 func TestOverflowDuringSubmitSettlesInsteadOfDeadlocking(t *testing.T) {
 	covers("offline_flush_replays_and_confirms_optimistic")
 
-	scenario := queueFixture(t, "overflow")
+	scenario := fixtureScenario(t, "offlineQueue", "overflow")
 	maxItems := int(scenario["maxItems"].(float64))
 	code, _ := scenario["code"].(string)
 
@@ -802,5 +975,103 @@ func TestSubmitRollsBackTheOverlayWhenTheWriteIsRejected(t *testing.T) {
 
 	if want := []any{"a"}; !reflect.DeepEqual(seen[len(seen)-1], want) {
 		t.Fatalf("after rollback: got %v, want %v", seen[len(seen)-1], want)
+	}
+}
+
+// TestSubmitAndFlushDoNotRaceTheQueue is the normal topology: application code
+// submitting on one goroutine while the reconnect logic flushes on another.
+//
+// The queue carries no lock of its own, so every mutation has to happen inside
+// the client's. With the flush's drain outside it, `go test -race` reports the
+// append in Enqueue against the reassignment in Drain — and the write appended in
+// that window is silently discarded, after Submit already answered "queued".
+func TestSubmitAndFlushDoNotRaceTheQueue(t *testing.T) {
+	const writes = 200
+
+	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
+		return 200, []byte(`{"commitCursor":1,"result":{"ok":true}}`), nil
+	})
+
+	// Connected once, then dropped: every Submit queues.
+	client.AttachSocket(func(map[string]any) error { return nil })
+	client.DetachSocket()
+
+	var committed atomic.Int64
+
+	client.OnMutationSettled(func(event MutationSettled) {
+		if event.Status == MutationCommitted {
+			committed.Add(1)
+		}
+	})
+
+	var (
+		group      sync.WaitGroup
+		submitErrs atomic.Int64
+	)
+
+	group.Add(2)
+
+	go func() {
+		defer group.Done()
+
+		for range writes {
+			if _, err := client.Submit(SubmitOptions{Args: map[string]any{}, FunctionPath: "messages:send"}); err != nil {
+				submitErrs.Add(1)
+			}
+		}
+	}()
+
+	go func() {
+		defer group.Done()
+
+		for range writes {
+			client.FlushOfflineQueue("")
+		}
+	}()
+
+	group.Wait()
+	client.FlushOfflineQueue("")
+
+	if submitErrs.Load() != 0 {
+		t.Fatalf("submit errors: got %d, want 0", submitErrs.Load())
+	}
+
+	// Every write Submit accepted either committed or is still queued. A dropped
+	// one is the lost write this test exists for.
+	if got, pending := committed.Load(), client.PendingMutationCount(); got != writes || pending != 0 {
+		t.Fatalf("committed %d of %d, %d still queued — writes were lost", got, writes, pending)
+	}
+}
+
+// TestOptimisticUpdateMayReEnterTheClient pins the other half of the mutex
+// discipline: the consumer's update is arbitrary code, and it runs with the lock
+// released, so touching the client it was handed cannot deadlock the caller.
+func TestOptimisticUpdateMayReEnterTheClient(t *testing.T) {
+	client := NewClient("https://app.example", nil)
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{QueueBeforeFirstConnect: true}))
+	client.Subscribe("messages:list", map[string]any{}, func(any) {}, nil, "")
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		_, _ = client.Submit(SubmitOptions{
+			Args:         map[string]any{},
+			FunctionPath: "messages:list",
+			OptimisticUpdate: func(store *OptimisticLocalStore, _ any) {
+				// Every one of these takes the client's mutex.
+				_ = client.PendingMutationCount()
+				_ = client.Online()
+				store.SetQuery("messages:list", map[string]any{}, []any{"predicted"})
+				_ = store.GetQuery("messages:list", map[string]any{})
+			},
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Submit deadlocked: the consumer's OptimisticUpdate ran inside the client's critical section")
 	}
 }

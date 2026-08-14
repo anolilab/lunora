@@ -244,6 +244,13 @@ type OptimisticLocalStore struct {
 	find     func(functionPath string, args any) []*OptimisticState
 	matching func(functionPath string) []QueryEntry
 	deferred *[]func()
+	// guard runs ONE store operation under the owning client's mutex. The
+	// consumer's OptimisticUpdate therefore runs with that mutex released — it is
+	// arbitrary user code, and a callback that touched the client it was handed
+	// (another Submit, PendingMutationCount, …) would otherwise deadlock on a
+	// sync.Mutex that is not reentrant. Nil runs the operation directly, which is
+	// what the engine's own single-goroutine tests want.
+	guard func(func())
 
 	// Confirms and Rollbacks are the settle closures every SetQuery produced, in
 	// application order, for the caller to run when the mutation settles.
@@ -264,33 +271,53 @@ func NewOptimisticLocalStore(
 // nothing is subscribed for it. It reflects any override already written in this
 // batch.
 func (s *OptimisticLocalStore) GetQuery(functionPath string, args any) any {
-	matches := s.find(functionPath, args)
-	if len(matches) == 0 {
-		return nil
+	var value any
+
+	s.locked(func() {
+		if matches := s.find(functionPath, args); len(matches) > 0 {
+			value = matches[0].LastValue
+		}
+	})
+
+	return value
+}
+
+// locked runs fn under the owning client's mutex, or directly when unguarded.
+func (s *OptimisticLocalStore) locked(fn func()) {
+	if s.guard == nil {
+		fn()
+
+		return
 	}
 
-	return matches[0].LastValue
+	s.guard(fn)
 }
 
 // GetAllQueries returns every loaded subscription on functionPath with the args
 // it was subscribed under — for a write that must patch every variant of a list
 // query without enumerating their args up front.
 func (s *OptimisticLocalStore) GetAllQueries(functionPath string) []QueryEntry {
-	return s.matching(functionPath)
+	var entries []QueryEntry
+
+	s.locked(func() { entries = s.matching(functionPath) })
+
+	return entries
 }
 
 // SetQuery writes an optimistic override for a subscribed query. A no-op when
 // nothing is subscribed for it: you only patch queries the consumer is watching.
 func (s *OptimisticLocalStore) SetQuery(functionPath string, args any, value any) {
-	for _, state := range s.find(functionPath, args) {
-		handle := ApplyOptimisticLayer(state, func(any) any { return value }, s.deferred)
-		if handle == nil {
-			continue
-		}
+	s.locked(func() {
+		for _, state := range s.find(functionPath, args) {
+			handle := ApplyOptimisticLayer(state, func(any) any { return value }, s.deferred)
+			if handle == nil {
+				continue
+			}
 
-		s.Confirms = append(s.Confirms, handle.Confirm)
-		s.Rollbacks = append(s.Rollbacks, handle.Rollback)
-	}
+			s.Confirms = append(s.Confirms, handle.Confirm)
+			s.Rollbacks = append(s.Rollbacks, handle.Rollback)
+		}
+	})
 }
 
 // ConfirmAll confirms every layer a write registered against its commit cursor.

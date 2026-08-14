@@ -117,6 +117,11 @@ public final class Optimistic {
      * <p>A layer whose transform throws is SKIPPED rather than aborting the fold: one buggy
      * optimistic update must not blank the whole query for every other layer. The mutation that
      * registered it surfaces the failure itself.
+     *
+     * <p>{@code Exception}, not {@code RuntimeException}: {@link Transform} cannot DECLARE a
+     * checked exception, but nothing stops one arriving through a wrapped call or a sneaky throw,
+     * and one buggy layer aborting the fold is precisely the outcome this catch exists to prevent.
+     * {@code Error} is deliberately not caught — a fold is not the place to swallow an OOM.
      */
     public static Object fold(Object base, List<Layer> layers) {
         Object value = base;
@@ -124,7 +129,7 @@ public final class Optimistic {
         for (Layer layer : layers) {
             try {
                 value = layer.transform.apply(value);
-            } catch (RuntimeException ignored) {
+            } catch (Exception ignored) {
                 // A throwing layer is skipped, never fatal to the fold.
             }
         }
@@ -201,21 +206,22 @@ public final class Optimistic {
     }
 
     /**
-     * Layers one transform onto {@code state}, returning its settle handle — or null, leaving the
-     * state untouched, when the transform throws on the value it is first handed: there is nothing
-     * to display and nothing to settle.
+     * Installs a layer whose FIRST application has already been computed, and returns its settle
+     * handle.
+     *
+     * <p>The split is the point: {@code transform} is a consumer's closure, and running it is the
+     * caller's job — done with the client's monitor RELEASED, against a snapshot of the displayed
+     * value. This method only installs the result, which is what the monitor is actually needed
+     * for. A transform that threw on that first application never reaches here: there is nothing to
+     * display and nothing to settle, so the caller drops it.
+     *
+     * <p>The transform is still STORED, not just its result, because a per-call optimistic layer
+     * rebases — it is re-derived from each new authoritative base by {@link #fold}. That re-run
+     * does happen under the monitor; it is inherent to rebasing and is why a transform must be
+     * pure.
      */
-    public static Handle applyLayer(State state, Transform transform, List<Runnable> deferred) {
-        Object predicted;
-
-        try {
-            // Same input as the reference client: the current DISPLAYED value, i.e. serverBase
-            // already folded through any prior layers.
-            predicted = transform.apply(state.lastValue);
-        } catch (RuntimeException error) {
-            return null;
-        }
-
+    public static Handle installLayer(
+            State state, Transform transform, Object predicted, List<Runnable> deferred) {
         Layer layer = new Layer(transform);
 
         state.layers.add(layer);
@@ -271,40 +277,54 @@ public final class Optimistic {
      * A read/write handle over the client's live query cache, handed to a write's {@code
      * optimisticUpdate} so ONE mutation can patch MANY subscribed queries.
      *
-     * <p>Each {@link #setQuery} registers a constant layer through the same engine the single-query
-     * path uses, so the whole batch rebases onto incoming deltas and settles together — confirmed
-     * on the mutation's commit cursor, or rolled back on failure.
+     * <p><b>A pure recorder.</b> {@link #setQuery} writes nothing — it appends an {@link Override},
+     * and the caller installs the batch as constant layers afterwards. That is what lets the
+     * consumer's update closure run with the client's monitor RELEASED while the install still
+     * happens in ONE critical section together with the offline decision and the enqueue. Reads go
+     * through the injected accessors, which take the monitor themselves for the instant they need
+     * it.
+     *
+     * <p>Installed, each override behaves exactly as before: a constant layer through the same
+     * engine the single-query path uses, so the whole batch rebases onto incoming deltas and
+     * settles together — confirmed on the mutation's commit cursor, or rolled back on failure.
      */
     public static final class LocalStore {
-        private final Function<QueryTarget, List<State>> find;
+        private final Function<QueryTarget, Object> read;
         private final Function<String, List<QueryEntry>> matching;
-        private final List<Runnable> deferred;
 
-        /** The settle closures every {@link #setQuery} produced, in application order. */
-        public final List<BiConsumer<Long, List<Runnable>>> confirms = new ArrayList<>();
-
-        public final List<Consumer<List<Runnable>>> rollbacks = new ArrayList<>();
+        /** The overrides {@link #setQuery} recorded, in the order they were written. */
+        public final List<Override> overrides = new ArrayList<>();
 
         public LocalStore(
-                Function<QueryTarget, List<State>> find,
-                Function<String, List<QueryEntry>> matching,
-                List<Runnable> deferred) {
-            this.find = find;
+                Function<QueryTarget, Object> read, Function<String, List<QueryEntry>> matching) {
+            this.read = read;
             this.matching = matching;
-            this.deferred = deferred;
         }
 
         /** One subscribed query, as the store addresses it. */
         public record QueryTarget(String functionPath, Object args) {}
 
+        /** One recorded {@link #setQuery}: the query it targets and the value to display for it. */
+        public record Override(String functionPath, Object args, Object value) {}
+
         /**
          * The current cached value for a subscribed query, or null when nothing is subscribed for
-         * it. Reflects any override already written in this batch.
+         * it. Reflects any override already written in this batch — the last one wins, so a second
+         * {@code setQuery} on the same target reads back as the second.
          */
         public Object getQuery(String functionPath, Object args) {
-            List<State> matches = find.apply(new QueryTarget(functionPath, args));
+            String key = Key.stableWireKey(args);
 
-            return matches.isEmpty() ? null : matches.get(0).lastValue;
+            for (int index = overrides.size() - 1; index >= 0; index--) {
+                Override override = overrides.get(index);
+
+                if (override.functionPath().equals(functionPath)
+                        && Key.stableWireKey(override.args()).equals(key)) {
+                    return override.value();
+                }
+            }
+
+            return read.apply(new QueryTarget(functionPath, args));
         }
 
         /**
@@ -317,20 +337,11 @@ public final class Optimistic {
         }
 
         /**
-         * Writes an optimistic override for a subscribed query. A no-op when nothing is subscribed
-         * for it: you only patch queries the consumer is watching.
+         * Records an optimistic override for a subscribed query. Installing it is a no-op when
+         * nothing is subscribed for it: you only patch queries the consumer is watching.
          */
         public void setQuery(String functionPath, Object args, Object value) {
-            for (State state : find.apply(new QueryTarget(functionPath, args))) {
-                Handle handle = applyLayer(state, current -> value, deferred);
-
-                if (handle == null) {
-                    continue;
-                }
-
-                confirms.add(handle::confirm);
-                rollbacks.add(handle::rollback);
-            }
+            overrides.add(new Override(functionPath, args, value));
         }
     }
 }

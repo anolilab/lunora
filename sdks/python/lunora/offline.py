@@ -40,6 +40,8 @@ OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
 OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED"
 #: The write was queued under a different identity than the one now in effect.
 OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
+#: The write's args cannot be wire-encoded, so no replay of it can ever succeed.
+OFFLINE_WRITE_UNENCODABLE = "OFFLINE_WRITE_UNENCODABLE"
 #: The client was closed while the write was still queued.
 CLIENT_CLOSED = "CLIENT_CLOSED"
 
@@ -166,14 +168,14 @@ class QueuedMutation:
     __slots__ = (
         "args",
         "client_id",
+        "confirms",
         "function_path",
         "id",
         "identity",
         "live_awaiter",
-        "on_commit",
+        "on_settled",
         "precondition",
-        "reject",
-        "resolve",
+        "rollbacks",
         "shard_key",
     )
 
@@ -186,9 +188,9 @@ class QueuedMutation:
         client_id: Optional[str] = None,
         identity: Identity = ABSENT_IDENTITY,
         precondition: Optional[Callable[[], bool]] = None,
-        on_commit: Optional[Callable[[Optional[int]], None]] = None,
-        resolve: Optional[Callable[[Any], None]] = None,
-        reject: Optional[Callable[[Exception], None]] = None,
+        confirms: Optional[list] = None,
+        rollbacks: Optional[list] = None,
+        on_settled: Optional[Callable[[Any], None]] = None,
         live_awaiter: bool = False,
     ) -> None:
         self.function_path = function_path
@@ -205,11 +207,16 @@ class QueuedMutation:
         #: Evaluated just before replay; ``False`` drops the write instead of
         #: replaying it (the row it edited was deleted while offline).
         self.precondition = precondition
-        #: Invoked on a successful replay with the echoed commit cursor, so a
-        #: pending optimistic layer drops gaplessly when a frame reaches it.
-        self.on_commit = on_commit
-        self.resolve = resolve
-        self.reject = reject
+        #: The optimistic layers this write installed, carried as DATA rather
+        #: than as a settle closure: the settle site confirms them against the
+        #: echoed commit cursor (so a pending overlay drops gaplessly when a
+        #: frame reaches it) or rolls them back. Empty for a restored write —
+        #: the layers went with the process that made them.
+        self.confirms: list = list(confirms) if confirms else []
+        self.rollbacks: list = list(rollbacks) if rollbacks else []
+        #: The per-call settle handler, if the caller passed one. ``None`` for a
+        #: restored write; the client-level observers are notified either way.
+        self.on_settled = on_settled
         #: ``True`` when a live caller is still watching this write. ``False`` for
         #: a record restored from storage after a restart — its original caller is
         #: gone, so a terminal verdict reaches nobody but the settle observer.
@@ -233,8 +240,8 @@ class QueuedMutation:
     def from_record(record: dict) -> QueuedMutation:
         """Rebuild a queued write from durable storage.
 
-        The restored entry carries no ``resolve``/``reject``: the caller that
-        submitted it is gone. A missing ``identity`` key restores as
+        The restored entry carries no settle handler and no layers: the caller
+        that submitted it is gone. A missing ``identity`` key restores as
         :data:`ABSENT_IDENTITY` (a legacy record), while a stored ``null``
         restores as ``None`` (queued signed out) — the distinction the identity
         gate turns on.
@@ -287,7 +294,11 @@ class OfflineQueue:
         on_size_change: Optional[Callable[[int], None]] = None,
         on_persistence_error: Optional[Callable[[str, Exception, Optional[str]], None]] = None,
     ) -> None:
-        self.max_items = max_items
+        #: Clamped to at least one: a cap of zero accepts a write and evicts it
+        #: in the same call, so every submit reports "queued" and then settles
+        #: OFFLINE_QUEUE_OVERFLOW — a queue that cannot hold anything is a
+        #: misconfiguration, not a policy.
+        self.max_items = max(1, max_items)
         #: Queue writes made before the socket has EVER connected. Off by
         #: default: without it a misconfigured endpoint silently accumulates
         #: writes that will never flush, instead of failing on the first one.
@@ -418,27 +429,22 @@ class OfflineQueue:
         self._items[:0] = list(items)
         self._notify_size()
 
-    def drain_conflict(self) -> list:
+    def drain_conflict(self, stale_ids: Any) -> list:
         """Drop and return the writes whose precondition no longer holds.
 
         Run at the start of a flush to weed out writes whose assumptions died
         while the client was offline. The admitted writes keep their FIFO order.
+
+        It takes the ids rather than evaluating the preconditions itself, because
+        a precondition is the CONSUMER's predicate and this method runs with the
+        client's lock held — the caller evaluates them over a snapshot with the
+        lock released and hands back what failed.
         """
 
-        conflicted: list[QueuedMutation] = []
-        kept: list[QueuedMutation] = []
-
-        for item in self._items:
-            if item.precondition is not None and not item.precondition():
-                conflicted.append(item)
-            else:
-                kept.append(item)
-
-        if conflicted:
-            self._items = kept
-            self._notify_size()
-
-        return [Discarded(item, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay") for item in conflicted]
+        return [
+            Discarded(item, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay")
+            for item in self.drain(lambda item: item.id in stale_ids)
+        ]
 
     def unpersist(self, mutation_id: Optional[str]) -> None:
         """Forget one write's durable record, after it has terminally settled."""
@@ -456,11 +462,7 @@ class OfflineQueue:
         purge them (on sign-out, say).
         """
 
-        drained = self._items[:]
-        self._items.clear()
-        self._notify_size()
-
-        return [Discarded(item, CLIENT_CLOSED, "client closed with the write still queued") for item in drained]
+        return [Discarded(item, CLIENT_CLOSED, "client closed with the write still queued") for item in self.drain()]
 
     # --- internals ---------------------------------------------------------
 

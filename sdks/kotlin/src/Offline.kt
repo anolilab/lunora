@@ -12,6 +12,16 @@ const val OFFLINE_PRECONDITION_FAILED: String = "OFFLINE_PRECONDITION_FAILED"
 /** The write was queued under a different identity than the one now in effect. */
 const val OFFLINE_IDENTITY_CHANGED: String = "OFFLINE_IDENTITY_CHANGED"
 
+/**
+ * The write's arguments cannot be wire-encoded, so it can never succeed.
+ *
+ * A codec failure carries no server code, which the transient rule would read as
+ * "a transport blip, re-queue it" — and a re-queue puts the write back at the
+ * FRONT, so it would retry forever, never settle its caller, never roll its
+ * overlay back, and block every write behind it in the FIFO.
+ */
+const val OFFLINE_WRITE_UNENCODABLE: String = "OFFLINE_WRITE_UNENCODABLE"
+
 /** The client was closed while the write was still queued. */
 const val CLIENT_CLOSED: String = "CLIENT_CLOSED"
 
@@ -54,6 +64,17 @@ sealed class Identity {
     }
 }
 
+/**
+ * Whether two shard keys name the SAME shard.
+ *
+ * Absent and empty are one key, not two: a consumer that submits with
+ * `shardKey = ""` must be drained by the flush for the default shard, and its
+ * optimistic overlay must target the subscription opened with no key. Comparing
+ * them strictly leaves such a write queued forever, because nothing ever flushes
+ * a shard named `""`.
+ */
+fun sameShard(left: String?, right: String?): Boolean = (left ?: "") == (right ?: "")
+
 /** Whether a write stamped [stamped] may replay under [current] (null = signed out). */
 fun identityAllowsReplay(stamped: Identity, current: String?): Boolean = when (stamped) {
     is Identity.Absent -> true
@@ -83,13 +104,13 @@ interface PersistenceAdapter {
 /**
  * A write the queue let go of without sending it, and the coded reason.
  *
- * Returned rather than rejected in place, which is the whole point: the client
- * calls into this queue with its own monitor held (see [OfflineQueue]), and a
- * rejection handler rolls optimistic layers back — which needs that same monitor.
- * `synchronized` is reentrant, so this port never deadlocked over it, but it did
- * run a consumer's callback inside the critical section that guards the
- * subscription registry. Its Go sibling, whose mutex is not reentrant,
- * self-deadlocked outright. The caller settles these once it has left the monitor.
+ * Returned rather than settled in place, which is the whole point: the client
+ * calls into this queue with its own monitor held (see [OfflineQueue]), and
+ * settling rolls optimistic layers back and notifies listeners — which needs that
+ * same monitor. `synchronized` is reentrant, so this port never deadlocked over
+ * it, but it did run a consumer's callback inside the critical section that
+ * guards the subscription registry. The caller settles these once it has left the
+ * monitor.
  */
 data class Discarded(val entry: QueuedMutation, val code: String, val message: String) {
     /** The coded error this write settles with. */
@@ -136,8 +157,18 @@ class QueuedMutation(
      */
     var onCommit: ((Long?) -> Unit)? = null
 
-    var resolve: ((WireValue) -> Unit)? = null
-    var reject: ((RuntimeException) -> Unit)? = null
+    /** Unwinds this write's optimistic layers when it settles as a rejection. */
+    var onRollback: (() -> Unit)? = null
+
+    /**
+     * The submitting caller's own settle handler, carried as DATA rather than as a
+     * closure that reports the verdict itself: the client emits every terminal
+     * verdict to its own listeners unconditionally, and calls this IN ADDITION when
+     * a live caller left one. A restored write has neither this nor [liveAwaiter],
+     * so routing the report through it would settle an evicted durable write to
+     * nobody.
+     */
+    var onSettled: ((MutationSettled) -> Unit)? = null
 
     /** The durable form. Callback fields are deliberately not persisted. */
     fun record(version: String?): Map<String, Any?> {
@@ -402,11 +433,16 @@ class OfflineQueue(
     }
 
     /**
-     * Drops and returns the writes whose precondition no longer holds. Run at the
-     * start of a flush to weed out writes whose assumptions died while the client
-     * was offline; the admitted writes keep their FIFO order.
+     * Drops and returns the writes named by [stale] — the ones whose precondition
+     * no longer holds. Run at the start of a flush to weed out writes whose
+     * assumptions died while the client was offline; the admitted writes keep their
+     * FIFO order.
+     *
+     * The verdicts are the CALLER's to compute, because a precondition is the
+     * consumer's own predicate and must run with the owning client's monitor
+     * released, while this call mutates the queue and so must run with it held.
      */
-    fun drainConflict(): List<Discarded> = drain { item -> item.precondition?.let { !it() } == true }
+    fun drainConflict(stale: Set<String>): List<Discarded> = drain { it.id in stale }
         .map { Discarded(it, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay") }
 
     /** Forgets one write's durable record, after it has terminally settled. */
@@ -425,14 +461,7 @@ class OfflineQueue(
      * Durable storage is left INTACT on purpose: closing must not discard writes a
      * future session will restore. Use the adapter's own `clear` to purge them.
      */
-    fun clear(): List<Discarded> {
-        val drained = items.toList()
-
-        items.clear()
-        notifySize()
-
-        return drained.map { Discarded(it, CLIENT_CLOSED, "client closed with the write still queued") }
-    }
+    fun clear(): List<Discarded> = drain().map { Discarded(it, CLIENT_CLOSED, "client closed with the write still queued") }
 
     /**
      * Drops from the FRONT (the oldest) until the queue is within capacity. Shared

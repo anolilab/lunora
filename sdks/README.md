@@ -411,16 +411,18 @@ failure re-queues that write and every unreplayed one, in order.
 
 ### Where the ports deliberately differ from `@lunora/client`
 
-Six divergences, all forced by what these SDKs are rather than chosen:
+Each of these is forced by what these SDKs are rather than chosen:
 
-| Divergence                                                                                                                                                                                                                                                                                                  | Why                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket. | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                              |
-| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).            | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                 |
-| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                       | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                |
-| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                             | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.  |
-| **A transient replay failure is classified by code**, not merely by "is it coded at all": a raw transport error or `SHARD_ERROR`/`SHARD_UNAVAILABLE` re-queues, everything else coded is terminal.                                                                                                          | This is the reference client's own BATCH classification. Its single-call path drops on any coded error, which loses a durable write to a shard blip; the ports take the better of its two. |
-| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                         | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                         |
+| Divergence                                                                                                                                                                                                                                                                                                  | Why                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket. | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                          |
+| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).            | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                             |
+| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                       | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                            |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                             | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                              |
+| **A transient replay failure is classified by code**, not merely by "is it coded at all": a raw transport error or `SHARD_ERROR`/`SHARD_UNAVAILABLE` re-queues, everything else coded is terminal.                                                                                                          | This is the reference client's own BATCH classification. Its single-call path drops on any coded error, which loses a durable write to a shard blip; the ports take the better of its two.                                                             |
+| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                         | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                     |
+| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                         | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working. |
+| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                  | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                    |
 
 **Multi-tab leader election** is the one browser-only half no port has — a Web
 Lock deciding which tab hydrates the shared durable queue, and there are no tabs
@@ -452,6 +454,70 @@ The Ruby failure is the instructive one: the mechanism that was supposed to stop
 an eviction dropping a durable write in silence was itself dropping it in silence.
 Every port now has a case asserting that an eviction raised from inside `submit`
 settles exactly once, with the documented code.
+
+The same rule is what makes the rest of the write path safe, so all seven ports
+hold to it: **on the write path, nothing you supply runs while the client holds
+its lock.** The optimistic transform is run against a snapshot and its result
+recorded; a queued write's `precondition` is evaluated on a snapshot too; the
+lock is then taken only to install what came back. Settle handlers, `on_settled`,
+and every subscription and error callback are likewise deferred and invoked after
+the lock is released. Four of the seven use a non-reentrant lock, so without this
+a callback reading `pending_mutation_count` would deadlock its own thread — a
+hazard the reference client cannot have, because it has no lock at all.
+
+Two things you supply do still run under the lock, in every port, and both are
+deliberate rather than missed:
+
+- **An optimistic transform re-run when an incoming frame re-folds the pending
+  layers.** That fold IS the value the frame delivers, and it has to see a base
+  nothing else is mutating, so it cannot be moved out. The callbacks it feeds are
+  still deferred; only the transform itself runs inside.
+- **The injected `PersistenceAdapter`, and the queue's `on_size_change` /
+  `on_persistence_error` observers.** These fire from inside `enqueue` / `drain` /
+  `hydrate` / `unpersist`, and the rule above requires those to hold the lock —
+  you cannot mutate the queue under the lock and keep its durable mirror outside
+  it. Note the practical consequence: your adapter's `append` and `remove` are on
+  the critical path, so a slow store makes every other thread wait on it.
+
+So the consumer rule is narrower than "your callbacks may re-enter the client":
+**an optimistic transform must be a pure function of the value it is handed, and
+neither it, your persistence adapter, nor a queue observer may call back into the
+client.** Settle handlers, `on_settled`, subscription and error callbacks may. Note where a violation
+surfaces — a re-entering transform passes `submit` cleanly and deadlocks on the
+next frame, which is a considerably worse place to find out.
+
+Making those two lock-free needs per-state locking rather than one client lock,
+which is a larger change than this one; they are recorded here so the next port
+does not quietly assume otherwise.
+
+A discarded write is likewise reported to the client-level settled listener
+**whether or not it has a per-entry handler**. A write restored from durable
+storage never has one — nobody is awaiting a write submitted in a previous
+process — so a port that reported discards only through the entry's own handler
+would drop a hydrated write on overflow in total silence, un-persisting it on the
+way out. The `hadAwaiter` flag on the settled event is how a consumer tells a
+restored write's only report from a live caller's second one.
+
+### Pin the client id if your queue is durable
+
+The client id defaults to a **freshly generated random string per client
+instance**, matching the reference. It is not decorative: writes carrying
+`x-lunora-mutation-id` also carry `x-lunora-client-id`, and for an unauthenticated
+caller the server namespaces its idempotency cache by exactly that value. A
+constant shared by every process would put all of them in one keyspace, where one
+caller's `mutation_id` can suppress another's write without ever running it.
+
+A durable queue needs nothing extra for this to keep working across a restart:
+the persisted record carries the id of the client that ISSUED the write, and the
+replay sends that one rather than the new process's, so a write queued before a
+crash still de-duplicates against the copy the server may already hold.
+
+Pinning matters for the other case — **caller-supplied mutation ids that mean
+something** (`"order-1"` rather than a generated key). Those are only de-duplicated
+against writes in the same namespace, so the same semantic id submitted before and
+after a restart is two different writes unless the client id is stable. Pin a
+per-device id if you rely on that; leave it alone if your mutation ids are
+generated.
 
 Two ports carry one further shape change apiece, and both are the language talking
 rather than a decision:
@@ -551,8 +617,9 @@ same files the TypeScript client is tested against.
 coverage drifted badly before that list existed, leaving the decode-side bounds
 unasserted in two ports for several commits with every gate green.
 
-The last nine names in that list cover the client-side write features rather than
-the wire, and assert against `protocol/fixtures/offline-optimistic.json`. Nothing
+The `optimistic_*` and `offline_*` names in that list cover the client-side write
+features rather than the wire, and assert against
+`protocol/fixtures/offline-optimistic.json`. Nothing
 in that file goes on a socket: it is the values and orderings eight independently
 hand-written ports must agree on — which value is displayed after a rebase, which
 cursor drops an overlay, which queue entry an overflow evicts, what a flush leaves

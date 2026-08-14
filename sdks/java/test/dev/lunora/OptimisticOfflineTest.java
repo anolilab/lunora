@@ -4,18 +4,20 @@ import static dev.lunora.ConformanceTest.check;
 import static dev.lunora.ConformanceTest.covers;
 import static dev.lunora.ConformanceTest.fixture;
 
-import dev.lunora.Client.FlushReport;
-import dev.lunora.Client.MutationStatus;
 import dev.lunora.Client.Response;
-import dev.lunora.Client.SubmitOptions;
 import dev.lunora.Offline.Identity;
 import dev.lunora.Offline.OfflineException;
 import dev.lunora.Offline.OfflineQueue;
 import dev.lunora.Offline.PersistenceAdapter;
 import dev.lunora.Offline.QueuedMutation;
-import dev.lunora.Optimistic.LocalStore;
+import dev.lunora.Submit.FlushReport;
+import dev.lunora.Submit.MutationOutcome;
+import dev.lunora.Submit.MutationSettled;
+import dev.lunora.Submit.MutationStatus;
+import dev.lunora.Submit.SubmitOptions;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -38,12 +40,173 @@ final class OptimisticOfflineTest {
         optimisticLayerRebasesOntoServerFrame();
         optimisticLayerDropsOnCommitCursor();
         optimisticLayerRollsBackOnFailure();
+        optimisticCursorlessFramePreservesCursor();
         offlineQueueFifoAndShardDrain();
         offlineQueueOverflowEvictsOldest();
         offlineQueuePreconditionDropsStaleWrite();
         offlineQueueHydratesPersistedWrites();
+        offlineQueueHydrateOverflowSettlesDiscarded();
         offlineQueueIdentityGateRejectsReplay();
         offlineFlushReplaysAndConfirmsOptimistic();
+        offlineFlushUnencodableWriteSettlesTerminal();
+        clientIdIsPerInstanceAndPersisted();
+        consumerCallbacksRunOutsideTheLock();
+        emptyShardKeyNeverReachesTheWire();
+    }
+
+    /**
+     * Records a violation if {@code name} is running inside the client's monitor, then reaches back
+     * into the client.
+     *
+     * <p>Both halves matter. {@link Thread#holdsLock} is the exact question this port has to answer
+     * — its monitor is REENTRANT, so a callback running inside the critical section neither hangs
+     * nor deadlocks, which is why the violation was invisible for as long as it was. The re-entrant
+     * call is the shape that hard-deadlocks the sibling ports whose lock is not reentrant, kept
+     * here so all seven suites drive the same scenario.
+     */
+    private static void assertUnlocked(Client client, List<String> violations, String name) {
+        if (Thread.holdsLock(client.lock)) {
+            violations.add(name);
+        }
+
+        client.pendingMutationCount();
+        client.online();
+    }
+
+    /**
+     * No callback a consumer supplies runs while the client holds its lock.
+     *
+     * <p>{@code sdks/README.md} states this for all seven ports: not the optimistic update, not a
+     * queue entry's precondition, not {@code onSettled}, not a subscription handler. The transform
+     * runs and the precondition is evaluated outside the critical section; the lock is taken only
+     * to install the result — in ONE section with the offline decision and the enqueue, so the
+     * TOCTOU that strands a write stays closed.
+     *
+     * <p>No timeout guard, deliberately: {@code synchronized} is reentrant, so a regression here
+     * cannot hang the test and a watchdog would never fire. {@code holdsLock} detects it directly.
+     */
+    private static void consumerCallbacksRunOutsideTheLock() {
+        List<String> violations = new ArrayList<>();
+        int[] applications = {0};
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> new Response(200, CODED_ERROR));
+
+        client.attachSocket(frame -> {});
+        client.subscribe(
+                "messages:list",
+                new LinkedHashMap<>(),
+                value -> assertUnlocked(client, violations, "subscription handler"),
+                null,
+                null);
+        client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.detachSocket();
+
+        client.submit(
+                new SubmitOptions("messages:list", new LinkedHashMap<>())
+                        .optimistic(
+                                current -> {
+                                    // The FIRST application is the consumer callback the guarantee
+                                    // covers. A later REBASE re-runs the same transform from
+                                    // `fold`, which necessarily holds the monitor — the layer list
+                                    // it folds is the state that monitor guards. That is inherent
+                                    // to rebasing, and is why a transform must be pure.
+                                    if (applications[0]++ == 0) {
+                                        assertUnlocked(client, violations, "optimistic transform");
+                                    }
+
+                                    return current;
+                                })
+                        .optimisticUpdate(
+                                (store, args) -> {
+                                    assertUnlocked(client, violations, "optimisticUpdate");
+                                    store.setQuery("messages:list", args, List.of("z"));
+                                })
+                        .precondition(
+                                () -> {
+                                    assertUnlocked(client, violations, "precondition");
+
+                                    return true;
+                                })
+                        .onSettled(event -> assertUnlocked(client, violations, "onSettled")));
+
+        client.attachSocket(frame -> {});
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(applications[0] > 0, "the transform ran");
+        check(report.rejected.size() == 1, "and the write settled, so every callback fired");
+        check(
+                violations.isEmpty(),
+                "these consumer callbacks ran inside the client's monitor: " + violations);
+    }
+
+    /**
+     * An empty shard key is the DEFAULT shard to this client, and must never reach the wire as one.
+     *
+     * <p>{@code Offline.sameShard} merges absent and {@code ""} for the drain predicate and the
+     * subscription lookup, but the runtime does not — {@code packages/runtime/src/create-worker.ts}
+     * says in as many words that an empty string is a valid named shard, and routes it to its own
+     * Durable Object. Normalising only the comparisons would be worse than the bug it replaced: the
+     * write would drain on a null-shard flush and then land on a DIFFERENT shard from the
+     * subscription whose overlay it just updated, rather than simply never replaying.
+     */
+    private static void emptyShardKeyNeverReachesTheWire() {
+        Map<String, Object> empty = Client.buildRpcBody("messages:send", new LinkedHashMap<>(), "");
+        Map<String, Object> named =
+                Client.buildRpcBody("messages:send", new LinkedHashMap<>(), "room-1");
+        Client client = new Client("https://app.example", null);
+
+        check(!empty.containsKey("shardKey"), "an empty shard key is omitted from the RPC body");
+        check(!client.wsUrl("", null).contains("shard="), "and from the socket URL");
+        check("room-1".equals(named.get("shardKey")), "while a real one still rides the body");
+        check(client.wsUrl("room-1", null).contains("shard=room-1"), "and the socket URL");
+
+        // End to end, because the omission has to hold on the path a consumer actually takes.
+        List<String> posted = new ArrayList<>();
+        Client live =
+                new Client(
+                        "https://app.example",
+                        (url, headers, payload) -> {
+                            posted.add(new String(payload, StandardCharsets.UTF_8));
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        live.attachSocket(frame -> {});
+        live.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()).shardKey(""));
+
+        check(
+                !posted.get(0).contains("shardKey"),
+                "a write submitted with an empty shard key sends none");
+    }
+
+    /**
+     * The default client id is minted per INSTANCE, and the issuing one is what a write persists.
+     *
+     * <p>The shard namespaces an anonymous caller's idempotency rows by this value, so a
+     * per-language constant would put every signed-out client of this SDK — in this process and
+     * every other — into one namespace: two users calling the same mutation under the same
+     * caller-supplied mutation id collide, and the second write short-circuits to the first's
+     * cached result without ever running.
+     */
+    private static void clientIdIsPerInstanceAndPersisted() {
+        Client first = new Client("https://app.example", null);
+        Client second = new Client("https://app.example", null);
+
+        check(!first.clientId.equals(second.clientId), "two clients must not share a client id");
+
+        MemoryStore store = new MemoryStore();
+
+        first.offlineQueue(new OfflineQueue().persistence(store).queueBeforeFirstConnect(true));
+        first.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+
+        // The persisted record carries the id that ISSUED the write, so the replay namespaces
+        // server-side under it rather than under whatever a later session minted.
+        check(
+                first.clientId.equals(store.appended.get(0).get("clientId")),
+                "and a queued write persists the issuing client's real id");
     }
 
     private static Map<String, Object> scenario(String block, String name) throws IOException {
@@ -82,62 +245,167 @@ final class OptimisticOfflineTest {
         };
     }
 
-    /** Applies one server data frame the way {@code Client.handleFrame} does. */
-    private static void applyFrame(Optimistic.State state, Map<String, Object> frame) {
-        state.serverBase = frame.get("data");
-        state.serverCursor =
-                frame.get("cursor") instanceof Number number ? number.longValue() : null;
-        Optimistic.dropConfirmedLayers(state, state.serverCursor);
-        Optimistic.notifySubscription(
-                state, Optimistic.fold(state.serverBase, state.layers), new ArrayList<>());
+    /**
+     * Throws a CHECKED exception from somewhere a lambda cannot declare one.
+     *
+     * <p>{@code Optimistic.Transform} does not declare {@code throws}, but a transform that wraps a
+     * call which does still delivers one. The fold has to skip it exactly as it skips an unchecked
+     * one — catching only {@code RuntimeException} aborts the whole fold and blanks the query for
+     * every other layer.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void sneakyThrow(Throwable error) throws T {
+        throw (T) error;
     }
+
+    /**
+     * One live client with one live subscription, driven end to end.
+     *
+     * <p>Server frames go through the REAL {@link Client#handleFrame} and optimistic layers are
+     * registered by the REAL {@link Client#submit} and settled by the REAL flush. The suite used to
+     * drive a hand-copied transcription of the frame handler's {@code data} branch instead, which
+     * is why nothing caught the handler nulling the tracked cursor on a cursorless frame: the copy
+     * and the production path could disagree indefinitely and every case still passed.
+     *
+     * <p>Nothing here needs a network — the poster and the frame sender are both injected.
+     */
+    private static final class Live {
+        static final String ID = "sub_1";
+
+        final List<Object> seen = new ArrayList<>();
+        final List<MutationSettled> settled = new ArrayList<>();
+        final Map<String, Object> args = new LinkedHashMap<>();
+
+        /** The body the injected poster answers a replay with; swapped per flush. */
+        private final String[] body = {"{\"result\":null}"};
+
+        final Client client;
+
+        Live() {
+            client =
+                    new Client(
+                            "https://app.example",
+                            (url, headers, payload) -> new Response(200, body[0]));
+            client.attachSocket(frame -> {});
+            client.subscribe("messages:list", args, seen::add, null, null);
+            client.onMutationSettled(settled::add);
+        }
+
+        /** Feeds one server {@code data} frame through the client's real handler. */
+        void frame(Map<String, Object> frame) {
+            Map<String, Object> out = new LinkedHashMap<>(frame);
+
+            out.put("id", ID);
+            out.put("type", "data");
+            client.handleFrame(Json.write(out));
+        }
+
+        /** Primes the subscription with an authoritative base and no cursor. */
+        void base(Object value) {
+            Map<String, Object> frame = new LinkedHashMap<>();
+
+            frame.put("data", value);
+            frame(frame);
+        }
+
+        /** Submits with the socket down, so the write queues and its overlay stays pending. */
+        MutationOutcome queue(SubmitOptions options) {
+            client.detachSocket();
+
+            MutationOutcome outcome = client.submit(options);
+
+            client.attachSocket(frame -> {});
+
+            return outcome;
+        }
+
+        /** Replays the queued writes, with {@code responseBody} as the server's answer. */
+        FlushReport flush(String responseBody) {
+            body[0] = responseBody;
+
+            return client.flushOfflineQueue(null);
+        }
+
+        Object displayed() {
+            return seen.isEmpty() ? null : seen.get(seen.size() - 1);
+        }
+
+        int layers() {
+            return client.subscriptionState(ID).layers.size();
+        }
+
+        Long cursor() {
+            return client.subscriptionState(ID).serverCursor;
+        }
+    }
+
+    /** The reply a shard with CDC on echoes for a committed write. */
+    private static String committedAt(int commitCursor) {
+        return "{\"commitCursor\":" + commitCursor + ",\"result\":{\"ok\":true}}";
+    }
+
+    /** A server verdict: terminal, so the write is dropped rather than retried. */
+    private static final String CODED_ERROR =
+            "{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"gone\"}}";
 
     private static void optimisticLayerRebasesOntoServerFrame() throws IOException {
         covers("optimistic_layer_rebases_onto_server_frame");
 
         Map<String, Object> testCase = scenario("optimistic", "rebase");
-        List<Object> seen = new ArrayList<>();
-        Optimistic.State state = new Optimistic.State(testCase.get("base"));
+        Live live = new Live();
 
-        state.callbacks.add(seen::add);
+        live.base(testCase.get("base"));
 
-        List<Runnable> deferred = new ArrayList<>();
+        int before = live.seen.size();
 
-        Optimistic.applyLayer(state, appender(testCase.get("appended")), deferred);
-        deferred.forEach(Runnable::run);
+        live.queue(
+                new SubmitOptions("messages:list", live.args)
+                        .optimistic(appender(testCase.get("appended"))));
 
         check(
-                state.lastValue.equals(testCase.get("displayedAfterApply")),
+                live.displayed().equals(testCase.get("displayedAfterApply")),
                 "the predicted value is displayed as soon as the layer is applied");
-        check(seen.size() == 1, "and the handler is told exactly once");
+        check(live.seen.size() == before + 1, "and the handler is told exactly once");
 
-        applyFrame(state, map(testCase.get("frame")));
+        live.frame(map(testCase.get("frame")));
 
         // The overlay survived the frame and was RE-FOLDED onto the new base, rather than being
         // clobbered by it.
         check(
-                state.lastValue.equals(testCase.get("displayedAfterFrame")),
+                live.displayed().equals(testCase.get("displayedAfterFrame")),
                 "a pending layer rebases onto the new authoritative base");
         check(
-                state.layers.size() == count(testCase.get("layersAfterFrame")),
+                live.layers() == count(testCase.get("layersAfterFrame")),
                 "and is still pending afterwards");
 
-        // A layer that throws is skipped by the fold, not fatal to it. Registered directly rather
-        // than through applyLayer, which refuses a transform that throws on first application —
-        // this is the other case: one that worked once and throws on a later rebase.
+        // A layer that throws is skipped by the fold, not fatal to it. The write path refuses a
+        // transform that throws on FIRST application, so this is the other case: one that worked
+        // once and throws on a later rebase — with a checked exception, which the fold must skip
+        // exactly as it skips an unchecked one.
         Map<String, Object> skipped = scenario("optimistic", "throwingLayerSkipped");
-        Optimistic.State second = new Optimistic.State(skipped.get("base"));
+        Live second = new Live();
+        int[] applied = {0};
 
-        second.layers.add(
-                new Optimistic.Layer(
-                        current -> {
-                            throw new IllegalStateException("buggy optimistic update");
-                        }));
-        Optimistic.applyLayer(second, appender(skipped.get("appended")), new ArrayList<>());
+        second.base(skipped.get("base"));
+        second.queue(
+                new SubmitOptions("messages:list", second.args)
+                        .optimistic(
+                                current -> {
+                                    if (applied[0]++ > 0) {
+                                        sneakyThrow(new IOException("buggy optimistic update"));
+                                    }
 
-        check(second.layers.size() == count(skipped.get("layers")), "the throwing layer is kept");
+                                    return current;
+                                }));
+        second.queue(
+                new SubmitOptions("messages:list", second.args)
+                        .optimistic(appender(skipped.get("appended"))));
+        // Any frame re-folds, which is when the buggy layer throws.
+        second.base(skipped.get("base"));
+
+        check(second.layers() == count(skipped.get("layers")), "the throwing layer is kept");
         check(
-                Optimistic.fold(second.serverBase, second.layers).equals(skipped.get("displayed")),
+                second.displayed().equals(skipped.get("displayed")),
                 "but skipped by the fold, so the good layer still applies");
     }
 
@@ -145,127 +413,159 @@ final class OptimisticOfflineTest {
         covers("optimistic_layer_drops_on_commit_cursor");
 
         Map<String, Object> testCase = scenario("optimistic", "commitCursorDrop");
-        Optimistic.State state = new Optimistic.State(testCase.get("base"));
-        List<Runnable> deferred = new ArrayList<>();
-        Optimistic.Handle handle =
-                Optimistic.applyLayer(state, appender(testCase.get("appended")), deferred);
+        int commitCursor = count(testCase.get("commitCursor"));
+        Live live = new Live();
 
-        handle.confirm((long) count(testCase.get("commitCursor")), deferred);
-        applyFrame(state, map(testCase.get("belowFrame")));
+        live.base(testCase.get("base"));
+        live.queue(
+                new SubmitOptions("messages:list", live.args)
+                        .optimistic(appender(testCase.get("appended"))));
+        live.flush(committedAt(commitCursor));
+        live.frame(map(testCase.get("belowFrame")));
 
         // Below the commit cursor: the write is NOT in the server base yet, so dropping the overlay
         // here would blink the value away and back.
         check(
-                state.lastValue.equals(testCase.get("displayedAfterBelowFrame")),
+                live.displayed().equals(testCase.get("displayedAfterBelowFrame")),
                 "a frame below the commit cursor keeps the overlay");
         check(
-                state.layers.size() == count(testCase.get("layersAfterBelowFrame")),
+                live.layers() == count(testCase.get("layersAfterBelowFrame")),
                 "and the layer with it");
 
-        applyFrame(state, map(testCase.get("atFrame")));
+        live.frame(map(testCase.get("atFrame")));
 
         // The frame reached the commit cursor: the effect is in the base, so the overlay drops
         // without the value ever double-counting it.
         check(
-                state.lastValue.equals(testCase.get("displayedAfterAtFrame")),
+                live.displayed().equals(testCase.get("displayedAfterAtFrame")),
                 "the confirming frame does not double-count the write");
-        check(
-                state.layers.size() == count(testCase.get("layersAfterAtFrame")),
-                "and the layer is gone");
+        check(live.layers() == count(testCase.get("layersAfterAtFrame")), "and the layer is gone");
 
         // CDC is off on this shard, so there is no cursor to gate on. The layer goes, but the
         // display does not revert: the write DID commit.
         Map<String, Object> without = scenario("optimistic", "confirmWithoutCursor");
-        Optimistic.State degraded = new Optimistic.State(without.get("base"));
-        Optimistic.Handle degradedHandle =
-                Optimistic.applyLayer(
-                        degraded, appender(without.get("appended")), new ArrayList<>());
+        Live degraded = new Live();
 
-        degradedHandle.confirm(null, new ArrayList<>());
+        degraded.base(without.get("base"));
+        degraded.queue(
+                new SubmitOptions("messages:list", degraded.args)
+                        .optimistic(appender(without.get("appended"))));
+        degraded.flush("{\"result\":{\"ok\":true}}");
 
         check(
-                degraded.lastValue.equals(without.get("displayedAfterConfirm")),
+                degraded.displayed().equals(without.get("displayedAfterConfirm")),
                 "confirming with no cursor does not revert a committed write");
         check(
-                degraded.layers.size() == count(without.get("layersAfterConfirm")),
+                degraded.layers() == count(without.get("layersAfterConfirm")),
                 "but does drop the layer");
 
         // The confirming frame beat the RPC response — the common race. The overlay must drop on
         // confirm rather than linger until the next frame.
         Map<String, Object> atFrame = map(testCase.get("atFrame"));
-        Optimistic.State raced = new Optimistic.State(atFrame.get("data"));
+        Live raced = new Live();
 
-        raced.serverCursor = (long) count(atFrame.get("cursor"));
+        raced.frame(atFrame);
+        raced.queue(new SubmitOptions("messages:list", raced.args).optimistic(appender("x")));
+        raced.flush(committedAt(commitCursor));
 
-        Optimistic.Handle racedHandle =
-                Optimistic.applyLayer(raced, appender("x"), new ArrayList<>());
-
-        racedHandle.confirm((long) count(testCase.get("commitCursor")), new ArrayList<>());
-
-        check(raced.layers.isEmpty(), "a cursor the frames already reached drops the layer now");
-        check(raced.lastValue.equals(atFrame.get("data")), "and the display reverts to the base");
+        check(raced.layers() == 0, "a cursor the frames already reached drops the layer now");
+        check(raced.displayed().equals(atFrame.get("data")), "and the display reverts to the base");
     }
 
     private static void optimisticLayerRollsBackOnFailure() throws IOException {
         covers("optimistic_layer_rolls_back_on_failure");
 
         Map<String, Object> testCase = scenario("optimistic", "rollback");
-        List<Object> seen = new ArrayList<>();
-        Optimistic.State state = new Optimistic.State(testCase.get("base"));
+        Live live = new Live();
 
-        state.callbacks.add(seen::add);
-
-        List<Runnable> deferred = new ArrayList<>();
-        Optimistic.Handle handle =
-                Optimistic.applyLayer(state, appender(testCase.get("appended")), deferred);
-
-        handle.rollback(deferred);
-        deferred.forEach(Runnable::run);
+        live.base(testCase.get("base"));
+        live.queue(
+                new SubmitOptions("messages:list", live.args)
+                        .optimistic(appender(testCase.get("appended"))));
+        live.flush(CODED_ERROR);
 
         check(
-                state.lastValue.equals(testCase.get("displayedAfterRollback")),
+                live.displayed().equals(testCase.get("displayedAfterRollback")),
                 "a rolled-back write leaves the server value displayed");
-        check(state.layers.size() == count(testCase.get("layersAfterRollback")), "and no layer");
+        check(live.layers() == count(testCase.get("layersAfterRollback")), "and no layer");
         check(
-                seen.get(seen.size() - 1).equals(testCase.get("displayedAfterRollback")),
-                "the handler saw it");
+                live.settled.size() == 1 && live.settled.get(0).status() == MutationStatus.REJECTED,
+                "and the caller is told exactly once");
 
         // A constant layer is an absolute override: while pending it re-clamps and HIDES the
         // concurrent server change rather than merging with it.
         Map<String, Object> mask = scenario("optimistic", "constantMask");
-        Optimistic.State masked = new Optimistic.State(mask.get("base"));
-        List<Runnable> maskDeferred = new ArrayList<>();
-        LocalStore store =
-                new LocalStore(
-                        target -> List.of(masked),
-                        path ->
-                                List.of(
-                                        new Optimistic.QueryEntry(
-                                                new LinkedHashMap<>(), masked.lastValue)),
-                        maskDeferred);
+        Live masked = new Live();
 
-        store.setQuery("messages:list", new LinkedHashMap<>(), mask.get("value"));
-        maskDeferred.forEach(Runnable::run);
+        masked.base(mask.get("base"));
+        masked.queue(
+                new SubmitOptions("messages:list", masked.args)
+                        .optimisticUpdate(
+                                (store, args) -> {
+                                    store.setQuery("messages:list", args, mask.get("value"));
+
+                                    check(
+                                            store.getQuery("messages:list", args)
+                                                    .equals(mask.get("displayedAfterApply")),
+                                            "getQuery reads back what setQuery wrote");
+                                }));
 
         check(
-                masked.lastValue.equals(mask.get("displayedAfterApply")),
+                masked.displayed().equals(mask.get("displayedAfterApply")),
                 "setQuery displays the predicted value");
-        check(
-                store.getQuery("messages:list", new LinkedHashMap<>())
-                        .equals(mask.get("displayedAfterApply")),
-                "and getQuery reads it back");
 
-        applyFrame(masked, map(mask.get("frame")));
+        masked.frame(map(mask.get("frame")));
 
         check(
-                masked.lastValue.equals(mask.get("displayedAfterFrame")),
+                masked.displayed().equals(mask.get("displayedAfterFrame")),
                 "the override masks a concurrent server change");
 
-        Optimistic.rollbackAll(store.rollbacks, new ArrayList<>());
+        masked.flush(CODED_ERROR);
 
         check(
-                masked.lastValue.equals(mask.get("displayedAfterRollback")),
+                masked.displayed().equals(mask.get("displayedAfterRollback")),
                 "and rolling back reveals it");
+    }
+
+    /**
+     * A frame that omits {@code cursor} — legal on data/delta/resume — must LEAVE the tracked
+     * cursor alone.
+     *
+     * <p>Nulling it strands every pending layer: the tracked cursor is what a write's commit cursor
+     * is compared against, so the confirm that should have dropped the overlay keeps it and the row
+     * renders twice until some later cursored frame happens to land.
+     */
+    private static void optimisticCursorlessFramePreservesCursor() throws IOException {
+        covers("optimistic_cursorless_frame_preserves_cursor");
+
+        Map<String, Object> testCase = scenario("optimistic", "cursorlessFrame");
+        Live live = new Live();
+
+        live.base(testCase.get("base"));
+        live.queue(
+                new SubmitOptions("messages:list", live.args)
+                        .optimistic(appender(testCase.get("appended"))));
+        live.frame(map(testCase.get("cursoredFrame")));
+        live.frame(map(testCase.get("cursorlessFrame")));
+
+        check(
+                live.cursor() != null
+                        && live.cursor() == count(testCase.get("cursorAfterCursorlessFrame")),
+                "a cursorless frame leaves the tracked cursor where it was");
+        check(
+                live.displayed().equals(testCase.get("displayedAfterCursorlessFrame")),
+                "and the pending layer rebases onto its data");
+        check(
+                live.layers() == count(testCase.get("layersAfterCursorlessFrame")),
+                "still pending, because nothing has confirmed it yet");
+
+        live.flush(committedAt(count(testCase.get("commitCursor"))));
+
+        // The assertion the fix exists for: with the cursor nulled there is nothing for the commit
+        // cursor to be compared against, so the overlay survives its own confirmation.
+        check(
+                live.layers() == count(testCase.get("layersAfterConfirm")),
+                "so the confirm at that cursor drops the overlay instead of stranding it");
     }
 
     /** A persistence adapter that records every call. */
@@ -361,30 +661,44 @@ final class OptimisticOfflineTest {
                 sizes.get(sizes.size() - 1) == count(fifo.get("sizeAfterDrain")),
                 "and the depth observer sees the queue empty");
 
+        // Driven through the CLIENT's flush, not a predicate written here: the drain predicate is
+        // production code, and a suite that supplies its own asserts nothing about it.
         Map<String, Object> shard = scenario("offlineQueue", "shardDrain");
-        OfflineQueue sharded = new OfflineQueue();
+        List<String> replayed = new ArrayList<>();
+        Client sharded =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            replayed.add(headers.get("x-lunora-mutation-id"));
+
+                            return new Response(200, "{\"result\":null}");
+                        });
+
+        sharded.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
 
         for (Object raw : list(shard.get("entries"))) {
             Map<String, Object> spec = map(raw);
 
-            sharded.enqueue(
-                    entry(
-                            (String) spec.get("id"),
-                            spec.get("shardKey") == null ? null : spec.get("shardKey").toString()));
+            sharded.offlineQueue()
+                    .enqueue(
+                            entry(
+                                    (String) spec.get("id"),
+                                    spec.get("shardKey") == null
+                                            ? null
+                                            : spec.get("shardKey").toString()));
         }
 
         String target =
                 shard.get("drainShardKey") == null ? null : shard.get("drainShardKey").toString();
-        List<QueuedMutation> drained =
-                sharded.drain(
-                        item ->
-                                target == null
-                                        ? item.shardKey == null
-                                        : target.equals(item.shardKey));
 
-        check(ids(drained).equals(strings(shard.get("drained"))), "one shard's writes drained");
+        sharded.flushOfflineQueue(target);
+
+        // `m5` is queued under an EMPTY shard key and the flush is for the ABSENT one — the same
+        // shard. Comparing the two strictly leaves it queued forever, because nothing ever flushes
+        // a shard named "".
+        check(replayed.equals(strings(shard.get("drained"))), "one shard's writes drained");
         check(
-                ids(sharded.items()).equals(strings(shard.get("remaining"))),
+                ids(sharded.offlineQueue().items()).equals(strings(shard.get("remaining"))),
                 "and the rest stay queued in order");
 
         Map<String, Object> requeue = scenario("offlineQueue", "requeue");
@@ -547,33 +861,6 @@ final class OptimisticOfflineTest {
                 new HashSet<>(shardKeys).equals(new HashSet<>(strings(testCase.get("shardKeys")))),
                 "the surviving writes' shard keys are reported");
 
-        Map<String, Object> overflow = scenario("offlineQueue", "hydrateOverflow");
-        MemoryStore overflowStore = new MemoryStore(persistedRecords(overflow));
-        OfflineQueue capped =
-                new OfflineQueue()
-                        .maxItems(count(overflow.get("maxItems")))
-                        .persistence(overflowStore)
-                        .version((String) overflow.get("version"));
-        OfflineQueue.Hydrated cappedHydrated = capped.hydrate();
-        List<String> cappedKeys = cappedHydrated.shardKeys();
-        List<String> evicted = new ArrayList<>();
-
-        for (Offline.Discarded item : cappedHydrated.evicted()) {
-            evicted.add(item.entry().id);
-        }
-
-        check(
-                ids(capped.items()).equals(strings(overflow.get("queuedAfterHydrate"))),
-                "hydration respects the capacity cap");
-        check(
-                evicted.equals(strings(overflow.get("evicted"))),
-                "dropping the oldest restored write");
-        // Only the shards whose writes SURVIVED — a key gathered before eviction would send the
-        // caller to open a socket with nothing queued behind it.
-        check(
-                cappedKeys.equals(strings(overflow.get("shardKeys"))),
-                "and reports only the surviving shards");
-
         // Version gating is OFF until a version is configured.
         check(!Offline.isStaleVersion(null, null), "no version configured, nothing is stale");
         check(!Offline.isStaleVersion(null, "v1"), "even a stamped record");
@@ -590,6 +877,133 @@ final class OptimisticOfflineTest {
         }
 
         check(minted.size() == 2000, "minted ids must not collide");
+    }
+
+    /**
+     * A restored write the capacity cap drops still reports, through the client-level observer.
+     *
+     * <p>Driven through {@link Client#hydrateOfflineQueue}, deliberately: a hydrated entry has no
+     * per-entry handler, so a client that reports a discard through the entry's own reject callback
+     * reports this eviction to NOBODY — the durable write is un-persisted and vanishes in silence.
+     * Calling {@code OfflineQueue.hydrate()} directly is what the queue-level case above does, and
+     * that is exactly the test that cannot see the bug.
+     */
+    private static void offlineQueueHydrateOverflowSettlesDiscarded() throws IOException {
+        covers("offline_queue_hydrate_overflow_settles_discarded");
+
+        Map<String, Object> overflow = scenario("offlineQueue", "hydrateOverflow");
+        MemoryStore store = new MemoryStore(persistedRecords(overflow));
+        List<MutationSettled> settled = new ArrayList<>();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> new Response(200, "{\"result\":null}"));
+
+        client.offlineQueue(
+                new OfflineQueue()
+                        .maxItems(count(overflow.get("maxItems")))
+                        .persistence(store)
+                        .version((String) overflow.get("version")));
+        client.onMutationSettled(settled::add);
+
+        List<String> shardKeys = client.hydrateOfflineQueue();
+        List<String> reported = new ArrayList<>();
+
+        for (MutationSettled event : settled) {
+            reported.add(event.mutationId());
+        }
+
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(overflow.get("queuedAfterHydrate"))),
+                "hydration respects the capacity cap");
+        check(
+                reported.equals(strings(overflow.get("settledFromClient"))),
+                "the evicted restored write reaches the client-level settled observer");
+        check(
+                settled.get(0).status() == MutationStatus.REJECTED
+                        && settled.get(0).error() instanceof OfflineException coded
+                        && coded.code.equals(overflow.get("settledCode")),
+                "carrying the documented overflow code");
+        // Read from the entry's own liveAwaiter, never restated as a literal at the settle site:
+        // it is what tells a consumer this is a restored write's ONLY report rather than a live
+        // caller's second one.
+        check(
+                settled.get(0).hadAwaiter()
+                        == Boolean.TRUE.equals(overflow.get("settledHadAwaiter")),
+                "and stamped as having no live awaiter");
+        // Only the shards whose writes SURVIVED — a key gathered before eviction would send the
+        // caller to open a socket with nothing queued behind it.
+        check(
+                shardKeys.equals(strings(overflow.get("shardKeys"))),
+                "and only the surviving shards are reported");
+        check(
+                store.removed.equals(strings(overflow.get("evicted"))),
+                "the evicted write is un-persisted");
+    }
+
+    /**
+     * A queued write whose args cannot be wire-encoded settles TERMINALLY on the first flush.
+     *
+     * <p>A codec failure carries no server code, so the transient rule would re-queue it at the
+     * FRONT and retry it on every reconnect forever: never settling its caller, never rolling its
+     * overlay back, and blocking every write behind it in the FIFO.
+     */
+    private static void offlineFlushUnencodableWriteSettlesTerminal() throws IOException {
+        covers("offline_flush_unencodable_write_settles_terminal");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "unencodableWrite");
+        List<String> unencodable = strings(testCase.get("unencodable"));
+        List<String> seenHeaders = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            seenHeaders.add(headers.get("x-lunora-mutation-id"));
+
+                            return new Response(200, "{\"result\":{\"ok\":true}}");
+                        });
+
+        client.offlineQueue(new OfflineQueue().persistence(store));
+        client.onMutationSettled(settled::add);
+
+        for (String id : strings(testCase.get("queued"))) {
+            Map<String, Object> args = new LinkedHashMap<>();
+
+            // A class instance in a `v.any()` field: nothing the wire codec can carry.
+            if (unencodable.contains(id)) {
+                args.put("blob", new Object());
+            }
+
+            client.offlineQueue().enqueue(new QueuedMutation("messages:send", args, null, id));
+        }
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(
+                report.rejected.equals(strings(testCase.get("rejected"))),
+                "the unencodable write is rejected rather than retried");
+        check(
+                report.committed.equals(strings(testCase.get("committed"))),
+                "and the survivors alone replay");
+        // Only the encodable write reached the wire — the other never even attempted a POST.
+        check(
+                seenHeaders.equals(strings(testCase.get("mutationIdHeaders"))),
+                "the unencodable write never reaches the server");
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(testCase.get("queuedAfterFlush"))),
+                "and nothing is left to poison the next flush");
+        check(
+                store.removed.equals(strings(testCase.get("persistRemoveCalls"))),
+                "both are un-persisted");
+        check(
+                settled.get(0).status() == MutationStatus.REJECTED
+                        && settled.get(0).error() instanceof OfflineException coded
+                        && coded.code.equals(testCase.get("code")),
+                "with the documented terminal code");
     }
 
     private static void offlineQueueIdentityGateRejectsReplay() throws IOException {
@@ -766,7 +1180,7 @@ final class OptimisticOfflineTest {
         client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}");
         client.detachSocket();
 
-        Client.MutationOutcome outcome =
+        MutationOutcome outcome =
                 client.submit(new SubmitOptions("messages:list", args).optimistic(appender("c")));
         List<Object> predicted = List.of("a", "c");
 
@@ -818,7 +1232,7 @@ final class OptimisticOfflineTest {
 
         client.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
 
-        Client.MutationOutcome outcome =
+        MutationOutcome outcome =
                 client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
 
         check(outcome.status() == MutationStatus.QUEUED, "the opt-in queues it instead");
@@ -837,7 +1251,7 @@ final class OptimisticOfflineTest {
     private static void overflowDuringSubmitSettles() throws IOException {
         Map<String, Object> testCase = scenario("offlineQueue", "overflow");
         int maxItems = count(testCase.get("maxItems"));
-        List<Client.MutationSettled> settled = new ArrayList<>();
+        List<MutationSettled> settled = new ArrayList<>();
         Client client =
                 new Client(
                         "https://app.example",

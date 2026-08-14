@@ -86,6 +86,16 @@ type Client struct {
 	// ClientID identifies this client to the shard. It rides every write that
 	// carries an idempotency key, because an anonymous caller has no
 	// server-minted user id to namespace its de-duplication rows by.
+	//
+	// NewClient mints a fresh one per instance, which is what a shared constant
+	// cannot be: the shard namespaces anonymous idempotency by this value, so two
+	// anonymous callers sharing it also share one de-duplication key space, and a
+	// colliding caller-supplied mutation id makes the second write short-circuit
+	// to the first caller's cached result without ever running.
+	//
+	// Pin a stable value here when the offline queue is DURABLE: a write restored
+	// after a restart replays under the id that issued it, so a per-process id
+	// would namespace the replay somewhere the original write never was.
 	ClientID string
 	// Identity is an opaque, stable, NON-SECRET stamp for whoever is signed in —
 	// a user id, not a bearer token. It is persisted alongside every queued write
@@ -163,30 +173,13 @@ type subscription struct {
 func NewClient(baseURL string, post HTTPPoster) *Client {
 	return &Client{
 		BaseURL:       baseURL,
-		ClientID:      "go-client",
+		ClientID:      RandomID(),
 		Post:          post,
 		offline:       NewOfflineQueue(OfflineQueueOptions{}),
 		pokes:         map[string]*pokeBuffer{},
 		shapes:        map[string]*shapeSubscription{},
 		subscriptions: map[string]*subscription{},
 	}
-}
-
-// SetOfflineQueue replaces the write queue — to configure capacity, a
-// persistence adapter, or an app version. Call it before the first write.
-func (c *Client) SetOfflineQueue(queue *OfflineQueue) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.offline = queue
-}
-
-// OfflineQueue returns the write queue backing Submit.
-func (c *Client) OfflineQueue() *OfflineQueue {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.offline
 }
 
 // AttachSocket registers the sender used for subscription frames. Call it once
@@ -221,43 +214,18 @@ func (c *Client) Online() bool {
 	return c.send != nil
 }
 
-// PendingMutationCount is how many writes are waiting for the socket.
-func (c *Client) PendingMutationCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.offline.Size()
-}
-
-// OnMutationSettled observes every queued write's terminal verdict, returning an
-// unsubscribe. This is the ONLY report a write restored from durable storage
-// produces — its original caller did not survive the restart.
-func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
-	c.mu.Lock()
-	index := len(c.settledListeners)
-	c.settledListeners = append(c.settledListeners, listener)
-	c.mu.Unlock()
-
-	return func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-
-		if index < len(c.settledListeners) {
-			c.settledListeners[index] = nil
-		}
-	}
-}
-
 // Close rejects every queued write so no caller waits on a dead client. Durable
 // storage is untouched: the next session restores those writes.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.send = nil
-	queue := c.offline
+	discarded := c.offline.Clear()
 	c.mu.Unlock()
 
-	c.reportDiscarded(queue.Clear())
+	// Settled outside the lock: a rejection rolls optimistic layers back, which
+	// re-acquires it.
+	c.reportDiscarded(discarded)
 }
 
 // argsOrEmpty normalises a nil argument record to the empty object the wire
@@ -775,7 +743,16 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			c.mu.Lock()
 			c.advanceLocked(entry, frame)
 			entry.state.ServerBase = value
-			entry.state.ServerCursor = asCursor(frame["cursor"])
+
+			// `cursor` is OPTIONAL on a data/delta frame, and one that omits it
+			// must LEAVE the tracked cursor where it was. Nulling it strands every
+			// pending layer: the tracked cursor is what a later commitCursor is
+			// compared against, so the confirm that should have dropped the overlay
+			// keeps it and the write renders twice.
+			if cursor := asCursor(frame["cursor"]); cursor != nil {
+				entry.state.ServerCursor = cursor
+			}
+
 			// Drop the overlays this frame has caught up with, then RE-FOLD the
 			// rest onto the new authoritative base rather than clobbering them:
 			// a still-queued write's predicted value has to survive an unrelated
