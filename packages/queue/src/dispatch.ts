@@ -322,6 +322,26 @@ const resolveAttributedFailure = (harness: CaptureHarness, threw: boolean, handl
 };
 
 /**
+ * Ack `attributed.message` (the one message the failure belongs to) and
+ * explicitly retry every OTHER still-undecided message in `harness.originals`.
+ * The handler's throw cut its loop short before it necessarily reached every
+ * message (see §1a's "adjacent read and call" shape) — a message it never
+ * got to is not "successful", so it must be redelivered, not implicitly acked
+ * once `dispatchQueueBatch` stops rethrowing. A message the handler already
+ * explicitly acked/retried keeps that decision untouched.
+ */
+const resolveAttributedBatch = (harness: CaptureHarness, attributed: AttributedFailure): void => {
+    attributed.message.ack();
+
+    for (const candidate of harness.originals) {
+        if (candidate !== attributed.message && !harness.dispositions.has(candidate)) {
+            harness.dispositions.set(candidate, "retry");
+            candidate.retry();
+        }
+    }
+};
+
+/**
  * Look up the handler for `batch.queue` and invoke it with a fresh
  * `QueueRunContext`. Throws a directed error when no push handler is registered
  * for the delivered queue (a misconfiguration — the consumer was declared
@@ -374,17 +394,20 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     }
 
     // A failure attributed to one message is that message's problem, not the
-    // rest of the batch's: ack JUST it and skip the whole-batch rethrow below.
-    // Every other case (see resolveAttributedFailure) stays unattributed and
-    // falls through unchanged.
+    // rest of the batch's: ack JUST it (and retry every other undecided
+    // message, so an unprocessed one is redelivered rather than lost — see
+    // resolveAttributedBatch) instead of the whole-batch rethrow below. Every
+    // other case (see resolveAttributedFailure) stays unattributed and falls
+    // through unchanged.
     const attributed = resolveAttributedFailure(harness, threw, handlerError);
 
     if (attributed !== undefined) {
-        attributed.message.ack();
-        // The batch no longer failed as a whole — every OTHER message now
-        // resolves through the undecided-message fallback below exactly like a
-        // clean handler return (implicit ack), matching the delivery outcome
-        // (no rethrow below).
+        resolveAttributedBatch(harness, attributed);
+
+        // The batch no longer failed as a whole — the attributed message is
+        // acked and every other message now has an explicit disposition
+        // (retry, or whatever the handler decided), so nothing is left to the
+        // implicit-ack fallback.
         threw = false;
     }
 

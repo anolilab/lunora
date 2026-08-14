@@ -459,10 +459,27 @@ const scopedDispatchQueue = defineQueue({
     },
 });
 
+/**
+ * Like {@link scopedDispatchQueue}, but explicitly acks each message right
+ * after its own dispatch succeeds — models a handler that commits
+ * per-message as it goes, so an earlier message's disposition is already
+ * DECIDED (not merely "its `ctx.run` happened to succeed") by the time a
+ * later message's dispatch throws.
+ */
+const scopedDispatchQueueAckingAsItGoes = defineQueue({
+    handler: async (context, b) => {
+        for (const m of b.messages) {
+            // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
+            await context.run({ __lunoraRef: "fn" }, { id: m.id }, { messageId: m.id });
+            m.ack();
+        }
+    },
+});
+
 const DISPATCH_ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" };
 
 describe("dispatchQueueBatch — poison message isolation (deterministic dispatch failure)", () => {
-    it("acks the one attributed message on a branded 404 and leaves the rest of the batch alone", async () => {
+    it("acks the one attributed message on a branded 404 and retries every other UNDECIDED message (never processed, so never lost)", async () => {
         expect.assertions(5);
 
         const capture = vi.fn<QueueCaptureSink>();
@@ -478,17 +495,55 @@ describe("dispatchQueueBatch — poison message isolation (deterministic dispatc
             ),
         ).resolves.toBeUndefined();
 
+        // The handler's loop stops at m2 — it never explicitly acks m1 (its own
+        // `ctx.run` merely resolved) and never even reaches m3. Both are
+        // undecided, so both must be RETRIED (redelivered), matching what the
+        // old whole-batch rethrow would have given them. Only m2, the
+        // attributed message, is acked.
         expect(m2.acked).toBe(true);
-        expect(m1.acked).toBe(false);
-        expect(m3.acked).toBe(false);
+        expect(m1.retried).toBe(true);
+        expect(m3.retried).toBe(true);
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+        const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
+
+        expect(byId).toMatchObject({
+            m1: { outcome: "retry" },
+            m2: { error: expect.stringContaining("dispatch failed for m2"), outcome: "error" },
+            m3: { outcome: "retry" },
+        });
+    });
+
+    it("keeps an explicit ack the handler already made and only retries the genuinely undecided message", async () => {
+        expect.assertions(5);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: scopedDispatchQueueAckingAsItGoes, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+            ),
+        ).resolves.toBeUndefined();
+
+        // m1 was explicitly acked by the handler before m2's dispatch threw —
+        // that decision stands. m2 is the attributed poison message. m3 was
+        // never reached, so it must be retried, not silently acked.
+        expect(m1.acked).toBe(true);
+        expect(m2.acked).toBe(true);
+        expect(m3.retried).toBe(true);
 
         const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
         const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
 
         expect(byId).toMatchObject({
             m1: { outcome: "ack" },
-            m2: { error: expect.stringContaining("dispatch failed for m2"), outcome: "error" },
-            m3: { outcome: "ack" },
+            m2: { outcome: "error" },
+            m3: { outcome: "retry" },
         });
     });
 
