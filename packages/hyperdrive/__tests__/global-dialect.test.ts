@@ -1,8 +1,11 @@
 import { LunoraError } from "@lunora/errors";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
 import { buildMysqlExec, buildPgExec } from "../src/global-exec";
+
+/** The MySQL wire-protocol `CLIENT_FOUND_ROWS` bit — matches `global-exec.ts`'s probe. */
+const CLIENT_FOUND_ROWS_FLAG = 0x00_00_00_02;
 
 describe("postgresDialect", () => {
     it("maps kinds to Postgres types (DOUBLE PRECISION / BYTEA / TEXT)", () => {
@@ -103,6 +106,7 @@ describe("exec adapters", () => {
 
         const calls: string[] = [];
         const exec = buildMysqlExec({
+            config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
             execute: async (text) => {
                 calls.push(text);
 
@@ -122,6 +126,7 @@ describe("exec adapters", () => {
         const rows = [{ id: 1 }, { id: 2 }];
         const params: unknown[] = [];
         const exec = buildMysqlExec({
+            config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
             execute: async (_text, parameters) => {
                 params.push(...(parameters ?? []));
 
@@ -139,6 +144,7 @@ describe("exec adapters", () => {
         expect.assertions(1);
 
         const exec = buildMysqlExec({
+            config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
             execute: async () => [{}, undefined],
         });
 
@@ -175,6 +181,7 @@ describe("exec adapters", () => {
 
         const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
         const exec = buildMysqlExec({
+            config: { clientFlags: CLIENT_FOUND_ROWS_FLAG },
             execute: async (text, params = []) => {
                 calls.push({ params, sql: text });
 
@@ -188,5 +195,102 @@ describe("exec adapters", () => {
         ]);
 
         expect(calls).toHaveLength(2);
+    });
+});
+
+describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("throws naming CLIENT_FOUND_ROWS and the mysql2 remedy when the flag is determinately absent", () => {
+        expect.assertions(3);
+
+        // A real merged clientFlags bitmask, but with the FOUND_ROWS bit (0x2) unset —
+        // e.g. a connection created with `flags: ["-FOUND_ROWS"]`.
+        const connection = { config: { clientFlags: 0x00_00_00_01 }, execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+
+        let caught: unknown;
+
+        try {
+            buildMysqlExec(connection);
+        } catch (error) {
+            caught = error;
+        }
+
+        expect(caught).toBeInstanceOf(LunoraError);
+        expect((caught as Error).message).toContain("CLIENT_FOUND_ROWS");
+        expect((caught as Error).message).toContain('createPool({ flags: ["FOUND_ROWS"] })');
+    });
+
+    it("proceeds silently when the flag is determinately present (single-connection shape: connection.config.clientFlags)", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const connection = { config: { clientFlags: CLIENT_FOUND_ROWS_FLAG }, execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+
+        expect(() => buildMysqlExec(connection)).not.toThrow();
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("proceeds silently when the flag is determinately present (pool shape: connection.pool.config.connectionConfig.clientFlags)", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        // Mirrors mysql2/promise's real Pool wrapper: `pool.config` is undefined; the
+        // merged flags live on the core pool it wraps (`pool.pool.config.connectionConfig`).
+        const connection = {
+            execute: async () => [{}, undefined] as [Record<string, unknown>, undefined],
+            pool: { config: { connectionConfig: { clientFlags: CLIENT_FOUND_ROWS_FLAG } } },
+        };
+
+        expect(() => buildMysqlExec(connection)).not.toThrow();
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("warns once and proceeds when the connection exposes no flag information", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        // A minimal `Mysql2Like` double — only `execute`, no `config`/`pool`.
+        const connection = { execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
+
+        expect(() => buildMysqlExec(connection)).not.toThrow();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("CLIENT_FOUND_ROWS");
+    });
+
+    it("leaves the Postgres path untouched — no probe, no warning", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const exec = buildPgExec({ query: async () => [] });
+
+        const result = await exec.run("DELETE FROM t WHERE id = $1", ["x"]);
+
+        expect(result).toEqual({ rowsAffected: 0 });
+        expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("probes once at construction — never per statement", async () => {
+        expect.assertions(1);
+
+        let configReads = 0;
+        const connection = {
+            execute: async () => [{ affectedRows: 1 }, undefined] as [Record<string, unknown>, undefined],
+            get config() {
+                configReads += 1;
+
+                return { clientFlags: CLIENT_FOUND_ROWS_FLAG };
+            },
+        };
+
+        const exec = buildMysqlExec(connection);
+
+        await exec.run("UPDATE `t` SET `a` = 1", []);
+        await exec.all("SELECT 1", []);
+        await exec.batch?.([{ params: [], sql: "SELECT 1" }]);
+
+        expect(configReads).toBe(1);
     });
 });
