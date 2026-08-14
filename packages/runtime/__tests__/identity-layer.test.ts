@@ -285,3 +285,90 @@ describe("identity contract trust boundary", () => {
         expect(res.status).toBe(200);
     });
 });
+
+describe("execution context forwarded to the identity layer", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    /**
+     * A context shaped like the one Cloudflare hands a Worker protected by an
+     * Access policy attached to the Worker itself: the caller's identity arrives
+     * out-of-band on `ctx.access`, not on the request, so a resolver can only
+     * reach it if the worker forwards the context it was invoked with.
+     */
+    const accessContext = (email: string): ExecutionContextLike => {
+        return {
+            ...fakeContext,
+            access: { getIdentity: () => Promise.resolve({ email, sub: "user-1" }) },
+        };
+    };
+
+    /** A resolver that authenticates ONLY off the context-supplied identity, like `createAccessResolver()` does. */
+    const contextOnlyResolver: IdentityResolver = async (_request, _env, context) => {
+        const identity = await context?.access?.getIdentity();
+
+        return identity ? { email: identity.email, userId: String(identity.sub) } : null;
+    };
+
+    it("hands resolveIdentity the ExecutionContext the request was served with", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ resolveIdentity: contextOnlyResolver, shardDO: shard.namespace });
+
+        const res = await worker.fetch(rpc(), {}, accessContext("user@acme.test"));
+
+        expect(res.status).toBe(200);
+        expect(shard.calls[0]?.request.headers.get("x-lunora-userid")).toBe("user-1");
+    });
+
+    it("resolves anonymous, not an error, when the host supplied a context with no Access identity", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ resolveIdentity: contextOnlyResolver, shardDO: shard.namespace });
+
+        const res = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(shard.calls[0]?.request.headers.has("x-lunora-userid")).toBe(false);
+    });
+
+    it("forwards the exact context object, so a resolver can read anything on it", async () => {
+        expect.assertions(1);
+
+        const seen: (ExecutionContextLike | undefined)[] = [];
+        const context = accessContext("user@acme.test");
+        const worker = createWorker({
+            resolveIdentity: (_request, _env, forwarded) => {
+                seen.push(forwarded);
+
+                return { userId: "u1" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(rpc(), {}, context);
+
+        expect(seen[0]).toBe(context);
+    });
+
+    it("reaches serverQuery only through the explicit callOptions.context", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ functions: { "messages:list": { kind: "query" } }, resolveIdentity: contextOnlyResolver, shardDO: shard.namespace });
+        const reference = { __lunoraRef: "messages:list" };
+        const context = accessContext("user@acme.test");
+
+        // `serverQuery` has no `fetch` funnel to have recorded the context, and an
+        // SSR host may hand it a rebuilt Request — so without `callOptions.context`
+        // a Worker-scoped Access caller is anonymous here while their `/_lunora/rpc`
+        // traffic is authenticated. That divergence is what this pins.
+        await worker.serverQuery(rpc(), {}, reference, {});
+        await worker.serverQuery(rpc(), {}, reference, {}, { context });
+
+        expect(shard.calls[0]?.request.headers.has("x-lunora-userid")).toBe(false);
+        expect(shard.calls[1]?.request.headers.get("x-lunora-userid")).toBe("user-1");
+    });
+});

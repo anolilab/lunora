@@ -16,6 +16,7 @@
  * contract that the OpenAPI emitter also uses, so the published spec and the live
  * surface cannot drift.
  */
+import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
@@ -53,10 +54,12 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 /**
  * A built REST route. Takes the same `(request, env, url, context)` shape as the
  * runtime's internal route table so it can be spread straight into it; `url` is
- * unused here (the route re-parses it) and `context` is read only for its
- * `waitUntil`, which keeps dispatch telemetry alive past the response.
+ * unused here (the route re-parses it). The context is the real
+ * {@link ExecutionContextLike} rather than a `waitUntil`-only projection, because
+ * the cache decision reads `context.access` too — see the `applyRestCache` call
+ * below.
  */
-type RestRoute = (request: Request, env: unknown, url?: URL, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => Promise<Response>;
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: ExecutionContextLike) => Promise<Response>;
 
 interface RestRouteDeps {
     /** The generated function registry — the source of which procedures are exposed. */
@@ -197,8 +200,10 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // Applied AFTER dispatch so the effective `Cache-Control` can account
             // for the real status (an error is never cached) and for whether the
             // caller presented credentials (a credentialed exchange is forced
-            // `private`, see `rest-cache`).
-            return applyRestCache(response, cache, request);
+            // `private`, see `rest-cache`). The context is passed because one
+            // credential — the Cloudflare Access identity under a Worker-scoped
+            // policy — arrives there rather than on the request.
+            return applyRestCache(response, cache, request, context);
         };
     }
 

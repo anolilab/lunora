@@ -319,7 +319,7 @@ interface AuthDeclaration<Env> {
 
 /** Builder instance fields (private state recorded by the fluent methods). */
 const buildFieldLines = (options: EmitAppOptions): string[] => [
-    ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions>;`] : []),
+    ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
@@ -348,9 +348,9 @@ const buildLongTailMethods = (options: EmitAppOptions): string[] =>
 const buildMethodBlocks = (options: EmitAppOptions): string[] => [
     ...(options.hasAccess
         ? [
-              `    /** Wire Cloudflare Access (Zero Trust) — verifies the \`Cf-Access-Jwt-Assertion\` JWT and feeds the identity into \`ctx.auth\` / RLS via \`resolveIdentity\`. When \`.auth(...)\` is also configured, Access is composed ahead of it (Access wins when its JWT is present; everyone else falls through to the app session). */
-    public access(selector: Selector<Env, CreateAccessResolverOptions>): this {
-        this.accessSelector = selector;
+              `    /** Wire Cloudflare Access (Zero Trust) — feeds the verified Access identity into \`ctx.auth\` / RLS via \`resolveIdentity\`. Call it with no argument when the Access policy is attached to the Worker (the identity arrives on the execution context; nothing to configure); pass \`teamDomain\` + \`aud\` for a hostname-scoped Access application, whose \`Cf-Access-Jwt-Assertion\` JWT is verified against your team JWKS. When \`.auth(...)\` is also configured, Access is composed ahead of it (Access wins when it authenticated the caller; everyone else falls through to the app session). */
+    public access(selector?: Selector<Env, CreateAccessResolverOptions>): this {
+        this.accessSelector = selector ?? (() => undefined);
 
         return this;
     }`,

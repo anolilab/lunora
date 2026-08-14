@@ -35,10 +35,20 @@ describe("emitApp — Cloudflare Access", () => {
 
         const output = emitApp({ ...baseOptions, hasAccess: true });
 
-        expect(output).toContain("public access(selector: Selector<Env, CreateAccessResolverOptions>): this");
-        expect(output).toContain("private accessSelector?: Selector<Env, CreateAccessResolverOptions>;");
+        expect(output).toContain("public access(selector?: Selector<Env, CreateAccessResolverOptions>): this");
+        expect(output).toContain("private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;");
         expect(output).toContain('import type { CreateAccessResolverOptions } from "@lunora/cloudflare-access";');
         expect(output).toContain('import { createAccessResolver } from "@lunora/cloudflare-access";');
+    });
+
+    it("makes the selector optional so a Worker-scoped Access policy needs no JWT config", () => {
+        expect.assertions(1);
+
+        const output = emitApp({ ...baseOptions, hasAccess: true });
+
+        // `.access()` with no argument still records the wiring; the resolver then
+        // authenticates purely off the execution-context identity.
+        expect(output).toContain("this.accessSelector = selector ?? (() => undefined);");
     });
 
     it("sets resolveIdentity directly (no compose) when Access is used without auth", () => {
