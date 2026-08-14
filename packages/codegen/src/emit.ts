@@ -4540,8 +4540,17 @@ ${vectorNamespaceField}
     // one global backend (mixed is rejected above), so this is a single writer —
     // D1 by default, or Hyperdrive when `.global({ backend: "hyperdrive" })`.
     const globalDatabaseThunk = hasHyperdriveGlobal ? "config.hyperdriveGlobal" : "config.d1";
+    // Widen the per-request context handed to the global-database thunk with the
+    // D1 Sessions API bookmark: `bookmark` lets a D1-backed factory pin reads to
+    // the caller's own prior writes (read-your-writes across replicas), and
+    // `onBookmark` lets it report back the bookmark a write produced so this DO
+    // can record it via `setOutboundBookmark` and echo it on the response.
+    // Assigned to a named local (not passed as an inline object literal) so
+    // handing it to the narrower Hyperdrive thunk's `request` parameter type —
+    // which does not declare these fields — doesn't trip an excess-property
+    // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { identity, userId }) ?? globalDbStub;\n`
+        ? `            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -4557,7 +4566,11 @@ ${vectorNamespaceField}
             ? `
         protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
             const env = this.env as Record<string, unknown>;
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, identity) ?? globalDbStub;
+            // A shape read performs no writes, so the widened request only needs
+            // the inbound bookmark (pin the membership drain to the caller's own
+            // prior writes) — no \`onBookmark\` here.
+            const globalRequest = { ...identity, bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
             let cursor: null | string = null;
