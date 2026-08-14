@@ -1,5 +1,5 @@
 import SiCloudflare from "@icons-pack/react-simple-icons/icons/SiCloudflare.mjs";
-import type { CSSProperties, FC } from "react";
+import type { FC } from "react";
 
 import { Kicker, Shell } from "@/kit/layout";
 
