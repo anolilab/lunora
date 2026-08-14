@@ -6,6 +6,13 @@ One hand-written transport per language, plus a generated surface produced by
 Browser and Node consumers should use `@lunora/client`, which is hand-written,
 richer than anything generated, and not covered here.
 
+This file is the CONTRIBUTOR side: how the three layers fit together, where the
+ports deliberately differ, and what the gates are. For using one transport —
+wiring, examples, its own wire-type table — read that language's own README:
+[python](./python/README.md) · [go](./go/README.md) · [ruby](./ruby/README.md) ·
+[rust](./rust/README.md) · [swift](./swift/README.md) · [java](./java/README.md)
+· [kotlin](./kotlin/README.md) · [dart](./dart/README.md).
+
 ## The three layers
 
 | Layer          | Where                                        | Generated?                                     |
