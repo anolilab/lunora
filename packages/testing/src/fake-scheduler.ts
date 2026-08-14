@@ -7,11 +7,14 @@ interface FakeScheduledJob extends ScheduledJob {
 }
 
 /**
- * A single scheduled-job failure captured during an `advance()` / `runPending()`
- * sweep. Production's scheduler isolates per-job failures (one bad job does not
- * abort the rest), so the fake scheduler does the same — but, being a test
- * harness, it never swallows the error: every failure is recorded here so tests
- * can still assert on it.
+ * A single scheduled-job failure that exhausted its retry budget, captured
+ * during an `advance()` / `runPending()` sweep. Mirrors `SchedulerDO`'s
+ * dead-letter park (`recordRetry()`, `packages/scheduler/src/scheduler-do.ts:875-909`):
+ * a job that fails while it still has retries left is silently re-enqueued
+ * with backoff and is NOT recorded here. Only once a job's `attempts` exceeds
+ * the retry budget (default 5 — see {@link DEFAULT_RETRY_POLICY}, matching
+ * production) does it land here — being a test harness, the fake scheduler
+ * never swallows a terminal failure, so tests can still assert on it.
  */
 interface ScheduledJobFailure {
     /** The args the job was dispatched with. */
@@ -33,43 +36,55 @@ interface FakeSchedulerControls {
      * Advance the virtual clock by `ms` milliseconds, executing all jobs whose
      * `scheduledFor` timestamp is now at or before the new virtual "now". Jobs
      * are dispatched in `scheduledFor` order (oldest first). Newly queued jobs
-     * (scheduled by an executed job during the advance) are NOT re-evaluated in
-     * the same advance call — callers should advance again if needed.
+     * (scheduled by an executed job, or re-enqueued as a retry, during the
+     * advance) are NOT re-evaluated in the same advance call — callers should
+     * advance again if needed.
      *
      * Per-job failures are isolated (matching production): a job that throws does
-     * NOT prevent the remaining due jobs from running. After every due job has
-     * run, the failures are surfaced — they are recorded on
-     * {@link FakeSchedulerControls.failures} and, by default, re-thrown so a test
-     * still sees the error. A single failure is re-thrown verbatim; multiple
-     * failures are aggregated into an `AggregateError`. Pass
+     * NOT prevent the remaining due jobs from running. A failure with retries
+     * left is silently re-enqueued with exponential backoff on the virtual clock
+     * — mirroring `SchedulerDO`'s default retry policy
+     * ({@link DEFAULT_RETRY_POLICY}: 5 retries, 30s base delay, doubling —
+     * `packages/scheduler/src/scheduler-do.ts:89-90`) — rather than surfaced.
+     * Only once a job's retry budget is exhausted is the failure surfaced: it is
+     * recorded on {@link FakeSchedulerControls.failures} and, by default,
+     * re-thrown so a test still sees the error. A single such failure is
+     * re-thrown verbatim; multiple are aggregated into an `AggregateError`. Pass
      * `{ throwOnError: false }` to suppress the re-throw and inspect
      * {@link FakeSchedulerControls.failures} (and the returned count) instead.
      *
-     * Returns the number of jobs that were executed (including failed ones).
+     * Returns the number of jobs dispatched this sweep, including ones that
+     * failed and were silently retried, and ones that failed terminally.
      */
     advance: (ms: number, options?: SweepOptions) => Promise<number>;
 
     /**
-     * All scheduled-job failures captured so far, in execution order, across
-     * every `advance()` / `runPending()` call on this harness. Always available,
-     * even when `throwOnError: false` suppressed the re-throw. The list is a
-     * snapshot — mutating it does not affect the scheduler.
+     * All scheduled-job failures that exhausted their retry budget, in
+     * execution order, across every `advance()` / `runPending()` call on this
+     * harness. A failure with retries remaining is NOT recorded here — see
+     * {@link ScheduledJobFailure}. Always available, even when
+     * `throwOnError: false` suppressed the re-throw. The list is a snapshot —
+     * mutating it does not affect the scheduler.
      */
     failures: () => ScheduledJobFailure[];
 
     /**
      * List all pending jobs (those not yet executed or cancelled) in the order
-     * they were enqueued.
+     * they were enqueued. A job currently waiting out its retry backoff is
+     * still pending (visible here with its `attempts` count incremented and
+     * `scheduledFor` pushed out) until its budget is exhausted.
      */
     list: () => FakeScheduledJob[];
 
     /**
      * Execute all currently pending jobs regardless of their `scheduledFor`
      * time. Equivalent to advancing to `Infinity`. Returns the number of jobs
-     * executed (including failed ones).
+     * dispatched this sweep (including failed ones, retried or terminal).
      *
-     * Failure isolation and surfacing match {@link FakeSchedulerControls.advance}:
-     * one failing job does not abort the rest, and failures are recorded on
+     * Failure isolation, retry, and surfacing match
+     * {@link FakeSchedulerControls.advance}: one failing job does not abort the
+     * rest, a failure under the retry budget is silently re-enqueued rather
+     * than surfaced, and only a terminal failure is recorded on
      * {@link FakeSchedulerControls.failures} and re-thrown unless
      * `{ throwOnError: false }` is passed.
      */
@@ -86,6 +101,44 @@ interface SweepOptions {
      */
     throwOnError?: boolean;
 }
+
+/**
+ * Overrides for the fake scheduler's retry budget, passed to
+ * {@link createFakeScheduler}. Both fields default to
+ * {@link DEFAULT_RETRY_POLICY} — `SchedulerDO`'s production values — so a
+ * harness that never configures this sees production-faithful retry behaviour.
+ * A smaller `baseMs` (or `maxAttempts`) lets a test exhaust the retry budget
+ * without advancing the virtual clock through the full production backoff
+ * schedule (30s, 60s, 120s, 240s, 480s by default).
+ */
+interface SchedulerRetryPolicy {
+    /**
+     * Base backoff in ms before the first retry; doubles on each subsequent
+     * retry (exponential backoff — the only policy `SchedulerDO`'s default
+     * applies; the fake scheduler does not model a per-job `RetryPolicy`).
+     * @default 30_000
+     */
+    baseMs?: number;
+
+    /**
+     * Retries allowed after the original attempt before a failure is dropped
+     * into `recordedFailures`, matching `SchedulerDO`'s dead-letter park.
+     * @default 5
+     */
+    maxAttempts?: number;
+}
+
+/**
+ * The fake scheduler's default retry budget — a direct mirror of
+ * `SchedulerDO`'s `MAX_RETRY_ATTEMPTS` / `RETRY_BASE_DELAY_MS`
+ * (`packages/scheduler/src/scheduler-do.ts:89-90`). Those constants are
+ * module-private (not exported), so this duplicates the values rather than
+ * importing them — keep the two in sync if production's defaults ever change.
+ */
+const DEFAULT_RETRY_POLICY: Required<SchedulerRetryPolicy> = {
+    baseMs: 30_000,
+    maxAttempts: 5,
+};
 
 /**
  * Top-level dispatch for a scheduled job — wired by the harness. Unlike the
@@ -116,6 +169,11 @@ type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, conte
  * harness is fully constructed. Because `createFakeScheduler` is called once at
  * construction time, we take thunks so the references are resolved lazily at
  * dispatch time.
+ *
+ * `retryPolicy` overrides the retry budget a failing job is given before it is
+ * dropped into `recordedFailures`; see {@link SchedulerRetryPolicy}. Left
+ * unset, it defaults to {@link DEFAULT_RETRY_POLICY} — `SchedulerDO`'s
+ * production values — so the fake scheduler retries the way production does.
  */
 const createFakeScheduler = (
     getDispatch: () => ScheduledDispatch,
@@ -123,6 +181,7 @@ const createFakeScheduler = (
     getActionContext: () => unknown,
     getFunctionRegistry: () => Map<string, { handler: unknown; kind: string }>,
     now: number,
+    retryPolicy?: SchedulerRetryPolicy,
 ): { controls: FakeSchedulerControls; scheduler: Scheduler } => {
     // Seed the virtual clock from the harness's `now` (which honours
     // `options.now`) so `ctx.scheduler.runAt(ctx.now + delay, …)` schedules
@@ -131,10 +190,13 @@ const createFakeScheduler = (
     let nowMs = now;
     let nextId = 1;
 
+    const maxAttempts = retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts;
+    const baseMs = retryPolicy?.baseMs ?? DEFAULT_RETRY_POLICY.baseMs;
+
     /** All pending (not yet executed or cancelled) jobs, in enqueue order. */
     const pending = new Map<string, FakeScheduledJob>();
 
-    /** Every captured job failure, in execution order, across all sweeps. */
+    /** Every captured TERMINAL job failure (retry budget exhausted), in execution order, across all sweeps. */
     const recordedFailures: ScheduledJobFailure[] = [];
 
     const enqueue = (scheduledFor: number, functionPath: string, args: Record<string, unknown> = {}): string => {
@@ -220,16 +282,27 @@ const createFakeScheduler = (
 
     /**
      * Execute all jobs whose `scheduledFor` is at or before `cutoff`, in scheduled order.
-     * Returns the count of jobs dispatched (including any that failed).
+     * Returns the count of jobs dispatched this sweep, including ones that failed
+     * (whether silently retried or terminal).
      *
-     * Per-job failures are isolated — a throwing job is recorded on
-     * `recordedFailures` and the sweep continues to the remaining jobs (matching
-     * production, which routes a failed dispatch to retry rather than aborting the
-     * drain). Captured failures are then surfaced by `runSweep` below.
+     * Per-job failures are isolated — a throwing job never aborts the sweep,
+     * matching production. Unlike production's HTTP round-trip, the fake
+     * scheduler runs the retry decision synchronously right here, mirroring
+     * `SchedulerDO.recordRetry()` (`packages/scheduler/src/scheduler-do.ts:875-909`):
+     * a failure whose `attempts` is still within the budget (`maxAttempts`,
+     * default 5 — see {@link DEFAULT_RETRY_POLICY}) is
+     * silently re-enqueued with exponential backoff — `baseMs * 2 ** (attempts -
+     * 1)` on the virtual clock — and is NOT added to `failed`/`recordedFailures`.
+     * Only once the budget is exhausted does the failure get recorded, mirroring
+     * production's dead-letter park; captured (terminal) failures are then
+     * surfaced by `runSweep` below.
      *
      * Jobs run sequentially (each job may itself enqueue new jobs, but those
      * are not included in the current sweep — the due list is snapshotted before
-     * the first dispatch).
+     * the first dispatch). A job re-enqueued as a retry mid-sweep is likewise
+     * not picked up in the same sweep even if its new `scheduledFor` still falls
+     * within `cutoff` — it waits for the next `advance()` / `runPending()` call,
+     * exactly like any other newly-scheduled job.
      */
     const executeDue = async (cutoff: number): Promise<{ executed: number; failed: ScheduledJobFailure[] }> => {
         // Snapshot due jobs before executing (avoids processing newly-scheduled
@@ -255,12 +328,29 @@ const createFakeScheduler = (
                 // eslint-disable-next-line no-await-in-loop -- intentional sequential dispatch; jobs must run in order and may mutate shared state
                 await dispatchJob(job);
             } catch (error) {
-                // Isolate the failure (prod does not abort the rest of the drain),
-                // but never swallow it: record so the sweep can surface it.
-                const failure: ScheduledJobFailure = { args: job.args, error, functionPath: job.functionPath, id: job.id };
+                // Mirrors SchedulerDO.recordRetry(): `attempts` counts THIS
+                // failure, so the very first failure sets it to 1 (not 0-indexed).
+                const attempts = (job.attempts ?? 0) + 1;
 
-                failed.push(failure);
-                recordedFailures.push(failure);
+                if (attempts > maxAttempts) {
+                    // Retry budget exhausted — terminal, matching the DO's
+                    // dead-letter park. Isolate the failure (the sweep continues
+                    // to the remaining jobs) but never swallow it: record so the
+                    // sweep can surface it.
+                    const failure: ScheduledJobFailure = { args: job.args, error, functionPath: job.functionPath, id: job.id };
+
+                    failed.push(failure);
+                    recordedFailures.push(failure);
+                } else {
+                    // Still within budget — re-enqueue with exponential backoff on
+                    // the virtual clock (SchedulerDO's default "exponential"
+                    // policy; the fake scheduler does not model a per-job
+                    // `RetryPolicy`). Silent: production does not surface a
+                    // mid-retry failure either.
+                    const delayMs = baseMs * 2 ** (attempts - 1);
+
+                    pending.set(job.id, { ...job, attempts, scheduledFor: nowMs + delayMs });
+                }
             }
         }
 
@@ -311,5 +401,5 @@ const createFakeScheduler = (
     return { controls, scheduler };
 };
 
-export { createFakeScheduler };
-export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions };
+export { createFakeScheduler, DEFAULT_RETRY_POLICY };
+export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SchedulerRetryPolicy, SweepOptions };

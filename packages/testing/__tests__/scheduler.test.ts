@@ -101,11 +101,38 @@ const appendOrThrow = internalMutation.input({ fail: v.boolean(), message: v.str
 /** Query that reads the log table. */
 const readLog = query.query(({ ctx }) => ctx.db.query("log").collect());
 
+/**
+ * Per-key invocation counter for {@link flakyThenSucceed}, keyed by `args.key`
+ * so concurrent tests scheduling their own flaky job don't interfere with each
+ * other. Module-level (rather than DB-backed) because it is pure test
+ * scaffolding, not something a handler under test would ever read.
+ */
+const flakyInvocationCounts = new Map<string, number>();
+
+/**
+ * Internal mutation that throws on its first `args.failTimes` invocations for a
+ * given `args.key`, then succeeds and appends a log entry — used to prove the
+ * fake scheduler's retry re-dispatches a job that transiently fails until it
+ * succeeds.
+ */
+const flakyThenSucceed = internalMutation.input({ failTimes: v.number(), key: v.string() }).mutation(async ({ args, ctx }) => {
+    const invocation = (flakyInvocationCounts.get(args.key) ?? 0) + 1;
+
+    flakyInvocationCounts.set(args.key, invocation);
+
+    if (invocation <= args.failTimes) {
+        throw new Error(`flaky:${args.key}:${String(invocation)}`);
+    }
+
+    await ctx.db.insert("log", { message: `succeeded:${args.key}` });
+});
+
 const functions = {
     "log:appendLog": appendLog,
     "log:appendOrThrow": appendOrThrow,
     "log:appendThenThrow": appendThenThrow,
     "log:cancelPendingAppends": cancelPendingAppends,
+    "log:flakyThenSucceed": flakyThenSucceed,
     "log:pingViaFetch": pingViaFetch,
 };
 
@@ -381,18 +408,33 @@ describe("fake scheduler", () => {
         expect(ctxJobs as unknown[]).toHaveLength(1);
     });
 
-    it("a scheduled mutation runs in its own transaction — a mid-batch throw rolls back everything (matching production)", async () => {
-        expect.assertions(2);
+    it("a scheduled mutation runs in its own transaction — a mid-batch throw rolls back every attempt, including the terminal one (matching production)", async () => {
+        expect.assertions(4);
 
         const t = start();
 
         await t.mutation(scheduleThrow, {});
 
-        // The job throws mid-batch; runPending surfaces the throw, but the partial
-        // insertMany must NOT persist (the scheduled mutation gets its own
-        // BEGIN/COMMIT span, exactly like a top-level t.mutation(...) call).
-        await expect(t.scheduler.runPending()).rejects.toThrow("scheduled boom");
+        // Attempt 1: the job throws mid-batch. It is still within the default
+        // 5-retry budget, so it is silently retried rather than surfacing —
+        // matching SchedulerDO, which routes a failed dispatch to retry rather
+        // than dead-lettering it on the first failure. The partial insertMany
+        // must NOT persist regardless (the scheduled mutation gets its own
+        // BEGIN/COMMIT span on every attempt, exactly like a top-level
+        // t.mutation(...) call).
+        await expect(t.scheduler.runPending()).resolves.toBe(1);
+        await expect(t.query(readLog, {})).resolves.toHaveLength(0);
 
+        // Exhaust the remaining retry budget (5 total retries, exponential
+        // backoff from a 30s base — packages/scheduler/src/scheduler-do.ts:89-90)
+        // so the job reaches its terminal (6th) attempt.
+        for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+            await t.scheduler.advance(delay, { throwOnError: false });
+        }
+
+        // Terminal attempt: still rolls back, and the failure is now surfaced.
+        expect(t.scheduler.failures()).toHaveLength(1);
         await expect(t.query(readLog, {})).resolves.toHaveLength(0);
     });
 
@@ -419,8 +461,8 @@ describe("fake scheduler", () => {
         expect(second.value).toHaveLength(1);
     });
 
-    it("isolates a failing scheduled job — the remaining jobs still run and the failure is observable", async () => {
-        expect.assertions(4);
+    it("isolates a failing scheduled job — the remaining jobs still run while the failed one is retried", async () => {
+        expect.assertions(5);
 
         const t = start();
 
@@ -431,22 +473,30 @@ describe("fake scheduler", () => {
             await ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: false, message: "last" });
         });
 
-        // Default surfacing re-throws after every job has run.
-        await expect(t.scheduler.runPending()).rejects.toThrow("boom:middle");
+        // The middle job throws but is still within the default retry budget, so
+        // it is silently retried rather than surfaced — matching SchedulerDO,
+        // which routes a failed dispatch to retry rather than aborting the drain
+        // or dead-lettering it on the first failure.
+        const executed = await t.scheduler.runPending();
+
+        expect(executed).toBe(3);
 
         // Both non-failing jobs ran despite the middle one throwing.
         const log = await t.query(readLog, {});
 
         expect((log as { message: string }[]).map((r) => r.message).toSorted((a, b) => a.localeCompare(b))).toEqual(["first", "last"]);
 
-        // The failure is recorded and observable.
-        const failures = t.scheduler.failures();
+        // Not yet a terminal failure — the retry budget has not been exhausted.
+        expect(t.scheduler.failures()).toHaveLength(0);
 
-        expect(failures).toHaveLength(1);
-        expect(failures[0]).toMatchObject({ functionPath: "log:appendOrThrow" });
+        // The failing job is still pending, waiting out its backoff for a retry.
+        const stillPending = t.scheduler.list();
+
+        expect(stillPending).toHaveLength(1);
+        expect(stillPending[0]).toMatchObject({ attempts: 1, functionPath: "log:appendOrThrow" });
     });
 
-    it("aggregates multiple scheduled-job failures into an AggregateError while running the survivors", async () => {
+    it("aggregates multiple scheduled-job failures into an AggregateError once each exhausts its retry budget, while running the survivor", async () => {
         expect.assertions(4);
 
         const t = start();
@@ -457,7 +507,19 @@ describe("fake scheduler", () => {
             await ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "boom-b" });
         });
 
-        await expect(t.scheduler.runPending()).rejects.toBeInstanceOf(AggregateError);
+        // Attempt 1 for both failing jobs — within budget, silently retried.
+        await t.scheduler.runPending({ throwOnError: false });
+
+        // Both failing jobs share the same schedule (enqueued together, same
+        // default backoff), so they exhaust their retry budget in the same sweep.
+        for (const delay of [30_000, 60_000, 120_000, 240_000]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+            await t.scheduler.advance(delay, { throwOnError: false });
+        }
+
+        // Attempt 6: both exceed the 5-retry budget in this sweep — surfaced
+        // together as an AggregateError.
+        await expect(t.scheduler.advance(480_000)).rejects.toBeInstanceOf(AggregateError);
 
         // The surviving job persisted.
         const log = await t.query(readLog, {});
@@ -492,8 +554,8 @@ describe("fake scheduler", () => {
         expect(log).toMatchObject([{ message: "status:200" }]);
     });
 
-    it("with throwOnError: false the sweep resolves and failures are observable via failures()", async () => {
-        expect.assertions(3);
+    it("with throwOnError: false the sweep resolves and failures are observable via failures() once the retry budget is exhausted", async () => {
+        expect.assertions(4);
 
         const t = start();
 
@@ -502,15 +564,124 @@ describe("fake scheduler", () => {
             await ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "swallowed" });
         });
 
-        // No throw — the count of executed jobs (including the failed one) is returned.
-        const executed = await t.scheduler.runPending({ throwOnError: false });
+        // No throw on any attempt — the count of jobs dispatched this sweep
+        // (including the retried/failed one) is returned every time.
+        await expect(t.scheduler.runPending({ throwOnError: false })).resolves.toBe(2);
+        expect(t.scheduler.failures()).toHaveLength(0);
 
-        expect(executed).toBe(2);
+        for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+            await t.scheduler.advance(delay, { throwOnError: false });
+        }
 
         const log = await t.query(readLog, {});
 
         expect((log as { message: string }[]).map((r) => r.message)).toEqual(["kept"]);
 
         expect(t.scheduler.failures()).toHaveLength(1);
+    });
+
+    describe("retry parity with SchedulerDO", () => {
+        it("a job that fails twice then succeeds is retried to success and records no terminal failure", async () => {
+            expect.assertions(6);
+
+            const t = start();
+
+            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:flakyThenSucceed", { failTimes: 2, key: "flaky-1" }));
+
+            // Attempt 1: fails, retried 30s out — not yet terminal.
+            await expect(t.scheduler.runPending()).resolves.toBe(1);
+            expect(t.scheduler.failures()).toHaveLength(0);
+
+            // Attempt 2 (after the first 30s backoff): fails again, retried 60s out.
+            await expect(t.scheduler.advance(30_000)).resolves.toBe(1);
+
+            // Attempt 3 (after the doubled 60s backoff): succeeds.
+            await expect(t.scheduler.advance(60_000)).resolves.toBe(1);
+
+            await expect(t.query(readLog, {})).resolves.toMatchObject([{ message: "succeeded:flaky-1" }]);
+            expect(t.scheduler.failures()).toHaveLength(0);
+        });
+
+        it("a job that fails every time is retried MAX_RETRY_ATTEMPTS times before landing in recordedFailures", async () => {
+            expect.assertions(11);
+
+            const t = start();
+
+            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "always" }));
+
+            // Attempt 1 (the original dispatch): fails. attempts=1 is within the
+            // default 5-retry budget, so it is silently retried rather than surfaced.
+            await expect(t.scheduler.runPending()).resolves.toBe(1);
+            expect(t.scheduler.failures()).toHaveLength(0);
+
+            // Backoff is honoured: advancing short of the 30s cutoff does not fire the retry.
+            await expect(t.scheduler.advance(29_999)).resolves.toBe(0);
+
+            // Attempts 2-5 (retries 1-4): each still within budget. Delays double
+            // every time — 60s, 120s, 240s, 480s — matching exponential backoff
+            // from a 30s base (packages/scheduler/src/scheduler-do.ts:89-90).
+            await expect(t.scheduler.advance(1)).resolves.toBe(1); // attempt 2 (attempts=2)
+            await expect(t.scheduler.advance(60_000)).resolves.toBe(1); // attempt 3 (attempts=3)
+            await expect(t.scheduler.advance(120_000)).resolves.toBe(1); // attempt 4 (attempts=4)
+            await expect(t.scheduler.advance(240_000)).resolves.toBe(1); // attempt 5 (attempts=5, still <= maxAttempts)
+
+            expect(t.scheduler.failures()).toHaveLength(0);
+
+            // Attempt 6 (retry 5): attempts=6 exceeds the 5-retry budget — terminal,
+            // matching SchedulerDO's dead-letter park.
+            await expect(t.scheduler.advance(480_000)).rejects.toThrow("boom:always");
+
+            expect(t.scheduler.failures()).toHaveLength(1);
+            expect(t.scheduler.list()).toHaveLength(0);
+        });
+
+        it("honours the backoff cutoff — a retried job does not re-run until the virtual clock passes it", async () => {
+            expect.assertions(4);
+
+            const t = start();
+
+            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:flakyThenSucceed", { failTimes: 1, key: "backoff-cutoff" }));
+
+            // Attempt 1: fails, retried 30s out (the default base delay).
+            await expect(t.scheduler.runPending()).resolves.toBe(1);
+
+            // Short of the cutoff: the retry does not fire.
+            await expect(t.scheduler.advance(29_999)).resolves.toBe(0);
+            await expect(t.query(readLog, {})).resolves.toHaveLength(0);
+
+            // At the cutoff: the retry fires and succeeds.
+            await expect(t.scheduler.advance(1)).resolves.toBe(1);
+        });
+
+        it("an unknown functionPath still drops the job without retrying", async () => {
+            expect.assertions(2);
+
+            const t = start();
+
+            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:doesNotExist", {}));
+
+            const executed = await t.scheduler.runPending();
+
+            expect(executed).toBe(1);
+            // Dropped, not retried — an unknown path is not a transient failure.
+            expect(t.scheduler.list()).toHaveLength(0);
+        });
+
+        it("a successful job runs exactly once and is never retried", async () => {
+            expect.assertions(3);
+
+            const t = start();
+
+            await t.mutation(scheduleAppend, { delayMs: 0, message: "once" });
+
+            await expect(t.scheduler.runPending()).resolves.toBe(1);
+
+            // Advancing far past what would have been a retry backoff must not
+            // re-run the (already succeeded) job.
+            await expect(t.scheduler.advance(10_000_000)).resolves.toBe(0);
+
+            await expect(t.query(readLog, {})).resolves.toHaveLength(1);
+        });
     });
 });
