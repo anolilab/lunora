@@ -63,6 +63,7 @@ const VALID_WRANGLER = `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "x" }]
 }
 `;
@@ -91,6 +92,7 @@ describe("wrangler-validator", () => {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 compatibility_flags: [REQUIRED_FLAG],
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
             };
 
             const report = validateWranglerConfig(wrangler);
@@ -120,6 +122,7 @@ describe("wrangler-validator", () => {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 compatibility_flags: ["nodejs_compat"],
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
             });
 
             expect(report.valid).toBe(true);
@@ -318,6 +321,7 @@ describe("wrangler-validator", () => {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 compatibility_flags: [REQUIRED_FLAG],
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 vectorize: [{ binding: "DOCS_BODY", index_name: "docs-body" }],
             };
 
@@ -334,6 +338,7 @@ describe("wrangler-validator", () => {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 compatibility_flags: [REQUIRED_FLAG],
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 tail_consumers: [{ service: "log-forwarder" }],
             };
 
@@ -381,12 +386,16 @@ describe("wrangler-validator", () => {
             return {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 compatibility_flags: [REQUIRED_FLAG],
-                d1_databases: [{ binding: "DB" }],
+                d1_databases: [{ binding: "DB", database_name: "top-level-db" }],
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
                 kv_namespaces: [{ binding: "CACHE", id: "top-level-kv-id" }],
+                // migrations is INHERITABLE (see INHERITABLE_KEYS) — declared once
+                // here so every env-scoped case below, none of which override it,
+                // still resolves ShardDO's binding against a known class.
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 observability: { enabled: true },
                 queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
-                r2_buckets: [{ binding: "UPLOADS" }],
+                r2_buckets: [{ binding: "UPLOADS", bucket_name: "top-level-uploads" }],
                 vars: { LUNORA_ENV: "shared" },
             };
         };
@@ -471,7 +480,10 @@ describe("wrangler-validator", () => {
             const wrangler = topLevel();
 
             wrangler.env = {
-                production: { d1_databases: [{ binding: "DB" }], durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } },
+                production: {
+                    d1_databases: [{ binding: "DB", database_name: "prod-db" }],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                },
             };
 
             expect(validateWranglerConfig(wrangler, { hasGlobalTable: true }, "production").valid).toBe(true);
@@ -698,6 +710,7 @@ describe("wrangler-validator", () => {
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "top-level-only" }],
     "env": {
         "production": {
@@ -776,7 +789,8 @@ describe("wrangler-validator", () => {
     "name": "x",
     "main": "src/index.ts",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
-    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }${extra}] }
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }${extra}] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }]
 }
 `,
                     "utf8",
@@ -942,6 +956,7 @@ describe("wrangler-validator", () => {
     "name": "x",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "assets": { "directory": "./dist/client", "binding": "ASSETS" }
 }
 `,
@@ -988,7 +1003,8 @@ describe("wrangler-validator", () => {
     "compatibility_flags": ["${REQUIRED_FLAG}"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `,
                 "utf8",
@@ -1013,6 +1029,7 @@ describe("wrangler-validator", () => {
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }
 `,
                 "utf8",
@@ -1079,6 +1096,7 @@ describe("wrangler-validator", () => {
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }]
 }
 `,
@@ -1375,6 +1393,7 @@ describe("wrangler-validator", () => {
             return {
                 compatibility_date: REQUIRED_COMPATIBILITY_DATE,
                 durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
                 ...overrides,
             };
         };
@@ -1627,6 +1646,201 @@ describe("wrangler-validator", () => {
             expect(validateWranglerConfig(validBase({ exports: { default: { type: "worker", cache: null } } })).errors.join(" ")).toContain(
                 'exports["default"].cache must be an object',
             );
+        });
+    });
+
+    // Plan 353: `migrations[]` cross-checked against `durable_objects.bindings`.
+    // The risk here is over-rejection (a false positive breaks a working
+    // project's deploy), so the fold must be order-sensitive — tests 3 and 4
+    // are the guards for that, not just coverage padding.
+    describe("durable object migrations", () => {
+        it("errors naming the class when a DO binding has no migrations block at all", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            });
+
+            expect(report.errors.join(" ")).toContain('declares class "ShardDO" but it is missing from migrations');
+        });
+
+        it("passes once a migration entry registers the class via new_sqlite_classes", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors).toEqual([]);
+            expect(report.valid).toBe(true);
+        });
+
+        it("resolves a class added then renamed across two migration entries by its NEW name", () => {
+            expect.assertions(3);
+
+            // A second binding (unrelated to the fixed SHARD/ShardDO check) is
+            // added, renamed, then re-checked. Naive "does this class appear
+            // anywhere in migrations" scan gets BOTH directions wrong here: the
+            // OLD name ("WorkerDO") must no longer satisfy a binding, and the
+            // NEW name must.
+            const renamed = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "WorkerDOv2", name: "WORKER" },
+                    ],
+                },
+                migrations: [{ new_sqlite_classes: ["ShardDO", "WorkerDO"] }, { renamed_classes: [{ from: "WorkerDO", to: "WorkerDOv2" }] }],
+            });
+
+            expect(renamed.errors).toEqual([]);
+            expect(renamed.valid).toBe(true);
+
+            const stillOldName = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "WorkerDO", name: "WORKER" },
+                    ],
+                },
+                migrations: [{ new_sqlite_classes: ["ShardDO", "WorkerDO"] }, { renamed_classes: [{ from: "WorkerDO", to: "WorkerDOv2" }] }],
+            });
+
+            expect(stillOldName.errors.join(" ")).toContain('declares class "WorkerDO" but it is missing from migrations');
+        });
+
+        it("errors when a class is added then later deleted", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }, { deleted_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors.join(" ")).toContain('declares class "ShardDO" but it is missing from migrations');
+        });
+
+        it("names a second DO binding (e.g. SessionDO) that migrations don't cover", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "SessionDO", name: "SESSION" },
+                    ],
+                },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors.join(" ")).toContain('declares class "SessionDO" but it is missing from migrations');
+            expect(report.errors.join(" ")).not.toContain('declares class "ShardDO" but it is missing from migrations');
+        });
+
+        it("ignores a binding whose class lives in another script (script_name set)", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "RemoteDO", name: "OTHER", script_name: "other-worker" },
+                    ],
+                },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors.join(" ")).not.toContain("RemoteDO");
+        });
+    });
+
+    describe("r2_buckets / d1_databases structural validation", () => {
+        it("errors when an r2_buckets entry has no bucket_name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                r2_buckets: [{ binding: "FILES" }],
+            });
+
+            expect(report.errors.join(" ")).toContain('must have a non-empty "bucket_name"');
+        });
+
+        it("accepts a well-formed r2_buckets entry", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                r2_buckets: [{ binding: "FILES", bucket_name: "app-files" }],
+            });
+
+            expect(report.errors).toEqual([]);
+        });
+
+        it("errors when a d1_databases entry has neither database_id nor database_name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                d1_databases: [{ binding: "DB" }],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors.join(" ")).toContain('must have a "database_id" or a "database_name"');
+        });
+
+        it("accepts a d1_databases entry with only database_name (id is filled in later by wrangler d1 create)", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                d1_databases: [{ binding: "DB", database_name: "app-db" }],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+            });
+
+            expect(report.errors).toEqual([]);
+        });
+    });
+
+    // Regression guard (plan 353, Step 4 test 8): a realistic, fully-wired
+    // config — mirroring examples/team-chat/wrangler.jsonc — must produce no
+    // NEW errors or warnings from this change. Keep this in sync with that
+    // example if its shape changes.
+    describe("realistic complete config (regression guard)", () => {
+        it("produces no errors or warnings for a fully-wired example-shaped config", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                {
+                    compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                    compatibility_flags: ["nodejs_compat"],
+                    d1_databases: [{ binding: "DB", database_id: "REPLACE_WITH_D1_ID", database_name: "lunora-example-team-chat" }],
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    main: "src/server/index.ts",
+                    migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                    observability: { enabled: true, head_sampling_rate: 1 },
+                    r2_buckets: [{ binding: "FILES", bucket_name: "lunora-example-team-chat-files" }],
+                    vars: { PUBLIC_STORAGE_BASE_URL: "http://localhost:5173" },
+                },
+                { hasGlobalTable: true },
+            );
+
+            expect(report.errors).toEqual([]);
+            expect(report.warnings).toEqual([]);
         });
     });
 });

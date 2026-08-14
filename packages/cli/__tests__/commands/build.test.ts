@@ -23,6 +23,7 @@ const VALID_WRANGLER = `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
 }
 `;
@@ -126,7 +127,7 @@ describe("lunora build", () => {
         expect(manifest.name).toBe("lunora-app");
         expect(manifest.bindings).toStrictEqual([
             { binding: "DB", resource: "x", resourceId: "real-db-id-abc123", type: "d1" },
-            { binding: "SHARD", className: "ShardDO", sqlite: false, type: "durable_object" },
+            { binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" },
         ]);
         expect(successes.join("\n")).toContain("binding manifest written to");
     });

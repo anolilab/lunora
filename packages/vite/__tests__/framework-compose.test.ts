@@ -38,7 +38,8 @@ const VALID_WRANGLER = `{
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `;
 
