@@ -43,37 +43,56 @@ const trimTrailingSlash = (base: string): string => {
     return url;
 };
 
-export default {
-    // eslint-disable-next-line @typescript-eslint/require-await -- the Cloudflare `tail` handler contract is async; this body dispatches through `waitUntil` and has nothing to await
-    async tail(events: TailTraceItem[], environment: TailEnv, context: TailContext): Promise<void> {
-        const batches = groupTailEvents(events);
+/**
+ * Forward one grouped tail batch to the control plane, or do nothing when tail
+ * streaming isn't configured. Returns the in-flight send for `waitUntil`, or nothing when there was
+ * nothing to send.
+ *
+ * Separated from the handler so the handler stays a few lines: the contract is a
+ * promise-returning `tail`, but nothing here is awaited — delivery is
+ * deliberately fire-and-forget so a flaky control plane never back-pressures a
+ * tailed tenant worker.
+ */
+const forwardTailBatches = (events: TailTraceItem[], environment: TailEnv): Promise<void> | undefined => {
+    const batches = groupTailEvents(events);
 
-        if (batches.length === 0) {
-            return;
-        }
+    if (batches.length === 0) {
+        return undefined;
+    }
 
-        const base = environment.LUNORA_CONTROL_PLANE_URL;
-        const secret = environment.LUNORA_TAIL_SECRET;
+    const base = environment.LUNORA_CONTROL_PLANE_URL;
+    const secret = environment.LUNORA_TAIL_SECRET;
 
-        // Unconfigured (local dev, a cell without log streaming) → inert no-op.
-        if (base === undefined || base === "" || secret === undefined || secret === "") {
-            return;
-        }
+    // Unconfigured (local dev, a cell without log streaming) → inert no-op.
+    if (base === undefined || base === "" || secret === undefined || secret === "") {
+        return undefined;
+    }
 
+    // Awaited inside, so a rejection is caught here and never surfaces to (or
+    // back-pressures) the tailed tenant workers; the response body is
+    // irrelevant, the send is the point. A synchronous `fetch` throw (e.g. a
+    // malformed URL) lands in the same catch.
+    return (async () => {
         try {
-            // `.catch` swallows any rejection so a flaky control plane never
-            // surfaces to (or back-pressures) the tailed tenant workers.
-            const sent = fetch(`${trimTrailingSlash(base)}/v1/logs/tail`, {
+            await fetch(`${trimTrailingSlash(base)}/v1/logs/tail`, {
                 body: JSON.stringify({ batches }),
                 headers: { "content-type": "application/json", "x-lunora-tail-secret": secret },
                 method: "POST",
-            }).catch(() => {
-                // Delivery error — intentionally ignored.
             });
-
-            context.waitUntil(sent);
         } catch {
-            // `fetch` throwing synchronously (e.g. a malformed URL) must not break tail delivery.
+            // Delivery error — intentionally ignored.
         }
+    })();
+};
+
+export default {
+    tail(events: TailTraceItem[], environment: TailEnv, context: TailContext): Promise<void> {
+        const sent = forwardTailBatches(events, environment);
+
+        if (sent !== undefined) {
+            context.waitUntil(sent);
+        }
+
+        return Promise.resolve();
     },
 };
