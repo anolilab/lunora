@@ -21,6 +21,7 @@ import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 import { LinkRow, LinkRowList } from "@/kit/link-row";
 import Capabilities from "@/pages/home/sections/capabilities";
 import CompareBand from "@/pages/home/sections/compare-band";
+import Examples from "@/pages/home/sections/examples";
 import Faq from "@/pages/home/sections/faq";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
@@ -169,6 +170,7 @@ const Home: FC = () => (
                     <AgentPanel />
                 </Reveal>
             </Shell>
+            <Examples />
         </Section>
 
         <HatchSpacer />

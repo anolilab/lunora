@@ -269,9 +269,12 @@ const BlogPost: FC<{
                 <>
                     <HatchSpacer />
                     <section data-nav-theme="dark">
-                        <Shell className="py-16">
-                            <h2 className="text-h2 font-semibold tracking-tight text-ink">More from the blog</h2>
-                            <div className="mt-8 grid grid-cols-1 gap-10 sm:grid-cols-2 lg:grid-cols-3">
+                        <Shell className="grid gap-10 py-16 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] lg:gap-16">
+                            <div className="lg:sticky lg:top-32 lg:self-start">
+                                <Kicker size="micro">Blog</Kicker>
+                                <h2 className="mt-3 text-h2 font-semibold tracking-tight text-ink">Keep reading</h2>
+                            </div>
+                            <div className="grid grid-cols-1 gap-x-10 gap-y-14 sm:grid-cols-2">
                                 {related.map((item) => (
                                     <RelatedCard key={item.slug} post={item} />
                                 ))}

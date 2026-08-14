@@ -10,6 +10,43 @@ import BlogPost from "@/pages/blog/content";
 
 import { NotFound } from "../../pages/not-found";
 
+/** How many posts the "Keep reading" grid shows. */
+const KEEP_READING = 6;
+
+/** A stable number for a slug. Plain arithmetic: the lint rules ban bitwise. */
+const hashSeed = (value: string): number => {
+    let seed = 7;
+
+    for (const character of value) {
+        seed = (seed * 31 + (character.codePointAt(0) ?? 0)) % 2_147_483_647;
+    }
+
+    return seed;
+};
+
+/**
+ * Fisher–Yates over a Lehmer generator.
+ *
+ * Not a good source of randomness and it does not need to be — it orders six
+ * posts, reproducibly, from a seed the server and the browser both derive from
+ * the slug. `Math.random()` would order them differently in the prerendered HTML
+ * and on hydration, which is a mismatch React cannot patch up.
+ */
+const shuffle = <T,>(items: T[], seed: number): T[] => {
+    const out = [...items];
+    let state = seed === 0 ? 1 : seed;
+
+    for (let index = out.length - 1; index > 0; index -= 1) {
+        state = (state * 16_807) % 2_147_483_647;
+
+        const swap = state % (index + 1);
+
+        [out[index], out[swap]] = [out[swap], out[index]];
+    }
+
+    return out;
+};
+
 const WORD_SPLIT = /\s+/;
 
 const toLink = (post?: { slug: string; title?: string }): PostLink | null => {
@@ -38,18 +75,29 @@ const buildPost = async (slug: string) => {
     const newer = index > 0 ? all[index - 1] : undefined;
     const older = index >= 0 && index < all.length - 1 ? all[index + 1] : undefined;
 
-    const related: RelatedPost[] = all
-        .filter((other) => other.slug !== slug)
-        .slice(0, 3)
-        .map((other) => {
-            return {
-                category: other.category,
-                image: other.image,
-                publishedAt: other.publishedAt,
-                slug: other.slug,
-                title: other.title,
-            };
-        });
+    // "Keep reading" is this year's writing in a shuffled order, so two articles
+    // do not recommend the same three posts — but the shuffle is seeded from the
+    // slug rather than `Math.random()`. These pages are prerendered: a random
+    // draw would bake one order into the HTML and then deal a different one on
+    // hydration, which is a mismatch React cannot patch up.
+    //
+    // The year filter is applied only while it can be satisfied. In January, or
+    // for a quiet year, an empty section is worse than an older post, so the
+    // remainder tops up from the archive newest-first.
+    const currentYear = String(new Date().getFullYear());
+    const others = all.filter((other) => other.slug !== slug);
+    const fromThisYear = others.filter((other) => other.publishedAt?.startsWith(currentYear));
+    const rest = others.filter((other) => !other.publishedAt?.startsWith(currentYear));
+
+    const related: RelatedPost[] = [...shuffle(fromThisYear, hashSeed(slug)), ...rest].slice(0, KEEP_READING).map((other) => {
+        return {
+            category: other.category,
+            image: other.image,
+            publishedAt: other.publishedAt,
+            slug: other.slug,
+            title: other.title,
+        };
+    });
 
     return {
         compiled: post.mdx,
