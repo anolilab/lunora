@@ -2875,7 +2875,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: globalSchema("d1") });
 
-            expect(output).toContain("config.d1?.(env, { identity, userId }) ?? globalDbStub");
+            expect(output).toContain("config.d1?.(env, globalRequest) ?? globalDbStub");
             expect(output).toContain("d1?: (env: Record<string, unknown>");
             expect(output).not.toContain("config.hyperdriveGlobal");
         });
@@ -2885,7 +2885,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: globalSchema("hyperdrive") });
 
-            expect(output).toContain("config.hyperdriveGlobal?.(env, { identity, userId }) ?? globalDbStub");
+            expect(output).toContain("config.hyperdriveGlobal?.(env, globalRequest) ?? globalDbStub");
             expect(output).toContain("hyperdriveGlobal?: (env: Record<string, unknown>");
             expect(output).not.toContain("config.d1?.(env");
         });
@@ -3758,7 +3758,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 "d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;",
             );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
-            expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;");
+            expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;");
 
             // `globalDb` is passed into the shard ctx-db so the generic
             // `ctx.db.insert("<global>", …)`/`query`/… methods route to D1 (not just
