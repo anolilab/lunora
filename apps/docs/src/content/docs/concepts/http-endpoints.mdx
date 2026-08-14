@@ -16,7 +16,7 @@ to match someone else's spec. That's what `httpAction` and `httpRouter` are for.
 :::tip[Just want an existing procedure callable over HTTP?]
 You don't need a route for that. `.expose({ rest: true })` publishes a query,
 mutation, or action at a derived URL, dispatching through the procedure so auth,
-RLS, and validators still apply — see [Public REST API](/docs/concepts/rest-api).
+RLS, and validators still apply. See [Public REST API](/docs/concepts/rest-api).
 Write an `httpRoute` when the endpoint's URL or payload shape is dictated by
 something outside your app.
 :::
@@ -72,9 +72,9 @@ HTTP actions run in the worker (the "action runtime"), separate from the
 transactional store. The context is therefore a narrower view of `ActionCtx`. It
 carries:
 
-- `ctx.auth` — the resolved caller identity.
-- `ctx.fetch` — outbound HTTP.
-- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` — reach the data layer; these forward to the owning shard.
+- `ctx.auth`: the resolved caller identity.
+- `ctx.fetch`: outbound HTTP.
+- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`: reach the data layer; these forward to the owning shard.
 
 An HTTP action has no direct `ctx.db`, `ctx.scheduler`, `ctx.storage`, or
 `ctx.vectors`. Go through `runQuery` / `runMutation` / `runAction` to read or
@@ -136,4 +136,3 @@ export default createWorker({ httpRouter: app /* …other options */ });
 The lifting middleware throws if the context is absent, so this only trips when
 the router is run outside the runtime. The misconfiguration surfaces loudly
 rather than leaving `c.var.lunora` silently `undefined`.
-

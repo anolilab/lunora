@@ -9,8 +9,8 @@ related:
 ---
 
 Every error Lunora throws carries a machine-readable `code`. The code keys into
-a central catalog that supplies the transport status, a human title, and — for
-the codes where it helps — an actionable hint. The same catalog drives the CLI
+a central catalog that supplies the transport status, a human title, and (for
+the codes where it helps) an actionable hint. The same catalog drives the CLI
 renderer, the Vite error overlay, the Studio, and the client SDK, so an error
 reads the same wherever you meet it.
 
@@ -24,9 +24,9 @@ if (isLunoraError(error)) {
 }
 ```
 
-`isLunoraError` matches structurally — a string `code` plus a numeric `status` —
-so it also recognises errors rebuilt from the wire, where `instanceof` cannot be
-trusted.
+`isLunoraError` matches structurally, on a string `code` plus a numeric
+`status`, so it also recognises errors rebuilt from the wire, where `instanceof`
+cannot be trusted.
 
 ## Request errors
 
@@ -38,7 +38,7 @@ trusted.
 | `FORBIDDEN`         | 403    | Authenticated, but not allowed                |
 | `NOT_FOUND`         | 404    | The addressed resource does not exist         |
 | `UNPROCESSABLE`     | 422    | Well-formed, but semantically rejected        |
-| `TOO_MANY_REQUESTS` | 429    | Rate limited — check `Retry-After`            |
+| `TOO_MANY_REQUESTS` | 429    | Rate limited; check `Retry-After`             |
 | `NOT_IMPLEMENTED`   | 501    | The operation exists but is not implemented   |
 
 Client helpers exist for the ones you branch on most:
@@ -61,7 +61,7 @@ Another write changed the row while your mutation was running. Re-read the row
 and retry with the fresh value.
 
 Because Lunora serializes a DO's mutations, a _persistent_ conflict usually means
-the handler conflicts **with itself** — a trigger or cascade touching the same
+the handler conflicts **with itself**: a trigger or cascade touching the same
 row. Split that work rather than adding a retry loop. See
 [OCC & atomicity](/docs/concepts/occ).
 
@@ -110,8 +110,8 @@ resolved for this caller, so the read fails closed. Add a read policy with
 | `R2_SQL_ERROR`             | 502    | R2 SQL API failure                               |
 | `WORKFLOWS_REST_ERROR`     | 502    | Cloudflare Workflows REST API failure            |
 
-The three `*_ERROR` codes carry Cloudflare's own error text — trusted
-infrastructure rather than user input — so the upstream message is echoed rather
+The three `*_ERROR` codes carry Cloudflare's own error text (trusted
+infrastructure rather than user input), so the upstream message is echoed rather
 than redacted, and the actual upstream HTTP status is passed through.
 
 ## Auth and email errors
@@ -133,13 +133,13 @@ These are **redacted on the wire**: their messages may carry SQL fragments, file
 paths, or internal identifiers, so the transport emits a generic message and logs
 the real one server-side.
 
-| Code                    | Status | Meaning                                            |
-| ----------------------- | ------ | -------------------------------------------------- |
-| `INTERNAL`              | 500    | Free-form internal failure                         |
-| `INTERNAL_SERVER_ERROR` | 500    | Alias of `INTERNAL`                                |
-| `RPC_FAILED`            | 500    | A non-mappable throw crossed the RPC boundary      |
-| `RUN_DEPTH_EXCEEDED`    | 500    | Too many nested function invocations               |
-| `ENV_INVALID`           | 500    | Environment validation failed — names failing keys |
+| Code                    | Status | Meaning                                           |
+| ----------------------- | ------ | ------------------------------------------------- |
+| `INTERNAL`              | 500    | Free-form internal failure                        |
+| `INTERNAL_SERVER_ERROR` | 500    | Alias of `INTERNAL`                               |
+| `RPC_FAILED`            | 500    | A non-mappable throw crossed the RPC boundary     |
+| `RUN_DEPTH_EXCEEDED`    | 500    | Too many nested function invocations              |
+| `ENV_INVALID`           | 500    | Environment validation failed; names failing keys |
 
 Throwing a `LunoraError` with any **non**-internal code is your vouch that its
 message is safe to show a client. `invariant(...)` and `unreachable(...)` throw
@@ -160,7 +160,7 @@ them by message text and attaches a solution. The ones with dedicated guidance:
 | Situation                                           | What to do                                                                                               |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | **No Lunora schema found**                          | Create `lunora/schema.ts` with a `defineSchema` default export, or run `lunora init`                     |
-| **`defineSchema()` needs an inline object literal** | Pass the object literal directly — codegen reads it statically and cannot follow a variable or spread    |
+| **`defineSchema()` needs an inline object literal** | Pass the object literal directly; codegen reads it statically and cannot follow a variable or spread     |
 | **Table name is reserved**                          | The name collides with a built-in `ctx.db` member; rename the table                                      |
 | **Duplicate table name**                            | Two tables resolve to the same name, usually a base table and a `.extend(...)` both defining it          |
 | **Invalid `.jurisdiction(...)` value**              | Only the string literals `"eu"`, `"us"`, or `"fedramp"` are accepted                                     |
@@ -180,4 +180,3 @@ throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 
 Explicit options override the catalog defaults. For errors you expect the client
 to branch on, see [Error handling](/docs/concepts/error-handling).
-

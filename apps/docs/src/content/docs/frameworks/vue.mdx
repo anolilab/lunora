@@ -169,18 +169,17 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 
 ## Worker composition
 
-Vue has no meta-framework SSR build of its own — worker composition depends on
+Vue has no meta-framework SSR build of its own, so worker composition depends on
 what you build it with:
 
-- **Nuxt** — the [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts Lunora
+- **Nuxt**: the [`@lunora/nuxt`](/docs/frameworks/nuxt) module mounts Lunora
   _inside_ Nitro (`addServerHandler` at `/_lunora/**`, a `#lunora/app` alias,
   and a root `worker.ts` wrapper re-exporting `ShardDO`) for single-worker
-  composition, or split into two workers — see the [Nuxt guide](/docs/frameworks/nuxt).
+  composition, or you split into two workers instead. See the [Nuxt guide](/docs/frameworks/nuxt).
 - **A framework whose build exposes an importable emitted handler** (e.g.
-  Astro, SvelteKit) — see [Bring your framework](/docs/frameworks/bring-your-framework)
+  Astro, SvelteKit): see [Bring your framework](/docs/frameworks/bring-your-framework)
   for `withFrameworkWorker`, the shared composer.
-- **Plain SPA** — no SSR loaders, so there's nothing to compose; point the
+- **Plain SPA**: no SSR loaders, so there's nothing to compose; point the
   client at a standalone Lunora worker.
 
 See [Deploy your framework](/docs/frameworks/deploy).
-

@@ -7,9 +7,11 @@ import DocsHub from "@/pages/docs-hub";
  * The `/docs` landing page.
  *
  * This is an index route, so it wins over the `/docs/$` splat for the exact
- * path — which means `src/content/docs/index.mdx` is no longer reachable at
- * `/docs`. That is intentional: the hub replaces it. Any content that page
- * carried belongs on `/docs/getting-started`.
+ * path. The prose that used to live at `/docs` now lives at `/docs/overview`
+ * (`src/content/docs/overview.mdx`) — an index-named MDX file would still be
+ * indexed by Fumadocs, still appear in the sidebar and in `/llms.txt`, and
+ * still resolve to `/docs`, where this hub is served instead. Renaming it keeps
+ * the page readable rather than shadowed.
  */
 export const Route = createFileRoute("/docs/")({
     component: () => <DocsHub />,

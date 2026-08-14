@@ -51,15 +51,15 @@ when you need a side effect a mutation can't safely perform.
 
 The handler receives `ctx: ActionCtx`. Its surface (from `@lunora/server`):
 
-- `ctx.fetch` — the platform `fetch`, for outbound HTTP.
-- `ctx.runQuery(ref, args)` / `ctx.runMutation(ref, args)` / `ctx.runAction(ref, args)` — call other functions (see below).
-- `ctx.scheduler` — `runAfter` / `runAt` to defer follow-up work.
-- `ctx.storage` — the full read/write R2 surface (`store`, `delete`, `download`, `generateUploadUrl`, `getSignedUrl`, …).
-- `ctx.vectors` — query and `upsert` Vectorize indexes.
-- `ctx.workflows` — start / inspect durable workflows.
-- `ctx.auth` — the resolved identity (`ctx.auth.userId`, `ctx.auth.getIdentity()`).
-- `ctx.log` — structured, function-attributed logger.
-- `ctx.ip` — the caller's IP (`undefined` for server-initiated dispatch).
+- `ctx.fetch`: the platform `fetch`, for outbound HTTP.
+- `ctx.runQuery(ref, args)` / `ctx.runMutation(ref, args)` / `ctx.runAction(ref, args)`: call other functions (see below).
+- `ctx.scheduler`: `runAfter` / `runAt` to defer follow-up work.
+- `ctx.storage`: the full read/write R2 surface (`store`, `delete`, `download`, `generateUploadUrl`, `getSignedUrl`, …).
+- `ctx.vectors`: query and `upsert` Vectorize indexes.
+- `ctx.workflows`: start / inspect durable workflows.
+- `ctx.auth`: the resolved identity (`ctx.auth.userId`, `ctx.auth.getIdentity()`).
+- `ctx.log`: structured, function-attributed logger.
+- `ctx.ip`: the caller's IP (`undefined` for server-initiated dispatch).
 
 There is no transactional `ctx.db` reader/writer the way a mutation has one. An
 action reaches your data through `runQuery` and `runMutation`, each of which
@@ -109,4 +109,3 @@ export const startDripCampaign = action.input({ userId: v.id("users") }).action(
 
 `runAfter(delayMs, ref, args)` fires after a delay; `runAt(timestampMs, ref, args)`
 fires at an absolute time. Both return a job id you can later `ctx.scheduler.cancel(id)`.
-

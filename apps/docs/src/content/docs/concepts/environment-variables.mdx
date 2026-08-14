@@ -25,11 +25,11 @@ difference is how you set them and whether the value is encrypted at rest. **Use
 a secret for anything sensitive; use a `var` for non-secret config you're happy
 to see in plain text.**
 
-## Locally — `.dev.vars`
+## Locally: `.dev.vars`
 
 Local secrets and vars live in `.dev.vars` (a dotenv-style file), which
 `wrangler dev` and the Vite dev server load automatically. **`.dev.vars` is
-gitignored — never commit it.** Instead commit a `.dev.vars.example` listing the
+gitignored, so never commit it.** Instead commit a `.dev.vars.example` listing the
 keys your worker needs, with placeholder values:
 
 ```bash
@@ -60,7 +60,7 @@ lunora env doctor                        # check .dev.vars against its example
 extras, and exits non-zero when anything is actionable, so it works as a CI
 gate or a pre-`dev` sanity check.
 
-## In production — secrets and vars
+## In production: secrets and vars
 
 Set **secrets** with `wrangler secret put` (you'll be prompted for the value;
 it's encrypted and never echoed back):
@@ -90,9 +90,9 @@ Worker and are visible in the dashboard:
 }
 ```
 
-This is exactly how, for example, the security layer reads its CORS allowlist
-from config without a code change: set `LUNORA_ALLOWED_ORIGINS` as a `var` and
-the worker picks it up at request time (see [Security](/docs/concepts/security)).
+The security layer reads its CORS allowlist from config this way, without a code
+change: set `LUNORA_ALLOWED_ORIGINS` as a `var` and the worker picks it up at
+request time (see [Security](/docs/concepts/security)).
 
 <Callout type="warn">
     Lunora never logs secret values, and the `wrangler-validator` plugin warns when a binding marked `secret: true` in your schema is missing from your secret
@@ -135,4 +135,3 @@ bindings themselves.
   `wrangler.jsonc`'s `vars` (plain text, committed).
 - Run `lunora env doctor` in CI to catch a checked-in placeholder or a missing
   key before it ships.
-

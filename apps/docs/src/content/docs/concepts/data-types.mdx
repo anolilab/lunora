@@ -16,27 +16,27 @@ column may hold; this page is the reference for what those types actually are.
 
 ## The type table
 
-| Validator              | TypeScript type  | Notes                                                         |
-| ---------------------- | ---------------- | ------------------------------------------------------------- |
-| `v.string()`           | `string`         |                                                               |
-| `v.number()`           | `number`         | IEEE-754 double                                               |
-| `v.boolean()`          | `boolean`        |                                                               |
-| `v.null()`             | `null`           | The explicit "no value" — distinct from absent                |
-| `v.bigint()`           | `bigint`         | Needs the wire codec (see below)                              |
-| `v.bytes()`            | `ArrayBuffer`    | Needs the wire codec                                          |
-| `v.id("table")`        | `Id<"table">`    | A reference — see [Document IDs](/docs/concepts/document-ids) |
-| `v.timestamp()`        | `number`         | Epoch milliseconds                                            |
-| `v.date()`             | `number`         | Calendar date, also stored as epoch ms                        |
-| `v.geoPoint()`         | `{ lat, lng }`   | WGS84 decimal degrees                                         |
-| `v.storage(bucket?)`   | `string`         | An R2 object key                                              |
-| `v.array(inner)`       | `T[]`            |                                                               |
-| `v.object({ … })`      | `{ … }`          | Nested object with a declared shape                           |
-| `v.record(key, value)` | `Record<K, V>`   | Open-ended keys, uniform values                               |
-| `v.union(a, b, …)`     | `A \| B \| …`    |                                                               |
-| `v.literal(value)`     | the literal      | `string`, `number`, `boolean`, `bigint`, or `null`            |
-| `v.optional(inner)`    | `T \| undefined` | The field may be absent                                       |
-| `v.any()`              | `unknown`        | Unchecked — the escape hatch                                  |
-| `v.from(schema)`       | inferred         | Adapt a Standard Schema validator (Zod, Valibot, ArkType)     |
+| Validator              | TypeScript type  | Notes                                                        |
+| ---------------------- | ---------------- | ------------------------------------------------------------ |
+| `v.string()`           | `string`         |                                                              |
+| `v.number()`           | `number`         | IEEE-754 double                                              |
+| `v.boolean()`          | `boolean`        |                                                              |
+| `v.null()`             | `null`           | The explicit "no value", distinct from absent                |
+| `v.bigint()`           | `bigint`         | Needs the wire codec (see below)                             |
+| `v.bytes()`            | `ArrayBuffer`    | Needs the wire codec                                         |
+| `v.id("table")`        | `Id<"table">`    | A reference; see [Document IDs](/docs/concepts/document-ids) |
+| `v.timestamp()`        | `number`         | Epoch milliseconds                                           |
+| `v.date()`             | `number`         | Calendar date, also stored as epoch ms                       |
+| `v.geoPoint()`         | `{ lat, lng }`   | WGS84 decimal degrees                                        |
+| `v.storage(bucket?)`   | `string`         | An R2 object key                                             |
+| `v.array(inner)`       | `T[]`            |                                                              |
+| `v.object({ … })`      | `{ … }`          | Nested object with a declared shape                          |
+| `v.record(key, value)` | `Record<K, V>`   | Open-ended keys, uniform values                              |
+| `v.union(a, b, …)`     | `A \| B \| …`    |                                                              |
+| `v.literal(value)`     | the literal      | `string`, `number`, `boolean`, `bigint`, or `null`           |
+| `v.optional(inner)`    | `T \| undefined` | The field may be absent                                      |
+| `v.any()`              | `unknown`        | Unchecked; the escape hatch                                  |
+| `v.from(schema)`       | inferred         | Adapt a Standard Schema validator (Zod, Valibot, ArkType)    |
 
 Every document additionally carries the framework-managed `_id` and
 `_creationTime`, described in [Document IDs](/docs/concepts/document-ids).
@@ -44,7 +44,7 @@ Every document additionally carries the framework-managed `_id` and
 ## Numbers, bigints, and dates
 
 `v.number()` is a JavaScript double, so integers above 2^53 lose precision. When
-you need exact large integers — ledger amounts, external 64-bit ids — use
+you need exact large integers (ledger amounts, external 64-bit ids), use
 `v.bigint()`.
 
 `v.timestamp()` and `v.date()` both store a finite epoch-millisecond **number**;
@@ -65,15 +65,15 @@ export default defineSchema({
 ```
 
 Storing times as numbers keeps them sortable and range-queryable through an
-ordinary [index](/docs/concepts/indexes) — no date parsing on the read path.
+ordinary [index](/docs/concepts/indexes), with no date parsing on the read path.
 
 ## Optional versus null
 
 These are different, and the difference is load-bearing:
 
-- **`v.optional(v.string())`** — the field may be **absent**. Reading it gives
+- **`v.optional(v.string())`**: the field may be **absent**. Reading it gives
   `undefined`.
-- **`v.union(v.string(), v.null())`** — the field is **present and explicitly
+- **`v.union(v.string(), v.null())`**: the field is **present and explicitly
   empty**.
 
 That distinction shows up when you write. `patch` rejects an explicit
@@ -84,7 +84,7 @@ rather than a silent no-op, because the two intents are too easy to confuse.
 ## Values that JSON cannot carry
 
 The RPC and WebSocket transport is JSON, and JSON has no `bigint` and no
-`ArrayBuffer` — `JSON.stringify(1n)` throws, and an `ArrayBuffer` silently
+`ArrayBuffer`: `JSON.stringify(1n)` throws, and an `ArrayBuffer` silently
 stringifies to `{}`. Lunora therefore runs a **wire codec** over every payload
 that tags exactly those leaves so they survive the round trip.
 
@@ -117,8 +117,8 @@ full table.
 
 `v.from(schema)` adapts any [Standard Schema](https://standardschema.dev)
 validator (Zod, Valibot, ArkType), for function arguments **and** table columns.
-It exists for the case where a shape is already defined in another library — an
-AI SDK that demands Zod types, a validator shared with a non-Lunora service — so
+It exists for the case where a shape is already defined in another library (an
+AI SDK that demands Zod types, a validator shared with a non-Lunora service), so
 you do not have to maintain the same shape twice, in two languages, and hope they
 stay in step.
 
@@ -139,10 +139,9 @@ that reads the schema rather than the value:
   a stored _string_ that itself looks like JSON (`'{"a":1}'`) is ambiguous on read
   and decodes to the parsed object.
 - **Indexes.** Declare the column with a concrete type if you need a comparison
-  index on it — the storage form above is what an index would sort.
+  index on it; the storage form above is what an index would sort.
 - **Seeding.** [`@lunora/seed`](/docs/packages/seed) cannot introspect an
   external schema to invent a conforming value, so it refuses the column by name.
   Supply one through `overrides`, or skip the table with `only`.
 - **JSON Schema.** The OpenAPI/OpenRPC surface documents the column as
   unconstrained, because there is nothing for it to read.
-

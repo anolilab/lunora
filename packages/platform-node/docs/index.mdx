@@ -3,8 +3,8 @@ title: "@lunora/platform-node"
 description: "The Node host for the @lunora/platform contracts — experimental, no lunora dev --target node yet, and no SemVer promise until it graduates."
 ---
 
-`@lunora/platform-node` is the Node **host**: the `@lunora/platform` contracts —
-`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost` —
+`@lunora/platform-node` is the Node **host**: the `@lunora/platform` contracts
+(`ShardHost`, `SocketHost`, `ShardDirectory`, `ShardKvStore`, `SchedulerHost`)
 implemented over `better-sqlite3` and an in-process registry, plus `.global()`
 tables over `@lunora/sql-store`, workflows over `@visulima/workflow`, and object
 storage on the local filesystem.
@@ -18,15 +18,15 @@ const platform = createNodePlatform({ path: "./shard.sqlite3" });
 ## Status
 
 **Experimental, and not a shipping target.** There is no `lunora dev --target
-node` — this package ships no dev server. A `@lunora/config` deploy driver
+node`; this package ships no dev server. A `@lunora/config` deploy driver
 (`node`) does exist, but `provision` is a reporting step, not a writing one: it
 tells you, once, which declared features this target cannot serve, and it has
 no toolchain to shell out to (no `wrangler`-equivalent), because there is
 nothing remote to deploy to, tail logs from, or store secrets in.
 
 Its API snapshot is gated at the **experimental** tier
-(`scripts/api-snapshot.js`): here is a public-API change and must be reviewed
-as one. This package is Experimental — the snapshot records how its surface
+(`scripts/api-snapshot.js`): a diff here is a public-API change and must be
+reviewed as one. This package is Experimental: the snapshot records how its surface
 moves, and carries **no SemVer promise until the package graduates**
 (`ROADMAP.md`'s [graduation bar](https://github.com/anolilab/lunora/blob/alpha/ROADMAP.md#experimental--stable-the-graduation-bar)).
 `scripts/check-roadmap-tiers.js` fails the install if the roadmap and the
@@ -38,7 +38,7 @@ production traffic on it.
 ## Capability matrix
 
 Reproduced from `NODE_CAPABILITIES` in `@lunora/platform`
-(`packages/platform/src/capabilities.ts`) — this is the same matrix codegen
+(`packages/platform/src/capabilities.ts`). This is the same matrix codegen
 gates `ctx.*` surfaces on, not a second copy of it.
 `pnpm run lint:node-capabilities-docs` fails if this table and the source
 disagree.
@@ -83,8 +83,8 @@ Dev and test. It exists to run the same conformance suite
 second host so portability is a construction check rather than a claim, and it
 is a useful in-process double for exercising app code without Cloudflare
 credentials. It is not wired into `lunora dev`, is not a deploy target, and the
-capabilities above — one process, no distributed placement or failover, no
-Cloudflare product bindings — mean it is not a substitute for the Cloudflare
+capabilities above (one process, no distributed placement or failover, no
+Cloudflare product bindings) mean it is not a substitute for the Cloudflare
 host in anything that needs them.
 
 ## Known divergences
@@ -94,7 +94,7 @@ wire format on its own.** `ShardKvStore.put`'s contract says a value must be
 structured-clonable and hosts serialize it durably, without pinning a wire
 format. Cloudflare's `state.storage` uses the platform's own structured-clone
 implementation. This host stores values as `node:v8`'s `serialize`/`deserialize`
-output — the same structured-clone algorithm V8 uses for `postMessage` and
+output, the same structured-clone algorithm V8 uses for `postMessage` and
 `structuredClone` itself, so it round-trips `Date`, `Map`, `Set`, `RegExp`, and
 typed arrays, genuinely closer to Cloudflare's fidelity than `JSON.stringify`
 would be. But `node:v8`'s format is explicitly documented by Node as **not** a

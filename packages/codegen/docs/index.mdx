@@ -24,17 +24,17 @@ identical regardless of how it was produced.
 
 The core outputs, always written:
 
-- `api.ts` — the typed `api.<file>.<function>` (and `internal.*`) function
+- `api.ts`: the typed `api.<file>.<function>` (and `internal.*`) function
   references your client and server code call through.
-- `server.ts` — the `query` / `mutation` / `action` / `internalQuery` /
+- `server.ts`: the `query` / `mutation` / `action` / `internalQuery` /
   `internalMutation` / `internalAction` / `definePolicy` procedure builders,
   bound to your schema.
-- `dataModel.ts` — the `Doc<"messages">` / `Id<"users">` types derived from your
+- `dataModel.ts`: the `Doc<"messages">` / `Id<"users">` types derived from your
   tables.
 
-It also emits `app.ts`, `functions.ts`, `shard.ts`, and Drizzle schemas, plus —
-only when you use the matching feature — `crons.ts`, `containers.ts`,
-`workflows.ts`, `vectors.ts`, `seed.ts`, and the OpenAPI / OpenRPC spec files.
+It also emits `app.ts`, `functions.ts`, `shard.ts`, and Drizzle schemas, plus
+`crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`, `seed.ts`, and the
+OpenAPI / OpenRPC spec files, each only when you use the matching feature.
 
 ## When it runs
 
@@ -102,12 +102,11 @@ if (result.advisories.length > 0) {
 
 Common options:
 
-- `projectRoot` (required) — the directory containing the `lunora/` folder.
-- `dryRun` — run discovery and emit (so parse errors still surface) without
+- `projectRoot` (required): the directory containing the `lunora/` folder.
+- `dryRun`: run discovery and emit (so parse errors still surface) without
   writing files. `outputDirectory` is still the path that would have been
   written.
-- `lint` — run the static schema advisor (default `true`); when `false`,
+- `lint`: run the static schema advisor (default `true`); when `false`,
   `result.advisories` is empty.
-- `apiSpec` — `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
-- `lunoraDirectory` — override the `lunora` subdirectory name.
-
+- `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
+- `lunoraDirectory`: override the `lunora` subdirectory name.

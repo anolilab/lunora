@@ -69,7 +69,7 @@ resolve it for you; call `getLunoraClient()` only if you need it directly.
 
 ## Live queries
 
-`query(fn, args)` opens a live query as a readable store — read it with `$store`.
+`query(fn, args)` opens a live query as a readable store; read it with `$store`.
 The subscription attaches the moment the store gains its first subscriber and
 tears down when the last one goes away, so an unread store opens no socket. The
 store holds `undefined` until the first response.
@@ -189,4 +189,3 @@ export default app;
 
 See [Bring your framework](/docs/frameworks/bring-your-framework) for the full
 composition contract, and [Deploy your framework](/docs/frameworks/deploy).
-

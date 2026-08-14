@@ -72,7 +72,7 @@ sign-in flow; subsequent RPC calls carry the token automatically.
 ## Server Components (Next.js App Router)
 
 Every hook in `@lunora/react` calls `useState`/`useEffect` and owns a live
-WebSocket — they're **client-only**, and each module declares `"use client"`.
+WebSocket: they're **client-only**, and each module declares `"use client"`.
 Use them inside your own Client Components (the examples below mark
 `"use client"` on the files that call them).
 
@@ -188,24 +188,24 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 ### `@lunora/react/server` reference
 
-- **`createServerClient({ url, token?, fetch? })`** — a request-scoped,
+- **`createServerClient({ url, token?, fetch? })`**: a request-scoped,
   HTTP-only `LunoraClient`. Build one **per request** so a user's `token`
   (and any cookies forwarded via `fetch`) never leak across requests.
-- **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`** — runs the
+- **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`**: runs the
   query and seeds `queryClient` under the key the client hooks use.
-- **`preloadQuery(client, fn, args, { shardKey? }?)`** — runs the query and
+- **`preloadQuery(client, fn, args, { shardKey? }?)`**: runs the query and
   returns a serializable `Preloaded` token for `usePreloadedQuery`.
-- **`dehydrate` / `HydrationBoundary`** — re-exported from
+- **`dehydrate` / `HydrationBoundary`**: re-exported from
   `@tanstack/react-query` for convenience.
 
 ## File uploads (`@lunora/react/upload`)
 
-End-user file uploads — live progress, pause/resume, large-file resumable and
-per-part retry — are re-exported from `@visulima/storage-client` (Lunora does not
+End-user file uploads (live progress, pause/resume, large-file resumable and
+per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
 hand-roll the uploader). `useUpload` auto-selects TUS / chunked-REST / multipart
 by file size; the TUS path survives a pause/resume and a dropped connection.
 Point the endpoint at a route backed by
-[`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated) —
+[`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
 these uploads are gated by _your_ per-user RLS policy, **not** the studio
 `adminToken`.
 
@@ -214,7 +214,7 @@ these uploads are gated by _your_ per-user RLS policy, **not** the studio
 The **upload** hooks (`useUpload`, `useMultipartUpload`, `useTusUpload`,
 `useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold their own state and
 need **no** `QueryClientProvider`. The `@visulima/storage-client` _data_ hooks
-(`useGetFileList` …) do use TanStack Query — and `LunoraProvider` already mounts a
+(`useGetFileList` …) do use TanStack Query, and `LunoraProvider` already mounts a
 `QueryClient`, so they coexist with Lunora's own `useQuery` without extra wiring.
 
 ### Drag-and-drop uploader with a progress bar
@@ -282,4 +282,3 @@ export function Uploader() {
 resumable protocols (TUS / chunked-REST). For a plain `<input type="file">`,
 `useFileInput` gives you the change-handler + selected-files plumbing; `useTusUpload`
 is the lower-level hook when you always want the resumable protocol.
-

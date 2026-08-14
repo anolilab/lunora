@@ -13,9 +13,9 @@ related:
 ---
 
 `@lunora/auth` gives you the server half of authentication. Auth UI gives you the
-screens: sign in/up, forgot/reset password, magic link, email OTP, two-factor
-(verify _and_ setup), account & security settings, and organizations — for all
-five base frameworks.
+screens, for all five base frameworks: sign in/up, forgot/reset password, magic
+link, email OTP, two-factor (verify _and_ setup), account & security settings,
+and organizations.
 
 They are not a dependency. One command copies the code into your project, and
 from that moment it is your code:
@@ -39,7 +39,7 @@ lunora/auth-ui/
   styles.css    minimal CSS on the Lunora design tokens (no Tailwind)
 ```
 
-`core/` is plain TypeScript — a small external store per flow, holding the
+`core/` is plain TypeScript: a small external store per flow, holding the
 fields, validation, pending state, and error mapping. The framework folder is a
 thin binding over it. You will spend your time in the views; the controllers are
 there when you want to build a screen the cards don't cover.
@@ -47,8 +47,8 @@ there when you want to build a screen the cards don't cover.
 ## Wire it up
 
 Import the stylesheet once, then wrap your auth routes in the provider. Pass your
-router in through `nav` (and optionally `Link`) so navigation stays client-side —
-one component set serves Next, react-router, TanStack Start, and Astro islands:
+router in through `nav` (and optionally `Link`) so navigation stays client-side.
+One component set serves Next, react-router, TanStack Start, and Astro islands:
 
 ```tsx
 import { useNavigate } from "react-router";
@@ -74,29 +74,29 @@ function SignInPage() {
 ```
 
 `nav` is optional and falls back to a `location`-based adapter, which is fine for
-a plain SPA and wrong for anything with a router — a full page load on every
-sign-in. Pass it.
+a plain SPA and wrong for anything with a router, where it means a full page load
+on every sign-in. Pass it.
 
 Social buttons render only for the providers you list in `social`, and only work
 once the matching provider is configured server-side.
 
 ### Provider options
 
-| Prop              | What it does                                                                      |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `authClient`      | Your better-auth client, from `lunora/auth-ui/client.ts`. Required.               |
-| `nav` / `Link`    | Router bridge for redirects and internal links.                                   |
-| `redirects`       | `afterSignIn`, `afterSignOut`, and the route hosting your sign-in screen.         |
-| `social`          | OAuth providers to render buttons for, e.g. `["github", "google"]`.               |
-| `basePath`        | Where better-auth is mounted. Defaults to `/api/auth`.                            |
-| `localization`    | Partial overrides for every string the cards render.                              |
-| `onSessionChange` | Fires after any successful auth mutation — refresh your app's session state here. |
-| `onError`         | Observes failures; the card still shows the error itself.                         |
-| `plugins`         | Force an optional flow on or off; detected from your client by default.           |
-| `theme`           | Retint the cards from config — see [Making them yours](#making-them-yours).       |
+| Prop              | What it does                                                                     |
+| ----------------- | -------------------------------------------------------------------------------- |
+| `authClient`      | Your better-auth client, from `lunora/auth-ui/client.ts`. Required.              |
+| `nav` / `Link`    | Router bridge for redirects and internal links.                                  |
+| `redirects`       | `afterSignIn`, `afterSignOut`, and the route hosting your sign-in screen.        |
+| `social`          | OAuth providers to render buttons for, e.g. `["github", "google"]`.              |
+| `basePath`        | Where better-auth is mounted. Defaults to `/api/auth`.                           |
+| `localization`    | Partial overrides for every string the cards render.                             |
+| `onSessionChange` | Fires after any successful auth mutation; refresh your app's session state here. |
+| `onError`         | Observes failures; the card still shows the error itself.                        |
+| `plugins`         | Force an optional flow on or off; detected from your client by default.          |
+| `theme`           | Retint the cards from config; see [Making them yours](#making-them-yours).       |
 
 `onSessionChange` matters more than it looks. A same-origin cookie sign-in
-changes no token, so `useAuth` has nothing to react to — wire this to whatever
+changes no token, so `useAuth` has nothing to react to. Wire this to whatever
 re-resolves your identity and the rest of the app follows the sign-in.
 
 ## The cards
@@ -139,11 +139,10 @@ Email verification: `VerifyEmailCard` (the page the link lands on) and
 `ResendVerificationCard`.
 
 `ErrorToaster` is optional and mounts once in your app shell. It shows only the
-errors that have no card to land in — a social sign-in that failed to redirect,
-a failed unlink — because everything else already renders on its own card's
-banner.
+errors that have no card to land in (a social sign-in that failed to redirect, a
+failed unlink), because everything else already renders on its own card's banner.
 
-Each is independent — mount the ones you want, on the routes you want. There is
+Each is independent: mount the ones you want, on the routes you want. There is
 no router, layout, or shell imposed on you.
 
 ### One route instead of ten
@@ -196,7 +195,7 @@ the plugin array.) For the server side, run `lunora add auth-magic-link` or
 ### The server can just tell it
 
 The list above declares your **client** plugins. It does not have to be the only
-place a flow is declared, because the server already knows what it runs — add
+place a flow is declared, because the server already knows what it runs. Add
 `uiConfig()` to your auth instance and the screens configure themselves:
 
 ```ts
@@ -210,7 +209,7 @@ export const auth = createAuth({
 
 `lunora add auth` wires this in for you. It serves a public
 `GET /api/auth/ui-config` describing which plugins are enabled, which social
-providers are configured, and whether password sign-in and sign-up are open —
+providers are configured, and whether password sign-in and sign-up are open,
 only facts a sign-in page reveals by existing. Your session policy, rate limits
 and user-field schemas are **not** in it.
 
@@ -219,20 +218,20 @@ appears**, with no second list to keep in sync. `social` on the provider becomes
 an override for pinning or reordering, not a requirement.
 
 The two answers are combined rather than ranked. A card renders when the server
-has the endpoint **and** your client registered the plugin that drives it — they
+has the endpoint **and** your client registered the plugin that drives it. They
 answer different halves, and a flow with only one half is broken in a way a
 rendered card would hide (`passkey` without `passkeyClient()` has a live endpoint
 and no WebAuthn ceremony to reach it). A card whose flow is off renders nothing
 rather than failing at call time, and says why in the console during development.
 
 Without `uiConfig()` mounted, discovery degrades silently and your client's list
-is the only source — exactly the previous behaviour. Override either way with the
+is the only source, exactly the previous behaviour. Override either way with the
 provider's `plugins` prop, or turn discovery off with `discover={false}`.
 
 ## Password rules
 
-The rule that matters is your server's — better-auth rejects what it rejects.
-A UI with its own hard-coded minimum is guessing: set it lower and the user is
+The rule that matters is your server's: better-auth rejects what it rejects.
+A UI with its own hard-coded minimum is guessing. Set it lower and the user is
 told "too short" only after a round-trip; set it higher and you refuse passwords
 the server would have taken. So the policy is config, and you match it to
 `emailAndPassword`:
@@ -246,11 +245,11 @@ the server would have taken. So the policy is config, and you match it to
 
 Every password field validates against it, and `<PasswordStrength>` renders the
 live checklist under the sign-up field. It is a checklist rather than a bare
-"weak / strong" bar on purpose — a bar tells someone their password is
+"weak / strong" bar on purpose: a bar tells someone their password is
 unacceptable without telling them what to change. The bar that _is_ there is
 derived from the same requirements, so the two can never disagree.
 
-Unset, the policy is better-auth's own default: 8–128 characters and no
+Unset, the policy is better-auth's own default: 8 to 128 characters and no
 composition rules.
 
 ## Username availability
@@ -260,14 +259,14 @@ availability as the user types, so a taken name surfaces before the submit
 rather than as a failed sign-up with the whole form to re-check.
 
 It is debounced, and a slow answer for an earlier value is discarded rather than
-applied — that out-of-order race is how these end up confidently reporting the
-wrong thing. The result is advisory: the name can still be taken between the
+applied, because that out-of-order race is how these end up confidently reporting
+the wrong thing. The result is advisory: the name can still be taken between the
 check and the submit, so the server stays the authority and a failed check never
 blocks a submit on its own.
 
 ## Being an OAuth provider
 
-Everywhere else your app is the OAuth _client_ — the user signs in to you. With
+Everywhere else your app is the OAuth _client_: the user signs in to you. With
 `@better-auth/oauth-provider` wired server-side, it can be the authorization
 server too, and two screens are yours to host:
 
@@ -284,8 +283,8 @@ Both are deliberately plain, and two properties are enforced in the controller
 rather than left to the view: nothing is ever pre-approved (an auto-accepting
 consent screen is indistinguishable from no consent screen), and denying is
 exactly as cheap as allowing. If the request can't be loaded, the screen resolves
-to _no decision_ rather than to a default — a broken consent screen must not
-become an approving one.
+to _no decision_ rather than to a default, because a broken consent screen must
+not become an approving one.
 
 Turn it on with `oauthProvider: true` in `lunora/auth-ui/client.ts` alongside the
 server plugin.
@@ -309,10 +308,10 @@ fields on `ProfileCard` / `OrganizationSettingsCard` remain the way to set one.
 
 ## Email templates
 
-`lunora add auth-emails` copies styled templates for the mail these flows send —
-verify address, reset password, magic link, one-time code, organization
-invitation, and the security notices after a change — into
-`lunora/auth/emails.tsx`. They are rendered by your Worker through
+`lunora add auth-emails` copies styled templates into `lunora/auth/emails.tsx`
+for the mail these flows send: verify address, reset password, magic link,
+one-time code, organization invitation, and the security notices after a change.
+They are rendered by your Worker through
 `@lunora/mail`, so they are the same mail whichever frontend framework you use:
 
 ```tsx
@@ -351,7 +350,7 @@ createApp(App).use(createAuthUI({ authClient })).mount("#app");
 
 Solid mirrors the React API exactly (`AuthUIProvider`, the same card names, with
 `createController` in place of `useController`). Angular ships standalone signal
-components — `provideAuthUI({ authClient })` in `app.config.ts`, then
+components: `provideAuthUI({ authClient })` in `app.config.ts`, then
 `SignInCardComponent` and friends with `lunora-*` selectors:
 
 ```ts
@@ -364,7 +363,7 @@ export const appConfig: ApplicationConfig = {
 
 ## Meta-frameworks
 
-The cards are client components in every framework — they hold form state and
+The cards are client components in every framework: they hold form state and
 call better-auth from event handlers. What differs per meta-framework is the
 router you hand to `nav`, and where the client boundary sits.
 
@@ -374,19 +373,17 @@ router you hand to `nav`, and where the client boundary sits.
 | React Router (framework mode) | `auth-ui-react`   | `useNavigate()` from `react-router`                           |
 | TanStack Start (React)        | `auth-ui-react`   | `useRouter()` from `@tanstack/react-router`                   |
 | TanStack Start (Solid)        | `auth-ui-solid`   | `useRouter()` from `@tanstack/solid-router`                   |
-| Astro                         | `auth-ui-react`   | none needed — see below                                       |
+| Astro                         | `auth-ui-react`   | none needed; see below                                        |
 | Nuxt                          | `auth-ui-vue`     | `useRouter()` from `vue-router`                               |
 | SvelteKit                     | `auth-ui-svelte`  | `goto` from `$app/navigation`                                 |
 | Analog                        | `auth-ui-angular` | Angular's `Router`                                            |
 
-Three things are worth knowing before you wire one up.
-
 **Next.js.** The React views already carry `"use client"`, so you can render a
-card straight from a server component — no wrapper needed.
+card straight from a server component, with no wrapper needed.
 
 **Pointing at a different auth origin.** Leave it alone and the client uses the
-current origin, which is right whenever the Worker is same-origin with your app —
-the default in every template. To override, `lunora/auth-ui/client.ts` reads
+current origin, which is right whenever the Worker is same-origin with your app
+(the default in every template). To override, `lunora/auth-ui/client.ts` reads
 `VITE_AUTH_URL` under Vite (Nuxt, SvelteKit, Astro, TanStack Start, Analog) and
 falls back to `NEXT_PUBLIC_AUTH_URL` / `PUBLIC_AUTH_URL` from `process.env` on
 bundlers that are not Vite. Set whichever your framework inlines.
@@ -407,7 +404,7 @@ Hydrating `AuthUIProvider` and a card as two separate islands throws
 `useAuthUI must be used inside <AuthUIProvider />`.
 
 **SSR.** Every card renders its empty state on the server and fills in on the
-client — the settings and organization cards fetch on mount, so a server-rendered
+client. The settings and organization cards fetch on mount, so a server-rendered
 page shows their loading state. That is intended: session-dependent markup should
 not be in the SSR payload. Nothing reads `window` or `document` at module scope,
 so no card needs a `<ClientOnly>` / `client:only` escape hatch.
@@ -416,12 +413,12 @@ so no card needs a `<ClientOnly>` / `client:only` escape hatch.
 stylesheet; Metro has nothing to mount them into. `lunora add auth-ui` detects a
 React Native project and refuses rather than copying them in. The server half
 (`lunora add auth`) and the better-auth Expo bridge
-(`@lunora/react-native/auth`) both work — build the screens with React Native
+(`@lunora/react-native/auth`) both work, so build the screens with React Native
 primitives against that same client.
 
 ## Making them yours
 
-Restyle `styles.css` — it reads the same design tokens as the rest of Lunora, so
+Restyle `styles.css`: it reads the same design tokens as the rest of Lunora, so
 changing your token values moves the auth screens with everything else. Override
 copy through the provider's `localization` prop, or stop being precious about it
 and edit the cards directly. That is what "you own it" means.
@@ -433,10 +430,9 @@ the defaults and returns what you want changed:
 <AuthUIProvider authClient={authClient} theme={(defaults) => ({ ...defaults, primary: "#5b21b6", radius: "1rem" })}>
 ```
 
-Only what you actually change is emitted, as custom properties on the cards —
+Only what you actually change is emitted, as custom properties on the cards,
 so every token you leave alone keeps inheriting from your app.
 
 Re-running `lunora add auth-ui` three-way merges upstream changes into your copy.
 Where a file you edited also changed upstream, you get a `.new` file next to it
 instead of a clobbered screen.
-

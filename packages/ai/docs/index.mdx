@@ -13,8 +13,7 @@ Cloudflare's [`workers-ai-provider`](https://github.com/cloudflare/ai). Call
 `generateText` / `streamText` / `generateObject` / `embed` / `tool` from any
 function. **Workers AI is the zero-config default**, but every call is
 provider-agnostic: pass a Workers AI model id (a string) or any AI SDK model
-object (`@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, …), so your app is
-never locked to Workers AI.
+object (`@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, …).
 
 ```sh
 pnpm add @lunora/ai
@@ -26,7 +25,7 @@ codegen wires a typed `ctx.ai` onto your **action** contexts.
 
 ## `ctx.ai` in an action
 
-Inference is an external, non-deterministic call — like `ctx.fetch`, `ctx.ai`
+Inference is an external, non-deterministic call, so like `ctx.fetch`, `ctx.ai`
 lives on actions, not queries or mutations.
 
 ```ts
@@ -82,7 +81,7 @@ const { object } = await generateObject({
 `defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a
 declared index → retrieve pipeline: chunk → embed → upsert on the write side,
 embed → query → assemble on the read side. It's a thin library over the two
-facades every action already has — no new binding, no codegen.
+facades every action already has, with no new binding and no codegen.
 
 ```ts
 // lunora/rag.ts
@@ -106,38 +105,38 @@ const { chunks, context, sources } = await docs(ctx).retrieve(question, { namesp
 
 What you get beyond the manual loop:
 
-- **Deterministic chunk ids** (`${sourceId}#${n}`) — re-indexing a source replaces
+- **Deterministic chunk ids** (`${sourceId}#${n}`): re-indexing a source replaces
   its chunks; shrinking documents have stale trailing chunks deleted automatically.
-- **Content-hash short-circuit** — re-indexing unchanged text skips chunking,
+- **Content-hash short-circuit**: re-indexing unchanged text skips chunking,
   embedding, and every write (`{ unchanged: true }`), so periodic re-syncs are free.
-- **Tenant isolation** — thread `namespace` (your shard/tenant key) through both
+- **Tenant isolation**: thread `namespace` (your shard/tenant key) through both
   sides; a namespace-less call gets a one-time dev warning (Vectorize indexes are
   account-global). Multi-tenant apps should set `requireNamespace: true` to turn
   the warning into a hard error; single-tenant apps suppress it with
   `allowSharedNamespace`.
-- **Ranking controls** — `minScore` threshold, per-source `importance` weighting
-  (0–1, multiplied into scores), and `chunkContext: { before, after }` to stitch
+- **Ranking controls**: `minScore` threshold, per-source `importance` weighting
+  (0 to 1, multiplied into scores), and `chunkContext: { before, after }` to stitch
   neighbouring chunks around each match ("embed small, retrieve big").
-- **`asTool()`** — expose retrieval as an AI SDK tool so a model can decide to
+- **`asTool()`**: expose retrieval as an AI SDK tool so a model can decide to
   search the index itself: `tools: { searchDocs: docs(ctx).asTool() }`.
-- **Traced** — when the bound context carries `ctx.trace`, each embedding call is a
+- **Traced**: when the bound context carries `ctx.trace`, each embedding call is a
   [`generation` span](/docs/concepts/observability#generation-spans-ai)
   (`gen_ai.operation.name: "embeddings"`, `gen_ai.request.model`), so RAG shows up
   on the trace waterfall. A hand-built context without `ctx.trace` embeds untraced.
 
 Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
 capped at 20, 10 KiB of metadata per vector). For long documents or deeper
-retrieval, supply a `textStore` (`{ put, getMany, remove? }` — a DO table, KV,
+retrieval, supply a `textStore` (`{ put, getMany, remove? }`: a DO table, KV,
 …): text moves out of metadata and the `topK` ceiling lifts to 100. The default
 chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
 token/sentence/semantic strategies.
 
-The 10 KiB is Vectorize's, and it covers the **whole** metadata object — chunk
+The 10 KiB is Vectorize's, and it covers the **whole** metadata object: chunk
 text, Lunora's bookkeeping keys, and any `metadata` you attach. `defineRag`
 measures each chunk's metadata as it is assembled and refuses one that would not
 fit, rather than letting the upsert fail at Vectorize with nothing naming the
 cause. It also rejects an unworkable `chunkSize` up front, though that earlier
-check can only compare characters against a byte ceiling — multibyte text costs
+check can only compare characters against a byte ceiling; multibyte text costs
 up to three bytes each, so the index-time measurement is the one that holds.
 
 The `topK` 20 is **Lunora's** cap, not Vectorize's: Vectorize allows 50 with
@@ -146,11 +145,11 @@ full metadata. Ours is a legacy-V1 holdover.
 ### Bring your own embeddings — no `env.AI` binding
 
 `embeddingModel` takes a Workers AI model **id** (a string, resolved through
-`ctx.ai` — so it needs the `env.AI` binding) **or** a ready-made AI SDK
+`ctx.ai`, so it needs the `env.AI` binding) **or** a ready-made AI SDK
 `EmbeddingModel` **object**. Pass an object and the helper embeds through it
-directly, never touching `ctx.ai` — so a RAG index over OpenAI (or any provider)
+directly, never touching `ctx.ai`, so a RAG index over OpenAI (or any provider)
 needs **no Workers AI binding at all**. `ctx.vectors` (Vectorize) is still
-required — it's the store.
+required: it's the store.
 
 ```ts
 import { openai } from "@ai-sdk/openai";
@@ -171,7 +170,7 @@ wire `ctx.ai`.
 
 ### Embedding-model versioning
 
-Embeddings from different models are not comparable — swap the model and every
+Embeddings from different models are not comparable: swap the model and every
 old vector becomes noise a nearest-neighbour query still happily returns. Set an
 opt-in `embeddingModelVersion` discriminator (`^[A-Za-z0-9._-]{1,40}$`) and it is
 folded into the Vectorize **namespace**, so bumping the tag re-partitions the
@@ -187,7 +186,7 @@ export const docs = defineRag({
 });
 ```
 
-Leaving `embeddingModelVersion` unset is byte-identical to before — existing
+Leaving `embeddingModelVersion` unset is byte-identical to before; existing
 indexes are untouched. The discriminator must live in the namespace (not just the
 id prefix): a Vectorize id prefix does not partition nearest-neighbour results.
 
@@ -195,8 +194,8 @@ id prefix): a Vectorize id prefix does not partition nearest-neighbour results.
 
 Dense retrieval misses exact keywords, rare tokens, and identifiers. Supply a
 `lexicalStore` and `retrieve` runs a keyword leg alongside the vector leg and
-fuses the two rankings with Reciprocal Rank Fusion — semantic recall plus
-lexical precision, no reranker call.
+fuses the two rankings with Reciprocal Rank Fusion. That combines semantic
+recall with lexical precision and needs no reranker call.
 
 ```ts
 import { bm25LexicalStore, defineRag } from "@lunora/ai/rag";
@@ -210,7 +209,7 @@ export const docs = defineRag({
 ```
 
 `bm25LexicalStore()` is an **in-memory** Okapi BM25 reference adapter: it lives in
-the worker isolate, so it is not durable and not shared across isolates — use it
+the worker isolate, so it is not durable and not shared across isolates; use it
 for tests, local dev, and single-isolate workloads. In production plug a durable
 `RagLexicalStore` (`{ index, remove?, search }`) backed by a DO-SQLite inverted
 index, D1, or an external search service; the index/remove/hybrid-fusion plumbing
@@ -223,7 +222,7 @@ removals fan out to it too.
 row-level security applies without every call site remembering to pass it. It
 receives `ctx.auth` (an action's `ctx` satisfies `RagContext.auth` structurally)
 and returns a Vectorize metadata filter, which is merged over any explicit
-`filter` **with the RLS keys winning** — a caller can never widen past the
+`filter` **with the RLS keys winning**, so a caller can never widen past the
 tenant/RBAC scope.
 
 ```ts
@@ -237,7 +236,7 @@ export const docs = defineRag({
 const { chunks } = await docs(ctx).retrieve(question, { topK: 5 });
 ```
 
-The filter applies to both the vector and lexical legs, and only to retrieval —
+The filter applies to both the vector and lexical legs, and only to retrieval;
 indexing stays a trusted server path. The reference `bm25LexicalStore` holds no
 metadata, so it **fails closed** on a metadata filter it cannot evaluate (skips
 its leg and warns once); fold the RLS dimension into `namespace`, or plug a
@@ -255,7 +254,6 @@ import { createAi } from "@lunora/ai";
 const ai = createAi({ binding: env.AI });
 ```
 
-The raw binding escape hatch — `ctx.ai.run(model, inputs)` (or `ai.run(...)`) —
+The raw binding escape hatch, `ctx.ai.run(model, inputs)` (or `ai.run(...)`),
 covers Workers-AI-only model families (image, ASR, translation) that aren't
 surfaced through the AI SDK provider.
-

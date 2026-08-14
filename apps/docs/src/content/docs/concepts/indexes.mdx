@@ -76,9 +76,9 @@ and any foreign-key column you read by should have an index leading with it.
 The [Advisors](/docs/concepts/advisors) lint your schema and discovered queries
 at build time and surface these in the Studio:
 
-- **`filter_without_index`** (warn) — a `query(...).filter(...)` with no
+- **`filter_without_index`** (warn): a `query(...).filter(...)` with no
   `.withIndex()` first; it loads every row and filters in memory.
-- **`unindexed_foreign_key`** (info) — a foreign-key column with no index leading
+- **`unindexed_foreign_key`** (info): a foreign-key column with no index leading
   with it, so reads on it full-scan. (It honours SQLite's leftmost-prefix rule;
   FKs onto `_id` are exempt.)
 - **`empty_index`** (warn) and **`duplicate_index`** (info) catch indexes that
@@ -105,4 +105,3 @@ messages: defineTable({
     .index("by_channel", ["channelId", "_creationTime"])
     .aggregateIndex("count_by_channel", { by: ["channelId"] });
 ```
-

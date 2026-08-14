@@ -35,7 +35,7 @@ export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.
 ```
 
 Like [row-level security](/docs/concepts/rls) and [data masking](/docs/concepts/masking),
-it rides the `.use(...)` chain and is **opt-in per procedure** — a bare
+it rides the `.use(...)` chain and is **opt-in per procedure**: a bare
 `query`/`mutation` is never rate-limited.
 
 ## Algorithms
@@ -69,7 +69,7 @@ Each entry in the config map is a `RateLimitConfig`:
 | `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                   |
 | `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. Ignored by sliding windows.    |
 | `shards`   | `number`        | `1`     | Split a hot limit across N independent sub-buckets. Positive integer; `1` is equivalent to unset. See [Sharding](#sharding). |
-| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms — windows align to `start + n * period`. Ignored by token buckets.          |
+| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms; windows align to `start + n * period`. Ignored by token buckets.           |
 
 <Callout type="info">
 The constructor validates every config up front: a non-positive `period` or
@@ -107,7 +107,7 @@ Per-call `RateLimitArgs`:
 ## Procedure middleware
 
 `rateLimit(limiter, name, options)` returns a `Middleware` you attach with
-`.use(...)`. The first argument is a `LimiterResolver` — either a fixed
+`.use(...)`. The first argument is a `LimiterResolver`: either a fixed
 `RateLimiter` or a `(ctx) => RateLimiter` that binds a context-derived limiter at
 call time (handy for an ORM-backed store, see [Stores](#pluggable-stores)).
 
@@ -130,7 +130,7 @@ export const send = mutation
 ```
 
 For the common DB-backed case, `dbRateLimit(config, name, options)` is shorthand
-for the resolver above — it builds the per-call `RateLimiter` + `createDbStore`
+for the resolver above; it builds the per-call `RateLimiter` + `createDbStore`
 for you:
 
 ```ts
@@ -158,9 +158,9 @@ the rest of `options` matches `rateLimit`'s.
 | `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below. |
 
 <Callout type="warn">
-    **Failure policy:** the middleware **fails closed by default** — if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
+    **Failure policy:** the middleware **fails closed by default**: if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
     `503`. This is the safer default for security-sensitive limits (auth, account creation). Set `failOpen: true` only when degraded availability is preferable
-    to refusal — a failing limiter then admits every request.
+    to refusal, because a failing limiter then admits every request.
 </Callout>
 
 ## Deny list
@@ -178,7 +178,7 @@ const limiter = new RateLimiter({
 
 The list is consulted as-is. If you also pass a `normalize` function (applied to
 every incoming `key` for case-folding, trimming, or canonicalizing IPs/emails),
-both the normalized and raw form are checked — but normalize your deny-list
+both the normalized and raw form are checked, but normalize your deny-list
 entries up front to be safe.
 
 ## Sharding
@@ -187,7 +187,7 @@ For a high-volume limit where a single hot key contends on one bucket/Durable
 Object, set `shards: N`. The limiter splits the limit into N independent
 sub-buckets, each enforcing `rate / shards` (and `capacity / shards`). A request
 is routed to a shard by a deterministic hash of `(name, key)`, so the same key
-always lands on the same shard — its effective throughput is exactly
+always lands on the same shard; its effective throughput is exactly
 `rate / shards`, while aggregate throughput across many distinct keys approaches
 `rate` as keys spread uniformly.
 
@@ -207,11 +207,11 @@ bucket) otherwise.
 Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async). Three
 are shipped:
 
-| Factory                   | Backing                                                            | Use when                                                             |
-| ------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.       |
-| `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation — you have raw SQL.   |
-| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. |
+| Factory                   | Backing                                                            | Use when                                                              |
+| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.        |
+| `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation, and you have raw SQL. |
+| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL.  |
 
 `createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
 `createDbStore` expects a table you declare in your schema with a key column and
@@ -235,7 +235,7 @@ export const rateLimits = defineTable({
 
 ## Plugin form
 
-`ratelimitPlugin(limiter)` packages the limiter as a first-party `Plugin` that
+`ratelimitPlugin(limiter)` packages the limiter as a `Plugin` that
 exposes the resolved `RateLimiter` under `ctx.api.ratelimit`, so a handler can
 call `limit()`/`check()`/`reset()` programmatically instead of (or alongside) the
 enforcing middleware. Install its middleware with one `.use(...)`:
@@ -259,6 +259,5 @@ export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(
 });
 ```
 
-The plugin ships no schema extension — persistence is whatever store the limiter
-was built with — so it is middleware-only and skipped by the plugin schema fold.
-
+The plugin ships no schema extension (persistence is whatever store the limiter
+was built with), so it is middleware-only and skipped by the plugin schema fold.

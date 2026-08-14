@@ -9,7 +9,7 @@ related:
     - to: /docs/packages/svelte
 ---
 
-`@lunora/flags` brings feature flags to Lunora on top of [OpenFeature](https://openfeature.dev). Configure a provider once with `defineFlags` in `lunora/flags.ts`; codegen wires a typed `ctx.flags` surface onto every query, mutation, and action, and the `useFlag` / `useFlags` hooks make evaluations reactive on the client. Cloudflare Flagship is the first-class default provider, but any OpenFeature provider is pluggable.
+`@lunora/flags` brings feature flags to Lunora on top of [OpenFeature](https://openfeature.dev). Configure a provider once with `defineFlags` in `lunora/flags.ts`; codegen wires a typed `ctx.flags` surface onto every query, mutation, and action, and the `useFlag` / `useFlags` hooks make evaluations reactive on the client. Cloudflare Flagship is the default provider, but any OpenFeature provider is pluggable.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -39,7 +39,7 @@ vis generate lunora-flags
 
 ## Configure
 
-`lunora/flags.ts` is a singleton: a single `defineFlags` default export that configures the provider for the whole app. Cloudflare Flagship in Workers binding mode needs no auth token — bind it in wrangler and you're done.
+`lunora/flags.ts` is a singleton: a single `defineFlags` default export that configures the provider for the whole app. Cloudflare Flagship in Workers binding mode needs no auth token: bind it in wrangler and you're done.
 
 ```ts
 // lunora/flags.ts
@@ -62,11 +62,11 @@ The `provider` is either a Flagship config or any factory `(env) => OpenFeatureP
 
 ## Built-in providers
 
-Cloudflare Flagship is the first-class default, but two zero-config providers ship in the box for local development, tests, and binding-driven flags — neither adds a dependency.
+Two zero-config providers ship alongside the Flagship default, for local development, tests, and binding-driven flags. Neither adds a dependency.
 
 ### Memory provider
 
-`memoryProvider` wraps OpenFeature's in-memory provider with a flat `key → value` map. The value's runtime type is the flag's kind, so booleans, strings, numbers, and JSON objects all work. Ideal for tests and local defaults.
+`memoryProvider` wraps OpenFeature's in-memory provider with a flat `key → value` map. The value's runtime type is the flag's kind, so booleans, strings, numbers, and JSON objects all work. Useful for tests and local defaults.
 
 ```ts
 // lunora/flags.ts
@@ -85,7 +85,7 @@ export default defineFlags({
 
 ### Env-binding provider
 
-`envProvider` reads flags from the Worker's `env` — plain vars or Secrets Store bindings — so flags are configured the same way as the rest of your deployment. By default a flag key maps to `FLAG_` + its `UPPER_SNAKE_CASE` name (`dark-mode` → `FLAG_DARK_MODE`); customise with `prefix` or a full `name` mapper. Booleans accept `1/on/true/yes` and `0/off/false/no`; numbers and JSON objects are parsed from their string form, failing open to the default on a parse error.
+`envProvider` reads flags from the Worker's `env` (plain vars or Secrets Store bindings), so flags are configured the same way as the rest of your deployment. By default a flag key maps to `FLAG_` + its `UPPER_SNAKE_CASE` name (`dark-mode` → `FLAG_DARK_MODE`); customise with `prefix` or a full `name` mapper. Booleans accept `1/on/true/yes` and `0/off/false/no`; numbers and JSON objects are parsed from their string form, failing open to the default on a parse error.
 
 ```ts
 // lunora/flags.ts
@@ -102,7 +102,7 @@ export default defineFlags({
 
 ## Server usage
 
-Flags ride every ctx (query, mutation, and action) like `ctx.kv`. Each typed accessor takes a flag key and a default that is returned whenever the flag is missing, the provider errors, or evaluation is otherwise unresolved — **evaluations never throw**.
+Flags ride every ctx (query, mutation, and action) like `ctx.kv`. Each typed accessor takes a flag key and a default that is returned whenever the flag is missing, the provider errors, or evaluation is otherwise unresolved: **evaluations never throw**.
 
 ```ts
 import { query } from "./_generated/server";
@@ -131,7 +131,7 @@ const result = await ctx.flags.details.boolean("dark-mode", false);
 
 ## Client usage
 
-`@lunora/react` exposes `useFlag` and `useFlags`. Evaluations are reactive and live over the WebSocket — when a flag's value changes for the current targeting context the component re-renders.
+`@lunora/react` exposes `useFlag` and `useFlags`. Evaluations are reactive and live over the WebSocket: when a flag's value changes for the current targeting context the component re-renders.
 
 ```tsx
 import { useFlag, useFlags } from "@lunora/react";
@@ -149,11 +149,11 @@ function Dashboard() {
 
 `useFlag(key, default)` resolves a single flag; `useFlags({ key: default, ... })` resolves a batch in one round trip.
 
-The reactive WebSocket channel is **server-trusted**. Each evaluation runs under the socket's own server-verified identity — the `targetingKey` comes from your server-side `identify(...)` (and any server-set context), never from the client. A subscriber cannot spoof targeting attributes (plan, role, …) to unlock a flag gated on them. The channel also serves **only** the flag keys codegen discovered statically from your `ctx.flags.<type>(...)` reads; an arbitrary or unknown key resolves to the supplied default, so a subscriber can't probe internal or unreleased flags.
+The reactive WebSocket channel is **server-trusted**. Each evaluation runs under the socket's own server-verified identity: the `targetingKey` comes from your server-side `identify(...)` (and any server-set context), never from the client. A subscriber cannot spoof targeting attributes (plan, role, …) to unlock a flag gated on them. The channel also serves **only** the flag keys codegen discovered statically from your `ctx.flags.<type>(...)` reads; an arbitrary or unknown key resolves to the supplied default, so a subscriber can't probe internal or unreleased flags.
 
 ### Other frameworks
 
-The same reactive contract ships in every Lunora client adapter — one import, idiomatic to each framework, all live over the existing WebSocket:
+The same reactive contract ships in every Lunora client adapter: one import, idiomatic to each framework, all live over the existing WebSocket:
 
 | Framework | Import           | Single / batch               | Returns          |
 | --------- | ---------------- | ---------------------------- | ---------------- |
@@ -180,7 +180,7 @@ Astro and Nuxt are server-rendered: read flags through `ctx.flags` in a server e
 
 ## Studio
 
-The Lunora Studio surfaces a read-only **Flags** page listing every configured flag and its live evaluation under an editable targeting context — change the targeting key (or other context attributes) and the resolved values update in place, so you can preview exactly what a given user would see.
+The Lunora Studio surfaces a read-only **Flags** page listing every configured flag and its live evaluation under an editable targeting context. Change the targeting key (or other context attributes) and the resolved values update in place, so you can preview exactly what a given user would see.
 
 ## Wrangler binding
 
@@ -192,5 +192,4 @@ Flagship binding mode needs a `flagship` binding in `wrangler.jsonc`. The `app_i
 }
 ```
 
-HTTP-mode Flagship and other OpenFeature providers need no binding — they reach the service over the network using the credentials you pass to the provider factory.
-
+HTTP-mode Flagship and other OpenFeature providers need no binding; they reach the service over the network using the credentials you pass to the provider factory.

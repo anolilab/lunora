@@ -9,8 +9,8 @@ related:
     - to: /docs/packages/cli
 ---
 
-Lunora gives you several places to look when something misbehaves. Working
-outward from the cheapest, roughly in the order you should try them.
+Lunora gives you several places to look when something misbehaves. They are
+listed from the cheapest outward, roughly in the order you should try them.
 
 ## Start with `lunora doctor`
 
@@ -40,7 +40,7 @@ lunora analyze   # wrangler dry-deploy: bundle size, heaviest modules, _generate
 ```
 
 `verify` catches codegen drift and type errors. `analyze` is how you find out a
-dependency doubled your bundle — see [Runtime & bundling](/docs/concepts/runtime).
+dependency doubled your bundle; see [Runtime & bundling](/docs/concepts/runtime).
 
 ## The error overlay
 
@@ -53,7 +53,7 @@ flag, a container or workflow class missing from your worker entry, and runtime
 unique-constraint and conflict errors.
 
 Every code Lunora throws is documented in the
-[errors reference](/docs/errors) — start there when you have a code and no idea
+[errors reference](/docs/errors). Start there when you have a code and no idea
 what it means.
 
 ## Structured logging with `ctx.log`
@@ -69,7 +69,7 @@ export const send = mutation.input({ text: v.string() }).mutation(async ({ ctx, 
 });
 ```
 
-Prefer structured fields over interpolated strings — they stay queryable once
+Prefer structured fields over interpolated strings; they stay queryable once
 the log leaves your terminal. For spans and traces around sub-operations, see
 [Observability](/docs/concepts/observability).
 
@@ -79,20 +79,20 @@ the log leaves your terminal. For spans and traces around sub-operations, see
 `lunora view`). It is the fastest way to answer "what is actually in the
 database" and "what did that function do":
 
-- **Data** — browse and edit rows, so you can confirm a mutation wrote what you
+- **Data**: browse and edit rows, so you can confirm a mutation wrote what you
   expected.
-- **Functions** — the discovered function list, with the arguments each takes.
-- **Logs** — recent invocations with their arguments, results, and errors.
-- **Issues** — errors grouped by fingerprint, so ten thousand instances of one
+- **Functions**: the discovered function list, with the arguments each takes.
+- **Logs**: recent invocations with their arguments, results, and errors.
+- **Issues**: errors grouped by fingerprint, so ten thousand instances of one
   bug read as one row.
-- **Advisors** — schema and query lints, including the unindexed reads that turn
+- **Advisors**: schema and query lints, including the unindexed reads that turn
   into slowness later.
 
 See the [Studio guide](/docs/packages/studio) for the full tour.
 
 ## Find the slow or failing function
 
-`lunora insights` ranks the live worker's functions three ways — write-conflict
+`lunora insights` ranks the live worker's functions three ways, by write-conflict
 hot-spots, error hot-spots, and latency outliers:
 
 ```bash
@@ -116,7 +116,7 @@ lunora logs --format json | jq .
 ```
 
 Filter by status to see only failures, and by search text to follow one code
-path. For durable, queryable history rather than a live tail, wire a log sink —
+path. For durable, queryable history rather than a live tail, wire a log sink;
 see [Observability](/docs/concepts/observability#sinks) and
 [Logpush](/docs/deployment#logpush).
 
@@ -126,13 +126,13 @@ Auth failures are their own category because the identity is resolved before you
 function runs. Work through it in this order:
 
 1. **Is an identity present at all?** Log `ctx.auth.userId` at the top of the
-   function. `undefined` means the token never resolved — the problem is in the
+   function. `undefined` means the token never resolved, so the problem is in the
    client or the auth wiring, not your handler.
 2. **Is the token reaching the worker?** Check the request carries the bearer
    token. `AUTH_HEADERS_MISSING` means auth is not wired up correctly.
 3. **Is it an authorization failure instead?** `FORBIDDEN` means the identity
    resolved and was rejected. `RLS_REQUIRED` means the table is secure by default
-   and no policy resolved for this caller — see [RLS](/docs/concepts/rls).
+   and no policy resolved for this caller; see [RLS](/docs/concepts/rls).
 4. **Does it work with auth off?** Temporarily calling the function through an
    internal path isolates whether the bug is in the policy or the query.
 
@@ -152,6 +152,5 @@ seed is reproducible for everyone else too.
 ## Reproduce it in a test
 
 Once you can see the bug, pin it. The `lunoraTest` in-memory harness runs
-functions without a worker, so a failing case becomes a fast regression test —
-see [Testing](/docs/concepts/testing).
-
+functions without a worker, so a failing case becomes a fast regression test.
+See [Testing](/docs/concepts/testing).

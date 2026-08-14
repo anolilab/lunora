@@ -31,8 +31,8 @@ after that re-renders the component automatically.
   after hydration.
 
 Lunora's loader and its real-time subscription are the **same query**. The server
-runs it once for SSR; the client resumes it as a subscription. No second data
-path, no polling, no hand-rolled socket.
+runs it once for SSR; the client resumes it as a subscription. There is no second
+data path, no polling, and no hand-rolled socket.
 
 ## The handoff
 
@@ -115,18 +115,18 @@ wiring.
 
 The no-flash behaviour is two TanStack Query options working together:
 
-- **`initialData: preloaded.value`** — the first render returns the SSR value
+- **`initialData: preloaded.value`**. The first render returns the SSR value
   synchronously. There is no intermediate `undefined`/loading state, so the
   server markup and the first client markup match (no hydration mismatch).
-- **`staleTime: Infinity`** — Lunora is push-driven, so the seeded value is never
+- **`staleTime: Infinity`**. Lunora is push-driven, so the seeded value is never
   considered stale and is never refetched. The WebSocket subscription that
   attaches in `useEffect` after mount is the _only_ freshness signal; when a
   mutation broadcasts a delta, `usePreloadedQuery` updates via
   `queryClient.setQueryData` and React re-renders.
 
-The result: the first paint already contains live data, and the transition from
-server-rendered to live-subscribed is invisible. No refetch, no spinner, no
-content shift.
+The first paint already contains live data, so the transition from
+server-rendered to live-subscribed is invisible: nothing refetches, no spinner
+appears, and the content does not shift.
 
 ## Identity continuity (SSR → client)
 
@@ -171,4 +171,3 @@ backs each adapter's `/server` entry, with Solid, Svelte, Vue, and Angular
 adapters that expose the same hydrate-then-subscribe handoff idiomatically. See
 [Bring your framework](/docs/frameworks/bring-your-framework) for the
 per-framework status.
-

@@ -8,7 +8,7 @@ in-memory ring buffers behind the Studio panels, the durable per-shard tables th
 survive hibernation, and the folding logic that turns raw events into what an
 operator reads.
 
-Like the engine, it is host-neutral — it takes a `SqlExec` and plain event
+Like the engine, it is host-neutral: it takes a `SqlExec` and plain event
 objects. `@lunora/do` wires it into `ctx.log` / `ctx.trace` / `ctx.metrics` and
 the `__lunora_admin__` read RPCs, so an app gets it without importing it.
 
@@ -18,17 +18,17 @@ import { recordFunctionMetric, readFunctionMetrics } from "@lunora/observability
 
 ## What it provides
 
-| Area            | What it does                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------ |
-| Logs            | `LogBuffer` ring + durable request log; `ctx.log` lines and synthetic sources                    |
-| Traces          | `SpanBuffer` + `foldTraces` — groups spans by trace, nests by parent, offsets from the root      |
-| Metrics         | `MetricBuffer` for the live readout, `metric-history` for the durable minute-bucketed series     |
-| Function stats  | `function-metrics` — durable per-function counters, latency, conflicts, and scan attribution     |
-| Query insights  | `query-metrics` — normalized statements, slow-query buckets                                      |
-| Issues          | error grouping over `@lunora/fingerprint`, plus triage state                                     |
-| Issue explainer | `explainIssue` — grounds a folded issue in the error catalog, optionally rewritten by Workers AI |
-| Auth & security | `auth-metrics`, `security-audit`                                                                 |
-| Correlation     | `database-telemetry`, `storage-correlation`, `trace-context`                                     |
+| Area            | What it does                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------- |
+| Logs            | `LogBuffer` ring + durable request log; `ctx.log` lines and synthetic sources                   |
+| Traces          | `SpanBuffer` + `foldTraces`: groups spans by trace, nests by parent, offsets from the root      |
+| Metrics         | `MetricBuffer` for the live readout, `metric-history` for the durable minute-bucketed series    |
+| Function stats  | `function-metrics`: durable per-function counters, latency, conflicts, and scan attribution     |
+| Query insights  | `query-metrics`: normalized statements, slow-query buckets                                      |
+| Issues          | error grouping over `@lunora/fingerprint`, plus triage state                                    |
+| Issue explainer | `explainIssue`: grounds a folded issue in the error catalog, optionally rewritten by Workers AI |
+| Auth & security | `auth-metrics`, `security-audit`                                                                |
+| Correlation     | `database-telemetry`, `storage-correlation`, `trace-context`                                    |
 
 ## Two design notes
 
@@ -40,8 +40,8 @@ hibernation. Most areas ship both, and the read paths create their tables
 defensively so a panel opened before any traffic returns empty rather than
 throwing.
 
-**Everything caller-supplied is capped.** A `functionPath` is attacker-reachable —
-an unregistered dispatch still records under the name the caller supplied — so the
+**Everything caller-supplied is capped.** A `functionPath` is attacker-reachable
+(an unregistered dispatch still records under the name the caller supplied), so the
 accumulator caps distinct paths, and the read paths clamp rows so a bloated table
 cannot materialize into a Durable Object's ~128MB isolate. The issue explainer
 caps every field that reaches a model prompt and fences the untrusted error report

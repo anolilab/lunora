@@ -11,12 +11,12 @@ related:
 
 `@lunora/notify` adds multi-channel notifications, wrapping the
 [`@visulima/notification`](https://visulima.com/packages/notification) engine.
-**Web Push** and **FCM** come first — both are edge-safe under workerd
-(`fetch` + Web Crypto, no `node:*`) — alongside chat, in-app inbox, and webhook
-channels. It exposes two facades on the function context:
+**Web Push** and **FCM** come first, alongside chat, in-app inbox, and webhook
+channels; both are edge-safe under workerd (`fetch` + Web Crypto, no `node:*`).
+It exposes two facades on the function context:
 
-- `ctx.notify` — the multi-channel facade (`send`, `chat`, `inApp`, `webhook`, `push`).
-- `ctx.push` — the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
+- `ctx.notify`: the multi-channel facade (`send`, `chat`, `inApp`, `webhook`, `push`).
+- `ctx.push`: the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
 
 <Callout type="info">
     APNs (`node:http2`) and SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the edge facade. Route heavy fan-out
@@ -80,7 +80,7 @@ export const registerDevice = mutation.input({ subscription: v.any() }).mutation
 
 ## Send from an action
 
-Notification sends are external I/O, so they belong in **actions** — the
+Notification sends are external I/O, so they belong in **actions**. The
 `notify_send_outside_action` [advisor lint](/docs/concepts/advisors) enforces
 this. `ctx.push.broadcast` fans out to every stored subscription, reusing the
 engine's retry + circuit-breaker middleware and pruning subscriptions the push
@@ -120,4 +120,3 @@ await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body
 // consumer (lunora/queues.ts)
 for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
 ```
-

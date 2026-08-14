@@ -26,11 +26,11 @@ monorepo. This page is the manual procedure to prove it yourself.
 
 Three claims, in order:
 
-1. **SSR preload** — the route loader runs the Lunora query on the server and the
+1. **SSR preload**: the route loader runs the Lunora query on the server and the
    result is in the **raw HTML** (before any JS runs), not just after hydration.
-2. **No flash** — the first client paint shows the preloaded value with no
+2. **No flash**: the first client paint shows the preloaded value with no
    loading spinner and no refetch.
-3. **Live update** — a write from one tab pushes over `/_lunora/ws` and updates a
+3. **Live update**: a write from one tab pushes over `/_lunora/ws` and updates a
    second tab with no page reload.
 
 ## 1. Scaffold
@@ -59,8 +59,8 @@ pnpm dev   # starts wrangler + the Vite dev server (default http://localhost:517
 
 For class-A frameworks this is one Vite/Miniflare dev server running both the SSR
 handler and Lunora realtime. For class-B frameworks (SvelteKit / Nuxt / Astro)
-this is the framework's own dev server with Lunora realtime composed in — verify
-the `/_lunora/ws` endpoint responds under it.
+this is the framework's own dev server with Lunora realtime composed in; verify
+that the `/_lunora/ws` endpoint responds under it.
 
 ## 3. Prove SSR preload (curl the raw HTML)
 
@@ -99,7 +99,7 @@ never refetched. The WebSocket is the only freshness signal.
 
 The path being proven: mutation in A → `/_lunora/rpc` → `ShardDO` writes and
 broadcasts a delta → `/_lunora/ws` push to B → the adapter applies the delta via
-`setQueryData` → re-render. No polling, no manual refresh.
+`setQueryData` → re-render. Nothing polls, and nothing needs a manual refresh.
 
 ## Identity check (optional, with auth)
 
@@ -123,4 +123,3 @@ user:
 
 If all three pass, the live-loader contract holds for your framework: SSR data
 that hydrates into a live subscription with no flash.
-

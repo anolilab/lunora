@@ -10,7 +10,7 @@ related:
 ---
 
 There is one runtime. Queries, mutations, actions, HTTP endpoints, scheduled
-jobs, and workflows all execute on Cloudflare's Workers runtime — there is no
+jobs, and workflows all execute on Cloudflare's Workers runtime. There is no
 separate Node environment to opt a function into.
 
 That single fact explains most of what follows: a dependency that only works on
@@ -30,7 +30,7 @@ scaffolded config enables the compatibility flag:
 }
 ```
 
-`nodejs_compat` provides the built-in modules most libraries actually reach for —
+`nodejs_compat` provides the built-in modules most libraries actually reach for:
 `node:buffer`, `node:crypto`, `node:stream`, `node:util`, and friends. What it
 cannot provide is anything that assumes a real operating system underneath:
 there is no filesystem to write to, no child processes to spawn, no long-lived
@@ -42,7 +42,7 @@ incidentally.
 
 ### When a dependency will not run
 
-Some work genuinely needs a real machine — ffmpeg, headless Chrome, a native ML
+Some work genuinely needs a real machine: ffmpeg, headless Chrome, a native ML
 runtime, a long-running process. That is what
 [containers](/docs/packages/container) are for: a Docker workload running as a
 Durable Object, reached from an action through `ctx.containers`. Reach for one
@@ -61,9 +61,9 @@ polyfill.
 The full table is in [Limits](/docs/limits).
 
 CPU time is the one that surprises people. A mutation holds its shard's
-transaction open while it runs, so slow work there does not just risk the
-timeout — it blocks every other write to that shard. Move anything unbounded
-into an [action](/docs/concepts/actions), and anything deferrable into the
+transaction open while it runs, so slow work there risks the timeout and blocks
+every other write to that shard. Move anything unbounded into an
+[action](/docs/concepts/actions), and anything deferrable into the
 [scheduler](/docs/concepts/scheduling).
 
 ## Bundling
@@ -88,7 +88,7 @@ A few habits do most of the work:
 
 - **Import narrowly.** Deep-import the subpath you need rather than a package's
   barrel file, so the bundler can drop the rest. Lunora's own packages are built
-  for this — `@lunora/bindings/kv` rather than all of `@lunora/bindings`.
+  for this: `@lunora/bindings/kv` rather than all of `@lunora/bindings`.
 - **Install only the add-ons you use.** The `lunorash` umbrella covers the base;
   add-ons, adapters, and the Vite plugin stay separate installs precisely so an
   app does not pay for what it does not use.
@@ -98,14 +98,14 @@ A few habits do most of the work:
   reachable from the worker entry.
 
 Lunora's packages are ESM-only and marked `"sideEffects": false`, so unused
-exports tree-shake cleanly — provided you do not defeat it by importing for side
+exports tree-shake cleanly, provided you do not defeat it by importing for side
 effects.
 
 ## The worker entry
 
 Some generated classes must be re-exported from your worker entry or wrangler
-will reject the deploy — Durable Object classes, container classes, and workflow
-entrypoints among them:
+will reject the deploy, among them Durable Object classes, container classes,
+and workflow entrypoints:
 
 ```ts
 export * from "./lunora/_generated/containers";
@@ -127,4 +127,3 @@ lunora deploy --prebuilt     # ship the bundle without redoing codegen
 
 `build` runs codegen, the schema-drift gate, and `wrangler.jsonc` validation, then
 writes the bundled worker without publishing. `--prebuilt` trusts that work.
-

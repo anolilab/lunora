@@ -9,17 +9,17 @@ related:
 ---
 
 A shard lives in exactly one place. That is what makes its writes serialized and
-its reads consistent — and it is also why a reader on the other side of the
-world pays the round trip. This page covers the three controls that move work
-closer to the reader, and what each one costs.
+its reads consistent, and it is also why a reader on the other side of the world
+pays the round trip. This page covers the three controls that move work closer
+to the reader, and what each one costs.
 
 None of them are on by default. A single-region app should leave them alone.
 
 ## Where a shard is created
 
 By default Cloudflare creates a Durable Object in the data centre nearest the
-request that first touched it. That is usually right — the first request is
-normally a user's — but not always: a shard first materialized by a cron fire, a
+request that first touched it. That is usually right, since the first request is
+normally a user's, but not always: a shard first materialized by a cron fire, a
 migration fan-out, a seeding run, or the Studio lands wherever _that_ ran, and
 stays there for its whole life.
 
@@ -36,7 +36,7 @@ export default createWorker({
 
 Return `undefined` for a key you have no opinion about and the default applies.
 The hint is honoured only by the resolution that **creates** the object, so
-changing this later does not move a shard that already exists — moving one is an
+changing this later does not move a shard that already exists; moving one is an
 [export → import](/docs/concepts/backups) job.
 
 This is placement, not residency. If you need a hard guarantee about where data
@@ -44,8 +44,8 @@ lives, use [`.jurisdiction()`](/docs/concepts/data-residency), which constrains
 rather than hints.
 
 <Callout type="warn">
-    **A jurisdiction turns every region hint off.** On a deployment pinned with `.jurisdiction(...)`, `shardRegion` and the replica/relay hints are not sent —
-    the jurisdiction already constrains placement, and it is the constraint that must hold. The worker logs this once so an ignored `shardRegion` is never a
+    **A jurisdiction turns every region hint off.** On a deployment pinned with `.jurisdiction(...)`, `shardRegion` and the replica/relay hints are not sent.
+    The jurisdiction already constrains placement, and it is the constraint that must hold. The worker logs this once so an ignored `shardRegion` is never a
     silent surprise.
 </Callout>
 
@@ -69,7 +69,7 @@ Four things all have to hold before a read is served from a replica, and each
 one falls back to the owner rather than failing:
 
 1. `replicaReads: true`.
-2. `functions` is passed, and the call is a registered **query** — a mutation,
+2. `functions` is passed, and the call is a registered **query**. A mutation,
    action or stream is never eligible.
 3. Cloudflare could geolocate the request. A caller it cannot place has no
    region to be near, so there is no replica to prefer.
@@ -85,7 +85,7 @@ dispatch the runtime did not explicitly route to it as a read.
 
 **Requires CDC.** The changelog _is_ the replication feed. Without it a replica
 has nothing to follow, reports itself unavailable, and every read falls back to
-the owner — correct, but one wasted hop per read.
+the owner: correct, but one wasted hop per read.
 
 ### What stays on the owner
 
@@ -108,7 +108,7 @@ the read to the owner instead of answering from an older copy.
 What you are trading away is freshness for _other people's_ writes: a read that
 carries no cursor may be up to `LUNORA_REPLICA_MAX_STALENESS_MS` (default
 `1000`) behind. If a query must never be behind anyone's write, do not enable
-this — or keep that query on a live subscription, which is owner-served and
+this, or keep that query on a live subscription, which is owner-served and
 pushed.
 
 A replica reports itself unusable, and reads fall back to the owner, when it
@@ -121,10 +121,10 @@ cannot reconcile with its owner at all:
 - the shard is **too large to snapshot** in one response, so bootstrapping would
   leave the replica with an arbitrary prefix of it.
 
-All three are dead ends, and a Durable Object is never destroyed — so in
-practice a replica that diverges stays diverged, and every read in that region
-pays a wasted hop to it before falling back for as long as the deployment
-lives. Reads stay correct throughout; they just stop being local, quietly.
+All three are dead ends, and a Durable Object is never destroyed, so in practice
+a replica that diverges stays diverged, and every read in that region pays a
+wasted hop to it before falling back for as long as the deployment lives. Reads
+stay correct throughout; they just stop being local, and nothing announces it.
 
 ### Cost
 
@@ -137,7 +137,7 @@ Three costs worth knowing before you turn it on:
 
 - **Below roughly one read per second per region, a replica is _slower_ than the
   owner.** Outside the staleness window the first read pays a catch-up round
-  trip to the owner — the same cross-world hop it exists to avoid — and then
+  trip to the owner (the same cross-world hop it exists to avoid) and then
   answers locally. The tier pays for itself under steady read traffic, not under
   a trickle.
 - **Query telemetry follows the DO that served it.** Request logs, function
@@ -157,11 +157,11 @@ relay DOs, and each relay is **created in the region of the client that first
 reached it**. A single-region app therefore ends up with every relay in its own
 region; a multi-region one spreads them across the regions actually generating
 load. The socket terminates near the client, and only the owner→relay hop
-crosses the world — once per relay rather than once per connection.
+crosses the world, once per relay rather than once per connection.
 
 The spread itself stays random on purpose. Routing a whole region to one relay
 would give tighter locality and pile that region's entire connection load onto a
-single DO — re-creating the fan-out wall promotion exists to escape.
+single DO, re-creating the fan-out wall promotion exists to escape.
 
 There is nothing to configure; it applies automatically above the promotion
 threshold.
@@ -170,4 +170,3 @@ threshold.
     **One socket per shard.** A client subscribing across several shards still opens one socket per shard. Collapsing those onto a single connection is not
     implemented.
 </Callout>
-

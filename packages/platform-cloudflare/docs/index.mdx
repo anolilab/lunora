@@ -4,7 +4,7 @@ description: The Cloudflare implementation of the @lunora/platform host contract
 ---
 
 `@lunora/platform-cloudflare` is the Cloudflare **host**: it implements the
-`@lunora/platform` contracts over Durable Object primitives — `state.storage.sql`,
+`@lunora/platform` contracts over Durable Object primitives: `state.storage.sql`,
 `blockConcurrencyWhile`, the WebSocket hibernation API, alarms, and
 `DurableObjectNamespace`.
 
@@ -39,7 +39,7 @@ objects unchanged rather than wrapping them, and identity comes from
 `SocketHost.idFor`. Fan-out is O(subscribers) and `SocketHandle` sits on that
 loop, so a wrapper's two extra call frames per socket measured at +11% to +13% on
 whisper delivery at 128 and 1024 subscribers. It also gave one socket two
-identities — the runtime's own `webSocketMessage` / `webSocketClose` callbacks
+identities: the runtime's own `webSocketMessage` / `webSocketClose` callbacks
 hand back the transport object, so per-socket `WeakMap` memos could key on either
 and silently diverge.
 
@@ -56,9 +56,9 @@ be a lie the engine could route on.
 
 ## Conformance
 
-This host is proven by the same two suites any host must pass — the host contract
+This host is proven by the same two suites any host must pass (the host contract
 suite from `@lunora/platform/conformance` and the engine suite from
-`@lunora/shard-engine/conformance` — run against real workerd rather than a
+`@lunora/shard-engine/conformance`), run against real workerd rather than a
 double:
 
 ```bash

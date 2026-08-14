@@ -32,11 +32,11 @@ Three ways, smallest setup first:
 
 1. **`lunora dev` (zero config).** The [`@lunora/vite`](/docs/packages/vite) plugin
    serves the studio at **`/__lunora`** during dev and prints the URL on startup.
-   Add `@lunora/studio` to your project's deps and it just works; opt out with
+   Add `@lunora/studio` to your project's deps; opt out with
    `lunora({ studio: false })`.
 2. **Standalone app.** `apps/studio` is a deployable Vite SPA that points at any
-   worker via `VITE_LUNORA_URL` — for hosting the studio separately from dev.
-3. **Embed.** Mount the batteries-included console, or compose individual panels
+   worker via `VITE_LUNORA_URL`, for hosting the studio separately from dev.
+3. **Embed.** Mount the whole console, or compose individual panels
    under your own `<LunoraProvider>`.
 
 ```ts
@@ -56,14 +56,14 @@ import { StudioApp, Studio, DataBrowser } from "@lunora/studio";
 
 The `<Studio>` shell takes a few host-controlled switches worth knowing:
 
-- `dataEditable` — allow row insert/edit/delete (off by default; the console is
+- `dataEditable`: allow row insert/edit/delete (off by default; the console is
   read-only until the host opts in).
-- `runAsIdentity` — let the function runner execute **as** a chosen authenticated
+- `runAsIdentity`: let the function runner execute **as** a chosen authenticated
   identity, to test auth + RLS. Security-sensitive (it forges identity on an
-  admin RPC) — only ever enable on a trusted loopback-dev gate, never in
+  admin RPC). Only ever enable on a trusted loopback-dev gate, never in
   production.
-- `functions` — the descriptors that populate the function runner and API tab.
-- `initialShardKey` — the shard every shard-scoped panel targets on first load.
+- `functions`: the descriptors that populate the function runner and API tab.
+- `initialShardKey`: the shard every shard-scoped panel targets on first load.
 
 ## How the console is laid out
 
@@ -82,7 +82,7 @@ bottom. Each owns a set of pages:
 | **Operations**    | Scheduled · Mail · Log drains · Payments · Flags                                                                    |
 | **Settings**      | Settings                                                                                                            |
 
-Most shard-scoped pages share a **shard-key input** — Durable Objects aren't
+Most shard-scoped pages share a **shard-key input**: Durable Objects aren't
 enumerable server-side, so you target a shard by key. The data and SQL pages
 remember the shards you've visited and offer a "Shards seen" picker with a live
 table/row-count summary. A **⌘K command palette** jumps to any page by name.
@@ -92,135 +92,134 @@ UI strings (`locale` / `i18n` props).
 
 ## Overview
 
-- **Home** — _Connection, health, and advisor summary for your deployment._ A
+- **Home**: _Connection, health, and advisor summary for your deployment._ A
   roll-up of **advisor findings** (security, performance, schema) so the first
   thing you see is whatever needs attention; drill into any summary to its
   panel.
-- **Dashboards** — _Chart widgets backed by saved read-only SQL queries._
+- **Dashboards**: _Chart widgets backed by saved read-only SQL queries._
 
 ## Database
 
-The data console — everything that reads or shapes stored state.
+Everything that reads or shapes stored state.
 
-- **Data** — _Browse and edit rows across your shard and global tables._ A
+- **Data**: _Browse and edit rows across your shard and global tables._ A
   full-height table editor: pick a table, page through rows (table or JSON view),
-  filter, and — when `dataEditable` is on — insert, patch, and delete. It covers
-  both shard tables and `.global()` (D1-backed) tables. Two power tools:
-    - **Mask preview** — a "Mask sensitive columns" toggle that previews
+  filter, and (when `dataEditable` is on) insert, patch, and delete. It covers
+  both shard tables and `.global()` (D1-backed) tables. Three extra tools:
+    - **Mask preview**: a "Mask sensitive columns" toggle that previews
       redact/hash/custom output client-side and flags masked columns in the grid
       header, mirroring what [data masking](/docs/concepts/masking) does on the
       server. Codegen emits the `(table, column, strategy)` map it reads.
-    - **Row generation** — generate realistic seed rows with `@faker-js/faker`,
+    - **Row generation**: generate realistic seed rows with `@faker-js/faker`,
       inferred from each column's type, before inserting.
-    - **Cascade preview** — before deleting a row, see which related rows a
+    - **Cascade preview**: before deleting a row, see which related rows a
       cascading relation would take with it.
-- **SQL editor** — _Run read-only SQL against a shard._ A full-height query
+- **SQL editor**: _Run read-only SQL against a shard._ A full-height query
   console for ad-hoc `SELECT`s against a shard's SQLite.
-- **Schema** — _Inspect each table and its columns._ Every table with its row
+- **Schema**: _Inspect each table and its columns._ Every table with its row
   count, expandable to its columns, indexes, and relations. It also renders an
   interactive **schema diagram** (React Flow): tables as nodes, relations as
   edges, with a storage-tier filter (shard / global), a find box, and **export
   to PNG / SVG / JSON**. The Insights "add the index" deep-link lands here with
   the offending table pre-expanded.
-- **Migrations** — _Review migration status and run them._ Inspect
+- **Migrations**: _Review migration status and run them._ Inspect
   data-migration run-state and kick one off.
-- **Vectors** — _Browse Vectorize indexes and run similarity searches._
-- **Time Travel** — _Restore a shard to a point in the last 30 days_ (PITR).
-- **Export / Import** — _Export a shard to NDJSON, or import rows from it._
+- **Vectors**: _Browse Vectorize indexes and run similarity searches._
+- **Time Travel**: _Restore a shard to a point in the last 30 days_ (PITR).
+- **Export / Import**: _Export a shard to NDJSON, or import rows from it._
 
 ## Functions
 
-- **Functions** — _Run registered queries, mutations, and actions._ Pick a
+- **Functions**: _Run registered queries, mutations, and actions._ Pick a
   function, edit its JSON args, and invoke it; per-function call/error stats sit
   above the runner. With `runAsIdentity` enabled, run a function **as** a chosen
   identity to test auth and RLS behaviour.
-- **API** — _Interactive OpenAPI reference and copy-paste snippets for your
+- **API**: _Interactive OpenAPI reference and copy-paste snippets for your
   functions._ Renders the generated OpenAPI 3.1 / OpenRPC documents.
-- **Workflows** — _Inspect declared Cloudflare Workflows and their bindings._
+- **Workflows**: _Inspect declared Cloudflare Workflows and their bindings._
   Lists every [durable workflow](/docs/packages/workflow) with its export name,
   generated class, binding, and deployed name; starts an instance from a
   JSON-params form; and tracks instances with their live status (queued /
   running / complete / errored) and output.
-- **Queues** — _Inspect declared Cloudflare Queues — their producer bindings,
+- **Queues**: _Inspect declared Cloudflare Queues: their producer bindings,
   consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).
-- **Containers** — _Live Cloudflare Containers — current lifecycle state per
+- **Containers**: _Live Cloudflare Containers: current lifecycle state per
   container from the log stream_ ([`@lunora/container`](/docs/packages/container)).
 
 ## Auth
 
-Backed by [`@lunora/auth`](/docs/packages/auth)'s admin API. Capability-driven —
+Backed by [`@lunora/auth`](/docs/packages/auth)'s admin API. Capability-driven:
 each page shows only when its better-auth plugin is enabled.
 
-- **Users** — _Manage auth users — roles, bans, sessions, and identity._
-- **Organizations** — _Browse and manage organizations, members, and
+- **Users**: _Manage auth users: roles, bans, sessions, and identity._
+- **Organizations**: _Browse and manage organizations, members, and
   invitations._
-- **Sessions** — _Browse and revoke active sessions across all users._
-- **Configuration** — _Enabled plugins and session config_ (read-only).
+- **Sessions**: _Browse and revoke active sessions across all users._
+- **Configuration**: _Enabled plugins and session config_ (read-only).
 
 ## Storage
 
-- **Files** — _Browse objects in your R2 storage buckets_ by prefix.
-- **Access Rules** — _Inspect storage access rules — per bucket, operation, and
+- **Files**: _Browse objects in your R2 storage buckets_ by prefix.
+- **Access Rules**: _Inspect storage access rules, per bucket, operation, and
   key prefix._
-- **KV** — _Browse and edit key-value pairs in your Workers KV namespaces_
+- **KV**: _Browse and edit key-value pairs in your Workers KV namespaces_
   ([`@lunora/bindings`](/docs/packages/bindings)).
 
 ## Observability
 
-Operational streams and per-shard signal — the live pulse of a running
-deployment.
+Operational streams and per-shard signal from a running deployment.
 
-- **Issues** — _Grouped error triage — Worker throws and container crashes folded
+- **Issues**: _Grouped error triage: Worker throws and container crashes folded
   by fingerprint_ ([`@lunora/fingerprint`](/docs/packages/fingerprint)), so many
   instances of one bug read as a single row.
-- **Logs** — _A live stream of recent function logs_ (the shard's log ring
+- **Logs**: _A live stream of recent function logs_ (the shard's log ring
   buffer).
-- **Traces** — _Recent `ctx.trace` waterfalls for this shard_ — the drill-down
+- **Traces**: _Recent `ctx.trace` waterfalls for this shard_, the drill-down
   from a log line (see [observability](/docs/concepts/observability)).
-- **Audit** — _A durable log of admin state-changing operations._
-- **Realtime** — _Active WebSocket subscriptions on this shard._
-- **Fan-out** — _Realtime fan-out cost and per-topic subscriber counts for this
+- **Audit**: _A durable log of admin state-changing operations._
+- **Realtime**: _Active WebSocket subscriptions on this shard._
+- **Fan-out**: _Realtime fan-out cost and per-topic subscriber counts for this
   shard._
-- **Containers** — _Live Cloudflare Containers — current lifecycle state per
+- **Containers**: _Live Cloudflare Containers: current lifecycle state per
   container from the log stream_ ([`@lunora/container`](/docs/packages/container)).
-- **Metrics** — _Per-shard health and aggregate metrics_ — request/error counts,
-  uptime, DB size, reactive-cache hit rate.
-- **Analytics** — _Usage and latency from Analytics Engine_ — request volume,
-  p50/p95, and hot shards.
-- **Health** — _At-a-glance connection, error, and shard signals._
-- **Deployment health** — _Live liveness, readiness, and per-binding health_ from
+- **Metrics**: _Per-shard health and aggregate metrics_ (request/error counts,
+  uptime, DB size, reactive-cache hit rate).
+- **Analytics**: _Usage and latency from Analytics Engine_ (request volume,
+  p50/p95, and hot shards).
+- **Health**: _At-a-glance connection, error, and shard signals._
+- **Deployment health**: _Live liveness, readiness, and per-binding health_ from
   the deployment's `/_lunora/health` endpoint.
 
 ## Advisors
 
-The [advisors](/docs/concepts/advisors) surface — splinter-style lints over your
+The [advisors](/docs/concepts/advisors) surface: splinter-style lints over your
 schema, functions, and runtime signal.
 
-- **Security** — _Review admin gates, credentials, and log redaction_ — the
+- **Security**: _Review admin gates, credentials, and log redaction_, the
   security-category findings.
-- **RLS Policies** — _Inspect row-level-security policies and roles, per table._
-- **Permissions** — _Inspect access policies per table, and probe a function as
+- **RLS Policies**: _Inspect row-level-security policies and roles, per table._
+- **Permissions**: _Inspect access policies per table, and probe a function as
   any identity._
-- **Performance** — _Surface slow functions, error spikes, and cache problems._
+- **Performance**: _Surface slow functions, error spikes, and cache problems._
   Runtime insights derived from each shard's durable metrics; findings deep-link
   to the fix (e.g. the Schema page to add a missing index).
 
 ## Operations
 
-The optional package-backed operational pages — scheduling, email, log
+The optional package-backed operational pages: scheduling, email, log
 forwarding, payments, and feature flags.
 
-- **Scheduled** — _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/packages/scheduler)).
-- **Mail** — _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/packages/mail)).
-- **Log drains** — _Forward logs to Logpush, Tail Workers, or a webhook
+- **Scheduled**: _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/packages/scheduler)).
+- **Mail**: _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/packages/mail)).
+- **Log drains**: _Forward logs to Logpush, Tail Workers, or a webhook
   collector._
-- **Payments** — _Synced customers, subscriptions, and webhook events._
-- **Flags** — _Inspect feature flags and their live evaluation under a
+- **Payments**: _Synced customers, subscriptions, and webhook events._
+- **Flags**: _Inspect feature flags and their live evaluation under a
   targeting context_ ([`@lunora/flags`](/docs/packages/flags)).
 
 ## Settings
 
-_Read-only deployment config — vars, secrets, and bindings._ Pinned to the
+_Read-only deployment config: vars, secrets, and bindings._ Pinned to the
 bottom of the rail.
 
 ## Admin gate
@@ -232,7 +231,7 @@ outside the shard (scheduler, storage, functions, global tables, auth).
 
 **Both are disabled unless the server sets `LUNORA_ADMIN_TOKEN`**, and the client
 must present a matching `Authorization: Bearer` token. The components issue no
-credentials of their own — configure the client's auth token at the host.
+credentials of their own. Configure the client's auth token at the host.
 
 ```ts
 // worker entry — every admin surface is gated by adminToken
@@ -248,15 +247,15 @@ createWorker({
 `globalIntrospector` (D1 tables) and `authAdmin` (the user-management +
 organization dashboard, via `@lunora/auth`'s `createAuthAdmin(auth)`) wire up the
 remaining pages; see the package README for the full per-page configuration. The
-auth dashboard is capability-driven — it shows only the surfaces whose
+auth dashboard is capability-driven: it shows only the surfaces whose
 better-auth plugin is enabled. Pages whose data source isn't configured are
 omitted from the `<Studio>` shell.
 
 ## Optional-package nav gating
 
 The studio also hides the pages for optional `@lunora/*` packages your app
-doesn't use — Payments, Mail, Notifications, Files + Access Rules, Vectors,
-Scheduler, and Workflows — so you never land on a page for a package you never
+doesn't use (Payments, Mail, Notifications, Files + Access Rules, Vectors,
+Scheduler, and Workflows), so you never land on a page for a package you never
 installed, which would error with "unknown table" or render a shell with nothing
 behind it. Gating is about _unused packages_, not about emptiness: a page for a
 package you do use still shows its own empty state when there is genuinely
@@ -271,17 +270,16 @@ A feature's page shows when **any** of these is true:
   `lunora/notify.ts` config's `@lunora/notify`) or reads its context helper
   (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`, `ctx.notify`,
   `ctx.workflows`);
-- a schema signal implies it — a `v.storage()` column or storage access rule
+- a schema signal implies it: a `v.storage()` column or storage access rule
   (Files), a declared cron (Scheduler), a vector index (Vectors), or a declared
   workflow (Workflows);
-- the package is a declared dependency in your `package.json` — so a package
+- the package is a declared dependency in your `package.json`, so a package
   wired only in your worker entry (outside `lunora/`), like `@lunora/mail`, still
   shows its page.
 
 The gating **fails open**: every page stays visible until the RPC resolves, and a
 worker predating the RPC (or one that errors) keeps showing everything. A page is
-only ever hidden once the worker positively reports its feature as unused — so the
+only ever hidden once the worker positively reports its feature as unused, so the
 worst case is an extra empty page, never a missing working one. No configuration
 is required; re-run codegen (`lunora dev` does this on save) after adding or
 removing a package and the nav updates itself.
-

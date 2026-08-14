@@ -21,14 +21,14 @@ racing you, so there is no read-set validation and no OCC retry loop for
 ordinary shard-local writes.
 
 The practical consequence: **a mutation that does not yield is a transaction.**
-Read, decide, write — the values you read cannot change underneath you, and
+Read, decide, write: the values you read cannot change underneath you, and
 either every write commits or none does.
 
 The qualifier is load-bearing. The guarantee holds for the handler's own writes;
 it does not survive an `await` that hands control to another mutation, which is
 what a before-update trigger or an `onDelete` cascade does. Those cases are
-covered in [Where conflicts still happen](#where-conflicts-still-happen) below —
-and the OCC guard means they fail loudly rather than silently clobbering.
+covered in [Where conflicts still happen](#where-conflicts-still-happen) below;
+the OCC guard means they fail loudly rather than silently clobbering.
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
@@ -52,12 +52,12 @@ No read-modify-write dance, no version column, no retry wrapper. The check-then-
 above is safe because `accounts` declares no before-update trigger and no
 cascade, so the handler never yields between the balance check and the two
 writes. Add a trigger to that table and the same code acquires a window in which
-a concurrent mutation can commit — which is the next section.
+a concurrent mutation can commit.
 
 ## Where conflicts still happen
 
 Serialization holds for the handler's own writes. It does **not** hold across an
-`await` that yields to another mutation — which happens when a write triggers a
+`await` that yields to another mutation, which happens when a write triggers a
 before-update hook or an `onDelete` cascade. During that yield another mutation
 can commit and change the row you were about to write.
 
@@ -76,7 +76,7 @@ are separable when handling errors.
 ## Handling a conflict on the client
 
 Conflicts surface to the caller as the `CONFLICT` error code (HTTP 409). There is
-no transparent server-side retry — the caller decides, because the right response
+no transparent server-side retry; the caller decides, because the right response
 depends on what the mutation meant.
 
 ```ts
@@ -111,12 +111,12 @@ lunora insights
 
 Read the result carefully before reaching for a fix. Because a DO's mutations are
 serialized, a _persistent_ conflict usually means the handler is conflicting
-**with itself** — a trigger or an `onDelete` cascade touching the same row the
+**with itself**: a trigger or an `onDelete` cascade touching the same row the
 handler is about to write. Splitting that work is the fix; a retry loop only
 hides it.
 
 Contention across many callers is the other reading, and there the answer is a
-[shard key](/docs/concepts/sharding) that splits writers across DOs — per
+[shard key](/docs/concepts/sharding) that splits writers across DOs: per
 tenant, per room, per user. DO throughput also tops out around 1 000 requests
 per second, so genuine contention and saturation tend to appear together.
 
@@ -127,8 +127,8 @@ offer distributed transactions: **cross-shard writes are eventual, not atomic.**
 Two shards cannot commit together, and a cross-shard read is a fan-out, not a
 snapshot.
 
-Design around it by keeping data that must change together in the same shard —
-which is the real constraint that should drive your choice of shard key. When
+Design around it by keeping data that must change together in the same shard;
+that constraint is what should drive your choice of shard key. When
 work genuinely must span shards, model it as a sequence of per-shard mutations
 with an explicit state machine, rather than assuming it will be all-or-nothing.
 See [Non-goals](/docs/non-goals) for why this trade-off is deliberate.
@@ -140,4 +140,3 @@ not participate in a shard's transaction. `@lunora/d1` wraps the Sessions API so
 that reads following your own writes see them, but a mutation that writes both a
 shard-local and a `.global()` table is not writing both atomically. Treat the
 global write as a separate step that can fail independently.
-

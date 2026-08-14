@@ -12,7 +12,7 @@ related:
 as part of a Lunora app: declare a container with `defineContainer`, and codegen
 emits the container-enabled Durable Object class while `lunora dev` / `lunora deploy`
 reconcile the `wrangler.jsonc` wiring. `wrangler deploy` builds the image with
-your local Docker engine and pushes it to Cloudflare's registry — there is no
+your local Docker engine and pushes it to Cloudflare's registry. There is no
 separate container platform to sign up for.
 
 Reach for a container when a job doesn't fit the Workers runtime: an existing
@@ -40,14 +40,14 @@ bun add @lunora/container
 </Tabs>
 
 <Callout type="warn">
-    Containers require the **Workers Paid** plan. Images must target **`linux/amd64`** — on Apple Silicon, build with `--platform linux/amd64` (the scaffolded
+    Containers require the **Workers Paid** plan. Images must target **`linux/amd64`**; on Apple Silicon, build with `--platform linux/amd64` (the scaffolded
     Dockerfile does this for you). See [Limits](/docs/limits).
 </Callout>
 
 ## Declare a container
 
-Containers live in `lunora/containers.ts`. Scaffold one — definition plus a
-starter Dockerfile under `containers/<name>/` — with:
+Containers live in `lunora/containers.ts`. Scaffold one (definition plus a
+starter Dockerfile under `containers/<name>/`) with:
 
 ```sh
 pnpm vis generate lunora-container --name=transcoder
@@ -72,7 +72,7 @@ path to the Dockerfile itself) that `wrangler deploy` builds and pushes, or a
 **pre-built registry reference** (`{ registry }`) from the Cloudflare Registry,
 Docker Hub, or Amazon ECR.
 
-Re-export the generated classes from your worker entry — wrangler requires every
+Re-export the generated classes from your worker entry; wrangler requires every
 container's class to be exported by the deployed Worker:
 
 ```ts
@@ -87,7 +87,7 @@ container logs are captured).
 
 ## Call a container from an action
 
-Container calls are external I/O, so — like `ctx.fetch` and `ctx.ai` —
+Container calls are external I/O, so (like `ctx.fetch` and `ctx.ai`)
 `ctx.containers` lives on **actions**, never queries or mutations. Codegen types
 one handle per declared container.
 
@@ -107,13 +107,13 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 
 ### Routing: `.get(name)` vs `.any()`
 
-- **`.get(name)`** — one container instance per name. Use it for stateful,
+- **`.get(name)`**: one container instance per name. Use it for stateful,
   per-entity work: a sandbox per user, a room per game, a worker per job id. The
   same name always reaches the same instance.
-- **`.any(count?)`** — a random instance from a fixed pool (defaults to
+- **`.any(count?)`**: a random instance from a fixed pool (defaults to
   `maxInstances`, else 3). Use it for stateless, interchangeable work where any
   instance can serve the request.
-- **`.pool(options?)`** — like `.any()`, but resilient: each `fetch` picks a
+- **`.pool(options?)`**: like `.any()`, but resilient. Each `fetch` picks a
   random instance and, on a thrown error or a retryable response (`5xx` by
   default), retries on a freshly-picked instance with exponential backoff.
 
@@ -128,18 +128,18 @@ const result = await ctx.containers.transcoder
 ```
 
 `fetch` accepts a path string (resolved against the container) or a full
-`Request`, and proxies WebSocket upgrades — a real-time stream to a container
+`Request`, and proxies WebSocket upgrades, so a real-time stream to a container
 works the same as any other `fetch`.
 
 #### Cold-start retry
 
 The first request to a sleeping or never-started instance can land while
-Cloudflare is still provisioning it — surfacing as a `503` "no Container
+Cloudflare is still provisioning it, surfacing as a `503` "no Container
 instance available", a `500` "Failed to start container", a `429`, or a thrown
 "not listening" error. `.get()` and `.any()` absorb that race: they retry the
 **same** instance a few times with exponential backoff (default 3 attempts,
 500 ms base, 30 s ceiling) so transient provisioning blips don't reach your
-handler. Only those platform provisioning signals retry — an honest application
+handler. Only those platform provisioning signals retry; an honest application
 `5xx` is returned straight through.
 
 ```ts
@@ -147,8 +147,8 @@ handler. Only those platform provisioning signals retry — an honest applicatio
 await ctx.containers.transcoder.get(jobId, { attempts: 5, backoffMs: 250 }).fetch("/transcode");
 ```
 
-A pre-built `Request` is sent **once** and never retried — its body may be a
-one-shot stream that can't be replayed. Pass a path string (the common case) to
+A pre-built `Request` is sent **once** and never retried, because its body may
+be a one-shot stream that can't be replayed. Pass a path string (the common case) to
 opt into the retry, or set `attempts: 1` to send a `Request` without it. (This
 is distinct from `.pool()`, which retries on a _fresh_ instance for stateless
 load-balancing; cold-start retry sticks to the one instance you named.)
@@ -167,7 +167,7 @@ await sandbox.stop(); // stop (can restart on next request)
 await sandbox.destroy(); // tear down and discard the ephemeral disk
 ```
 
-`.any()` and `.pool()` return fetch-only handles — lifecycle control is for
+`.any()` and `.pool()` return fetch-only handles; lifecycle control is for
 named instances you own.
 
 <Callout type="warn">
@@ -178,7 +178,7 @@ named instances you own.
 ## Multi-port containers
 
 A container that listens on more than one port (an app port plus an admin port,
-say) declares every one with `requiredPorts` — start-up waits for all of them to
+say) declares every one with `requiredPorts`; start-up waits for all of them to
 be listening. `defaultPort` is the target when a request doesn't pick a port;
 route a single request elsewhere with `.port(n)`, which composes with `.get()`,
 `.any()`, and `.pool()`:
@@ -199,8 +199,8 @@ await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
 
 ## Egress firewall
 
-By default a container may open any outbound connection (`enableInternet: true`)
-— and egress is billed per GB. Constrain it by pairing `enableInternet: false`
+By default a container may open any outbound connection (`enableInternet: true`),
+and egress is billed per GB. Constrain it by pairing `enableInternet: false`
 with an `allowedHosts` allow-list, or layer a `deniedHosts` deny-list that
 overrides everything, including `enableInternet: true` and `allowedHosts`. Glob
 patterns like `*.stripe.com` are supported.
@@ -221,7 +221,7 @@ plain HTTP; it requires the image to trust the Cloudflare CA at
 through the `ContainerProxy` worker entrypoint, which codegen re-exports from the
 generated container file automatically.
 
-Tighten or relax a single running instance at runtime through its named handle —
+Tighten or relax a single running instance at runtime through its named handle.
 `egress.allow` / `deny` add one host, `removeAllowed` / `removeDenied` drop one,
 and `setAllowed` / `setDenied` replace a whole list:
 
@@ -233,13 +233,13 @@ await ctx.containers.fetcher.get(tenantId).egress.setDenied(["*.evil.com", "*.tr
 For advanced egress _rewriting_ in worker code (inject auth, route, or mock a
 container's outbound calls), `@lunora/container/do` re-exports Cloudflare's
 custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`,
-`outboundParams`) — wire them onto a hand-authored `LunoraContainer` subclass.
+`outboundParams`); wire them onto a hand-authored `LunoraContainer` subclass.
 
 ## Readiness gating
 
-The platform health check waits for an **open port** (`defaultPort`) — and, if
-`pingEndpoint` is set, for an HTTP probe on that path on the same container — not
-necessarily a _ready_ app. `readyOn` adds
+The platform health check waits for an **open port** (`defaultPort`) and, if
+`pingEndpoint` is set, for an HTTP probe on that path on the same container.
+Neither means the app is _ready_. `readyOn` adds
 application-level probes that gate request proxying: a `ctx.containers.<name>`
 fetch holds until every probe responds with its expected status, so callers
 never hit a container still applying migrations or warming caches.
@@ -257,14 +257,14 @@ export const api = defineContainer({
 
 Each probe declares a `path` (a leading slash is optional), an optional `port`
 (defaults to `defaultPort`), and an optional `status` (defaults to `200`).
-Probes are declarative **data** — no handler functions — so codegen and the
+Probes are declarative **data** (no handler functions), so codegen and the
 config layer read them without evaluating code. At start they run in parallel,
 poll the container's TCP port directly, and fail the start if any probe doesn't
 go ready within the readiness budget.
 
 ## Hard timeout
 
-`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a
+`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime: a
 runaway-cost backstop that fires regardless of activity, measured from start. It
 uses the same grammar as `sleepAfter` (`"30s"`, `"5m"`, `"1h"`, or a plain
 number of seconds):
@@ -277,7 +277,7 @@ export const job = defineContainer({
 });
 ```
 
-When it elapses, the generated class's `onHardTimeoutExpired` hook runs — the
+When it elapses, the generated class's `onHardTimeoutExpired` hook runs; the
 default action is `stop()`. The timer is armed through the container's own
 scheduler and stamped with a run generation, so a stale timer left over from a
 previous (slept or crashed) run never kills a fresh one. Advanced apps that
@@ -287,7 +287,7 @@ class lives in `@lunora/container/do`) to drain or checkpoint before stopping.
 ## Calling Lunora from inside a container
 
 Container code calls back into your app's functions with the bridge client
-(any JS runtime — Node, Bun, Deno), over the Worker's HTTP RPC endpoint — so a
+(any JS runtime: Node, Bun, Deno) over the Worker's HTTP RPC endpoint, so a
 container reads/writes app state through the same queries/mutations the browser
 uses, instead of reaching into a database directly.
 
@@ -300,7 +300,7 @@ const pending = await lunora.query("jobs:listPending", { limit: 10 });
 await lunora.mutation("jobs:markDone", { id: pending[0].id });
 ```
 
-For full type-safety, pass a generated `api` reference to `run()` — args and
+For full type-safety, pass a generated `api` reference to `run()`; args and
 result are inferred from it:
 
 ```ts
@@ -309,7 +309,7 @@ import { api } from "../lunora/_generated/api";
 const job = await lunora.run(api.jobs.next, { queue: "transcode" }); // typed args + result
 ```
 
-The `token` is a bearer your Worker's `resolveIdentity` recognizes — forward it
+The `token` is a bearer your Worker's `resolveIdentity` recognizes. Forward it
 as a container `secret`, never bake it into the image. Non-JS containers can
 `POST /_lunora/rpc` with `{ functionPath, args }` directly (same contract).
 
@@ -317,7 +317,7 @@ as a container `secret`, never bake it into the image. Non-JS containers can
 
 The bridge sends its token as `Authorization: Bearer <token>`. Your Worker's
 `resolveIdentity` is what validates it and maps it to the identity the called
-functions run as — without that check, anyone who reaches `/_lunora/rpc` runs as
+functions run as. Without that check, anyone who reaches `/_lunora/rpc` runs as
 whatever identity you return. Validate the bearer against a Worker secret and
 return `null` for anything that doesn't match (an unrecognised request runs
 anonymously and fails your functions' own authorization checks):
@@ -344,7 +344,7 @@ container as a `secret` so it can send it back. Never bake it into the image.
 ## Building with Railpack (no Dockerfile)
 
 Point `image` at a `{ build }` source directory and Lunora builds the image
-with [Railpack](https://railpack.com) — Railway's Dockerfile-less builder —
+with [Railpack](https://railpack.com), Railway's Dockerfile-less builder,
 instead of you writing a Dockerfile:
 
 ```ts
@@ -365,8 +365,8 @@ export BUILDKIT_HOST=docker-container://buildkit
 ```
 
 `lunora deploy` preflights both and stops with setup directions if either is
-missing. The Dockerfile path remains the zero-extra-deps default — Railpack is
-purely opt-in.
+missing. The Dockerfile path remains the zero-extra-deps default; Railpack is
+opt-in.
 
 ## Lifecycle logs
 
@@ -383,7 +383,7 @@ with your `ctx.log` and RPC lines:
 The same events also appear in the Studio **Logs** panel: each lifecycle
 transition is best-effort pushed into the root shard's log buffer under the
 `container:<name>` source, so a crash-looping container shows up next to your
-function logs without leaving the dashboard. The push is best-effort by design —
+function logs without leaving the dashboard. The push is best-effort by design:
 if it can't reach the shard, the `lunora dev` terminal above remains the source
 of truth.
 
@@ -392,10 +392,10 @@ of truth.
 Two [advisor](/docs/packages/studio) lints flag container cost/security footguns
 in the Studio **Advisors** table and at codegen time:
 
-- **`container_oversized_instance`** — a large `standard-3`/`standard-4` (or
+- **`container_oversized_instance`**: a large `standard-3`/`standard-4` (or
   large custom) instance, whose provisioned memory + disk are billed while any
   instance runs.
-- **`container_public_internet`** — `enableInternet` left at the default
+- **`container_public_internet`**: `enableInternet` left at the default
   (enabled); set it explicitly (`false` to close egress, `true` to opt in).
 
 ## Configuration
@@ -415,9 +415,9 @@ in the Studio **Advisors** table and at codegen time:
 | `secrets`        | Names of Worker secrets forwarded into the container env at start.                                              |
 | `buildArgs`      | Build-time args for a built image (wrangler `image_vars`, like `--build-arg`); ignored for `{ registry }`.      |
 | `entrypoint`     | Override the image's `ENTRYPOINT`/`CMD` for every start.                                                        |
-| `enableInternet` | Whether the container may open outbound connections. Default `true` — note egress is billed.                    |
-| `allowedHosts`   | Egress allow-list (globs) — hosts reachable even with `enableInternet: false`.                                  |
-| `deniedHosts`    | Egress deny-list (globs) — overrides everything, including `allowedHosts`.                                      |
+| `enableInternet` | Whether the container may open outbound connections. Default `true`; egress is billed.                          |
+| `allowedHosts`   | Egress allow-list (globs): hosts reachable even with `enableInternet: false`.                                   |
+| `deniedHosts`    | Egress deny-list (globs): overrides everything, including `allowedHosts`.                                       |
 | `interceptHttps` | Extend the egress lists to HTTPS too (image must trust the Cloudflare CA). Default `false`.                     |
 | `labels`         | Key-value metadata attached to every instance for metrics/observability.                                        |
 | `name`           | Override the wrangler `containers[].name` identifier.                                                           |
@@ -425,7 +425,7 @@ in the Studio **Advisors** table and at codegen time:
 
 ### Secrets and environment
 
-`env` holds static values; `secrets` names Worker secrets — managed exactly like
+`env` holds static values; `secrets` names Worker secrets, managed exactly like
 every other Lunora secret. List them in `.dev.vars` for local dev and
 `wrangler secret put` for production (see [Deployment](/docs/deployment#secrets)).
 A declared secret that isn't set fails fast at container start with a directed
@@ -453,14 +453,14 @@ export const worker = defineContainer({
 ```
 
 A name that collides with `env`/`secrets`, or a binding missing from the Worker
-env, is rejected (the collision at authoring time, the missing binding at start)
-— the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
+env, is rejected (the collision at authoring time, the missing binding at start):
+the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
 replaces the env set wholesale and skips Secrets Store resolution entirely, so
 the injected values apply only to implicit starts or a bare `start()`.
 
 Both `env` and `secrets` are **runtime** values, available when the container
-starts. For **build-time** values — `docker build --build-arg`, exposed to the
-Dockerfile as `ARG` (wrangler's `image_vars`) — use `buildArgs`. They only apply
+starts. For **build-time** values (`docker build --build-arg`, exposed to the
+Dockerfile as `ARG`, wrangler's `image_vars`), use `buildArgs`. They only apply
 to an image Lunora builds (a Dockerfile or Railpack `{ build }` source) and are
 ignored for a pre-built `{ registry }` image:
 
@@ -491,26 +491,26 @@ EXPOSE 8080
 ENTRYPOINT ["node", "server.mjs"]
 ```
 
-Disk is **ephemeral** — every (re)start gives a fresh filesystem. For
+Disk is **ephemeral**: every (re)start gives a fresh filesystem. For
 persistence, write to [`@lunora/storage`](/docs/packages/storage) (R2).
 
 ## Local development
 
 `lunora dev` (and `vite dev`) build and run containers locally through the
 Cloudflare Vite plugin, so a Docker-compatible engine (Docker Desktop, Colima)
-must be running — Lunora warns up front if it isn't. A few things differ from
+must be running; Lunora warns up front if it isn't. A few things differ from
 production:
 
 - **Container code is not hot-reloaded.** Edit the Worker and it reloads; press
   `r` to rebuild the container.
 - **Ports must be `EXPOSE`d** in the Dockerfile (production exposes all ports).
-- **`vite dev` can't pull from the Cloudflare Registry** — use a local
+- **`vite dev` can't pull from the Cloudflare Registry.** Use a local
   Dockerfile, `FROM`-ing a registry image if you need one.
 
 ## Testing
 
 `ctx.containers` has a Docker-free test double, so action tests stay fast and
-deterministic — `createContainerTestContext` maps each container to a `fetch`
+deterministic. `createContainerTestContext` maps each container to a `fetch`
 handler that plays the container:
 
 ```ts
@@ -528,7 +528,7 @@ a Docker-enabled CI job, separate from the default unit-test matrix.
 
 ## CLI
 
-Manage images and instances with `lunora containers` — thin wrappers over
+Manage images and instances with `lunora containers`, thin wrappers over
 `wrangler containers` with a Docker preflight on the build/push paths:
 
 ```bash
@@ -545,17 +545,17 @@ is available.
 
 ## Known platform limitations
 
-Some constraints live in Cloudflare Containers itself, not in this package —
-worth knowing before you design around them. They track open issues on
-[`cloudflare/containers`](https://github.com/cloudflare/containers/issues); Lunora
-papers over what it can (cold-start retry, WebSocket keep-alive) and surfaces the
-rest honestly rather than pretending they don't exist.
+Some constraints live in Cloudflare Containers itself, not in this package, and
+are worth knowing before you design around them. They track open issues on
+[`cloudflare/containers`](https://github.com/cloudflare/containers/issues). Lunora
+papers over what it can (cold-start retry, WebSocket keep-alive); the rest are
+listed here.
 
 - **No autoscaling or location-aware routing.** Pools are a fixed size and
   `.any()`/`.pool()` pick uniformly at random, ignoring instance region. Drive
   batch work from a [scheduler](/docs/packages/scheduler) cron and prefer
   `.pool()` for stateless requests. (cloudflare/containers#226)
-- **Disk is ephemeral.** Every (re)start gives a fresh filesystem — persist to
+- **Disk is ephemeral.** Every (re)start gives a fresh filesystem; persist to
   [`@lunora/storage`](/docs/packages/storage) (R2). FUSE mounts, a writable
   `tmpfs`, and some low-level `node:net` socket modes are not available in the
   container sandbox. (cloudflare/containers#112, #160, #67)
@@ -570,4 +570,3 @@ rest honestly rather than pretending they don't exist.
 - **Local dev can't pull from the Cloudflare Registry.** `lunora dev` builds
   from a local Dockerfile; `FROM` a registry image inside it if you need one.
   (cloudflare/containers#155)
-

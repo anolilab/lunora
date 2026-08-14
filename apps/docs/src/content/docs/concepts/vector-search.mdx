@@ -74,7 +74,7 @@ export default defineSchema({
 
 When the embedded text is derived from multiple columns, use the standalone
 `defineVectorIndex(...)` form with a `source.select(row)` projection. See the
-[package reference](/docs/packages/bindings#standalone--definevectorindexoptions)
+[package reference](/docs/packages/bindings#vectors--lunorabindingsvectors)
 for the full shape.
 
 ## Automatic write sync
@@ -114,7 +114,7 @@ reactive `query`.
 function. `filter` and `namespace` scope the search.
 
 `topK` is capped at 100 for id/score-only queries, and at 20 once the query also
-asks for the heavy payload — `returnValues: true` or `returnMetadata: "all"`.
+asks for the heavy payload (`returnValues: true` or `returnMetadata: "all"`).
 Over either ceiling the call is refused locally with a message naming which one
 applied, rather than being silently capped at the far side.
 
@@ -211,4 +211,3 @@ export const ShardDO = createShardDO({
 
 Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
 error on first use.
-

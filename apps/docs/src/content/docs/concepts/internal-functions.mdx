@@ -85,4 +85,3 @@ export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mut
 The same applies to cron jobs (`cronJobs`) and connection-lifecycle hooks
 (`onConnect` / `onDisconnect`), which are registered as internal mutations the
 runtime dispatches on a schedule or socket event rather than via a client call.
-

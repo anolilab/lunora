@@ -44,7 +44,7 @@ bun add -D @lunora/testing
 database, builds the same `ctx.db` writer the real `ShardDO` builds, and returns
 a harness whose methods execute a registered function's handler directly. All
 methods share one database, so a write from a mutation is visible to a later
-query, which is exactly the reactivity guarantee your app relies on.
+query.
 
 ```ts
 import { defineSchema, defineTable, initLunora, v } from "lunorash/server";
@@ -272,4 +272,3 @@ Cloudflare account or `wrangler` login needed. Two things to wire up:
 pnpm lunora verify
 pnpm run test
 ```
-

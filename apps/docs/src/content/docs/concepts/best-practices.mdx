@@ -19,8 +19,8 @@ related:
 ---
 
 Lunora has a grain. Go with it and most performance, correctness, and security
-problems never appear; the [Advisors](/docs/concepts/advisors) catch the
-ones that do. This is the short list.
+problems never appear; the [Advisors](/docs/concepts/advisors) catch the ones
+that do.
 
 ## Schema first
 
@@ -83,6 +83,5 @@ ones that do. This is the short list.
 
 You don't have to remember all of the above. The [Advisors](/docs/concepts/advisors)
 run the static set on every `lunora dev` save and on deploy, and the Studio
-computes the runtime set from live shard metrics, surfacing unindexed scans,
-missing guards, hot shards, and dead schema before they bite.
-
+computes the runtime set from live shard metrics. Between them they report
+unindexed scans, missing guards, hot shards, and dead schema.

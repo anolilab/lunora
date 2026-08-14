@@ -47,9 +47,9 @@ export default defineSchema({
 
 | Kind                  | Declared with                                       | Enforced                                   | On violation                                     |
 | --------------------- | --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------ |
-| Unique (column)       | `v.string().unique()`                               | Write time — synthesized `UNIQUE` index    | `ConflictError` (`CONFLICT`, 409)                |
-| Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time — `UNIQUE` index                | `ConflictError` (`CONFLICT`, 409)                |
-| Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time — column validator parse        | `ValidationError`                                |
+| Unique (column)       | `v.string().unique()`                               | Write time (synthesized `UNIQUE` index)    | `ConflictError` (`CONFLICT`, 409)                |
+| Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time (`UNIQUE` index)                | `ConflictError` (`CONFLICT`, 409)                |
+| Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time (column validator parse)        | `ValidationError`                                |
 | Foreign-key delete    | `r.one(table, { field, onDelete })`                 | Delete time on the referenced (parent) row | `ConflictError` (`CONFLICT`, 409) for `restrict` |
 
 <Callout type="info">
@@ -149,4 +149,3 @@ finding).
 `ConflictError` is recognized structurally across packages (it declares `code`
 and `status` as own properties), so the runtime maps it to a `409` without an
 `instanceof` check.
-

@@ -6,7 +6,7 @@ description: The host-neutral reactive engine — everything a shard does that i
 `@lunora/shard-engine` is the reactive engine extracted out of `@lunora/do`:
 `ctx.db`, dependency tracking, the reactive cache, the CDC op-log and poke
 protocol, relations, RLS, search, rank and aggregate indexes, the relay tier, and
-the admin/ops surfaces. None of it knows what a Durable Object is — it takes a
+the admin/ops surfaces. None of it knows what a Durable Object is; it takes a
 `SqlExec` and the `@lunora/platform` host contracts and runs anywhere those can
 be implemented.
 
@@ -34,7 +34,7 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 | Dev catchers       | `mail-catcher`, `queue-catcher`                                                         |
 
 The last three groups moved here from `@lunora/do` because they never touch a
-Durable Object — they take a `SqlExec` and a schema and nothing else. That is the
+Durable Object: they take a `SqlExec` and a schema and nothing else. That is the
 test for whether something belongs in this package.
 
 ## Conformance
@@ -62,5 +62,5 @@ subscription.
 
 One adapter is a hypothetical seam; two is a real one. Splitting the engine out
 is what makes the Cloudflare host substitutable rather than merely
-well-abstracted — and the conformance suites, run against both the in-memory
+well-abstracted, and the conformance suites, run against both the in-memory
 reference host and real workerd, are what caught the defects inspection missed.

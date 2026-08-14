@@ -46,19 +46,18 @@ export default defineSchema({
 `v` exposes the primitive and composite validators used at the API boundary:
 
 - `v.string()`, `v.number()`, `v.boolean()`, `v.null()`, `v.bytes()`
-- `v.id("tableName")` — typed foreign key
+- `v.id("tableName")`: typed foreign key
 - `v.array(item)`, `v.object({ ... })`, `v.union(a, b)`, `v.literal("x")`
-- `v.optional(inner)` — makes a field optional
+- `v.optional(inner)`: makes a field optional
 
 ## Tier modifiers
 
-- _(default)_ — table lives in the root `__root__` Durable Object
-- `.shardBy(field)` — one Durable Object per distinct value of `field`
-- `.global()` — table is stored in Cloudflare D1 (cross-tenant reads)
+- _(default)_: table lives in the root `__root__` Durable Object
+- `.shardBy(field)`: one Durable Object per distinct value of `field`
+- `.global()`: table is stored in Cloudflare D1 (cross-tenant reads)
 
 ## Indexes
 
 `.index(name, fields, { unique? })` defines a B-tree index used by
 `q.withIndex(name, ...)` in queries. `.searchIndex(name, { field, filterFields })`
-adds a full-text index over `field` — see [Full-text search](/docs/concepts/search).
-
+adds a full-text index over `field`. See [Full-text search](/docs/concepts/search).

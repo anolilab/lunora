@@ -14,7 +14,7 @@ Lunora has two distinct migration surfaces, because it has two distinct
 storage backends:
 
 - **Sharded / root tables** live in each Durable Object's own SQLite. There is
-  no schema-migration step — editing [`lunora/schema.ts`](/docs/concepts/schema)
+  no schema-migration step: editing [`lunora/schema.ts`](/docs/concepts/schema)
   and re-running codegen is the migration. The DO provisions tables and indexes
   on demand.
 - **Global tables** (`.global()`) live in D1. A relational store needs explicit
@@ -42,8 +42,8 @@ lunora migrate generate add_email_index    # name the migration
 ```
 
 This emits `lunora/migrations/<timestamp>_<slug>.sql` and rewrites
-`lunora/migrations/.snapshot.json`. Commit both — they are deterministic, and
-the snapshot is what the next `generate` diffs against.
+`lunora/migrations/.snapshot.json`. Commit both: they are deterministic, and the
+snapshot is what the next `generate` diffs against.
 
 Supported diffs: `CREATE TABLE` (new global table), `DROP TABLE` (removed
 table), `ALTER TABLE … ADD COLUMN` (added column), and `CREATE INDEX` (added
@@ -58,7 +58,7 @@ re-applying is safe.
 ## Data migrations (sharded tables)
 
 A data migration is a per-document transform over one table. Declare it with
-`defineMigration` from `@lunora/server` anywhere under `lunora/` — codegen
+`defineMigration` from `@lunora/server` anywhere under `lunora/`; codegen
 discovers it through the type checker and keys a registry on its `id`.
 
 ```ts
@@ -105,7 +105,7 @@ lunora migrate create backfill_read_by --table messages
 The free-text name is slugified into a kebab-case `id` and a camelCase export.
 The table must be a bare identifier. Omit `--table` and the command prompts for
 it interactively (offering the tables declared in `lunora/schema.ts`); in a
-non-interactive context (CI / piped) it fails instead — pass `--table`
+non-interactive context (CI / piped) it fails instead, so pass `--table`
 explicitly there.
 
 ### Running a data migration
@@ -130,7 +130,7 @@ lunora migrate status backfill-read-by         # per-shard run-state
 | `--url`        | Worker URL (defaults to `http://localhost:8787`).                                              |
 | `--token`      | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                        |
 | `--prod`       | Target production. Requires an explicit `--url`.                                               |
-| `--yes`        | Required alongside `--prod` for `up`/`down` — confirms running against production.             |
+| `--yes`        | Required alongside `--prod` for `up`/`down`; confirms running against production.              |
 
 Every run is admin-gated: pass `--token` or set `LUNORA_ADMIN_TOKEN`. Against
 production, `--prod` requires an explicit `--url`, and `up`/`down` additionally
@@ -165,7 +165,7 @@ also reports summed `processed` / `changed` counts and the number of `ok` vs
 
 One migration id is reserved by the framework rather than declared in your
 `lunora/`: `__lunora_reproject__<table>`. It rewrites rows whose `v.bigint()` /
-`v.bytes()` columns are still stored in the pre-projection form — such a row
+`v.bytes()` columns are still stored in the pre-projection form. Such a row
 reads back correctly, but SQL never matches it, so `filter`, `withIndex`,
 `ORDER BY` and `SUM` silently skip it. Only rows written before the storage
 codec was fixed are affected, and any ordinary write heals a row, so what is
@@ -179,14 +179,14 @@ lunora migrate up __lunora_reproject__paymentSessions
 ```
 
 The transform skips a row already in the current projection, and the runner
-counts only the rows it would rewrite — so a dry run's `changed` **is** the
+counts only the rows it would rewrite, so a dry run's `changed` **is** the
 legacy-row count for that shard. `migrate status` reports run-state for a
 backfill that has already run; use the dry run before one, since a shard that
 never ran it has no run-state to report.
 
 One caveat on reading `changed: 0` as "done": the transform also skips a row it
-cannot re-project at all — a bigint wider than the projection's 39-digit key,
-which is reachable for a uint256-shaped value — and such a row is counted
+cannot re-project at all (a bigint wider than the projection's 39-digit key,
+which is reachable for a uint256-shaped value), and such a row is counted
 processed, not changed. It logs a warning naming the row id, and that warning is
 the only signal. So `changed: 0` means "nothing left that this backfill can fix",
 which is the same thing as "fully re-projected" only when the shard's logs are
@@ -221,4 +221,3 @@ lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
 ```
 
 This only touches local state; it never reaches a deployed worker or D1.
-
