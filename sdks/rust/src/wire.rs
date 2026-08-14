@@ -376,38 +376,73 @@ fn is_bigint_literal(raw: &str) -> bool {
     !body.is_empty() && body.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-/// Project a generated model's serde output onto the wire, dropping null-valued
-/// object fields at every depth.
+/// A generated list of paths into a model, each a run of keys from its root.
+///
+/// `*` stands for every element of an array or every value of a record, neither
+/// of which has a named position.
+pub type WirePaths<'a> = &'a [&'a [&'a str]];
+
+/// Project a generated model's serde output onto the wire, dropping a null ONLY
+/// where the schema says the property is optional.
 ///
 /// quicktype's Rust backend renders an optional field as `Option<T>` with no
 /// `skip_serializing_if`, so an unset one serialises as an explicit null — while
 /// `v.optional(x)` parses `undefined`-or-`x` and REJECTS null, failing validation
-/// on the server for every call that leaves an optional unset. The Go backend
-/// emits `omitempty` and Python's `to_dict` omits the key; this makes Rust agree
-/// with both.
+/// on the server for every call that leaves an optional unset.
 ///
-/// The ceiling, and it is a real gap rather than a shrug: a REQUIRED
-/// `v.nullable()` field the caller means to send AS null is dropped too, and the
-/// server rejects the absent key. Nothing in the rendered Rust model
-/// distinguishes the two cases — both are a bare `Option<T>` with no serde
-/// attribute and no required marker — so this cannot be told apart here.
-///
-/// Not, as this comment used to claim, a limitation Python shares. quicktype's
-/// Python backend writes `if self.x is not None:` for an optional field and
-/// `result["x"] = …` unconditionally for a required one, so it gets both right;
-/// Go does the same with `omitempty`, and the JVM and Dart targets get there by
-/// other means. `sdks/README.md` carries the per-port table. Closing it here
-/// means emitting Rust models from the schema, as `jvm-models.ts` does.
-pub fn from_model_json(value: &Value) -> WireValue {
+/// Dropping every null was the first fix, and it was wrong in the other
+/// direction: a required `v.nullable()` set to null has to reach the wire AS
+/// null, because the validator requires the key present, and a null inside a
+/// record or an array is a value the caller chose. Nothing in the rendered struct
+/// tells the three apart — each is a bare `Option<T>` — so `optional_paths`
+/// carries the answer from the schema, where `required` still exists. The
+/// generated call site passes it; see `ModelNullPaths` in
+/// `packages/codegen/src/sdk/spec.ts`.
+pub fn from_model_json(value: &Value, optional_paths: WirePaths) -> WireValue {
+    let mut path: Vec<&str> = Vec::new();
+
+    prune_unset(value, optional_paths, &mut path)
+}
+
+/// Whether `path` matches one of `paths`, where a `*` segment matches any key.
+fn matches_path(paths: WirePaths, path: &[&str]) -> bool {
+    paths
+        .iter()
+        .any(|candidate| candidate.len() == path.len() && candidate.iter().zip(path.iter()).all(|(segment, actual)| *segment == "*" || segment == actual))
+}
+
+fn prune_unset<'a>(value: &'a Value, optional_paths: WirePaths, path: &mut Vec<&'a str>) -> WireValue {
     match value {
-        Value::Array(items) => WireValue::Array(items.iter().map(from_model_json).collect()),
-        Value::Object(fields) => WireValue::Object(
-            fields
-                .iter()
-                .filter(|(_, item)| !item.is_null())
-                .map(|(key, item)| (key.clone(), from_model_json(item)))
-                .collect(),
-        ),
+        Value::Array(items) => {
+            // No element is ever dropped — an array position is not optional, and
+            // removing one would shift every later element.
+            path.push("*");
+
+            let mut out = Vec::with_capacity(items.len());
+
+            for item in items {
+                out.push(prune_unset(item, optional_paths, path));
+            }
+
+            path.pop();
+
+            WireValue::Array(out)
+        }
+        Value::Object(fields) => {
+            let mut out = Vec::with_capacity(fields.len());
+
+            for (key, item) in fields {
+                path.push(key.as_str());
+
+                if !(item.is_null() && matches_path(optional_paths, path)) {
+                    out.push((key.clone(), prune_unset(item, optional_paths, path)));
+                }
+
+                path.pop();
+            }
+
+            WireValue::Object(out)
+        }
         other => from_json(other),
     }
 }

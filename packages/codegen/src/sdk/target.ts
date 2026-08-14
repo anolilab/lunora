@@ -48,10 +48,22 @@
 
 import type { LanguageName } from "quicktype-core";
 
-import type { OpenRpcDocument, SdkNamespace } from "./spec";
+import type { ModelNullPaths, OpenRpcDocument, SdkNamespace } from "./spec";
 
 /** What a target renders from. */
 interface SdkRenderInput {
+    /**
+     * Where each rendered model's nulls mean "unset" and where they mean "null",
+     * keyed by model name — see {@link ModelNullPaths}.
+     *
+     * Supplied to every target because it is derived language-neutrally, and
+     * READ by the three whose rendered models flatten the distinction away
+     * (ruby, rust, swift). Python and Go get it from quicktype's own output, the
+     * JVM targets from the schema they emit from, and Dart from the `required`
+     * marker quicktype puts in its constructor — so those five ignore it.
+     */
+    modelNullPaths: Readonly<Record<string, ModelNullPaths>>;
+
     /**
      * The rendered model source, to be written as the target's model file.
      *
@@ -60,6 +72,7 @@ interface SdkRenderInput {
      * exists only so the declared-model reconciliation reads one shape.
      */
     models: string;
+
     /** Namespaces and their functions, already sorted. */
     namespaces: ReadonlyArray<SdkNamespace>;
 }

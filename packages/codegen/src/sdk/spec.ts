@@ -320,6 +320,180 @@ const modelSources = (document: OpenRpcDocument): ReadonlyArray<{ name: string; 
         .filter((source): source is { name: string; schema: Record<string, unknown> } => source.name !== undefined && source.schema !== undefined)
         .toSorted((a, b) => a.name.localeCompare(b.name));
 
+/**
+ * A path from a model's root to one property. `*` stands for every element of an
+ * array or every value of a record, neither of which has named positions.
+ */
+type SchemaPath = ReadonlyArray<string>;
+
+/**
+ * Where a model's nulls mean different things — the one fact a generated model
+ * flattens away, and the reason three ports could not send a `v.nullable()`
+ * argument at all.
+ *
+ * An unset `v.optional()` and a `v.nullable()` set to null are the SAME value in
+ * every generated model (a nil field), and opposite things on the wire: the
+ * validator rejects an explicit null for the first and requires the key present
+ * for the second. Neither Ruby, Rust nor Swift renders a marker telling them
+ * apart, so the distinction is computed here, from the schema, where `required`
+ * still exists — and handed to the targets that need it.
+ *
+ * Two lists rather than one because the ports need opposite operations. Ruby and
+ * Rust project a whole value tree and prune nulls, so they prune at
+ * {@link ModelNullPaths.optional} and nowhere else — which also stops them
+ * dropping a legitimate null inside a record or an array, as a blanket prune
+ * does. Swift's `JSONEncoder` has already dropped every struct-property nil
+ * before the transport sees a tree, so it restores nulls at
+ * {@link ModelNullPaths.nullable} instead: an absent key at a required path can
+ * only have been a nil, so putting the null back is exact.
+ *
+ * Both lists name PROPERTIES only. A record's values and an array's elements can
+ * be null too, but no port drops one: the pruning ports prune at `optional`
+ * paths, which a `*` position can never be, and `JSONEncoder` drops a nil only
+ * from a struct property — a nil inside a dictionary or array encodes as null.
+ * Listing a `*` leaf would also make Swift's restore INVENT record keys that
+ * were never there, which is why the walk records the path it descends through
+ * but never the `*` position itself.
+ */
+interface ModelNullPaths {
+    /** Required properties that permit null — a null there is a VALUE and must survive. */
+    nullable: ReadonlyArray<SchemaPath>;
+    /** Properties absent from their object's `required` — a null there means UNSET. */
+    optional: ReadonlyArray<SchemaPath>;
+}
+
+/** Bounds the schema walk; a real args schema is far shallower, and a `$ref` cycle must not hang codegen. */
+const MAX_SCHEMA_DEPTH = 32;
+
+/**
+ * Whether `schema` accepts an explicit null.
+ *
+ * `.nullable()` renders as `{ anyOf: [inner, { type: "null" }] }` and
+ * `v.union(v.null(), …)` as an `anyOf` carrying the same branch, so the test is
+ * the branch rather than a flag. A bare `{ type: "null" }` and the JSON Schema
+ * type-array spelling are accepted too — neither is what this repo emits, but
+ * `--spec` takes a hand-written document.
+ */
+const permitsNull = (schema: unknown, depth = 0): boolean => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return false;
+    }
+
+    const node = schema as Record<string, unknown>;
+
+    if (node["type"] === "null" || (Array.isArray(node["type"]) && node["type"].includes("null"))) {
+        return true;
+    }
+
+    return ["anyOf", "oneOf"].some((key) => {
+        const branches = node[key];
+
+        return Array.isArray(branches) && branches.some((branch) => permitsNull(branch, depth + 1));
+    });
+};
+
+/** The accumulator the three collectors below append to. */
+interface NullPathSink {
+    nullable: string[][];
+    optional: string[][];
+}
+
+/**
+ * Descend through a nullable or union wrapper WITHOUT extending the path.
+ *
+ * `v.object({…}).nullable()` renders as an `anyOf` around the object, and has
+ * the same properties in the same places as the object it wraps — so a walk that
+ * stopped at the wrapper would miss every one of them.
+ */
+const collectBranchPaths = (node: Record<string, unknown>, prefix: ReadonlyArray<string>, into: NullPathSink, depth: number): void => {
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+        const branches = node[key];
+
+        if (Array.isArray(branches)) {
+            for (const branch of branches) {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutually recursive with the dispatcher below
+                collectNullPaths(branch, prefix, into, depth + 1);
+            }
+        }
+    }
+};
+
+/** Record each named property, then descend into it. */
+const collectPropertyPaths = (node: Record<string, unknown>, prefix: ReadonlyArray<string>, into: NullPathSink, depth: number): void => {
+    const { properties } = node;
+
+    if (properties === null || typeof properties !== "object") {
+        return;
+    }
+
+    const declared = node["required"];
+    const required = new Set(Array.isArray(declared) ? declared.filter((key): key is string => typeof key === "string") : []);
+
+    for (const [key, child] of Object.entries(properties as Record<string, unknown>)) {
+        const path = [...prefix, key];
+
+        if (!required.has(key)) {
+            into.optional.push(path);
+        } else if (permitsNull(child)) {
+            into.nullable.push(path);
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutually recursive with the dispatcher below
+        collectNullPaths(child, path, into, depth + 1);
+    }
+};
+
+/**
+ * Descend into a record's values and an array's elements under the `*` segment.
+ *
+ * The `*` position itself is never recorded: no port drops a null there, and
+ * listing one would make Swift's restore invent record keys that were never
+ * sent. `additionalProperties: false` is a boolean and falls out of the type
+ * test rather than being walked as a schema.
+ */
+const collectWildcardPaths = (node: Record<string, unknown>, prefix: ReadonlyArray<string>, into: NullPathSink, depth: number): void => {
+    for (const key of ["additionalProperties", "items"]) {
+        const child = node[key];
+
+        if (child !== null && typeof child === "object") {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutually recursive with the dispatcher below
+            collectNullPaths(child, [...prefix, "*"], into, depth + 1);
+        }
+    }
+};
+
+const collectNullPaths = (schema: unknown, prefix: ReadonlyArray<string>, into: NullPathSink, depth = 0): void => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return;
+    }
+
+    const node = schema as Record<string, unknown>;
+
+    collectBranchPaths(node, prefix, into, depth);
+    collectPropertyPaths(node, prefix, into, depth);
+    collectWildcardPaths(node, prefix, into, depth);
+};
+
+/** Sorted so two runs over one schema emit byte-identical paths. */
+const byPath = (a: SchemaPath, b: SchemaPath): number => a.join("\u0000").localeCompare(b.join("\u0000"));
+
+/** The {@link ModelNullPaths} of one schema. */
+const nullPathsOf = (schema: unknown): ModelNullPaths => {
+    const into: NullPathSink = { nullable: [], optional: [] };
+
+    collectNullPaths(schema, [], into);
+
+    return { nullable: into.nullable.toSorted(byPath), optional: into.optional.toSorted(byPath) };
+};
+
+/**
+ * The {@link ModelNullPaths} of every model a backend will render, keyed by the
+ * same name {@link modelSources} gives it — so a target can look them up by a
+ * method's `argsType` with no second naming rule.
+ */
+const modelNullPaths = (document: OpenRpcDocument): Readonly<Record<string, ModelNullPaths>> =>
+    Object.fromEntries(modelSources(document).map((source) => [source.name, nullPathsOf(source.schema)]));
+
 /** A generated identifier must start with a letter and continue alphanumerically. */
 const VALID_IDENTIFIER = /^[A-Za-z][A-Za-z0-9]*$/u;
 
@@ -488,6 +662,7 @@ const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArra
         ),
     ].toSorted((a, b) => a.localeCompare(b));
 
+export type { ModelNullPaths, SchemaPath };
 export {
     allMethods,
     argsChoice,
@@ -497,7 +672,9 @@ export {
     hasUnrepresentableWireType,
     isTypedSchema,
     kotlinLiteral,
+    modelNullPaths,
     modelSources,
+    nullPathsOf,
     parseMethod,
     parseSpec,
     referencedModels,

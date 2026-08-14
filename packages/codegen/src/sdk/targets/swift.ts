@@ -33,21 +33,21 @@
  * copied — a manifest naming a directory that is absent is a hard SwiftPM error,
  * so shipping it would make every generated package fail to load.
  *
- * ## Known gap: a required `v.nullable()` argument
+ * ## A required `v.nullable()` argument
  *
  * `LunoraClient.wireValue` projects a model through `JSONEncoder`, and
  * synthesized `Codable` OMITS a nil — which is right for an unset
  * `v.optional()` (the validator rejects an explicit null) and wrong for a
  * required `v.nullable()` (the validator requires the key present holding one).
  * A struct whose `nickname` is explicitly null encodes to `{"id":"r1"}`,
- * measured. Nothing in the rendered struct tells the two apart: both are `T?`
- * with no required marker, and the generated `init` gives neither a default.
+ * measured, so that argument could not be sent at all. Nothing in the rendered
+ * struct tells the two apart: both are `T?` with no required marker, and the
+ * generated `init` gives neither a default.
  *
- * So a schema with a required `v.nullable()` argument cannot be called from the
- * Swift SDK. Closing it means emitting Swift models from the JSON Schema the way
- * `jvm-models.ts` does — the schema is where `required` still exists.
- * `sdks/README.md` carries the per-port table; python, go, dart and the two JVM
- * targets get both halves right.
+ * So the call site passes the paths the SCHEMA says are required-and-nullable
+ * and `wireValue` puts those nulls back. Restoring is exact rather than a guess:
+ * at a REQUIRED path an absent key can only be a nil the encoder dropped. See
+ * `ModelNullPaths` in `spec.ts`, and `Client.swift` for the walk.
  *
  * Unlike the other targets, this one does NOT pass `just-types` to quicktype:
  * without it the Swift backend omits `Codable`, and `Codable` is how a
@@ -55,7 +55,7 @@
  * through `JSONEncoder`.
  */
 
-import type { SdkMethod, SdkNamespace } from "../spec";
+import type { ModelNullPaths, SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -170,12 +170,28 @@ const memberName = (raw: string): string => {
     return SWIFT_KEYWORDS.has(camel) ? `\`${camel}\`` : camel;
 };
 
+/** `[["nickname"], ["profile", "bio"]]` — the paths `wireValue` restores nulls at. */
+const swiftPaths = (paths: ReadonlyArray<SchemaPath>): string =>
+    `[${paths.map((path) => `["${path.map((segment) => stringLiteral(segment)).join('", "')}"]`).join(", ")}]`;
+
 // `wireValue` projects a Codable model; an untyped argument is already a wire
 // value and is passed through.
-const swiftPayload = (method: SdkMethod): string => argsChoice(method, { none: "nil", typed: () => "try LunoraClient.wireValue(args)", untyped: "args" });
+const swiftPayload = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string =>
+    argsChoice(method, {
+        none: "nil",
+        // The paths ride the call site because the struct cannot carry them:
+        // synthesized Codable drops a nil from a required nullable exactly as it
+        // does from an unset optional. See `LunoraClient.wireValue`.
+        typed: (type) => {
+            const nullable = nullPaths[type]?.nullable ?? [];
+
+            return nullable.length === 0 ? "try LunoraClient.wireValue(args)" : `try LunoraClient.wireValue(args, nullablePaths: ${swiftPaths(nullable)})`;
+        },
+        untyped: "args",
+    });
 
 /** One function as a method posting the RPC envelope. */
-const renderCall = (method: SdkMethod): string => {
+const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
     // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
     // Dropping the parameter made those functions uncallable with arguments, which is
@@ -185,7 +201,7 @@ const renderCall = (method: SdkMethod): string => {
         typed: (type) => `_ args: ${type}, shardKey: String? = nil`,
         untyped: "_ args: Any, shardKey: String? = nil",
     });
-    const payload = swiftPayload(method);
+    const payload = swiftPayload(method, nullPaths);
     const returns = method.resultType ?? "Any";
     const call = `try client.${method.verb}("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`;
     // A typed result is re-decoded into the model; an untyped one is handed back.
@@ -213,9 +229,9 @@ const renderCall = (method: SdkMethod): string => {
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod): string => {
+const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     const argument = argsChoice(method, { none: "", typed: (type) => `_ args: ${type}, `, untyped: "_ args: Any, " });
-    const payload = swiftPayload(method);
+    const payload = swiftPayload(method, nullPaths);
 
     return [
         `    /// live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
@@ -230,11 +246,13 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
-const renderNamespaceStruct = (namespace: SdkNamespace): string => {
+const renderNamespaceStruct = (namespace: SdkNamespace, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     const typeName = `${toPascalCase(namespace.name)}API`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) =>
+            method.verb === "query" ? `${renderCall(method, nullPaths)}\n\n${renderSubscribe(method, nullPaths)}` : renderCall(method, nullPaths),
+        )
         .join("\n\n");
 
     return [`/// Functions declared in \`${commentText(namespace.name)}\`.`, `public struct ${typeName} {`, `    let client: LunoraClient`, ``, body, `}`].join(
@@ -242,7 +260,7 @@ const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     );
 };
 
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<string, string> => {
     const properties = namespaces.map((namespace) => `    public let ${memberName(namespace.name)}: ${toPascalCase(namespace.name)}API`).join("\n");
     const assignments = namespaces.map((namespace) => `        ${memberName(namespace.name)} = ${toPascalCase(namespace.name)}API(client: client)`).join("\n");
 
@@ -251,7 +269,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         `import Foundation\n`,
         `import Lunora\n`,
         `\n`,
-        namespaces.map((namespace) => renderNamespaceStruct(namespace)).join("\n\n"),
+        namespaces.map((namespace) => renderNamespaceStruct(namespace, modelNullPaths)).join("\n\n"),
         `\n\n`,
         `/// Typed entry point: \`API(client:).<namespace>.<function>(args)\`.\n`,
         `public struct API {\n`,

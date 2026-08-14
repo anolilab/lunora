@@ -145,8 +145,9 @@ assumed: an absent key for the second raises `Expected string at nickname,
 received undefined`, and an explicit null for the first raises `Expected number
 at limit, received null`.
 
-Five ports get both right, by three different mechanisms, and all five draw the
-line where the required-versus-optional distinction still exists:
+All eight get both right, and every one draws the line where the
+required-versus-optional distinction still exists — which, for three of them, is
+nowhere in the rendered model:
 
 | Port         | How                                                                                                     |
 | ------------ | ------------------------------------------------------------------------------------------------------- |
@@ -154,17 +155,30 @@ line where the required-versus-optional distinction still exists:
 | go           | quicktype's own struct tags: `omitempty` on optional fields only                                        |
 | java, kotlin | `jvm-models.ts` emits from the JSON Schema, which carries `required` outright                           |
 | dart         | `guardOptionalFields` puts `if (x != null)` on optional entries, keyed on quicktype's `required this.x` |
+| ruby, rust   | the generated call site passes the OPTIONAL paths, and the projection prunes only there                 |
+| swift        | the generated call site passes the NULLABLE paths, and the projection restores those nulls              |
 
-Three do not, and the reason is the same in each: their rendered models carry NO
-required marker at all, so `wire_args`/`from_model_json`/`JSONEncoder` prune every
-null and take the nullable field with them. Ruby declares both
-`Types::X.optional`; Rust renders both a bare `Option<T>` with no serde
-attribute; Swift renders both `T?` and lets synthesized `Codable` omit a nil —
-`{"id":"r1"}` for a struct whose `nickname` was explicitly null, measured. Closing
-those means emitting their models from the schema the way `jvm-models.ts` does,
-which is a project per language rather than a patch, so the row is ❌ and honest
-instead of quietly wrong. A schema with a required `v.nullable()` argument cannot
-be called from those three today.
+The last three had no marker to key on at all — Ruby declares both
+`Types::X.optional`, Rust renders both a bare `Option<T>` with no serde
+attribute, and Swift renders both `T?` and lets synthesized `Codable` omit a nil
+(`{"id":"r1"}` for a struct whose `nickname` was explicitly null, measured). So
+they are handed the answer instead, as a list of PATHS computed from the schema
+by `ModelNullPaths` in `packages/codegen/src/sdk/spec.ts` and emitted at the call
+site. A path is a run of keys from the model's root, with `*` for an array
+element or a record value, so a nested or in-array property is covered as exactly
+as a top-level one.
+
+Ruby and Rust take the OPTIONAL paths and prune only there. Swift takes the
+NULLABLE ones and restores, because `JSONEncoder` has already dropped every
+struct-property nil before the transport sees a tree — and at a required path an
+absent key can only have been a nil, so putting the null back is exact rather
+than a guess. Neither list names a `*` position: no port drops a null there, and
+listing one would make Swift's restore invent record keys that were never sent.
+
+Pruning only where the schema says also closed a second, quieter bug in the two
+pruning ports. A blanket prune walked the whole tree, so a deliberate null inside
+a `v.record()` or an array — a value the caller chose, nothing to do with
+optionality — disappeared with the rest.
 
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`

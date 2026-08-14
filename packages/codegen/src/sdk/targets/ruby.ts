@@ -26,7 +26,7 @@
  * `requires` is a list and why it says so.
  */
 
-import type { SdkMethod, SdkNamespace } from "../spec";
+import type { ModelNullPaths, SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { allMethods, argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -88,37 +88,31 @@ const memberName = (raw: string): string => {
 };
 
 /**
- * Projects a model onto the wire, dropping nil-valued fields at every depth.
+ * The generated shim over `Lunora.wire_args`.
  *
- * quicktype's Ruby backend writes an UNSET optional as an explicit null, while
- * `v.optional(x)` parses `undefined`-or-`x` and rejects null — so passing
- * `to_dynamic` straight through fails validation on the server for every call
- * that leaves an optional field unset. The Python backend omits the key itself;
- * this makes Ruby agree with it.
+ * quicktype's Ruby backend writes an UNSET optional as an explicit null, which
+ * `v.optional(x)` rejects — so `to_dynamic` passed straight through fails
+ * validation on every call that leaves one unset. Dropping every nil instead was
+ * wrong the other way: a required `v.nullable()` has to reach the wire AS null,
+ * and quicktype declares both `Types::X.optional`, so the model itself cannot
+ * say which is which.
  *
- * The ceiling, and it is a real gap rather than a shrug: a REQUIRED
- * `v.nullable()` field the caller means to send AS null is dropped too, and the
- * server rejects the absent key. There is nothing in the rendered model to tell
- * the two apart — quicktype declares both `Types::X.optional`.
- *
- * Not, as this comment used to claim, a limitation Python's `to_dict` shares: it
- * writes `if self.x is not None:` for an optional field and `result["x"] = …`
- * unconditionally for a required one, so it gets both right. `sdks/README.md`
- * carries the per-port table.
+ * So the projection takes the paths the SCHEMA says are optional, and lives in
+ * the transport where it can be unit-tested (`sdks/ruby/test/test_wire_args.rb`)
+ * rather than only through a generated SDK. See `ModelNullPaths` in `spec.ts`.
  */
-const WIRE_ARGS_HELPER = `  def self.wire_args(model)
-    drop_nils(model.to_dynamic)
-  end
-
-  def self.drop_nils(value)
-    case value
-    when ::Hash then value.each_with_object({}) { |(key, item), out| out[key] = drop_nils(item) unless item.nil? }
-    when ::Array then value.map { |item| drop_nils(item) }
-    else value
-    end
+const WIRE_ARGS_HELPER = `  # Delegates to the transport, which owns the projection and its tests — see
+  # \`Lunora.wire_args\`. The path list is generated per model because only the
+  # schema knows which nils may be dropped.
+  def self.wire_args(model, optional_paths = [])
+    Lunora.wire_args(model, optional_paths)
   end
 
 `;
+
+/** `[["limit"], ["rows", "*", "tag"]]` — the paths `wire_args` prunes at. */
+const rubyPaths = (paths: ReadonlyArray<SchemaPath>): string =>
+    `[${paths.map((path) => `[${path.map((segment) => `"${rubyLiteral(segment)}"`).join(", ")}]`).join(", ")}]`;
 
 // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
 // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
@@ -127,12 +121,22 @@ const WIRE_ARGS_HELPER = `  def self.wire_args(model)
 //
 // `wire_args` calls `to_dynamic`, which only a generated model has, so an untyped
 // argument is passed through — it is already the wire-shaped hash.
-const rubyPayload = (method: SdkMethod): string => argsChoice(method, { none: "{}", typed: () => "LunoraApi.wire_args(args)", untyped: "args" });
+//
+// The path list rides the call site because the model cannot carry it: quicktype
+// declares an optional field and a required nullable one identically
+// (`Types::X.optional`), so which nils may be dropped is knowable only from the
+// schema. See `ModelNullPaths`.
+const rubyPayload = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string =>
+    argsChoice(method, {
+        none: "{}",
+        typed: (type) => `LunoraApi.wire_args(args, ${rubyPaths(nullPaths[type]?.optional ?? [])})`,
+        untyped: "args",
+    });
 
 /** One function as a method posting the RPC envelope. */
-const renderCall = (method: SdkMethod): string => {
+const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
-    const payload = rubyPayload(method);
+    const payload = rubyPayload(method, nullPaths);
     const call = `@client.${method.verb}("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`;
     // A typed result routes the decoded payload through the model's own
     // constructor; an untyped one is handed back as-is.
@@ -145,10 +149,10 @@ const renderCall = (method: SdkMethod): string => {
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod): string => {
+const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     const parameters =
         method.argsType === undefined && !method.takesArgs ? "on_data, on_error = nil, shard_key: nil" : "args, on_data, on_error = nil, shard_key: nil";
-    const payload = rubyPayload(method);
+    const payload = rubyPayload(method, nullPaths);
 
     return [
         `    # live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
@@ -158,9 +162,11 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
-const renderNamespaceClass = (namespace: SdkNamespace): string => {
+const renderNamespaceClass = (namespace: SdkNamespace, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) =>
+            method.verb === "query" ? `${renderCall(method, nullPaths)}\n\n${renderSubscribe(method, nullPaths)}` : renderCall(method, nullPaths),
+        )
         .join("\n\n");
 
     return [
@@ -175,7 +181,7 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
     ].join("\n");
 };
 
-const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
+const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<string, string> => {
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");
 
@@ -188,7 +194,7 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
         // Only when something calls it: a deployment whose every function takes no
         // typed args would otherwise carry two unreferenced methods.
         allMethods(namespaces).some((method) => method.argsType !== undefined) ? WIRE_ARGS_HELPER : ``,
-        namespaces.map((namespace) => renderNamespaceClass(namespace)).join("\n\n"),
+        namespaces.map((namespace) => renderNamespaceClass(namespace, modelNullPaths)).join("\n\n"),
         `\n\n`,
         `  # Typed entry point: \`Api.new(client).<namespace>.<function>(args)\`.\n`,
         `  class Api\n`,
