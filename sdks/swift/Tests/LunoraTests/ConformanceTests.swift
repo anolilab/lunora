@@ -53,6 +53,7 @@ final class ConformanceTests: XCTestCase {
             case "wire_codec_round_trip": try caseWireCodecRoundTrip()
             case "undefined_is_distinct_from_null": try caseUndefinedIsDistinctFromNull()
             case "over_long_bigint_rejected": caseOverLongBigIntRejected()
+            case "malformed_bytes_rejected": try caseMalformedBytesRejected()
             case "depth_cap_enforced": caseDepthCapEnforced()
             case "stable_wire_key_fixtures": try caseStableWireKeyFixtures()
             case "format_number_matches_ecmascript": caseFormatDoubleMatchesEcmaScript()
@@ -104,6 +105,13 @@ final class ConformanceTests: XCTestCase {
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", overLong]))
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", "12x4"]))
         XCTAssertNoThrow(try Wire.decode([Wire.tag, "bigint", "-42"]))
+    }
+
+    func caseMalformedBytesRejected() throws {
+        XCTAssertThrowsError(try Wire.decode([Wire.tag, "bytes", "not@@base64!!"]))
+
+        let decoded = try Wire.decode([Wire.tag, "bytes", "AQID"])
+        XCTAssertEqual(try XCTUnwrap(decoded as? Data), Data([1, 2, 3]))
     }
 
     func caseDepthCapEnforced() {

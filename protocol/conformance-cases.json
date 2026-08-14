@@ -26,6 +26,7 @@
         "wire_codec_round_trip",
         "undefined_is_distinct_from_null",
         "over_long_bigint_rejected",
+        "malformed_bytes_rejected",
         "depth_cap_enforced",
         "stable_wire_key_fixtures",
         "format_number_matches_ecmascript",
