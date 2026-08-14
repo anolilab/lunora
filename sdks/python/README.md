@@ -41,6 +41,7 @@ async def main():
         auth_token="…",  # bearer for HTTP RPC (optional)
         ws_token=lambda: mint_ephemeral(),  # str | callable | async callable
         client_id="python-client",
+        timeout=30,  # seconds; the default transport's `urlopen` timeout, raise for slow actions
     )
 
     # HTTP RPC
