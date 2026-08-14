@@ -16,7 +16,6 @@
  */
 
 /* eslint-disable no-bitwise -- protobuf IS a bit-level format: base-128 varints, wire-type tags and hex nibbles are DEFINED in terms of shifts and masks. Rewriting them arithmetically would obscure the spec this file implements line-for-line, not improve it. */
-/* eslint-disable @typescript-eslint/no-use-before-define -- the message readers are mutually recursive (a resource envelope reads scope envelopes, which read spans, which read status), so no ordering exists that satisfies the rule; hoisted `const` arrows are only called at decode time, never during module init. */
 import type { OtlpLogsPayload, OtlpMetricsPayload, OtlpTracePayload } from "./otlp";
 
 /** Protobuf wire types. */
@@ -257,6 +256,24 @@ interface SpanOut {
     traceId?: string;
 }
 
+const readStatus = (reader: Reader): { code?: number; message?: string } => {
+    const status: { code?: number; message?: string } = {};
+
+    eachField(reader, (field, wire) => {
+        if (field === 2 && wire === WIRE_LEN) {
+            status.message = reader.string();
+        } else if (field === 3 && wire === WIRE_VARINT) {
+            status.code = reader.varintNumber();
+        } else {
+            return false;
+        }
+
+        return true;
+    });
+
+    return status;
+};
+
 /*
  * A flat field-number dispatch, not branching logic: one arm per protobuf field
  * the span decoder reads. Cognitive-complexity scores the `else if` chain as
@@ -296,46 +313,6 @@ const readSpan = (reader: Reader): SpanOut => {
 
     return span;
 };
-
-const readStatus = (reader: Reader): { code?: number; message?: string } => {
-    const status: { code?: number; message?: string } = {};
-
-    eachField(reader, (field, wire) => {
-        if (field === 2 && wire === WIRE_LEN) {
-            status.message = reader.string();
-        } else if (field === 3 && wire === WIRE_VARINT) {
-            status.code = reader.varintNumber();
-        } else {
-            return false;
-        }
-
-        return true;
-    });
-
-    return status;
-};
-
-/** Decode an OTLP/protobuf `ExportTraceServiceRequest` into the JSON payload shape. */
-export const decodeTracePayloadProto = (bytes: Uint8Array): OtlpTracePayload => {
-    const resourceSpans: unknown[] = [];
-    const root = new Reader(bytes);
-
-    eachField(root, (field, wire) => {
-        if (field === 1 && wire === WIRE_LEN) {
-            resourceSpans.push(readResourceSpans(root.message()));
-
-            return true;
-        }
-
-        return false;
-    });
-
-    return { resourceSpans } as OtlpTracePayload;
-};
-
-const readScopeSpans = (reader: Reader): Record<string, unknown> => readScopeEnvelope(reader, "spans", readSpan);
-
-const readResourceSpans = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeSpans", readScopeSpans);
 
 const readScope = (reader: Reader): { name?: string } => {
     const scope: { name?: string } = {};
@@ -410,6 +387,28 @@ const readScopeEnvelope = (reader: Reader, itemKey: string, readItem: (reader: R
 };
 
 // ── Logs ────────────────────────────────────────────────────────────────────
+
+const readScopeSpans = (reader: Reader): Record<string, unknown> => readScopeEnvelope(reader, "spans", readSpan);
+
+const readResourceSpans = (reader: Reader): Record<string, unknown> => readResourceEnvelope(reader, "scopeSpans", readScopeSpans);
+
+/** Decode an OTLP/protobuf `ExportTraceServiceRequest` into the JSON payload shape. */
+export const decodeTracePayloadProto = (bytes: Uint8Array): OtlpTracePayload => {
+    const resourceSpans: unknown[] = [];
+    const root = new Reader(bytes);
+
+    eachField(root, (field, wire) => {
+        if (field === 1 && wire === WIRE_LEN) {
+            resourceSpans.push(readResourceSpans(root.message()));
+
+            return true;
+        }
+
+        return false;
+    });
+
+    return { resourceSpans } as OtlpTracePayload;
+};
 
 const readLogRecord = (reader: Reader): Record<string, unknown> => {
     const record: Record<string, unknown> = { attributes: [] as KeyValue[] };

@@ -282,15 +282,6 @@ const evidenceNote = (bundle: EvidenceBundle): string => {
  * fallback when AI is unconfigured. Fully derived from the bundle, so its output
  * is stable and its structure is immune to anything in the (untrusted) telemetry.
  */
-/* eslint-disable @typescript-eslint/no-use-before-define -- the runner factories are declared above the pure helpers they call (`deterministicResult`, `tryParseJsonObject`) so the module reads top-down from its public surface; both references are inside function bodies, evaluated per call and never during module init. */
-export const createDeterministicRunner = (): IncidentInvestigationRunner => {
-    return {
-        // eslint-disable-next-line @typescript-eslint/require-await -- interface is async for LLM runners; this one resolves immediately.
-        async investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
-            return deterministicResult(bundle);
-        },
-    };
-};
 
 /** Build the deterministic result from a bundle (shared by both runners). */
 export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult => {
@@ -332,6 +323,16 @@ export const deterministicResult = (bundle: EvidenceBundle): InvestigationResult
         rootCauseHypothesis,
         suggestedRemediation,
         summary,
+    };
+};
+
+export const createDeterministicRunner = (): IncidentInvestigationRunner => {
+    return {
+        // The port is async for LLM-backed runners; this one has the answer
+        // already, so it resolves immediately rather than pretending to await.
+        investigate(bundle: EvidenceBundle): Promise<InvestigationResult> {
+            return Promise.resolve(deterministicResult(bundle));
+        },
     };
 };
 
@@ -378,6 +379,24 @@ export const buildInvestigationPrompt = (bundle: EvidenceBundle): string => {
 /** A text-generation port — the only impurity the LLM runner needs. */
 export type GeneratePort = (prompt: string) => Promise<string>;
 
+/** Parse a JSON object out of a completion, tolerating surrounding prose/fences. */
+const tryParseJsonObject = (raw: string): null | Record<string, unknown> => {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+
+    if (start === -1 || end <= start) {
+        return null;
+    }
+
+    try {
+        const value: unknown = JSON.parse(raw.slice(start, end + 1));
+
+        return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+    } catch {
+        return null;
+    }
+};
+
 /**
  * Coerce an untrusted model completion into a validated {@link InvestigationResult}.
  * The confidence, `relatedTraceIds`, and `evidenceNote` are ALWAYS taken from the
@@ -412,24 +431,6 @@ export const parseLlmResult = (raw: string, bundle: EvidenceBundle): Investigati
         suggestedRemediation: pick("suggestedRemediation"),
         summary: pick("summary"),
     };
-};
-
-/** Parse a JSON object out of a completion, tolerating surrounding prose/fences. */
-const tryParseJsonObject = (raw: string): null | Record<string, unknown> => {
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-
-    if (start === -1 || end <= start) {
-        return null;
-    }
-
-    try {
-        const value: unknown = JSON.parse(raw.slice(start, end + 1));
-
-        return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
-    } catch {
-        return null;
-    }
 };
 
 /**

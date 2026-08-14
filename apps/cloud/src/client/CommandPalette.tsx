@@ -55,7 +55,7 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
     }, []);
 
     return (
-        // eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions -- a native <dialog> handles keyboard dismissal itself (the `onCancel` below closes on Escape); the click handler only adds backdrop dismissal, which has no keyboard equivalent to mirror
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- jsx-a11y still classes `<dialog>` as non-interactive, which predates the element's native modal semantics; it IS the interactive surface here, and the keyboard path below mirrors the click
         <dialog
             aria-label="Command palette"
             className="palette"
@@ -73,6 +73,15 @@ const PaletteDialog = ({ commands, onClose }: Omit<CommandPaletteProps, "open">)
                 // and narrowing it to the ref's element type is what makes the identity
                 // check well-typed rather than a cross-type comparison.
                 if ((event.target as EventTarget | null) === (dialogRef.current as EventTarget | null)) {
+                    onClose();
+                }
+            }}
+            onKeyDown={(event) => {
+                // The keyboard twin of the backdrop click above: Escape also
+                // reaches `onCancel`, but wiring it here too means the dismiss
+                // affordance is not mouse-only.
+                if (event.key === "Escape") {
+                    event.preventDefault();
                     onClose();
                 }
             }}
