@@ -3,6 +3,37 @@ import { describe, expect, it } from "vitest";
 import { defineIdentity, v } from "../src/index";
 
 /**
+ * A minimal but SPEC-COMPLETE Standard Schema shape — it declares
+ * `~standard.types` (like a real Zod/valibot schema does) rather than the
+ * untyped fixture shape from `packages/values/__tests__/v-from.test.ts`, so
+ * `v.from()` recovers a concrete `string` output type instead of `unknown`
+ * (see `packages/values/__tests__/from.types.test-d.ts` for why the untyped
+ * shape would defeat this fixture's purpose: it would make
+ * `userId: v.from(...)` fail the compile-time `{ userId: string }` guard for
+ * an unrelated reason). Typed structurally rather than against the imported
+ * `StandardSchemaV1` interface — `@standard-schema/spec` is a dependency of
+ * `@lunora/values`, not of `@lunora/server`, so pnpm's strict `node_modules`
+ * won't resolve it from this package's tests.
+ */
+type FakeStandardSchema<Output> = {
+    readonly "~standard": {
+        readonly types?: { readonly input: Output; readonly output: Output };
+        readonly validate: (value: unknown) => { issues?: undefined; value: Output } | { issues: ReadonlyArray<{ message: string }> };
+        readonly vendor: string;
+        readonly version: 1;
+    };
+};
+
+const stringSchema: FakeStandardSchema<string> = {
+    "~standard": {
+        types: { input: "", output: "" },
+        validate: (value: unknown) => (typeof value === "string" ? { value } : { issues: [{ message: "expected string" }] }),
+        vendor: "fake",
+        version: 1,
+    },
+};
+
+/**
  * `defineIdentity` declares the identity claim contract: it brands the
  * declaration with `__lunoraIdentity` (so codegen discovers it), records the
  * reject policy, and exposes a runtime `validate` that runs the declared
@@ -77,11 +108,31 @@ describe("defineIdentity", () => {
     });
 
     it("accepts a string-typed userId declared with a non-plain-string validator kind", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        // `v.id(...)` and `v.storage()` infer to string, so the compile-time guard admits
-        // them — the runtime guard must not false-reject a legitimately string-typed userId.
+        // `v.id(...)` and `v.storage()` infer to string, and `v.literal("owner")` infers
+        // to the string literal type "owner" (which extends string) — the compile-time
+        // guard admits all three, so the runtime guard must not false-reject them.
         expect(defineIdentity({ userId: v.id("users") }).__lunoraIdentity).toBe(true);
         expect(defineIdentity({ userId: v.storage() }).__lunoraIdentity).toBe(true);
+        expect(defineIdentity({ userId: v.literal("owner") }).__lunoraIdentity).toBe(true);
+    });
+
+    it("throws at declaration time when userId is a geoPoint", () => {
+        expect.assertions(1);
+
+        // `v.geoPoint()` infers to `{ lat, lng }`, never a string — cast around the
+        // compile-time guard to prove the runtime backstop also rejects it.
+        expect(() => defineIdentity({ userId: v.geoPoint() } as never)).toThrow(/userId/);
+    });
+
+    it("accepts userId declared with v.from() wrapping a string-output Standard Schema", () => {
+        expect.assertions(1);
+
+        // Regression guard for the mistake an earlier version of this plan made:
+        // `v.from` is generic over the wrapped schema, so a string-output schema is a
+        // legitimate `userId: string` and must NOT be rejected — "from" is deliberately
+        // absent from NON_STRING_USER_ID_KINDS (see identity.ts).
+        expect(defineIdentity({ userId: v.from(stringSchema) }).__lunoraIdentity).toBe(true);
     });
 });
