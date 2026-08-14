@@ -95,8 +95,11 @@ structured-cloneable, so the queue body always carries pre-rendered html/
 text, never the original JSX.
 
 A consumer Worker re-hydrates the payload and sends it with
-`consumeQueuedSend(mailer, body)`: it validates the untrusted message body, then
-calls `mailer.send(...)` for you and returns `{ id }`:
+`consumeQueuedSend(mailer, body)` — it validates the untrusted message body, then
+calls `mailer.send(...)` for you and returns `{ id }`. Call `message.ack()` after
+each successful send: Cloudflare Queues are at-least-once, so without a per-message
+ack a single throw retries the WHOLE batch — resending every already-delivered
+email in it, not just the one that failed:
 
 ```ts
 import { consumeQueuedSend, createMailer } from "@lunora/mail";
@@ -107,10 +110,16 @@ export default {
 
         for (const message of batch.messages) {
             await consumeQueuedSend(mailer, message.body);
+            message.ack();
         }
     },
 };
 ```
+
+Each queued send carries a stable `idempotencyKey` — a caller-supplied one, or one
+generated at enqueue time — so a redelivered message can be deduped against your
+own store even though the ack above already narrows retries to the message that
+actually failed.
 
 ## Receiving email
 
