@@ -216,6 +216,7 @@ interface Queues {
 
 ```ts
 interface RunFunctionOptions {
+    messageId?: string;
     shardKey?: string;
     timeoutMs?: number;
 }
