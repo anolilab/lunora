@@ -85,16 +85,43 @@ models generated from your schema.
 
 One deliberate gap:
 
-- **Optimistic updates and the offline queue are JS-only.** The non-JS clients
-  speak the protocol; they do not implement the client-side mutation queue.
+- **Optimistic updates and the offline queue are JS and Dart only.** The other six
+  clients speak the protocol; they do not implement the client-side mutation queue.
 
-One thing only Dart gets:
+Three things only Dart gets, because a mobile client is disconnected routinely
+rather than exceptionally:
 
 - **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
   hands back a `Stream` a Flutter `StreamBuilder` consumes directly. It subscribes
   on first listen and unsubscribes when the last listener cancels, so disposing the
   widget disposes the subscription. The callback-shaped `subscribeList(...)` every
   other language has is there too.
+- **Optimistic updates.** Pass `optimisticUpdate` to a generated mutation to patch
+  any number of subscribed queries before the server answers. A prediction is a
+  layer, so an unrelated push re-folds it onto the new value rather than wiping it,
+  and it is released the moment a frame carries the write's own commit — not when
+  the HTTP call returns, which races the socket. A failed write unwinds it.
+- **An offline mutation queue.** A write issued while disconnected is held and
+  replayed in order on reconnect, under the same idempotency key the call minted,
+  so a write the server already committed is not applied twice. Tell the client
+  about connectivity with `setConnected(true|false)`; give it a `LunoraPersistence`
+  to survive a process restart.
+
+```dart
+await api.messages.send(
+  MessagesSendArgs(channelId: 'c1', text: 'hello', kind: Kind.TEXT, tags: {}),
+  optimisticUpdate: (store, _) => store.setQuery(
+    'messages:list',
+    [...(store.getQuery('messages:list', args: listArgs)! as List), pending],
+    args: listArgs,
+  ),
+);
+```
+
+<Callout type="warn">
+    A per-call `optimistic` patches the query subscribed under the **mutation's own** path and args — the shorthand for a counter or a document-by-id, where a
+    query and a mutation share both. To patch a differently-named query, which is the usual case, use `optimisticUpdate`: its store names its targets.
+</Callout>
 
 Two things are worth knowing about the models everywhere:
 

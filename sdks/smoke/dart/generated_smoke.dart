@@ -54,5 +54,39 @@ Future<void> main() async {
     throw StateError('generated call produced $got, want $want');
   }
 
-  print('OK — the generated surface reaches the wire');
+  // The generated WRITE path, with an optimistic update through it. Analysing
+  // the surface proves the extra parameters resolve; only calling one proves
+  // they are wired to the client rather than accepted and dropped.
+  final api = Api(client);
+  final seen = <Object?>[];
+
+  // The args a store lookup must be given are the ones the SUBSCRIPTION was
+  // opened with, wire-projected the same way the generated `subscribeList` does
+  // — `wireValue` drops the unset optional, so a raw `toJson()` here would key
+  // differently and silently match nothing.
+  final listArgs = LunoraClient.wireValue(MessagesListArgs(channelId: 'chan_1'));
+
+  client
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..subscribe('messages:list', args: listArgs, onData: seen.add);
+
+  client.handleFrame('{"type":"data","id":"sub_1","data":["first"]}');
+
+  await api.messages.send(
+    MessagesSendArgs(channelId: 'chan_1', text: 'hello', kind: Kind.TEXT, tags: <String, String>{}),
+    optimisticUpdate: (store, _) => store.setQuery(
+      'messages:list',
+      <Object?>[...(store.getQuery('messages:list', args: listArgs)! as List<Object?>), 'predicted'],
+      args: listArgs,
+    ),
+  );
+
+  final predicted = stableStringify(seen.last);
+
+  if (predicted != '["first","predicted"]') {
+    throw StateError('optimistic update produced $predicted, want ["first","predicted"]');
+  }
+
+  print('OK — the generated surface reaches the wire, optimistic updates included');
 }

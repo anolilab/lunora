@@ -126,7 +126,12 @@ change that adds or removes a capability.
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Subscription as a Stream      | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Optimistic updates            | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Offline mutation queue        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Durable offline queue         | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅¹  |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
+
+¹ Through an injected adapter, like HTTP and the socket — see below.
 
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`
@@ -136,6 +141,59 @@ and unsubscribes when the last listener cancels, so disposing a widget disposes
 the subscription and there is no `dispose()` override to forget. The
 callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
 value whose lifetime is not a widget's.
+
+**Optimistic updates and the offline queue, dart.** The three rows the other
+seven do not have, ported from `packages/client`'s `optimistic-layers.ts`,
+`local-store.ts` and `offline-queue.ts`. They are what the row above is for: a
+mobile client is disconnected routinely rather than exceptionally, so a write it
+cannot send yet and a value it can show before the server confirms are the
+difference between a usable app and one that spins.
+
+The layer model is the reference client's exactly, not a re-invention. A
+prediction is a LAYER on the subscription, so an unrelated frame re-folds it onto
+the new base instead of clobbering it, and it drops the moment a frame reaches
+the write's committed CDC cursor — never on the RPC response, which races the
+WebSocket broadcast. A throwing layer is skipped rather than blanking the query;
+a throwing multi-query update unwinds only its own writes and never fails the
+mutation. The queue is bounded FIFO, evicts the OLDEST on overflow, replays under
+the idempotency key the original call minted so the server deduplicates a write
+it already committed, and classifies a replay failure the way the reference does:
+a CODED error is the server's answer and terminal, an uncoded throw is a
+transport failure and re-queues that write and every one behind it, in order.
+
+Three things differ, and each follows from this transport's own shape rather
+than from taste:
+
+- **Connectivity is told, not observed.** The other clients own their socket and
+  can watch it; this one does not, so `setConnected(true|false)` is how it
+  learns, and the transition to connected is what flushes the queue. It sits
+  beside `attachSocket` and `resendSubscriptions` in the same reconnect recipe.
+- **Durability is injected.** `LunoraPersistence` is four methods a consumer
+  implements over `shared_preferences`, `sqflite`, Drift, a file — whichever the
+  app already has. Building one in would mean picking a storage dependency for
+  every consumer, which is the one thing this package does not do.
+  `MemoryPersistence` ships for tests. With no adapter the queue survives a
+  dropped socket but not a restart.
+- **There is no per-shard drain.** The reference queue drains one shard at a
+  time because its sockets are per-shard; here the shard rides the socket URL
+  and there is a single connectivity signal, so one reconnect drains everything.
+
+**The targeting rule for a per-call `optimistic` is a trap worth stating.** It
+patches the subscription opened under the MUTATION's own path and args — not
+"whatever the write affects", which no client can know. So it is the shorthand
+for a query and a mutation that share a path (a counter, a document by id) and
+it silently finds nothing to patch otherwise. The general case — a `send`
+mutation updating a `list` query — is `optimisticUpdate`, whose store names its
+targets. That is the reference client's rule, kept verbatim rather than
+"improved", because a port that quietly widens it makes two SDKs disagree about
+what a prediction applies to.
+
+Deliberately NOT ported, and none of it is a gap a mobile client feels:
+cross-tab leader election and the `BroadcastChannel` mirror (there are no tabs),
+the IndexedDB read cache, the service-worker path, the `@lunora/db` unified
+outbox, and batched replay over `/_lunora/rpc-batch` — the last purely because
+sequential replay is the proven path and a batch is an optimisation this port
+has no measurement to justify yet.
 
 **Typed models, dart.** Dart is the target where quicktype's default output was
 expected to fail the way the JVM backends do and did not. Its backend renames

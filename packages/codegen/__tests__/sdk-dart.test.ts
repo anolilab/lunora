@@ -148,6 +148,24 @@ describe("generateSdk (dart)", () => {
         expect(api).not.toContain("watchSend(");
     });
 
+    it("offers the write options on a mutation and on nothing else", async () => {
+        expect.assertions(4);
+
+        const { files } = await generateSdk(fixture(), dartTarget);
+        const api = files["lib/lunora_api.dart"] ?? "";
+        const send = api.slice(api.indexOf("Future<Object?> send("));
+        const list = api.slice(api.indexOf("Future<Object?> list("), api.indexOf("LunoraUnsubscribe subscribeList("));
+
+        expect(send).toContain("LunoraOptimistic? optimistic");
+        expect(send).toContain("bool Function()? precondition");
+        // Forwarded, not merely accepted — a parameter the call site drops would
+        // still compile and would silently do nothing.
+        expect(send).toContain("optimisticUpdate: optimisticUpdate");
+        // A read has nothing to predict and is never queued, so offering it a
+        // precondition would advertise an offline replay it does not get.
+        expect(list).not.toContain("optimistic");
+    });
+
     it("guards every optional map and drops every empty-list fallback in the models", async () => {
         expect.assertions(5);
 

@@ -190,23 +190,40 @@ const repairOptionals = (models: string): string =>
 /** `wireValue` projects a generated model; an untyped argument is already a wire value. */
 const dartPayload = (method: SdkMethod): string => argsChoice(method, { none: "null", typed: () => "LunoraClient.wireValue(args)", untyped: "args" });
 
-/** The parameter list, before the trailing `{String? shardKey}` block. */
-const dartParameters = (method: SdkMethod): string =>
-    argsChoice(method, {
-        none: "{String? shardKey}",
+/**
+ * The named parameters only a MUTATION takes, and their pass-through.
+ *
+ * Not on a query, which has nothing to predict and is never queued, and not on
+ * an action either: an action performs external side effects and is not replayed
+ * against the shard, so offering it a `precondition` would advertise an offline
+ * replay it deliberately does not get.
+ */
+const WRITE_OPTIONS = {
+    declaration: "LunoraOptimistic? optimistic, LunoraOptimisticUpdate? optimisticUpdate, bool Function()? precondition",
+    forward: "optimistic: optimistic, optimisticUpdate: optimisticUpdate, precondition: precondition",
+} as const;
+
+/** The parameter list, including the trailing named-parameter block. */
+const dartParameters = (method: SdkMethod): string => {
+    const named = method.verb === "mutation" ? `{String? shardKey, ${WRITE_OPTIONS.declaration}}` : "{String? shardKey}";
+
+    return argsChoice(method, {
+        none: named,
         // A function whose args no model can express (a `v.bigint()`/`v.bytes()`
         // schema, or a shape this backend could not name) still TAKES arguments —
         // wire-shaped ones. Dropping the parameter would make it uncallable.
-        typed: (type) => `${type} args, {String? shardKey}`,
-        untyped: "Object? args, {String? shardKey}",
+        typed: (type) => `${type} args, ${named}`,
+        untyped: `Object? args, ${named}`,
     });
+};
 
 /** Rebuilds a typed result from the decoded wire value. */
 const fromJson = (type: string, expression: string): string => `${type}.fromJson(${expression} as Map<String, dynamic>)`;
 
 /** One function as a method posting the RPC envelope. */
 const renderCall = (method: SdkMethod): string => {
-    const call = `_client.${method.verb}("${dartLiteral(method.functionPath)}", args: ${dartPayload(method)}, shardKey: shardKey)`;
+    const options = method.verb === "mutation" ? `, ${WRITE_OPTIONS.forward}` : "";
+    const call = `_client.${method.verb}("${dartLiteral(method.functionPath)}", args: ${dartPayload(method)}, shardKey: shardKey${options})`;
 
     if (method.resultType === undefined) {
         return [`  /// ${commentText(method.summary)}`, `  Future<Object?> ${memberName(method.functionName)}(${dartParameters(method)}) => ${call};`].join(

@@ -14,5 +14,8 @@
 library;
 
 export 'src/client.dart';
+export 'src/errors.dart';
 export 'src/key.dart';
+export 'src/offline_queue.dart';
+export 'src/optimistic.dart';
 export 'src/wire.dart';
