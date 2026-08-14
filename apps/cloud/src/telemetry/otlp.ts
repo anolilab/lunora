@@ -358,8 +358,7 @@ interface OtlpResourceLogs {
     scopeLogs?: OtlpScopeLogs[];
 }
 
-/* eslint-disable-next-line no-secrets/no-secrets -- the quoted identifier is an opentelemetry-proto message name, not a credential */
-/** The subset of an OTLP `ExportLogsServiceRequest` the ingest reads. */
+/** The subset of an OTLP `ExportLogsService` request the ingest reads. */
 export interface OtlpLogsPayload {
     resourceLogs?: OtlpResourceLogs[];
 }
@@ -432,10 +431,8 @@ const logFields = (attributes: OtlpKeyValue[] | undefined): Record<string, unkno
     return Object.keys(out).length > 0 ? out : undefined;
 };
 
-/* eslint-disable no-secrets/no-secrets -- the quoted identifier below is an opentelemetry-proto message name, not a credential */
-
 /**
- * Decode an OTLP `ExportLogsServiceRequest` into tenant-log entries — the
+ * Decode an OTLP `ExportLogsService` request into tenant-log entries — the
  * standard `/v1/logs` ingest, so any OpenTelemetry logs exporter can ship to the
  * cloud (not only Lunora's own sink). Level from `severityNumber` (or text),
  * message from the record `body`, `traceId`/`spanId` for correlation,

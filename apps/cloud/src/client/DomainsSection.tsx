@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { api } from "../../lunora/_generated/api.js";
+import readJson from "../read-json";
 import { AsyncList } from "./AsyncList";
 import { COLUMN_LABEL, Field, FieldForm, FormError, Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { SectionProps } from "./tabs";
@@ -69,7 +70,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
     // and a branded union makes that inference collapse to the empty-string literal.
     // The brand is reapplied at the query boundary, which is where it means something.
     const [projectId, setProjectId] = useState("");
-    const domains = useQuery(api.domains.list, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip");
+    const domains = useQuery(api.domains.list, projectId ? { organizationId, projectId: projectId as ProjectId } : "skip"); // gitleaks:allow -- a Lunora row id from app state; matches the Cypress project-id shape
     const removeDomain = useMutation(api.domains.remove);
 
     const [hostname, setHostname] = useState("");
@@ -224,8 +225,7 @@ export const DomainsSection = ({ organizationId, preloaded }: SectionProps<Retur
                                         return;
                                     }
 
-                                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-                                    const record = (await response.json()) as TxtRecord;
+                                    const record = await readJson<TxtRecord>(response);
 
                                     setTxtRecord(record);
                                     setHostname("");

@@ -35,6 +35,7 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
 import { deliverAlert } from "./mail/notify";
 import { createHttpAnalyticsReader } from "./metering/analytics";
 import { runUsageRollback } from "./metering/rollback";
+import readJson from "./read-json";
 import type { ControlPlaneDatabase } from "./store";
 import type { AlertDelivery } from "./telemetry/alerts";
 import { runAlertSweep } from "./telemetry/sweep";
@@ -538,8 +539,7 @@ const dispatchQueueBatch = async (dispatcher: NonNullable<Env["DISPATCHER"]>, gr
         throw new Error(`queue forward failed: ${String(response.status)}`);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-    const result = (await response.json()) as { retry?: unknown };
+    const result = await readJson<{ retry?: unknown }>(response);
     const retry: unknown[] = Array.isArray(result.retry) ? result.retry : [];
 
     return retry.filter((id): id is string => typeof id === "string");

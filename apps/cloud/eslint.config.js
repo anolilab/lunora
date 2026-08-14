@@ -55,6 +55,8 @@ export default createConfig(
                         "Request",
                         "Response",
                         "ReadableStream",
+                        // Baseline in workerd; the gzip tail of the OTLP ingest uses it.
+                        "DecompressionStream",
                         // Browser globals used by the hosted studio (src/client, src/routes).
                         "localStorage",
                         "sessionStorage",

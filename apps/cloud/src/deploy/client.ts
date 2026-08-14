@@ -5,6 +5,7 @@
  * `fetch` is injectable, so the streaming consumer is unit-testable.
  */
 import type { TenantBindingSpec } from "../provision";
+import readJson from "../read-json";
 
 export type DeployEvent = Record<string, unknown>;
 
@@ -71,8 +72,7 @@ export const rollbackDeployment = async (options: RollbackClientOptions): Promis
         throw new Error(`rollback failed (${String(response.status)})${detail ? `: ${detail}` : ""}`);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
-    return (await response.json()) as { scriptName: string; version?: number };
+    return readJson<{ scriptName: string; version?: number }>(response);
 };
 
 export const deployToCloud = async (options: DeployClientOptions, onEvent: (event: DeployEvent) => void): Promise<DeployResult> => {
