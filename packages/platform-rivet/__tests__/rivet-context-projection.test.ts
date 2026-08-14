@@ -8,6 +8,7 @@ import type {
     RivetRawDatabaseLike,
     RivetScheduledEventLike,
     RivetScheduleLike,
+    RivetWebSocketLike,
 } from "../src/rivet-context";
 
 /**
@@ -117,17 +118,40 @@ interface UpstreamActorContextSlice {
 }
 
 /** The client-handle members `RivetActorHandleLike` / `RivetActorNamespaceLike` narrow. */
+interface UpstreamActorFetchInit extends RequestInit {
+    skipReadyWait?: boolean;
+}
+
 interface UpstreamActorHandle {
-    fetch: (input: Request | string, init?: RequestInit) => Promise<Response>;
+    fetch: (input: string | URL | Request, init?: UpstreamActorFetchInit) => Promise<Response>;
     resolve: () => Promise<string>;
     webSocket: (path?: string) => Promise<WebSocket>;
 }
 
+/** `GetOrCreateOptions` from rivetkit's `src/client/client.ts`. */
+interface UpstreamGetOrCreateOptions {
+    createInRegion?: string;
+    createWithInput?: unknown;
+}
+
 interface UpstreamActorNamespace {
     create: (key: string | string[], options?: Record<string, unknown>) => Promise<UpstreamActorHandle>;
-    get: (key: string | string[]) => UpstreamActorHandle;
+    get: (key?: string | string[]) => UpstreamActorHandle;
     getForId: (id: string) => UpstreamActorHandle;
-    getOrCreate: (key: string | string[], options?: { createInRegion?: string }) => UpstreamActorHandle;
+    getOrCreate: (key?: string | string[], options?: UpstreamGetOrCreateOptions) => UpstreamActorHandle;
+}
+
+/**
+ * `UniversalWebSocket` from `@rivetkit/virtual-websocket`, narrowed to the
+ * members the socket host touches. Note `bufferedAmount` is **required** and
+ * readonly upstream; the projection makes it optional, which is a safe
+ * superset — a host that cannot report a queue depth is allowed to omit it.
+ */
+interface UpstreamUniversalWebSocket {
+    readonly bufferedAmount: number;
+    close: (code?: number, reason?: string) => void;
+    readonly readyState: 0 | 1 | 2 | 3;
+    send: (data: string | ArrayBufferLike | ArrayBufferView | Blob) => void;
 }
 
 describe("rivetkit projections", () => {
@@ -150,6 +174,9 @@ describe("rivetkit projections", () => {
 
         expectTypeOf<UpstreamActorHandle>().toExtend<RivetActorHandleLike>();
         expectTypeOf<UpstreamActorNamespace>().toExtend<RivetActorNamespaceLike>();
+        // The socket host narrows an accepted socket to this projection, so a
+        // real `UniversalWebSocket` has to satisfy it.
+        expectTypeOf<UpstreamUniversalWebSocket>().toExtend<RivetWebSocketLike>();
 
         expect(true).toBe(true);
     });

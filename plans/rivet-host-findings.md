@@ -107,18 +107,42 @@ contract shape rather than by convenience:
   Lunora engine owns state, fan-out and subscription bookkeeping, and an adapter
   that also reached for Rivet's would give one shard two sources of truth.
 
-## 5. `crossShardFanout` is unsupported, and that is a finding
+## 5. `crossShardFanout`: unsupported because unwired, not because impossible
+
+**This section originally said Rivet has no way to enumerate shard keys. That
+was wrong, and the correction is the more useful finding.**
 
 `@lunora/runtime`'s query coordinator needs to **enumerate** the shard keys
-holding a table. The RivetKit client only **addresses** them — `getOrCreate`,
-`getForId`, `resolve`. There is no key enumeration on the client surface.
+holding a table. The _actor-handle_ client only addresses them — `getOrCreate`,
+`getForId`, `resolve` — which is where the mistaken conclusion came from. But
+the **engine** client has `listActorsByName` (`GET /actors?name=<actor>`,
+`src/engine-client/api-endpoints.ts`), and it returns exactly what a
+`listShardKeys` needs:
 
-The Node host rates this `emulated` because it can seed a key list from the
-shard files on disk. Rivet has no equivalent, so a fan-out query here would
-answer from no shards instead of all of them — a wrong answer, not a slow one.
-It is therefore `unsupported`, which makes codegen's fail-closed gate refuse it
-rather than ship a silent hole. Closing it needs either an engine-API listing
-call or a Lunora-side shard registry actor.
+```ts
+interface ActorOutput {
+    actorId: string;
+    name: string;
+    key: ActorKey;
+    createTs?: number;
+    destroyTs?: number | null; /* … */
+}
+```
+
+So the rating stays `unsupported` for the ordinary reason — nothing in this
+package wires it — rather than for the interesting one. Whoever wires it has to
+handle two things the endpoint does not:
+
+- **No pagination.** `ActorsListResponse` is `{ actors: Actor[] }`: no cursor,
+  no limit, no filter parameters. For a tenant-sharded app that is one array of
+  every actor ever created under that name, which does not survive scale. See
+  §10 — this is the upstream ask.
+- **No liveness filter.** Destroyed actors come back with a `destroyTs`, so the
+  caller skips them client-side.
+
+The lesson generalises: "the client can't do X" is worth checking against the
+engine API before it goes in a capability note. A capability matrix that is
+wrong in the pessimistic direction is still wrong.
 
 ## 6. Testing: what is proven and what is not
 
@@ -178,7 +202,51 @@ Two of these bite the snapshot strategy specifically:
   snapshot would cut the constant enormously, and a BLOB column instead of
   base64 would cut a further third.
 
-## 8. Not built
+## 8. Lifecycle budgets the wiring has to live inside
+
+Verified against `rivetkit@2.3.10` source and the Lifecycle docs after the host
+was written. The documented hook order is
+`onMigrate → createState → onCreate → createVars → onWake`, which confirms the
+wiring recommendation: `c.db` **is** available in `createVars`, and migrations
+have already run by then. Two budgets, though, are tighter than the host's work:
+
+- **`createVarsTimeout` defaults to 5000 ms**, and `createRivetPlatform` runs
+  inside `createVars`: it reads the whole base64 snapshot, deserializes it into
+  a `better-sqlite3` database, creates two tables and re-arms the alarm. On a
+  large shard that is a real risk of timing out at wake. Apps should raise
+  `createVarsTimeout` in proportion to shard size — and this is a second reason
+  the whole-database snapshot deserves replacing (§7).
+- **`sleepGracePeriod` defaults to 15 s and is a single shared budget** covering
+  `onSleep`, every `waitUntil` promise, `keepAwake`, and async raw-WebSocket
+  handlers. `platform.close()` runs a final full snapshot flush inside it,
+  competing with the app's own background work.
+
+And one durability caveat that follows from the same docs: **`onSleep` is
+best-effort and does not run if the actor crashes.** The host's real durability
+boundary is therefore the flush at each `runSerialized` / `transaction` — which
+is every write the engine makes — and _not_ `close()`. A bare `sql.exec` issued
+outside both boundaries by non-engine code is durable only at the next boundary,
+and is lost on a crash before one arrives. That is the intended design, but it
+should be read as "the boundaries are the guarantee", not "close() will catch
+it".
+
+Two smaller confirmations worth recording, since both were assumptions when the
+code was written:
+
+- `handle.fetch(request)` really does forward a whole `Request` — `rawHttpFetch`
+  merges method, body, headers, signal and the rest. It keeps only
+  `pathname + search` from the URL, discarding the origin, which is fine for a
+  shard RPC but means the stub cannot address by host.
+- Action names have no reserved-prefix validation, so `__lunoraShardAlarm` and
+  friends are safe. Dots are not: action names are flattened with
+  dot-separated paths for nested groups.
+
+One wiring hazard with no compile-time signal: Rivet **deletes a recurring job
+whose action no longer exists**. An app that registers a cron through
+`SchedulerHost.cron` but forgets the `RIVET_CRON_ACTION` handler loses the cron
+silently.
+
+## 9. Not built
 
 No `lunora dev --target rivet`, no `@lunora/config` deploy driver, no
 `.global()` table backend, no queue/object-storage/AI bindings. This is the host
@@ -186,3 +254,48 @@ layer only. The Node host needed a deploy driver before `--target node` would
 resolve at all; Rivet will need the same, plus a decision about where a Lunora
 app's Worker-equivalent entry point lives when the runtime is `registry.start()`
 rather than a Cloudflare Worker.
+
+## 10. Upstream asks for Rivet
+
+Ordered by how much they would change this host. Numbers 1 and 2 are the ones
+that would let ratings move from `emulated`/`unsupported` to `native`.
+
+1. **A synchronous read path for actor SQLite.** The single structural blocker
+   (§2). Any of these would remove the working copy entirely: a sync `exec` on
+   the napi runtime, an exposed SQLite handle/file path the host can open
+   directly, or a documented "the database is a real file at P" contract. This
+   is the difference between `localSql: emulated` with an O(N)-per-commit
+   snapshot and `localSql: native`.
+2. **Pagination on `GET /actors?name=`.** A cursor + limit, and ideally a
+   `destroyed=false` filter (§5). Without it, actor enumeration is unusable
+   past a few thousand actors, which is exactly the scale a sharded app reaches
+   first.
+3. **A durable-blob-friendly binding round-trip for SQLite parameters.** The
+   snapshot is base64 TEXT purely because it was unclear whether a bound
+   `Uint8Array` round-trips identically on both the napi and wasm runtimes. A
+   documented guarantee (or a `BLOB` example) would cut 33% off every snapshot
+   write.
+4. **A replacement for the deprecated `c.kv`,** or a statement that it is
+   staying. It is the natural fit for a durable per-actor record store (§4);
+   right now the deprecation pushes hosts onto SQLite for data that is not
+   relational.
+5. **Retry policy on scheduled actions.** Rivet explicitly does not retry a
+   failed run, so every consumer that needs at-least-once rebuilds the same
+   backoff-and-dead-letter ladder (this host included). A built-in retry
+   policy on `schedule.after`/`at` would delete that code.
+6. **Streaming responses / SSE from `onRequest`** — already tracked upstream as
+   [rivet-dev/rivet#3529](https://github.com/rivet-dev/rivet/issues/3529). It
+   bounds anything Lunora wants to stream over the shard RPC edge.
+7. **A region-slug discovery API.** Region names are deployment-defined, which
+   is why `shardPlacement` needs a caller-supplied `resolveRegion` and is rated
+   `emulated`. An endpoint listing the deployment's regions would let a host map
+   placement hints itself.
+8. **Delivery to a handler rather than a named action.** Schedules invoke an
+   action by name, so a library integrating with Rivet must ask apps to paste
+   handler wiring into their actor definition (three handlers, here) and a typo
+   is a silent no-op — worse, Rivet _deletes_ a recurring job whose action does
+   not exist. A registerable callback, or a documented namespace libraries can
+   own, would remove a whole class of silent misconfiguration.
+
+Numbers 1, 2 and 8 are the ones worth filing first; the rest are either already
+tracked or are trade-offs Rivet may have made deliberately.

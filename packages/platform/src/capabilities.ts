@@ -326,7 +326,7 @@ export const RIVET_CAPABILITIES: PlatformCapabilities = {
         },
         crossShardFanout: {
             level: "unsupported",
-            note: "@lunora/runtime's query coordinator needs to enumerate the shard keys holding a table. The RivetKit client addresses actors by key (`getOrCreate`/`getForId`) and offers no key enumeration, so the coordinator has nothing to fan out over — a fan-out query against this target would answer from no shards rather than from all of them, which is why this is unsupported rather than emulated",
+            note: "Not wired, rather than impossible. Enumeration exists: the engine API's `GET /actors?name=<actor>` (RivetKit's `listActorsByName`) returns every actor of a type with its key, which is exactly the `listShardKeys` @lunora/runtime's query coordinator needs — but nothing here feeds it, so a fan-out query against this target would answer from no shards rather than from all of them. Wiring it has to solve two things the endpoint does not: the response is unpaginated (one array, no cursor or limit) and unfiltered (destroyed actors carry a `destroyTs` the caller must skip)",
         },
         queues: {
             level: "unsupported",

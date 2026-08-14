@@ -36,6 +36,7 @@ import { deserialize, serialize } from "node:v8";
 import { LunoraError } from "@lunora/errors";
 import type { SocketHandle, SocketHost } from "@lunora/platform";
 
+import type { RivetWebSocketLike } from "./rivet-context";
 import type { RivetShardState } from "./rivet-shard-state";
 
 /** Internal record for one accepted (or restored) socket. */
@@ -70,30 +71,29 @@ interface RivetSocketHost {
     socket: SocketHost;
 }
 
-/** The transport members this host calls on a socket Rivet handed it. */
-interface RivetTransportSocket {
-    readonly bufferedAmount?: number;
-    close: (code?: number, reason?: string) => void;
-    send: (data: string | ArrayBufferLike | ArrayBufferView | Blob) => void;
-}
-
 /**
  * Narrow the opaque `unknown` `SocketHost.accept` takes to the transport
  * members this host uses, or `undefined` when it is not a socket at all.
  *
  * The contract types the accepted socket as `unknown` because what a socket
- * is* differs per host, and the conformance suite accepts plain objects. So
+ * actually is differs per host, and the conformance suite accepts plain objects. So
  * this checks rather than casts: a restored-but-not-reconnected socket and a
  * test's opaque stand-in both land here, and neither should make `send` throw.
+ *
+ * The narrowed type is {@link RivetWebSocketLike} — the projection of Rivet's
+ * `UniversalWebSocket` in `./rivet-context` — rather than a second interface
+ * declared here. A `*Like` projection with no consumer is exactly what drifts
+ * from the real type unnoticed (CLAUDE.md's platform-parity note says so, and
+ * this one had no consumer until it became this function's return type).
  */
-const asTransport = (raw: unknown): RivetTransportSocket | undefined => {
+const asTransport = (raw: unknown): RivetWebSocketLike | undefined => {
     if (typeof raw !== "object" || raw === null) {
         return undefined;
     }
 
-    const candidate = raw as Partial<RivetTransportSocket>;
+    const candidate = raw as Partial<RivetWebSocketLike>;
 
-    return typeof candidate.send === "function" && typeof candidate.close === "function" ? (candidate as RivetTransportSocket) : undefined;
+    return typeof candidate.send === "function" && typeof candidate.close === "function" ? (candidate as RivetWebSocketLike) : undefined;
 };
 
 /**
@@ -144,7 +144,7 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
      * `WeakMap` keyed by handle, and `handleFor` maps the other way from the
      * transport object Rivet hands back to `onWebSocket` callbacks.
      */
-    const createHandle = (socketState: RivetSocket, transport: RivetTransportSocket | undefined): SocketHandle => {
+    const createHandle = (socketState: RivetSocket, transport: RivetWebSocketLike | undefined): SocketHandle => {
         const socket = socketState;
         const handle: SocketHandle = {
             get bufferedAmount(): number | undefined {
