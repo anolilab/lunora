@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import RateLimitError from "../src/error";
 import { RateLimiter } from "../src/rate-limiter";
+import { createMemoryStore } from "../src/store";
 import type { RateLimitConfigMap } from "../src/types";
 
 const NOT_CONFIGURED_RE = /not configured/;
@@ -380,5 +381,69 @@ describe("sharding", () => {
         expect(() => new RateLimiter({ config: { hits: { kind: "token bucket", capacity, period: 1000, rate: 4 } }, now: () => 0 })).toThrow(
             NON_NEGATIVE_CAPACITY_RE,
         );
+    });
+});
+
+describe("no-store warning", () => {
+    it("warns once when constructed with no explicit store, naming the durable store options", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        const limiter = new RateLimiter({ config, now: () => 0 });
+
+        expect(limiter).toBeInstanceOf(RateLimiter);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringMatching(/createDbStore/));
+
+        warn.mockRestore();
+    });
+
+    it("does not warn when constructed with an explicit store", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        const limiter = new RateLimiter({ config, now: () => 0, store: createMemoryStore() });
+
+        await expect(limiter.check("send")).resolves.toMatchObject({ ok: true });
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
+
+    it("fires once per construction, not once per check/limit call", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        const limiter = new RateLimiter({ config, now: () => 0 });
+
+        await limiter.check("send");
+        await limiter.limit("send");
+        await limiter.limit("send");
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("does not change limiting behaviour, with or without an explicit store (regression guard)", async () => {
+        expect.hasAssertions();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        const clockA = { now: 0 };
+        const clockB = { now: 0 };
+        const withDefaultStore = new RateLimiter({ config, now: () => clockA.now });
+        const withExplicitStore = new RateLimiter({ config, now: () => clockB.now, store: createMemoryStore() });
+
+        for (let index = 0; index < 6; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- ordered stateful calls, comparing the two limiters call-for-call
+            const [defaultResult, explicitResult] = await Promise.all([withDefaultStore.limit("send"), withExplicitStore.limit("send")]);
+
+            expect(defaultResult).toStrictEqual(explicitResult);
+        }
+
+        warn.mockRestore();
     });
 });
