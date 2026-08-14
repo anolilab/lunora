@@ -248,7 +248,7 @@ export const COMPARISONS: Record<string, Comparison> = {
                 q: "Is Supabase realtime the same as reactive queries?",
             },
             {
-                a: "Yes, via Docker, but it is a multi-service stack (Postgres, Auth, PostgREST, Realtime, Storage, and more) and is community-supported. Lunora self-hosts as serverless Workers on Cloudflare.",
+                a: "Yes. Supabase publishes an official Docker Compose stack, but it is a multi-service one (Postgres, Auth, PostgREST, Realtime, Storage, and more) you run and keep running. Lunora self-hosts as serverless Workers on Cloudflare.",
                 q: "Can you self-host Supabase?",
             },
             {

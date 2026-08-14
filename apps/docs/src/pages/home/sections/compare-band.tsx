@@ -57,7 +57,16 @@ const CompareBand: FC = () => {
 
                 {/* A table, not a grid of cards: these are values compared across
                     a shared axis, which is the one thing a table does better. */}
-                <div className="overflow-x-auto">
+                {/* Focusable because it really does scroll: the table is held at
+                    44rem, so below that width a keyboard-only reader has no other
+                    way to reach the right-hand columns. */}
+                <div
+                    aria-label="Feature comparison"
+                    className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    role="region"
+                    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the rule cannot see that an element scrolls, and a scroll container with no keyboard path to its overflowed content fails WCAG 2.1.1. `role="region"` + an accessible name + `tabIndex={0}` is the documented pattern for exactly this case.
+                    tabIndex={0}
+                >
                     <table className="w-full min-w-[44rem] border-collapse text-left">
                         <thead>
                             <tr className="border-b border-hairline">

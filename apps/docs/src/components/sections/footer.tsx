@@ -10,7 +10,7 @@ import LunoraLogo from "@/assets/lunora_logo.svg?react";
 import FlickeringGrid from "@/components/ui/flickering-grid";
 import { Kicker, Shell } from "@/kit/layout";
 import type { FooterEntry } from "~/site.config";
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /** Site footer: a hairline grid of link columns, the brand, and socials. */
 
@@ -83,11 +83,14 @@ const Footer: FC = () => (
             </div>
         </Shell>
 
-        {/* Built by anolilab — do not touch */}
+        {/* Built by anolilab — do not touch. The wordmark is a static svgr
+            import because Vite resolves those at build time; only the link and
+            the label come from the config. */}
         <div className="border-t border-hairline py-12">
             <div className="container mx-auto flex flex-col items-center justify-center gap-6">
                 <Kicker size="micro">Built by</Kicker>
                 <a
+                    aria-label={siteConfig.builtBy.name}
                     className="h-full w-full cursor-pointer transition-opacity duration-300 hover:opacity-80"
                     href={siteConfig.builtBy.href}
                     rel="noopener noreferrer"

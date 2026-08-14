@@ -10,7 +10,7 @@ import { GridCell, HairlineGrid } from "@/kit/grid";
 import { Kicker, Section, SectionHeader, Shell } from "@/kit/layout";
 import { LinkRow, LinkRowList } from "@/kit/link-row";
 import { PageHeader } from "@/kit/page-header";
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /**
  * The `/docs` hub — the page a reader lands on before they know which page they

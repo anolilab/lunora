@@ -7,7 +7,7 @@ import { useState } from "react";
 import { Kicker } from "@/kit/layout";
 import posthog from "@/lib/posthog";
 import { cn } from "@/lib/utils";
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /**
  * The agent hand-off, directly under the hero copy.

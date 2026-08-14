@@ -27,7 +27,7 @@ import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
 import Studio from "@/pages/home/sections/studio";
 import SupportSection from "@/pages/home/sections/support";
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /**
  * The landing page. Every band is a `Section` + `Shell` + `SectionHeader` from

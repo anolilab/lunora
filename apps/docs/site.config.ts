@@ -38,8 +38,13 @@ interface NavSection {
 
 type FooterEntry = { consentDialog: true; title: string } | { href: string; title: string } | { title: string; to: string };
 
-const siteConfig = {
-    /** Brand identity. `logo` is resolved against `src/assets/`. */
+export const siteConfig = {
+    /**
+     * Brand identity. `logo` names the file a downstream project swaps in
+     * `src/assets/` — it is not read at runtime, because svgr imports
+     * (`@/assets/*.svg?react`) are resolved by Vite at build time and a string
+     * here can never become one.
+     */
     brand: {
         description: "A type-safe, real-time backend on Cloudflare Workers and Durable Objects with a Vite-first developer experience.",
         logo: "lunora_logo.svg",
@@ -48,10 +53,13 @@ const siteConfig = {
         url: "https://lunora.sh",
     },
 
-    /** Shown in the footer's "Built by" band. Omit to hide the band. */
+    /**
+     * The footer's "Built by" band. Always rendered; the wordmark itself is a
+     * static svgr import in `footer.tsx` (see `brand.logo`), so a downstream
+     * project changes it there and changes the link and label here.
+     */
     builtBy: {
         href: "https://anolilab.com?ref=lunora",
-        logo: "anolilab_text.svg",
         name: "anolilab",
     },
 
@@ -158,4 +166,3 @@ const siteConfig = {
 };
 
 export type { FooterEntry, NavFeature, NavLeaf, NavSection };
-export default siteConfig;

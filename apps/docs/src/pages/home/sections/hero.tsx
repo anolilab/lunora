@@ -9,7 +9,7 @@ import { Kicker, Shell } from "@/kit/layout";
 import { PageHeader } from "@/kit/page-header";
 import AgentSetup from "@/pages/home/sections/agent-setup";
 import PlatformStrip from "@/pages/home/sections/platform-strip";
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /**
  * Landing hero: the colour field and its panel, then the numbered promise row

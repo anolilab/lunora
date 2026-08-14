@@ -59,10 +59,23 @@ const LinkRow: FC<{
     );
 };
 
+/**
+ * Column count *and* the seams that count implies, together — a seam is only
+ * correct for a known grid, so splitting them is what let `4` ship a two-column
+ * stage with no seam between its rows and a stray rule down the grid's edge.
+ *
+ * The stacked base (a bottom rule under every child but the last) carries
+ * through; each entry turns it into vertical rules once the grid has columns.
+ */
 const ROW_COLUMNS: Record<number, string> = {
-    2: "sm:grid-cols-2",
-    3: "sm:grid-cols-3",
-    4: "sm:grid-cols-2 lg:grid-cols-4",
+    2: "sm:grid-cols-2 sm:[&>*]:border-r sm:[&>*]:border-b-0 sm:[&>*:last-child]:border-r-0",
+    3: "sm:grid-cols-3 sm:[&>*]:border-r sm:[&>*]:border-b-0 sm:[&>*:last-child]:border-r-0",
+    // Two columns from `sm` to `lg`, four above it. In the two-column stage the
+    // stacked bottom rule is what separates the rows, so it is kept and cleared
+    // only on the last row; the right rule is dropped on every row-end child.
+    4:
+        "sm:grid-cols-2 sm:[&>*:not(:nth-child(2n))]:border-r sm:[&>*:nth-last-child(-n+2)]:border-b-0 " +
+        "lg:grid-cols-4 lg:[&>*]:border-r lg:[&>*]:border-b-0 lg:[&>*:last-child]:border-r-0",
 };
 
 /**
@@ -83,10 +96,9 @@ const LinkRowList: FC<{
         <div
             className={cn(
                 "grid grid-cols-1 border-y border-hairline",
-                ROW_COLUMNS[columns],
-                "[&>*]:border-b [&>*]:border-hairline sm:[&>*]:border-r sm:[&>*]:border-b-0",
-                "[&>*:last-child]:border-b-0 sm:[&>*:last-child]:border-r-0",
+                "[&>*]:border-b [&>*]:border-hairline [&>*:last-child]:border-b-0",
                 "[&>*]:px-5",
+                ROW_COLUMNS[columns],
                 className,
             )}
         >

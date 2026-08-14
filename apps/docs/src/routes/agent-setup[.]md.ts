@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import siteConfig from "~/site.config";
+import { siteConfig } from "~/site.config";
 
 /**
  * The one URL a user pastes at their coding agent to make it useful on Lunora.
