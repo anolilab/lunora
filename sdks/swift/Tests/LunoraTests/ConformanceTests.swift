@@ -301,6 +301,86 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(fired, 0, "the view would be torn if parts applied before pokeEnd")
     }
 
+    // MARK: - Generated-model projection
+
+    /// `wireValue` must restore the nulls synthesized `Codable` drops.
+    ///
+    /// Not a manifest case: it asserts how a GENERATED MODEL reaches the wire,
+    /// which is this port's own business rather than a frame every SDK shares.
+    /// The pairing it protects is the one no blanket rule gets right — an unset
+    /// `v.optional()` must be an absent key, a required `v.nullable()` a present
+    /// null — and `JSONEncoder` omits a nil for both.
+    func testWireValueRestoresRequiredNulls() throws {
+        struct Model: Encodable {
+            let id: String
+            let limit: Double?
+            let nickname: String?
+        }
+
+        let model = Model(id: "r1", limit: nil, nickname: nil)
+
+        // Without the paths, both nils are gone — the bug this fixes.
+        let bare = try XCTUnwrap(LunoraClient.wireValue(model) as? [String: Any])
+        XCTAssertNil(bare["nickname"])
+        XCTAssertNil(bare["limit"])
+
+        let restored = try XCTUnwrap(LunoraClient.wireValue(model, nullablePaths: [["nickname"]]) as? [String: Any])
+        XCTAssertTrue(restored["nickname"] is NSNull, "a required nullable must reach the wire AS null")
+        XCTAssertNil(restored["limit"], "an unset optional must stay an absent key")
+    }
+
+    /// A path names a run of keys, not a key anywhere, and it restores only into
+    /// an object that is actually there.
+    func testWireValueRestoresOnlyAtTheNamedPath() throws {
+        struct Inner: Encodable {
+            let bio: String?
+        }
+        struct Model: Encodable {
+            let outer: Inner
+            let bio: String?
+        }
+
+        let projected = try XCTUnwrap(
+            LunoraClient.wireValue(Model(outer: Inner(bio: nil), bio: nil), nullablePaths: [["outer", "bio"]]) as? [String: Any]
+        )
+        let outer = try XCTUnwrap(projected["outer"] as? [String: Any])
+
+        XCTAssertTrue(outer["bio"] is NSNull, "the nested path is restored")
+        XCTAssertNil(projected["bio"], "the same key at the top level is a different path")
+    }
+
+    /// A `*` is never restored: a record's absent key was never sent, and
+    /// inventing one would put a null where the caller had nothing at all.
+    func testWireValueNeverInventsARecordKey() throws {
+        struct Model: Encodable {
+            let tags: [String: String]
+        }
+
+        let projected = try XCTUnwrap(LunoraClient.wireValue(Model(tags: [:]), nullablePaths: [["tags", "*"]]) as? [String: Any])
+        let tags = try XCTUnwrap(projected["tags"] as? [String: Any])
+
+        XCTAssertTrue(tags.isEmpty, "an empty record must stay empty")
+    }
+
+    /// The restore must reach inside array elements, which is where a starred
+    /// path leads.
+    func testWireValueRestoresInsideArrayElements() throws {
+        struct Row: Encodable {
+            let note: String?
+        }
+        struct Model: Encodable {
+            let rows: [Row]
+        }
+
+        let projected = try XCTUnwrap(
+            LunoraClient.wireValue(Model(rows: [Row(note: nil), Row(note: "n")]), nullablePaths: [["rows", "*", "note"]]) as? [String: Any]
+        )
+        let rows = try XCTUnwrap(projected["rows"] as? [[String: Any]])
+
+        XCTAssertTrue(rows[0]["note"] is NSNull)
+        XCTAssertEqual(rows[1]["note"] as? String, "n")
+    }
+
     // MARK: - Concurrency
 
     /// The topology every real consumer has: a socket read loop on one thread,

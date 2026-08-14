@@ -11,7 +11,7 @@ use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
-use lunora::wire::{decode_wire, encode_wire, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
+use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
 use serde_json::{json, Value};
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -446,4 +446,58 @@ fn concurrent_subscribe_and_handle_frame() {
         THREADS * PER_THREAD,
         "every concurrent subscribe survived with a distinct id"
     );
+}
+
+/// `from_model_json` must drop a null ONLY where the generated call site says the
+/// schema made the property optional.
+///
+/// Not in the shared manifest: it asserts how a GENERATED MODEL reaches the wire,
+/// which is this port's own concern rather than a frame every SDK must agree on.
+/// The pairing it protects is the one no blanket rule can get right — an unset
+/// `v.optional()` must be an absent key, a required `v.nullable()` must be a
+/// present null.
+#[test]
+fn from_model_json_prunes_only_optional_paths() {
+    let model = json!({
+        "id": "r1",
+        "limit": Value::Null,
+        "nickname": Value::Null,
+        "tags": { "a": Value::Null },
+        "rows": [{ "note": Value::Null, "tag": Value::Null }],
+    });
+
+    let wire = from_model_json(&model, &[&["limit"][..], &["rows", "*", "tag"][..]]);
+    let encoded = encode_wire(&wire).expect("encode");
+
+    // The optional field is gone; the required nullable is present holding null.
+    assert_eq!(encoded["nickname"], Value::Null);
+    assert!(encoded.get("limit").is_none(), "an unset optional must be an absent key");
+
+    // A null inside a RECORD is a value the caller chose, and no path lists it.
+    assert_eq!(encoded["tags"]["a"], Value::Null);
+
+    // Inside an array element, the starred path prunes and the sibling survives.
+    assert!(encoded["rows"][0].get("tag").is_none(), "a starred optional path prunes inside an array");
+    assert_eq!(encoded["rows"][0]["note"], Value::Null);
+}
+
+/// An empty path list must change nothing — the shape a function with no optional
+/// arguments generates.
+#[test]
+fn from_model_json_with_no_paths_keeps_every_null() {
+    let model = json!({ "id": "r1", "nickname": Value::Null });
+    let encoded = encode_wire(&from_model_json(&model, &[])).expect("encode");
+
+    assert_eq!(encoded["nickname"], Value::Null);
+    assert_eq!(encoded["id"], json!("r1"));
+}
+
+/// A path must match a run of keys, not a key anywhere: `["a"]` is not `["b","a"]`.
+#[test]
+fn from_model_json_matches_whole_paths() {
+    let model = json!({ "outer": { "limit": Value::Null }, "limit": Value::Null });
+    let encoded = encode_wire(&from_model_json(&model, &[&["limit"][..]])).expect("encode");
+
+    assert!(encoded.get("limit").is_none(), "the top-level path prunes");
+    assert_eq!(encoded["outer"]["limit"], Value::Null, "the same key one level down is a different path");
 }

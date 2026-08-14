@@ -201,9 +201,66 @@ public final class LunoraClient {
     /// generator refuses to emit a typed model for any schema carrying a
     /// `v.bigint()` or `v.bytes()` (see `hasUnrepresentableWireType`), which
     /// are exactly the values a JSON round-trip would flatten.
-    public static func wireValue<T: Encodable>(_ value: T) throws -> Any {
+    ///
+    /// `nullablePaths` repairs the one thing that bounce loses. Synthesized
+    /// `Codable` OMITS a nil property, which is right for an unset
+    /// `v.optional()` — the validator rejects an explicit null — and wrong for a
+    /// required `v.nullable()`, which the validator needs present holding null. A
+    /// struct whose `nickname` is explicitly nil encodes to `{"id":"r1"}`, so
+    /// that argument could never be sent at all. Nothing in the rendered struct
+    /// tells the two apart (both are `T?`, and the generated `init` gives neither
+    /// a default), so the generated call site passes the paths the SCHEMA says
+    /// are required-and-nullable; see `ModelNullPaths` in
+    /// `packages/codegen/src/sdk/spec.ts`.
+    ///
+    /// Restoring is exact rather than a guess: at a REQUIRED path an absent key
+    /// can only be a nil the encoder dropped, so putting the null back is the
+    /// value the caller passed.
+    public static func wireValue<T: Encodable>(_ value: T, nullablePaths: [[String]] = []) throws -> Any {
         let data = try JSONEncoder().encode(value)
-        return try JSONSerialization.jsonObject(with: data)
+        let tree = try JSONSerialization.jsonObject(with: data)
+
+        return nullablePaths.isEmpty ? tree : restoreNulls(tree, nullablePaths, [])
+    }
+
+    /// Whether `candidate`'s leading segments match `path`, treating `*` — the
+    /// segment standing for an array element or record value — as any key.
+    private static func matchesPrefix(_ candidate: [String], _ path: [String]) -> Bool {
+        for (index, segment) in path.enumerated() where candidate[index] != "*" && candidate[index] != segment {
+            return false
+        }
+
+        return true
+    }
+
+    private static func restoreNulls(_ value: Any, _ paths: [[String]], _ path: [String]) -> Any {
+        if let dictionary = value as? [String: Any] {
+            var result: [String: Any] = [:]
+
+            for (key, item) in dictionary {
+                result[key] = restoreNulls(item, paths, path + [key])
+            }
+
+            // Put back each required-nullable key of THIS object that the encoder
+            // dropped. A `*` is never restored: a record's absent key was never
+            // sent, and inventing one would put a null where the caller had
+            // nothing at all.
+            for candidate in paths where candidate.count == path.count + 1 && matchesPrefix(candidate, path) {
+                let key = candidate[path.count]
+
+                if key != "*" && result[key] == nil {
+                    result[key] = NSNull()
+                }
+            }
+
+            return result
+        }
+
+        if let array = value as? [Any] {
+            return array.map { restoreNulls($0, paths, path + ["*"]) }
+        }
+
+        return value
     }
 
     // MARK: - Frame builders

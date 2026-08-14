@@ -50,7 +50,7 @@ for gem_bin in /opt/homebrew/lib/ruby/gems/*/bin; do
     [ -d "$gem_bin" ] && export PATH="$gem_bin:$PATH"
 done
 
-ALL=(python go ruby rust swift java kotlin)
+ALL=(python go ruby rust swift java kotlin dart)
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")
@@ -231,6 +231,36 @@ lint_suite() {
             done
 
             ktlint "${kotlin_files[@]}"
+            ;;
+        dart)
+            command -v dart >/dev/null || {
+                missing dart
+                return 3
+            }
+            cd "$ROOT/sdks/dart" || return 1
+            # `pub get` first: `dart analyze` resolves `package:lunora/…` through
+            # .dart_tool/package_config.json, which is gitignored. --offline
+            # because this package declares no dependencies, so a lint run must
+            # never be able to reach the network.
+            #
+            # --language-version, for the same reason rustfmt needs --config-path
+            # and ruff needs --config: `dart format`'s style is chosen by the SDK
+            # constraint in the nearest pubspec, the smoke lives outside this
+            # package, and there is no pubspec above `sdks/smoke/`. Left to
+            # discovery the smoke would be formatted against the LATEST style
+            # while the transport is formatted against 3.6 — two rule sets in one
+            # leg. Keep this in step with `sdks/dart/pubspec.yaml`.
+            #
+            # --fatal-infos, because `dart analyze` exits 0 on an info-level lint
+            # by default: without it every rule in `analysis_options.yaml` that
+            # reports at info — which is most of them — would be advisory.
+            dart pub get --offline >/dev/null \
+                && dart format --output=none --set-exit-if-changed --line-length=160 --language-version=3.6 lib test \
+                && dart analyze --fatal-infos \
+                && dart format --output=none --set-exit-if-changed --line-length=160 --language-version=3.6 "$ROOT/sdks/smoke/dart"
+            # No `dart analyze` over the smoke: it imports `package:lunora_sdk`,
+            # which only exists once an SDK has been generated. `generated-check.sh`
+            # analyses it there — the same split the go leg makes for `go vet`.
             ;;
         *)
             echo "unknown language: $1" >&2

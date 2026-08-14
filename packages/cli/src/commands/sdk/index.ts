@@ -7,6 +7,7 @@ const sdkCommand: Command = {
     examples: [
         ["lunora sdk generate --lang python", "Emit a Python SDK, transport included, into ./sdk/python"],
         ["lunora sdk generate --lang go --out ./clients/go", "Choose the language and output directory"],
+        ["lunora sdk generate --lang dart", "A Flutter-ready Dart client — live queries arrive as a Stream"],
         ["lunora sdk generate --lang kotlin", "Any of the registered targets; --lang lists them"],
         ["lunora sdk generate --lang rust --from ./sdks", "Copy the transport from a local checkout instead of fetching it"],
     ],

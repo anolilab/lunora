@@ -3,7 +3,7 @@
 # a call from a throwaway consumer project.
 #
 #   ./sdks/generated-check.sh python        # one language
-#   ./sdks/generated-check.sh               # all seven, sequentially
+#   ./sdks/generated-check.sh               # all eight, sequentially
 #
 # WHY OUTSIDE THE REPO. `lunora sdk generate` now COPIES the transport into its
 # output, so the promise under test is "this directory runs with no Lunora package
@@ -44,7 +44,7 @@ if [ ! -f "$CLI" ]; then
     exit 2
 fi
 
-ALL=(python go ruby rust swift java kotlin)
+ALL=(python go ruby rust swift java kotlin dart)
 LANGS=("$@")
 if [ ${#LANGS[@]} -eq 0 ]; then
     LANGS=("${ALL[@]}")
@@ -147,6 +147,36 @@ run_consumer() {
         kotlin)
             kotlinc "$out" "$ROOT/sdks/smoke/kotlin/GeneratedSmoke.kt" -include-runtime -d "$app/smoke.jar" -nowarn
             java -cp "$app/smoke.jar" dev.lunora.GeneratedSmokeKt
+            ;;
+        # A path dependency, which is the one stanza a consumer writes. pub takes
+        # a path dependency's identity from the DEPENDED-ON pubspec's `name:`, so
+        # `lunora_sdk` below is the emitted manifest's name and not the output
+        # directory's — the opposite of SwiftPM, and the reason this leg needs no
+        # `basename` the way the swift one does.
+        dart)
+            {
+                echo 'name: lunora_smoke'
+                echo 'publish_to: none'
+                echo 'environment:'
+                echo '    sdk: ^3.6.0'
+                echo 'dependencies:'
+                echo '    lunora_sdk:'
+                echo "        path: $out"
+            } >"$app/pubspec.yaml"
+            mkdir -p "$app/bin"
+            cp "$ROOT/sdks/smoke/dart/generated_smoke.dart" "$app/bin/"
+            # Analysed in BOTH directories, and the first is the one that matters.
+            # `dart analyze` only reports on the package it is run in: from the
+            # consumer it type-checks the smoke's use of the surface but stays
+            # silent about the surface itself, so a generated method the smoke
+            # does not call could reference an undefined type and still pass —
+            # measured, not assumed. Running it inside the generated package is
+            # the counterpart of `swift build`, and it covers quicktype's models
+            # too. A generated package carries no analysis_options.yaml, so this
+            # is the default error/warning set with no style lints, which is
+            # exactly right for output whose style this repo does not own.
+            (cd "$out" && dart pub get --offline && dart analyze) \
+                && (cd "$app" && dart pub get --offline && dart analyze && dart run bin/generated_smoke.dart)
             ;;
         *)
             echo "unknown language: $lang" >&2
