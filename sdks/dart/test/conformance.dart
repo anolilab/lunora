@@ -32,6 +32,7 @@ Future<void> main() async {
   await run(caseWireCodecRoundTrip);
   await run(caseUndefinedIsDistinctFromNull);
   await run(caseOverLongBigIntRejected);
+  await run(caseMalformedBytesRejected);
   await run(caseDepthCapEnforced);
   await run(caseStableWireKeyFixtures);
   await run(caseFormatNumberMatchesEcmaScript);
