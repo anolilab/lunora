@@ -1,5 +1,7 @@
+import type { ExecutionContextLike } from "../../../shared/execution-context";
+import readNativeIdentity from "./native";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
-import { assertVerifyOptions, verifyRequest } from "./verify";
+import { assertJwtFallbackOptions, verifyRequest } from "./verify";
 
 /**
  * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
@@ -21,11 +23,17 @@ const nonEmpty = (value: unknown): string | undefined => (typeof value === "stri
 
 /**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,
- * falling back to `email`, then `common_name` for service tokens (whose `sub` is
- * empty). Returns `undefined` when none is present — the resolver treats that as
- * anonymous rather than minting an identity with no id.
+ * then Cloudflare's `user_uuid` (present on the platform-supplied identity, never
+ * on the JWT), then `email`, then `common_name` for service tokens (whose `sub`
+ * is empty). Returns `undefined` when none is present — the resolver treats that
+ * as anonymous rather than minting an identity with no id.
+ *
+ * `user_uuid` sits ahead of `email` because it is the stable id: an address can
+ * be reassigned within an organization, which would silently hand the new holder
+ * the old one's rows.
  */
-const deriveUserId = (claims: AccessClaims): string | undefined => nonEmpty(claims.sub) ?? nonEmpty(claims.email) ?? nonEmpty(claims.common_name);
+const deriveUserId = (claims: AccessClaims): string | undefined =>
+    nonEmpty(claims.sub) ?? nonEmpty(claims.user_uuid) ?? nonEmpty(claims.email) ?? nonEmpty(claims.common_name);
 
 /**
  * Build the resolved identity from verified claims. Promotes the common Access
@@ -52,36 +60,58 @@ const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOption
 };
 
 /**
- * Create a `resolveIdentity` adapter for Cloudflare Access. The returned
- * function reads the Access JWT off the request, verifies it (`verifyAccessJwt`),
- * and maps the claims onto the identity shape `@lunora/runtime` expects — so a
- * verified Access user/service-token becomes `ctx.auth` for every
- * query/mutation/action (and feeds RLS) with no further wiring.
+ * Create a `resolveIdentity` adapter for Cloudflare Access, so a verified Access
+ * user or service token becomes `ctx.auth` for every query/mutation/action (and
+ * feeds RLS) with no further wiring.
  *
- * Behaviour is **fail-closed → anonymous**: a missing token, or a token that
- * fails verification, resolves to `null` (the request proceeds unauthenticated
- * and RLS denies). Use {@link CreateAccessResolverOptions.onError} to observe
- * verification failures.
+ * It authenticates from whichever of the two Access shapes the deployment uses,
+ * **platform identity first**:
+ *
+ * 1. `context.access` — the identity Cloudflare attaches when the Access policy
+ * is attached to the **Worker** (covering its custom domains, routes,
+ * `workers.dev`, and preview URLs at once). Nothing is verified because nothing
+ * can be forged: the platform authenticated the caller before the Worker ran,
+ * and the field is absent unless it did. No JWKS fetch, no `aud` to get wrong.
+ * This is also what `wrangler.jsonc`'s `access.dev` block simulates, so a
+ * locally-simulated identity reaches `ctx.auth` too.
+ * 2. The `Cf-Access-Jwt-Assertion` header (or `CF_Authorization` cookie),
+ * verified against your team JWKS. Needed for **hostname-scoped** Access
+ * applications, which do not populate `context.access`. Configured by passing
+ * `teamDomain` + `aud`; omit both (or pass no options at all) to run
+ * platform-identity-only.
+ *
+ * Behaviour is **fail-closed → anonymous** on both paths: no identity, or a token
+ * that fails verification, resolves to `null` (the request proceeds
+ * unauthenticated and RLS denies). Use {@link CreateAccessResolverOptions.onError}
+ * to observe verification failures.
  *
  * Wire it in your worker entry:
  *
  * ```ts
+ * // Access policy attached to the Worker — nothing to configure.
+ * options.resolveIdentity = createAccessResolver();
+ *
+ * // Hostname-scoped Access application — JWT verification config required.
  * options.resolveIdentity = createAccessResolver({
  *     teamDomain: env.CF_ACCESS_TEAM_DOMAIN, // "acme" | "acme.cloudflareaccess.com"
  *     aud: env.CF_ACCESS_AUD,                // the Access app's AUD tag
  * });
  * ```
  */
-export const createAccessResolver = (options: CreateAccessResolverOptions): ResolveIdentityFunction => {
-    // Validate the static config eagerly so a broken deployment (unset teamDomain
-    // or aud) fails fast here at wiring time instead of degrading to
-    // silent-anonymous — and thus RLS-denied — on every request with no signal.
-    assertVerifyOptions(options);
+export const createAccessResolver = (options?: CreateAccessResolverOptions): ResolveIdentityFunction => {
+    // Validate the static config eagerly so a half-configured deployment (an
+    // unset teamDomain or aud) fails fast here at wiring time instead of
+    // degrading to silent-anonymous — and thus RLS-denied — on every request with
+    // no signal. `undefined` means "no JWT fallback", a legal mode, not a miss.
+    const jwtOptions = assertJwtFallbackOptions(options);
 
-    return async (request: Request): Promise<ResolvedAccessIdentity | null> => {
-        const claims = await verifyRequest(request, options);
+    return async (request: Request, _env?: unknown, context?: ExecutionContextLike): Promise<ResolvedAccessIdentity | null> => {
+        // Platform identity wins when present: it is the stronger of the two
+        // (authenticated by the edge, unforgeable, nothing to re-verify), and on a
+        // Worker-scoped Access deployment it is the only one that exists.
+        const claims = (await readNativeIdentity(context)) ?? (jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions));
 
-        return claims === undefined ? ANONYMOUS : toIdentity(claims, options.mapClaims);
+        return claims === undefined ? ANONYMOUS : toIdentity(claims, options?.mapClaims);
     };
 };
 
@@ -95,10 +125,10 @@ export const createAccessResolver = (options: CreateAccessResolverOptions): Reso
  */
 export const composeResolvers =
     (...resolvers: ResolveIdentityFunction[]): ResolveIdentityFunction =>
-    async (request: Request, env?: unknown): Promise<ResolvedIdentityLike | null> => {
+    async (request: Request, env?: unknown, context?: ExecutionContextLike): Promise<ResolvedIdentityLike | null> => {
         for (const resolve of resolvers) {
             // eslint-disable-next-line no-await-in-loop -- ordered fallback: each resolver may early-return, so they cannot run concurrently
-            const identity = await resolve(request, env);
+            const identity = await resolve(request, env, context);
 
             if (identity) {
                 return identity;

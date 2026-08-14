@@ -9,6 +9,29 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/runtime`
 
+### `AccessContextLike` (interface)
+
+```ts
+interface AccessContextLike {
+    getIdentity: () => AccessIdentityLike | null | undefined | Promise<AccessIdentityLike | null | undefined>;
+}
+```
+
+### `AccessIdentityLike` (interface)
+
+```ts
+interface AccessIdentityLike {
+    [claim: string]: unknown;
+    common_name?: string;
+    email?: string;
+    exp?: number;
+    groups?: unknown;
+    name?: string;
+    sub?: string;
+    user_uuid?: string;
+}
+```
+
 ### `AdminTableResolver` (type)
 
 ```ts
@@ -570,6 +593,7 @@ interface DynamicShardRegistryOptions {
 
 ```ts
 interface ExecutionContextLike {
+    access?: AccessContextLike;
     cache?: {
         purge: (options: {
             purgeEverything?: boolean;
@@ -967,7 +991,7 @@ interface IdentityContractLike {
 ### `IdentityResolver` (type)
 
 ```ts
-type IdentityResolver = (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+type IdentityResolver = (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
 ```
 
 ### `IdentityValidation` (type)
@@ -2142,7 +2166,7 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 
 ```ts
 interface WorkerOptions {
-    adminGate?: (request: Request) => boolean | Promise<boolean>;
+    adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
     adminToken?: string;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
@@ -2182,7 +2206,7 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
     replicaReads?: boolean;
     requireEphemeralWsToken?: boolean;
-    resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+    resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;
     restRateLimit?: RestRateLimit;
     routes?: Record<string, Route>;
@@ -2223,7 +2247,7 @@ const applyJurisdiction: (namespace: ShardNamespaceLike, jurisdiction?: DurableO
 ### `applyRestCache` (const)
 
 ```ts
-const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, request: Request) => Response;
+const applyRestCache: (response: Response, policy: RestCachePolicy | undefined, request: Request, context?: ExecutionContextLike) => Response;
 ```
 
 ### `argsFromQuery` (const)
@@ -2500,7 +2524,7 @@ const readShardKey: (url: URL, request: Request) => string | undefined;
 ### `requestCarriesCredentials` (const)
 
 ```ts
-const requestCarriesCredentials: (request: Request, policy: RestCachePolicy) => boolean;
+const requestCarriesCredentials: (request: Request, policy: RestCachePolicy, context?: ExecutionContextLike) => boolean;
 ```
 
 ### `resolveLogArchiveFromEnv` (const)
@@ -2530,7 +2554,7 @@ const resolveShard: (namespace: ShardNamespaceInput, shardKey: string, locationH
 ### `restCacheHeaders` (const)
 
 ```ts
-const restCacheHeaders: (policy: RestCachePolicy, request: Request, status: number) => Record<string, string> | undefined;
+const restCacheHeaders: (policy: RestCachePolicy, request: Request, status: number, context?: ExecutionContextLike) => Record<string, string> | undefined;
 ```
 
 ### `restSurfaceFromRegistry` (const)

@@ -285,3 +285,60 @@ describe("identity contract trust boundary", () => {
         expect(res.status).toBe(200);
     });
 });
+
+describe("execution context forwarded to the identity layer", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    /**
+     * A context shaped like the one Cloudflare hands a Worker protected by an
+     * Access policy attached to the Worker itself: the caller's identity arrives
+     * out-of-band on `ctx.access`, not on the request, so a resolver can only
+     * reach it if the worker forwards the context it was invoked with.
+     */
+    const accessContext = (email: string): ExecutionContextLike => {
+        return {
+            ...fakeContext,
+            access: { getIdentity: () => Promise.resolve({ email, sub: "user-1" }) },
+        };
+    };
+
+    it("hands resolveIdentity the ExecutionContext the request was served with", async () => {
+        expect.assertions(2);
+
+        const resolveIdentity = vi.fn<IdentityResolver>((_request, _env, context) => {
+            const identity = context?.access?.getIdentity();
+
+             
+            return identity === undefined ? null : Promise.resolve({ userId: "resolved-from-context" });
+        });
+
+        const worker = createWorker({ resolveIdentity, shardDO: shard.namespace });
+
+        const res = await worker.fetch(rpc(), {}, accessContext("user@acme.test"));
+
+        expect(res.status).toBe(200);
+        expect(shard.calls[0]?.request.headers.get("x-lunora-userid")).toBe("resolved-from-context");
+    });
+
+    it("passes undefined rather than throwing when the host supplied no context", async () => {
+        expect.assertions(1);
+
+        const seen: (ExecutionContextLike | undefined)[] = [];
+        const worker = createWorker({
+            resolveIdentity: (_request, _env, context) => {
+                seen.push(context);
+
+                return { userId: "u1" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(seen[0]).toBe(fakeContext);
+    });
+});

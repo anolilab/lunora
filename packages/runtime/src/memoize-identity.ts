@@ -48,7 +48,7 @@ const memoizeIdentityPerRequest = (resolver: IdentityResolver): IdentityResolver
     // to outlive its request.
     const inFlight = new WeakMap<Request, ReturnType<IdentityResolver>>();
 
-    return (request, env) => {
+    return (request, env, context) => {
         const cached = inFlight.get(request);
 
         if (cached) {
@@ -57,7 +57,7 @@ const memoizeIdentityPerRequest = (resolver: IdentityResolver): IdentityResolver
 
         // Cache the PROMISE, not the result, so two concurrent fan-out legs that both
         // miss share one verification instead of racing two.
-        const pending = Promise.resolve(resolver(request, env));
+        const pending = Promise.resolve(resolver(request, env, context));
 
         inFlight.set(request, pending);
 
@@ -129,10 +129,13 @@ const DEFAULT_MAX_ENTRIES = 500;
  * **Contract — safe ONLY if the resolver reads nothing but `Cookie` / `Authorization`.**
  * This key is the identity of the *credential*, not of the *request*. If the
  * resolver authenticates off any other attribute (an `X-API-Key` header, a client
- * cert, `new URL(request.url).origin`, an Access JWT header, …), two distinct
- * principals sharing (or both lacking) Cookie/Authorization collide onto one entry
- * and the cache serves the WRONG identity. Such a resolver MUST pass
- * {@link MemoizeIdentityOptions.cacheKey} so the key covers exactly what it reads.
+ * cert, `new URL(request.url).origin`, an Access JWT header, the `ExecutionContext`'s
+ * `access` identity, …), two distinct principals sharing (or both lacking)
+ * Cookie/Authorization collide onto one entry and the cache serves the WRONG
+ * identity. Such a resolver MUST pass {@link MemoizeIdentityOptions.cacheKey} so the
+ * key covers exactly what it reads — or, for a credential that lives entirely off the
+ * request (the Worker-scoped Access identity), return `undefined` so it is never
+ * cached across requests at all.
  */
 const credentialKey = (request: Request): string | undefined => {
     const cookie = request.headers.get("cookie") ?? "";
@@ -177,11 +180,11 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
     // Insertion-ordered, so evicting the first key evicts the oldest entry.
     const cache = new Map<string, { expiresAt: number; value: ReturnType<IdentityResolver> }>();
 
-    return (request, env) => {
+    return (request, env, context) => {
         const key = keyOf(request);
 
         if (key === undefined) {
-            return perRequest(request, env);
+            return perRequest(request, env, context);
         }
 
         const now = Date.now();
@@ -191,7 +194,7 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
             return hit.value;
         }
 
-        const pending = Promise.resolve(perRequest(request, env));
+        const pending = Promise.resolve(perRequest(request, env, context));
 
         // A rejected verification must not be cached — the next request has to retry
         // rather than inherit a transient failure for the whole TTL.

@@ -696,11 +696,15 @@ interface WorkerOptions {
      * The intended producer is `@lunora/cloudflare-access`'s `accessAdminGate(...)`,
      * which verifies the request's `Cf-Access-Jwt-Assertion` JWT and applies an
      * `isAdmin(claims)` predicate — so the Studio can sit behind Cloudflare Access
-     * instead of (or alongside) a shared admin token. It takes only the request
-     * (verification needs static team-domain/aud config + the remote JWKS, no env
-     * binding), so it composes without threading async through every admin route.
+     * instead of (or alongside) a shared admin token. It needs no `env` binding
+     * (verification is static team-domain/aud config + the remote JWKS), so it
+     * composes without threading async through every admin route.
+     *
+     * The second argument is the request's `ExecutionContext`, carrying
+     * `context.access` when the Access policy is attached to the Worker rather
+     * than to a hostname. It is `undefined` when the host supplied no context.
      */
-    adminGate?: (request: Request) => boolean | Promise<boolean>;
+    adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
 
     /**
      * Admin bearer token expected by the export/import endpoints. When unset,
@@ -1150,8 +1154,16 @@ interface WorkerOptions {
      * forwarded as `x-lunora-identity` so `ctx.auth.getIdentity()` can
      * return them. Returning `null` (or omitting this option) means
      * anonymous — no identity headers are injected.
+     *
+     * The third argument is the request's `ExecutionContext`, forwarded so a
+     * resolver can read identity the platform supplies out-of-band rather than
+     * off the request — `context.access` on a Worker protected by Cloudflare
+     * Access is the one that exists today. It is `undefined` on the paths that
+     * have no context to give (a direct {@link LunoraWorker.serverQuery} call, a
+     * host that mounts the worker without one), so a resolver that uses it must
+     * still handle its absence.
      */
-    resolveIdentity?: (request: Request, env: unknown) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
+    resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
 
     /**
      * Resolve a table's sharding metadata. Required by the import endpoint to
@@ -1713,6 +1725,22 @@ const queueNameOf = (batch: unknown): string => {
     return typeof name === "string" && name.length > 0 ? name : "unknown";
 };
 
+/**
+ * The `ExecutionContext` of the request currently in flight, so the many places
+ * that resolve identity can hand it to `resolveIdentity` without every one of
+ * them (including the extracted admin-route modules, which take
+ * `resolveForwardContext` as an injected dep) having to thread a fourth argument
+ * through its own signature.
+ *
+ * Recorded once, at the single `fetch` funnel in `handle`, and keyed on the
+ * `Request` object — so an entry cannot outlive its request, cannot be read by a
+ * different one, and needs no eviction policy. Same shape and lifetime as the
+ * `accessAdminGrants` WeakSet below. A path with no context recorded (a direct
+ * `serverQuery`, a partial host mount) simply reads `undefined`, which is what
+ * the resolver contract already documents.
+ */
+const executionContextByRequest = new WeakMap<Request, ExecutionContextLike>();
+
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
@@ -1768,7 +1796,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         return { claims: null, headers, identity: null, userId: null };
     }
 
-    const identity = await resolveIdentity(request, env);
+    const identity = await resolveIdentity(request, env, executionContextByRequest.get(request));
 
     if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -4592,7 +4620,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         try {
-            if (await options.adminGate(request)) {
+            if (await options.adminGate(request, executionContextByRequest.get(request))) {
                 accessAdminGrants.add(request);
             }
         } catch {
@@ -4601,6 +4629,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        // Record the context for this request before anything resolves identity:
+        // `resolveIdentity` / `adminGate` read it back through
+        // `executionContextByRequest` to reach platform-supplied identity
+        // (`context.access` under Worker-scoped Cloudflare Access).
+        executionContextByRequest.set(request, context);
+
         const url = new URL(request.url);
 
         // Fast-path reject on a declared `Content-Length` over the cap — cheap
@@ -4938,7 +4972,7 @@ const createLunoraHandler =
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
-export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+export { type AccessContextLike, type AccessIdentityLike, type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 export type {
     AuthAdmin,
     AuthCapabilities,

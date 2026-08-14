@@ -1,6 +1,7 @@
 export { composeResolvers, createAccessResolver } from "./resolver";
 export type {
     AccessClaims,
+    AccessJwtFallbackOptions,
     AccessKeySet,
     CreateAccessResolverOptions,
     ResolvedAccessIdentity,

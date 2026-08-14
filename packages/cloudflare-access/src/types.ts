@@ -1,7 +1,13 @@
 import type { JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
 
+import type { ExecutionContextLike } from "../../../shared/execution-context";
+
 /**
- * The claims Cloudflare Access mints into the `Cf-Access-Jwt-Assertion` JWT.
+ * The verified claims of a Cloudflare Access caller — from the
+ * `Cf-Access-Jwt-Assertion` JWT (hostname-scoped Access applications) or from the
+ * platform-supplied `ctx.access.getIdentity()` (Access policies attached to the
+ * Worker). Both paths produce this one shape, so nothing downstream branches on
+ * how the caller was authenticated.
  *
  * Extends the standard `JWTPayload` (`iss`/`aud`/`sub`/`exp`/`iat`/…) with the
  * Access-specific fields. Which optional fields are present depends on the
@@ -10,7 +16,7 @@ import type { JWTPayload, JWTVerifyGetKey, KeyObject } from "jose";
  * Service tokens carry `common_name` and an empty `sub`; there is no `email`.
  *
  * Cloudflare may add further custom claims — they pass through verbatim via the
- * index signature so the claims stay a faithful view of the token.
+ * index signature so the claims stay a faithful view of the identity.
  */
 export interface AccessClaims extends JWTPayload {
     /** Service-token name. Present for non-interactive (machine) callers instead of `email`. */
@@ -23,8 +29,12 @@ export interface AccessClaims extends JWTPayload {
     groups?: string[];
     /** Per-session nonce Cloudflare rotates on re-authentication. */
     identity_nonce?: string;
+    /** Display name from the identity provider. Populated on the platform-supplied identity, not on the JWT. */
+    name?: string;
     /** Token kind, e.g. `"app"`. */
     type?: string;
+    /** Cloudflare's per-user UUID. Populated on the platform-supplied identity, not on the JWT. */
+    user_uuid?: string;
 }
 
 /**
@@ -127,8 +137,38 @@ export interface RequestVerifyOptions extends VerifyAccessJwtOptions {
     onError?: (error: unknown, request: Request) => void;
 }
 
-/** Options for `createAccessResolver`; extends {@link RequestVerifyOptions}. */
-export interface CreateAccessResolverOptions extends RequestVerifyOptions {
+/**
+ * {@link RequestVerifyOptions} with the JWT-verification config made optional,
+ * for the primitives that can also authenticate off the platform-supplied
+ * identity (`ctx.access`) and therefore may legitimately be given no JWT config
+ * at all.
+ *
+ * The two fields are **all-or-nothing**: supply both to enable the
+ * `Cf-Access-Jwt-Assertion` fallback (needed for hostname-scoped Access
+ * applications, which do not populate `ctx.access`), or neither to run
+ * platform-identity-only. Supplying exactly one throws at construction — that is
+ * always a misconfiguration (classically an unset `env.CF_ACCESS_AUD`), and
+ * silently degrading it to "no JWT fallback" would turn a broken deployment into
+ * a quietly anonymous one.
+ */
+export interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "teamDomain"> {
+    /**
+     * The Access application **AUD tag(s)**. Required together with `teamDomain`
+     * to enable JWT verification; omit both to authenticate only off the
+     * platform-supplied identity.
+     */
+    aud?: string | string[];
+
+    /**
+     * Your Cloudflare Access team domain. Required together with `aud` to enable
+     * JWT verification; omit both to authenticate only off the platform-supplied
+     * identity.
+     */
+    teamDomain?: string;
+}
+
+/** Options for `createAccessResolver`; extends {@link AccessJwtFallbackOptions}. */
+export interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
     /**
      * Remap verified claims into the resolved identity. Return an object to
      * shallow-merge over the defaults; return a `userId` to override the derived
@@ -141,5 +181,14 @@ export interface CreateAccessResolverOptions extends RequestVerifyOptions {
  * A `resolveIdentity`-shaped function: maps an inbound request to a verified
  * identity (or `null` for anonymous). Assignable to `@lunora/runtime`'s
  * `WorkerOptions.resolveIdentity`.
+ *
+ * The third argument is the request's `ExecutionContext`, which the runtime
+ * forwards so a resolver can read the identity Cloudflare Access attaches to a
+ * Worker-protected request (`context.access`). It is `undefined` on paths that
+ * have no context to give, so a resolver must handle its absence.
  */
-export type ResolveIdentityFunction = (request: Request, env?: unknown) => (ResolvedIdentityLike | null) | Promise<ResolvedIdentityLike | null>;
+export type ResolveIdentityFunction = (
+    request: Request,
+    env?: unknown,
+    context?: ExecutionContextLike,
+) => (ResolvedIdentityLike | null) | Promise<ResolvedIdentityLike | null>;

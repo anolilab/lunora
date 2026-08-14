@@ -197,8 +197,10 @@ const buildRestRoutes = (deps: RestRouteDeps): Record<string, RestRoute> => {
             // Applied AFTER dispatch so the effective `Cache-Control` can account
             // for the real status (an error is never cached) and for whether the
             // caller presented credentials (a credentialed exchange is forced
-            // `private`, see `rest-cache`).
-            return applyRestCache(response, cache, request);
+            // `private`, see `rest-cache`). The context is passed because one
+            // credential — the Cloudflare Access identity under a Worker-scoped
+            // policy — arrives there rather than on the request.
+            return applyRestCache(response, cache, request, context);
         };
     }
 

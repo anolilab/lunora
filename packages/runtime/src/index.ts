@@ -11,6 +11,8 @@ export {
 export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format";
 export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {
+    AccessContextLike,
+    AccessIdentityLike,
     AdminTableResolver,
     AuthAdmin,
     AuthCapabilities,

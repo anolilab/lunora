@@ -31,6 +31,11 @@ type RestFunctionKind = "action" | "mutation" | "query";
  * query parameter, …). An app doing that must declare its own header names via
  * {@link RestCachePolicy.credentialHeaders}, or not mark the endpoint
  * `scope: "public"`.
+ *
+ * One credential is deliberately absent because it is not a header at all: under
+ * a Cloudflare Access policy attached to the Worker, the caller's identity
+ * arrives on the `ExecutionContext`. `@lunora/runtime`'s `requestCarriesCredentials`
+ * checks for that separately.
  */
 const CREDENTIAL_HEADERS = ["authorization", "cf-access-jwt-assertion", "cookie"] as const;
 

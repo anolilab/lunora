@@ -107,6 +107,46 @@ const assertVerifyOptions = (options: VerifyAccessJwtOptions): void => {
 };
 
 /**
+ * Resolve the optional JWT-verification half of a primitive's config, for the
+ * primitives that can also authenticate off the platform-supplied `ctx.access`
+ * identity and therefore may legitimately be handed no JWT config at all.
+ *
+ * Returns the options narrowed to a fully-configured verify config when both
+ * `teamDomain` and `aud` are present, `undefined` when both are absent (run
+ * platform-identity-only, with no `Cf-Access-Jwt-Assertion` fallback), and
+ * throws when exactly one is present.
+ *
+ * The all-or-nothing rule is what keeps "no JWT config" an explicit choice
+ * rather than an accident: a half-configured deployment (classically an unset
+ * `env.CF_ACCESS_AUD`, whose `aud` is then `undefined`) is a misconfiguration
+ * that used to fail fast, and must keep failing fast now that a missing config
+ * is otherwise a legal mode — degrading it to "no fallback" would turn a broken
+ * deployment into a silently anonymous one on every hostname-scoped request.
+ */
+const assertJwtFallbackOptions = <T extends Partial<VerifyAccessJwtOptions>>(options: T | undefined): (T & VerifyAccessJwtOptions) | undefined => {
+    if (options === undefined) {
+        return undefined;
+    }
+
+    const { aud, teamDomain } = options;
+
+    if (aud === undefined && teamDomain === undefined) {
+        return undefined;
+    }
+
+    if (aud === undefined || teamDomain === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/cloudflare-access: `teamDomain` and `aud` must be configured together — supply both to verify the Cf-Access-Jwt-Assertion JWT, or neither to authenticate only off the Worker's Cloudflare Access identity",
+        );
+    }
+
+    assertVerifyOptions({ ...options, aud, teamDomain });
+
+    return options as T & VerifyAccessJwtOptions;
+};
+
+/**
  * Verify a Cloudflare Access JWT and return its claims.
  *
  * Enforces, in one shot: RS256 signature against the team JWKS, `iss` equal to
@@ -180,4 +220,4 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions): P
     }
 };
 
-export { accessIssuer, assertVerifyOptions, verifyAccessJwt, verifyRequest };
+export { accessIssuer, assertJwtFallbackOptions, assertVerifyOptions, verifyAccessJwt, verifyRequest };
