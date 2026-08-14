@@ -485,10 +485,12 @@ const Navbar = (): ReactElement => {
             </Shell>
 
             {/* mega-menu dropdown — a single centered box that morphs size between
-                menus. Its offset tracks the row (`h-28`, 112px) plus a small gap,
-                so the panel clears the tinted bar instead of starting inside it;
-                it was still on the 4.25rem the old h-16 row needed. */}
-            <div className="absolute top-[7.5rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+                menus. It docks at exactly the row height (`h-28`, 112px) — the
+                same offset the packages page gives its sticky filter bar, so the
+                open panel and that bar share one top line instead of missing it
+                by a couple of pixels. The tinted bar is `h-20` centred in the
+                row, ending 16px above its edge, so nothing is covered. */}
+            <div className="absolute top-28 left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
                 <AnimatePresence>
                     {active ? (
                         <motion.div

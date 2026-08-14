@@ -137,7 +137,11 @@ const PackagesListing: FC = () => {
                         <div className="relative">
                             <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
                             <input
+                                autoComplete="off"
                                 className="w-full border border-hairline bg-wash py-2 pr-4 pl-9 font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-hairline-strong sm:w-64"
+                                data-1p-ignore=""
+                                data-form-type="other"
+                                data-lpignore="true"
                                 onChange={(event) => {
                                     setSearch(event.target.value);
                                 }}

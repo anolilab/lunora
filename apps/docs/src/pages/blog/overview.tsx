@@ -21,7 +21,7 @@ const Byline: FC<{ name?: string }> = ({ name }) => (name === undefined ? null :
 
 const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-col gap-6" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover category={post.category} eager image={post.image} title={post.title} />
+        <Cover category={post.category} description={post.description} eager image={post.image} title={post.title} />
         <div className="flex flex-col gap-4">
             <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h2 className="max-w-2xl text-h2 font-bold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
@@ -39,7 +39,7 @@ const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
  */
 const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-1 flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover category={post.category} image={post.image} title={post.title} />
+        <Cover category={post.category} description={post.description} image={post.image} title={post.title} />
         <div className="flex flex-col gap-2.5">
             <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h3 className="text-h3 font-semibold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
@@ -56,7 +56,7 @@ const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
         <li className="border-t border-hairline last:border-b">
             <Link className="group flex items-center gap-5 py-5 transition-colors hover:bg-wash sm:gap-7" params={{ slug: post.slug }} to="/blog/$slug">
                 <div className="w-28 flex-none sm:w-40">
-                    <Cover category={post.category} image={post.image} title={post.title} />
+                    <Cover category={post.category} description={post.description} image={post.image} title={post.title} />
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                     <MetaLine category={post.category} publishedAt={post.publishedAt} />
@@ -103,7 +103,11 @@ const Filters: FC<{
             <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
             <input
                 aria-label="Search articles"
+                autoComplete="off"
                 className="w-full border border-hairline bg-wash py-2 pr-4 pl-9 font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-hairline-strong sm:w-64"
+                data-1p-ignore=""
+                data-form-type="other"
+                data-lpignore="true"
                 onChange={(event) => {
                     onQuery(event.target.value);
                 }}

@@ -144,7 +144,12 @@ const PageHeader: FC<{
                 // shows two adjacent stops and walks the window along, so it
                 // drifts violet → rose → cyan over a slow minute instead of
                 // painting the stock three-way mesh that belongs to no brand.
-                <div className={cn("animate-field-in absolute inset-0 motion-reduce:animate-none", fieldTone === "muted" && "opacity-[0.22] grayscale")}>
+                // No `animate-field-in` here. This wrapper mounts before the
+                // shader has a canvas, so animating it faded an empty box and
+                // the field still arrived as a cut once the first frame landed.
+                // `GradientBlinds` reveals its own canvas on that frame instead,
+                // which is the only moment there is anything to fade.
+                <div className={cn("absolute inset-0", fieldTone === "muted" && "opacity-[0.22] grayscale")}>
                     <GradientBlinds
                         angle={45}
                         blindCount={32}

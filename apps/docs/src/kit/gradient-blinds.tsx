@@ -209,6 +209,20 @@ void main() {
 }
 `;
 
+/**
+ * The reveal, as a keyframe animation rather than a transition.
+ *
+ * A transition only runs if the browser committed the starting value first, and
+ * here it never reliably does: the canvas is created, set to `opacity: 0` and
+ * revealed inside one task, so the two values coalesce and the field snaps in.
+ * Deferring by a frame — or by two — papers over that on a fast machine and
+ * loses the race on a slow one. An animation carries its own `from`, so it runs
+ * whenever it is applied, however long the shader took to compile.
+ *
+ * `both` holds the end state after it finishes; the keyframes are in app.css.
+ */
+const REVEAL_ANIMATION = "field-in 1200ms cubic-bezier(0.16, 1, 0.3, 1) both";
+
 const GradientBlinds: FC<{
     /** Gradient rotation in degrees; 0 is left→right. */
     angle?: number;
@@ -275,6 +289,10 @@ const GradientBlinds: FC<{
         canvas.style.width = "100%";
         canvas.style.height = "100%";
         canvas.style.display = "block";
+        // Hidden until `reveal()` has something to show. Compiling the program
+        // and landing the first frame takes long enough to see, and an opaque
+        // canvas spends that time as a black rectangle and then cuts to the field.
+        canvas.style.opacity = "0";
         container.append(canvas);
 
         const { colors: colorArray, count: colorCount } = prepStops(colorKey ? colorKey.split(",") : []);
@@ -443,11 +461,28 @@ const GradientBlinds: FC<{
             renderer.render({ scene: mesh });
         };
 
+        // Reveal on the frame *after* the first render, so the fade starts with
+        // pixels already in the buffer rather than racing them.
+        const reveal = () => {
+            if (reduceMotion.matches) {
+                // A reader who asked for less motion gets the backdrop, not a
+                // fade — and not a blank rectangle either.
+                canvas.style.opacity = "1";
+
+                return;
+            }
+
+            // An animation on the element wins over its inline `opacity` for the
+            // whole run, so the 0 above is the starting state, not a fight.
+            canvas.style.animation = REVEAL_ANIMATION;
+        };
+
         frame = requestAnimationFrame(loop);
 
         // One frame regardless, so a reduced-motion reader gets the backdrop as
         // a still image rather than an empty rectangle.
         renderer.render({ scene: mesh });
+        reveal();
 
         return () => {
             cancelAnimationFrame(frame);
