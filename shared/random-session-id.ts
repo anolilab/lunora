@@ -11,10 +11,10 @@
  * runtime that lacks `randomUUID`), which is the precise drift this file exists
  * to prevent — mirroring `shared/constant-time-equal.ts`.
  *
- * Resolution order:
+ * Resolution order — every path returns a bare, unprefixed id:
  *   1. `crypto.randomUUID()` — every modern browser, workerd, and Node 22+.
  *   2. `crypto.getRandomValues()` — older runtimes without `randomUUID` still
- *      ship Web Crypto's CSPRNG; hex-encode 16 bytes behind the prefix.
+ *      ship Web Crypto's CSPRNG; hex-encode 16 bytes.
  *   3. `Date.now()` — no Web Crypto at all (very old/exotic runtime); acceptable
  *      because the id is a non-secret correlation handle, not a token.
  *
@@ -31,7 +31,7 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
-const randomSessionId = (prefix = "sess"): string => {
+const randomSessionId = (): string => {
     if (typeof crypto !== "undefined") {
         if (typeof crypto.randomUUID === "function") {
             return crypto.randomUUID();
@@ -40,11 +40,11 @@ const randomSessionId = (prefix = "sess"): string => {
         if (typeof crypto.getRandomValues === "function") {
             const bytes = crypto.getRandomValues(new Uint8Array(16));
 
-            return `${prefix}-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+            return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
         }
     }
 
-    return `${prefix}-${Date.now().toString(36)}`;
+    return Date.now().toString(36);
 };
 
 export { randomSessionId };
