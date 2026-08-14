@@ -512,17 +512,6 @@ interface ShardAlarms {
 }
 ```
 
-### `ShardAsyncSqlExec` (interface)
-
-```ts
-interface ShardAsyncSqlExec {
-    all: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRow[]>;
-    run: (sql: string, params: ReadonlyArray<unknown>) => Promise<{
-        rowsAffected: number;
-    }>;
-}
-```
-
 ### `ShardDirectory` (type)
 
 ```ts
@@ -534,7 +523,6 @@ type ShardDirectory = DirectShardDirectory | TwoStepShardDirectory;
 ```ts
 interface ShardHost {
     alarms: ShardAlarms;
-    asyncSql?: ShardAsyncSqlExec;
     runSerialized: <T>(function_: () => Promise<T>) => Promise<T>;
     readonly shardKey?: string;
     sql: ShardSqlExec;
@@ -770,6 +758,7 @@ interface ConformanceHost {
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;
+    disposeTerminally?: () => void;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
@@ -829,6 +818,7 @@ interface ConformanceHost {
     cleanup?: () => void;
     createSocket?: () => unknown;
     directory: ShardDirectory;
+    disposeTerminally?: () => void;
     kv?: ShardKvStore;
     readFrames?: (socket: SocketHandle) => string[];
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;

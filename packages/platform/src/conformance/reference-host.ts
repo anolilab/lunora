@@ -5,7 +5,6 @@ import type {
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
-    ShardAsyncSqlExec,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -51,6 +50,23 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     /** The shard directory under test. */
     directory: ShardDirectory;
+
+    /**
+     * Terminally dispose this host instance, as opposed to {@link
+     * ConformanceHost.cleanup}, which some hosts (Cloudflare's DO-backed
+     * `cleanup`) use as a per-test reset rather than a true teardown — the DO's
+     * storage has no explicit close a test can drive, so `cleanup` there just
+     * disarms the pending alarm and drops socket references for the next run.
+     *
+     * Optional: only a host with a real terminal dispose implements it. Where
+     * it exists, the suite calls it once and then asserts every surface that
+     * documents a post-close behaviour (`ShardHost.alarms`,
+     * `SchedulerHost.schedule`, `SocketHost.accept`/`setTag`/`removeTag`) fails
+     * closed with a `"platform closed: …"` error — the same "report the gap
+     * instead of asserting a false close" pattern `scheduler`/`kv` already use
+     * for hosts that don't implement a surface at all.
+     */
+    disposeTerminally?: () => void;
 
     /**
      * The durable key-value store under test. Optional: a host that implements
@@ -244,20 +260,6 @@ const createReferenceHost = (): ReferenceHost => {
         },
     };
 
-    const asyncSql: ShardAsyncSqlExec = {
-        all: async (query_, params) => {
-            const statement = database.prepare(query_);
-
-            return statement.all(...(params as import("node:sqlite").SQLInputValue[]));
-        },
-        run: async (query_, params) => {
-            const statement = database.prepare(query_);
-            const result = statement.run(...(params as import("node:sqlite").SQLInputValue[]));
-
-            return { rowsAffected: Number(result.changes) };
-        },
-    };
-
     const drainQueue = (): void => {
         if (shardState.running || shardState.pending.length === 0) {
             return;
@@ -361,7 +363,6 @@ const createReferenceHost = (): ReferenceHost => {
 
     const shard: ShardHost = {
         alarms,
-        asyncSql,
         runSerialized,
         sql,
         transaction,

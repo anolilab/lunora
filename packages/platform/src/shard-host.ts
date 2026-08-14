@@ -73,16 +73,6 @@ export interface ShardSqlExec {
 }
 
 /**
- * Async SQL executor used by the engine's higher-level paths (global tables,
- * metrics, auth). Already defined in `@lunora/sql-store` as `SqlExec`; this
- * alias keeps the platform contract self-contained.
- */
-export interface ShardAsyncSqlExec {
-    all: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRow[]>;
-    run: (sql: string, params: ReadonlyArray<unknown>) => Promise<{ rowsAffected: number }>;
-}
-
-/**
  * Alarm scheduling for a shard. Alarms are durable: they survive host
  * recycling and fire at the requested timestamp.
  */
@@ -105,13 +95,6 @@ export interface ShardAlarms {
 export interface ShardHost {
     /** Durable alarm scheduling for the shard. */
     alarms: ShardAlarms;
-
-    /**
-     * Async SQL executor for engine paths that need promise-based row access
-     * (global tables, metrics, auth). Hosts may implement this over the same
-     * underlying storage as `sql`.
-     */
-    asyncSql?: ShardAsyncSqlExec;
 
     /**
      * Run `fn` with exclusive ownership of the shard. Concurrent calls are

@@ -11,10 +11,11 @@
  *
  * This module is the third such binding, and the cheapest: the engine that
  * already backs a Node shard *is* SQLite, so the dialect is the same one D1
- * injects, and the exec is the `ShardAsyncSqlExec` `createNodeShardHost`
- * already exposes. The store lives in its own database file rather than a
- * shard's, because a global table shared by every shard must not be inside any
- * one of them.
+ * injects, and the exec is `createNodeSqlExec`'s own wrap of a dedicated
+ * `better-sqlite3` connection (below) — a separate connection from any shard's,
+ * not `ShardHost.asyncSql` (which no engine path reads). The store lives in its
+ * own database file rather than a shard's, because a global table shared by
+ * every shard must not be inside any one of them.
  *
  * # Why this imports from `@lunora/d1`
  *
