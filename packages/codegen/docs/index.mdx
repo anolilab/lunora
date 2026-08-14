@@ -1,6 +1,13 @@
 ---
 title: "@lunora/codegen"
 description: "Emits _generated/{api,server,dataModel}.ts from your schema.ts."
+related:
+    - to: /docs/packages/vite
+      note: "runs codegen on schema changes during dev"
+    - to: /docs/packages/cli
+      note: "the `lunora codegen` command"
+    - to: /docs/packages/values
+      note: "the `v.*` validators the parser understands"
 ---
 
 `@lunora/codegen` reads your backend and writes the types that make it
@@ -104,8 +111,3 @@ Common options:
 - `apiSpec` — `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
 - `lunoraDirectory` — override the `lunora` subdirectory name.
 
-## See also
-
-- [@lunora/vite](/docs/packages/vite) — runs codegen on schema changes during dev
-- [@lunora/cli](/docs/packages/cli) — the `lunora codegen` command
-- [@lunora/values](/docs/packages/values) — the `v.*` validators the parser understands

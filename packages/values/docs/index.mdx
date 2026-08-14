@@ -1,6 +1,9 @@
 ---
 title: "@lunora/values"
 description: The validator runtime — v.*, Validator, Infer, Id, ValidationError, and JSON Schema export.
+related:
+    - to: /docs/packages/server
+    - to: /docs/concepts/schema
 ---
 
 `@lunora/values` is the validator runtime behind Lunora: the `v.*` factories and
@@ -175,7 +178,3 @@ const schema = argsToJsonSchema({ id: v.id("users"), limit: v.optional(v.number(
 builder, the HTTP route builder, and reusable workflow steps. `InferValidatorMap<A>`
 gives the object type of such a map (optional validators become optional keys).
 
-## See also
-
-- [@lunora/server](/docs/packages/server)
-- [Concepts: schema](/docs/concepts/schema)

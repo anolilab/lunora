@@ -1,6 +1,15 @@
 ---
 title: Auth UI
 description: Copy-in sign-in, settings, and organization screens for React, Vue, Svelte, Solid, and Angular — the code lands in your project and you own it.
+related:
+    - to: /docs/concepts/authentication
+      note: "`ctx.auth`, the server half these screens talk to"
+    - to: /docs/packages/auth
+      note: "full server configuration"
+    - to: /docs/packages/auth/plugins
+      note: "passkeys, organization, admin, 2FA"
+    - to: /docs/concepts/rls
+      note: "turning the resulting identity into per-row authorization"
 ---
 
 `@lunora/auth` gives you the server half of authentication. Auth UI gives you the
@@ -431,9 +440,3 @@ Re-running `lunora add auth-ui` three-way merges upstream changes into your copy
 Where a file you edited also changed upstream, you get a `.new` file next to it
 instead of a clobbered screen.
 
-## See also
-
-- [Authentication](/docs/concepts/authentication) — `ctx.auth`, the server half these screens talk to.
-- [@lunora/auth](/docs/packages/auth) — full server configuration.
-- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, organization, admin, 2FA.
-- [Row-level security](/docs/concepts/rls) — turning the resulting identity into per-row authorization.

@@ -1,6 +1,20 @@
 ---
 title: "@lunora/vue"
 description: Vue 3 composables built on @lunora/client — live queries, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/solid
+      note: "the SolidJS adapter"
+    - to: /docs/packages/svelte
+      note: "the Svelte adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
 `@lunora/vue` is the Vue 3 adapter for Lunora. It's a thin, idiomatic layer over
@@ -229,12 +243,3 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## See also
-
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/solid](/docs/packages/solid) — the SolidJS adapter
-- [@lunora/svelte](/docs/packages/svelte) — the Svelte adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)

@@ -1,6 +1,15 @@
 ---
 title: Environment variables
 description: Configure secrets and vars — .dev.vars locally, wrangler secrets in production, env bindings inside functions.
+related:
+    - to: /docs/deployment
+      note: "the full secrets-and-deploy flow"
+    - to: /docs/concepts/security
+      note: "env-driven CORS / CSRF configuration"
+    - to: /docs/concepts/testing
+      note: "why keeping `env` at the entry keeps handlers testable"
+    - to: /docs/packages/config
+      note: "the `.dev.vars` grammar, scaffolder, and wrangler validator"
 ---
 
 A Lunora app reads its configuration (API keys, signing secrets, allowlists)
@@ -127,9 +136,3 @@ bindings themselves.
 - Run `lunora env doctor` in CI to catch a checked-in placeholder or a missing
   key before it ships.
 
-## See also
-
-- [Deployment](/docs/deployment) — the full secrets-and-deploy flow
-- [Security](/docs/concepts/security) — env-driven CORS / CSRF configuration
-- [Testing](/docs/concepts/testing) — why keeping `env` at the entry keeps handlers testable
-- [@lunora/config](/docs/packages/config) — the `.dev.vars` grammar, scaffolder, and wrangler validator

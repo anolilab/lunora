@@ -1,6 +1,12 @@
 ---
 title: Debugging
 description: The tools to reach for when something is broken — doctor, the error overlay, ctx.log, the Studio, insights, and live logs.
+related:
+    - to: /docs/errors
+    - to: /docs/concepts/observability
+    - to: /docs/concepts/testing
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/cli
 ---
 
 Lunora gives you several places to look when something misbehaves. Working
@@ -149,10 +155,3 @@ Once you can see the bug, pin it. The `lunoraTest` in-memory harness runs
 functions without a worker, so a failing case becomes a fast regression test —
 see [Testing](/docs/concepts/testing).
 
-## See also
-
-- [Errors & warnings reference](/docs/errors)
-- [Observability](/docs/concepts/observability)
-- [Testing](/docs/concepts/testing)
-- [Advisors](/docs/concepts/advisors)
-- [@lunora/cli](/docs/packages/cli)

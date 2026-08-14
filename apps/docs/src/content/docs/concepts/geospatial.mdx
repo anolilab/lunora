@@ -1,6 +1,12 @@
 ---
 title: Geospatial
 description: Store lat/lng points with v.geoPoint, index them with .geoIndex, and answer "places near me" and bounding-box reads with withGeoIndex.
+related:
+    - to: /docs/concepts/indexes
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/sharding
+    - to: /docs/non-goals
+    - to: /docs/packages/server
 ---
 
 Lunora stores geographic points as a first-class column and answers proximity
@@ -85,10 +91,3 @@ The [Advisors](/docs/concepts/advisors) lint your schema and discovered queries:
 a `.geoIndex()` that is declared but never read through, and a `near`/`within`
 read against a table with no geo index, are both surfaced in the Studio.
 
-## See also
-
-- [Indexes](/docs/concepts/indexes)
-- [Schema](/docs/concepts/schema)
-- [Sharding](/docs/concepts/sharding)
-- [Non-goals](/docs/non-goals)
-- [API: @lunora/server](/docs/packages/server)

@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 // The fixed navbar's height. Every header has to clear it, and it is declared
 // once here because the two places that need it silently disagreed when the bar
 // grew from h-16 to h-28 — the hero panel ended up 16px underneath it.
-const NAV_CLEARANCE = "pt-28";
+const NAV_CLEARANCE = "pt-[var(--site-nav-height)]";
 
 const FIELD = {
     article: "min-h-[max(460px,clamp(360px,38vw,500px))]",

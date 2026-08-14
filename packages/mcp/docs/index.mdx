@@ -1,6 +1,17 @@
 ---
 title: "@lunora/mcp"
 description: Model Context Protocol servers for Lunora — one exposing a deployment to AI agents, one exposing the framework's documentation.
+related:
+    - to: /docs/packages/client
+      note: "the HTTP RPC client backing every tool"
+    - to: /docs/packages/server
+      note: "defines the queries, mutations, and actions the tools call"
+    - to: /docs/packages/agent
+      note: "the durable agents the `agent_<name>` tools front"
+    - to: /docs/packages/cli
+      note: "deploy the app the server introspects"
+    - to: /docs/concepts/sharding
+      note: "the `shardKey` the run-tools accept"
 ---
 
 `@lunora/mcp` ships two [Model Context Protocol](https://modelcontextprotocol.io)
@@ -315,10 +326,3 @@ run finishes.
     deployment's threads stay isolated — never the deployment's admin token. If the token resolves to no identity, threads are not owner-isolated.
 </Callout>
 
-## See also
-
-- [@lunora/client](/docs/packages/client) — the HTTP RPC client backing every tool
-- [@lunora/server](/docs/packages/server) — defines the queries, mutations, and actions the tools call
-- [@lunora/agent](/docs/packages/agent) — the durable agents the `agent_<name>` tools front
-- [@lunora/cli](/docs/packages/cli) — deploy the app the server introspects
-- [Sharding](/docs/concepts/sharding) — the `shardKey` the run-tools accept

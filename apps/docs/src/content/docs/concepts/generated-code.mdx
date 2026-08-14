@@ -1,6 +1,19 @@
 ---
 title: Generated code
 description: What @lunora/codegen emits from your schema.ts, and how api / Id / Doc keep server and client in sync.
+related:
+    - to: /docs/concepts/schema
+      note: "`defineSchema` / `defineTable`, the input to codegen"
+    - to: /docs/concepts/queries-mutations
+      note: "the functions `api` references"
+    - to: /docs/concepts/indexes
+      note: "what the typed `ctx.db` query builder exposes"
+    - to: /docs/packages/codegen
+      note: "the emitter package"
+    - to: /docs/packages/react
+      note: "consuming `api` from hooks"
+    - to: /docs/concepts/advisors
+      note: "the static lints run during codegen"
 ---
 
 `@lunora/codegen` reads your `schema.ts` (and the functions it discovers) and
@@ -180,11 +193,3 @@ rejected.
     CLI's, not the package manager's — but `yarn codegen` will not. Chain it explicitly there: `"codegen": "lunora codegen && yarn postcodegen"`.
 </Callout>
 
-## See also
-
-- [Schema](/docs/concepts/schema) — `defineSchema` / `defineTable`, the input to codegen.
-- [Queries & mutations](/docs/concepts/queries-mutations) — the functions `api` references.
-- [Indexes](/docs/concepts/indexes) — what the typed `ctx.db` query builder exposes.
-- [@lunora/codegen](/docs/packages/codegen) — the emitter package.
-- [@lunora/react](/docs/packages/react) — consuming `api` from hooks.
-- [Advisors](/docs/concepts/advisors) — the static lints run during codegen.

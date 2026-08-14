@@ -1,6 +1,20 @@
 ---
 title: "@lunora/svelte"
 description: Svelte 5 bindings built on @lunora/client — live query stores, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/solid
+      note: "the SolidJS adapter"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
 `@lunora/svelte` is the Svelte adapter for Lunora. It's a thin, idiomatic layer
@@ -358,12 +372,3 @@ for driving a connection indicator.
 <span data-status={$status}>{$status}</span>
 ```
 
-## See also
-
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/solid](/docs/packages/solid) — the SolidJS adapter
-- [@lunora/vue](/docs/packages/vue) — the Vue adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)

@@ -1,6 +1,21 @@
 ---
 title: Best practices
 description: The opinionated idioms that keep a Lunora app fast, safe, and reactive.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "picking the right function kind"
+    - to: /docs/concepts/actions
+      note: "where side effects live"
+    - to: /docs/concepts/indexes
+      note: "making reads fast"
+    - to: /docs/concepts/sharding
+      note: "scaling state across Durable Objects"
+    - to: /docs/concepts/error-handling
+      note: "expected vs. unexpected failures"
+    - to: /docs/concepts/generated-code
+      note: "the schema-derived types"
+    - to: /docs/concepts/advisors
+      note: "the lints that enforce these idioms"
 ---
 
 Lunora has a grain. Go with it and most performance, correctness, and security
@@ -71,12 +86,3 @@ run the static set on every `lunora dev` save and on deploy, and the Studio
 computes the runtime set from live shard metrics, surfacing unindexed scans,
 missing guards, hot shards, and dead schema before they bite.
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations) — picking the right function kind.
-- [Actions](/docs/concepts/actions) — where side effects live.
-- [Indexes](/docs/concepts/indexes) — making reads fast.
-- [Sharding](/docs/concepts/sharding) — scaling state across Durable Objects.
-- [Error handling](/docs/concepts/error-handling) — expected vs. unexpected failures.
-- [Generated code](/docs/concepts/generated-code) — the schema-derived types.
-- [Advisors](/docs/concepts/advisors) — the lints that enforce these idioms.

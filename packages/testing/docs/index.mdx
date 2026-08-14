@@ -1,6 +1,15 @@
 ---
 title: "@lunora/testing"
 description: In-memory harness for queries, mutations, and actions, plus E2E mail-catcher helpers.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "the `query` / `mutation` / `action` functions the harness runs"
+    - to: /docs/concepts/rls
+      note: "drive procedures with `withIdentity` to test authorization"
+    - to: /docs/packages/mail
+      note: "captures the outbound email the helpers read"
+    - to: /docs/packages/auth
+      note: "the verification / reset / magic-link flows you test end-to-end"
 ---
 
 `@lunora/testing` is the toolkit for testing a Lunora app. It ships two
@@ -358,9 +367,3 @@ test("password reset email carries a working link", async () => {
 | `timeoutMs`    | `10000`      | Give up after this many ms.                         |
 | `fetch`        | `globalThis` | Inject a `fetch` implementation (e.g. a stub).      |
 
-## See also
-
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
-- [Concepts: row-level security](/docs/concepts/rls) — drive procedures with `withIdentity` to test authorization
-- [@lunora/mail](/docs/packages/mail) — captures the outbound email the helpers read
-- [@lunora/auth](/docs/packages/auth) — the verification / reset / magic-link flows you test end-to-end

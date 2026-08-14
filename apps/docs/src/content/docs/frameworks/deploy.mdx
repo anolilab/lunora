@@ -1,6 +1,15 @@
 ---
 title: Deploy your framework
 description: One worker, one deploy — how a composed Lunora + meta-framework app ships to Cloudflare.
+related:
+    - to: /docs/deployment
+      note: "bindings, secrets, `lunora deploy`, log tailing"
+    - to: /docs/frameworks/bring-your-framework
+      note: "the composition matrix"
+    - to: /docs/frameworks/verify-live-loaders
+      note: "prove live loaders work"
+    - to: /docs/packages/runtime
+      note: "`createWorker`, the `httpRouter` seam"
 ---
 
 A Lunora + meta-framework app is **one Cloudflare Worker**. Your framework's
@@ -121,9 +130,3 @@ apps the Lunora plugin owns the config; for class-B apps it runs in
 framework-owned config rather than taking it over. Automatic framework detection
 and full one-worker emit for class-A frameworks are in progress.
 
-## See also
-
-- [Deployment](/docs/deployment) — bindings, secrets, `lunora deploy`, log tailing
-- [Bring your framework](/docs/frameworks/bring-your-framework) — the composition matrix
-- [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — prove live loaders work
-- [@lunora/runtime](/docs/packages/runtime) — `createWorker`, the `httpRouter` seam

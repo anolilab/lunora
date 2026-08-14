@@ -1,6 +1,17 @@
 ---
 title: "@lunora/nuxt"
 description: "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers."
+related:
+    - to: /docs/packages/vue
+      note: "the reactive layer (Nuxt is Vue): `useQuery` / `useMutation` / `hydratePreloaded`"
+    - to: /docs/packages/astro
+      note: "the other framework module composing single-worker deploys via `withLunora`"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK; `@lunora/nuxt/server` re-exports its `/ssr` contract"
+    - to: /docs/packages/flags
+      note: "feature flags surfaced through `ctx.flags` / `useFlag`"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
 ---
 
 `@lunora/nuxt` runs Lunora and Nuxt as a **single Cloudflare Worker**. Instead
@@ -147,10 +158,3 @@ const newHero = useFlag("homepage-hero", false);
     re-admit v2 once a stable h3 v2 actually ships.
 </Callout>
 
-## See also
-
-- [@lunora/vue](/docs/packages/vue) — the reactive layer (Nuxt is Vue): `useQuery` / `useMutation` / `hydratePreloaded`
-- [@lunora/astro](/docs/packages/astro) — the other framework module composing single-worker deploys via `withLunora`
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK; `@lunora/nuxt/server` re-exports its `/ssr` contract
-- [@lunora/flags](/docs/packages/flags) — feature flags surfaced through `ctx.flags` / `useFlag`
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity

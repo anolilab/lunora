@@ -198,6 +198,15 @@
        misaligned rather than generous. */
     --site-shell: 72rem;
 
+    /*
+     * The navbar row height, and therefore the offset of everything that docks
+     * under it: the page header's clearance, the mega-menu, and every sticky
+     * filter bar. It was written out in six files as `h-28` / `top-28` / `pt-28`
+     * and drifted twice when the bar was resized — a sidebar sat 32px under the
+     * nav, and the hero panel 16px beneath it.
+     */
+    --site-nav-height: 72px;
+
     /* Corners are square. Kept as a token so a softer brand can opt out in one
        line instead of hunting `rounded-*` across the component layer. */
     --site-radius: 0px;

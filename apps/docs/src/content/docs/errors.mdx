@@ -1,6 +1,11 @@
 ---
 title: Errors & warnings reference
 description: Every well-known Lunora error code — its HTTP status, what it means, and what to do about it.
+related:
+    - to: /docs/concepts/error-handling
+    - to: /docs/concepts/occ
+    - to: /docs/concepts/debugging
+    - to: /docs/packages/errors
 ---
 
 Every error Lunora throws carries a machine-readable `code`. The code keys into
@@ -176,9 +181,3 @@ throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
 Explicit options override the catalog defaults. For errors you expect the client
 to branch on, see [Error handling](/docs/concepts/error-handling).
 
-## See also
-
-- [Error handling](/docs/concepts/error-handling)
-- [OCC & atomicity](/docs/concepts/occ)
-- [Debugging](/docs/concepts/debugging)
-- [@lunora/errors](/docs/packages/errors)

@@ -1,6 +1,10 @@
 ---
 title: "@lunora/mail"
 description: Transactional email for Lunora — Cloudflare Email Workers or Resend, React templates, queue-backed sends.
+related:
+    - to: /docs/packages/scheduler
+      note: "useful for delayed sends"
+    - to: /docs/concepts/queries-mutations
 ---
 
 `@lunora/mail` wraps `@visulima/email` so you can send transactional email
@@ -237,7 +241,3 @@ const mail = await waitForMail({
 const link = extractLink(mail, { match: "/reset-password" });
 ```
 
-## See also
-
-- [@lunora/scheduler](/docs/packages/scheduler) — useful for delayed sends
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations)

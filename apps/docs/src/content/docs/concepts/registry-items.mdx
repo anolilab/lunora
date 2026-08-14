@@ -1,6 +1,11 @@
 ---
 title: Authoring registry items
 description: Package a reusable capability — schema, functions, bindings and env vars — as a registry item others install with one command.
+related:
+    - to: /docs/packages/cli
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/environment-variables
+    - to: /docs/packages
 ---
 
 A **registry item** is a reusable slice of a Lunora app: some files, the npm
@@ -158,9 +163,3 @@ Items resolve from the published registry by default. Two overrides:
   `https://` need `--allow-unsafe-source`, because applying an item writes code
   into the user's project.
 
-## See also
-
-- [@lunora/cli](/docs/packages/cli)
-- [Schema](/docs/concepts/schema)
-- [Environment variables](/docs/concepts/environment-variables)
-- [Package directory](/docs/packages)

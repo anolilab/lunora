@@ -1,6 +1,11 @@
 ---
 title: "@lunora/container"
 description: Deploy Docker containers alongside your Lunora app, called from actions over ctx.containers.
+related:
+    - to: /docs/deployment
+    - to: /docs/limits
+    - to: /docs/packages/scheduler
+    - to: /docs/packages/storage
 ---
 
 `@lunora/container` runs [Cloudflare Containers](https://developers.cloudflare.com/containers/)
@@ -566,9 +571,3 @@ rest honestly rather than pretending they don't exist.
   from a local Dockerfile; `FROM` a registry image inside it if you need one.
   (cloudflare/containers#155)
 
-## See also
-
-- [Deployment](/docs/deployment)
-- [Limits](/docs/limits)
-- [@lunora/scheduler](/docs/packages/scheduler)
-- [@lunora/storage](/docs/packages/storage)

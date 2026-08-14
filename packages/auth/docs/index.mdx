@@ -1,6 +1,13 @@
 ---
 title: "@lunora/auth"
 description: A thin better-auth wrapper for Lunora — email/password, OAuth, plugins, D1-backed.
+related:
+    - to: /docs/packages/auth/plugins
+      note: "passkeys, org, admin, 2FA, and the studio dashboard"
+    - to: /docs/packages/hyperdrive
+      note: "the Postgres/MySQL route SCIM needs (D1 has no transactions)"
+    - to: /docs/getting-started
+    - to: /docs/packages/server
 ---
 
 `@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com)
@@ -637,9 +644,3 @@ event's context never reaches the durable table. The trail lives in the reserved
 `__lunora_auth_audit__` table (auto-hidden from the data browser); retention is
 configurable via `retention` and defaults to unbounded.
 
-## See also
-
-- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and the studio dashboard.
-- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the Postgres/MySQL route SCIM needs (D1 has no transactions).
-- [Getting started](/docs/getting-started)
-- [@lunora/server](/docs/packages/server)

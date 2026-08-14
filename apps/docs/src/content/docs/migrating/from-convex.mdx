@@ -1,6 +1,12 @@
 ---
 title: Migrating from Convex
 description: Side-by-side mapping — schema, queries, mutations, actions, React hooks.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/sharding
+    - to: /docs/packages/cli
+      note: "`lunora migrate generate`, `lunora run`"
+    - to: /docs/architecture
 ---
 
 Lunora borrows Convex's authoring shape on purpose: if you've used Convex, you
@@ -417,9 +423,3 @@ the whole second step.
     importer writes what the schema declares, and `v.any()` is not `v.array(v.string())`.
 </Callout>
 
-## See also
-
-- [Concepts: schema](/docs/concepts/schema)
-- [Concepts: sharding](/docs/concepts/sharding)
-- [@lunora/cli](/docs/packages/cli) — `lunora migrate generate`, `lunora run`
-- [Architecture](/docs/architecture)

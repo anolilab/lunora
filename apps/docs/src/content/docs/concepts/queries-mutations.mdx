@@ -1,6 +1,11 @@
 ---
 title: Queries & mutations
 description: query / mutation / action — what each is for and how ctx is shaped.
+related:
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/sharding
+      note: "securing client-named shard access"
+    - to: /docs/packages/server
 ---
 
 Lunora exposes three function kinds. Which one you pick depends on the
@@ -105,8 +110,3 @@ object or `null`.
 Available in mutations and actions. `ctx.scheduler.runAfter(ms, fn, args)`
 enqueues a deferred call against the SchedulerDO.
 
-## See also
-
-- [Real-time](/docs/concepts/realtime)
-- [Sharding](/docs/concepts/sharding) — securing client-named shard access
-- [API: @lunora/server](/docs/packages/server)

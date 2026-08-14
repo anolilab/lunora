@@ -1,6 +1,12 @@
 ---
 title: Environments & releases
 description: Running staging next to production, shipping a preview per pull request, and rolling traffic back when something goes wrong.
+related:
+    - to: /docs/deployment
+    - to: /docs/production-checklist
+    - to: /docs/concepts/migrations
+    - to: /docs/concepts/backups
+    - to: /docs/concepts/environment-variables
 ---
 
 A Lunora deployment is a Cloudflare Worker, so environments are Wrangler
@@ -153,10 +159,3 @@ records the acting user, and the log keeps the most recent 1 000 entries so it
 cannot grow without bound. Read it from the Studio's **Audit** page under
 Observability.
 
-## See also
-
-- [Deployment](/docs/deployment)
-- [Production checklist](/docs/production-checklist)
-- [Migrations](/docs/concepts/migrations)
-- [Backups, export & import](/docs/concepts/backups)
-- [Environment variables](/docs/concepts/environment-variables)

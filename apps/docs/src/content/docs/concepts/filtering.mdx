@@ -1,6 +1,12 @@
 ---
 title: Filtering
 description: .filter() is a JavaScript predicate applied after rows are loaded — when to use it, and when to reach for an index instead.
+related:
+    - to: /docs/concepts/indexes
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/pagination
+    - to: /docs/concepts/advisors
+    - to: /docs/concepts/search
 ---
 
 `.filter()` narrows a query with an ordinary JavaScript predicate:
@@ -95,10 +101,3 @@ terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
 Applying `.take(n)` after a filter still reads whatever the index range
 produced, because the predicate has to run before the limit can be counted.
 
-## See also
-
-- [Indexes](/docs/concepts/indexes)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Pagination](/docs/concepts/pagination)
-- [Advisors](/docs/concepts/advisors)
-- [Search](/docs/concepts/search)

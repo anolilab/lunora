@@ -1,6 +1,11 @@
 ---
 title: Next.js
 description: Run Lunora alongside Next.js on Cloudflare with the two-worker split — RSC loaders that hydrate into live subscriptions.
+related:
+    - to: /docs/frameworks/react
+    - to: /docs/frameworks/reactive-loaders
+    - to: /docs/packages/react
+    - to: /docs/deployment
 ---
 
 Next.js is supported through a **two-worker split**: Next.js deploys to
@@ -213,9 +218,3 @@ NEXT_PUBLIC_LUNORA_URL=https://my-app-lunora.workers.dev pnpm deploy:next
 `pnpm deploy` runs both in that order. Preview the Cloudflare build locally with
 `pnpm preview` (`opennextjs-cloudflare build && opennextjs-cloudflare preview`).
 
-## See also
-
-- [React](/docs/frameworks/react)
-- [Reactive loaders](/docs/frameworks/reactive-loaders)
-- [@lunora/react](/docs/packages/react)
-- [Deployment](/docs/deployment)

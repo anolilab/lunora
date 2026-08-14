@@ -1,6 +1,14 @@
 ---
 title: "@lunora/payment"
 description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo/Creem adapters, webhook sync, and a payment/subscription state machine.
+related:
+    - to: /docs/packages/server
+      note: "`ctx.payments`, mirror tables into your schema"
+    - to: /docs/packages/scheduler
+      note: "drive the reconciliation sweep"
+    - to: /docs/packages/studio
+      note: "the Payments panel"
+    - to: /docs/architecture
 ---
 
 `@lunora/payment` is one provider-agnostic API over Stripe, Polar, Autumn, Dodo Payments, and Creem. Webhook
@@ -407,9 +415,3 @@ customers, subscriptions, and webhook events for the app — see
 [Logs](/docs/packages/studio#logs). The panel only appears once codegen detects
 payments in use.
 
-## See also
-
-- [@lunora/server](/docs/packages/server) — `ctx.payments`, mirror tables into your schema
-- [@lunora/scheduler](/docs/packages/scheduler) — drive the reconciliation sweep
-- [Studio](/docs/packages/studio) — the Payments panel
-- [Architecture](/docs/architecture)

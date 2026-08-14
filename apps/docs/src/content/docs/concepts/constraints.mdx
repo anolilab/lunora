@@ -1,6 +1,13 @@
 ---
 title: Constraints
 description: Unique, non-null and foreign-key integrity declared on the schema and enforced at write time.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables, validators, indexes and relations"
+    - to: /docs/concepts/advisors
+      note: "the `constraint_validator` lint that samples existing rows for violations"
+    - to: /docs/concepts/rls
+      note: "server-side authorization over which rows a procedure may read or write"
 ---
 
 A **constraint** is an invariant your data must hold: a column is unique, a
@@ -143,8 +150,3 @@ finding).
 and `status` as own properties), so the runtime maps it to a `409` without an
 `instanceof` check.
 
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables, validators, indexes and relations
-- [Advisors](/docs/concepts/advisors) — the `constraint_validator` lint that samples existing rows for violations
-- [Row-level security](/docs/concepts/rls) — server-side authorization over which rows a procedure may read or write

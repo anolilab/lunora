@@ -1,6 +1,15 @@
 ---
 title: Angular
 description: Use Lunora with Angular — provideLunora in your app config, signal-based liveQuery, imperative mutate, and a connectionStatus signal.
+related:
+    - to: /docs/packages/angular
+      note: "the full adapter reference"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff"
+    - to: /docs/concepts/realtime
+      note: "how subscriptions and deltas work"
 ---
 
 `@lunora/angular` is the Angular adapter, a thin, idiomatic layer over
@@ -179,9 +188,3 @@ parameter) as shown above.
 safe to import into a server render pass. See
 [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 
-## See also
-
-- [@lunora/angular](/docs/packages/angular) — the full adapter reference
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
-- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

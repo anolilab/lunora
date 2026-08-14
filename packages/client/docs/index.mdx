@@ -1,6 +1,12 @@
 ---
 title: "@lunora/client"
 description: Framework-agnostic browser/edge client.
+related:
+    - to: /docs/packages/react
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/offline-first
+    - to: /docs/concepts/local-first
+      note: "`subscribeShape` + shapes"
 ---
 
 `@lunora/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
@@ -188,9 +194,3 @@ const preloaded = await preloadQuery(client, api.messages.list, { channelId: "ge
 // Embed `serializePreloaded(preloaded)` in HTML; rehydrate with usePreloadedQuery on the client.
 ```
 
-## See also
-
-- [@lunora/react](/docs/packages/react)
-- [Concepts: real-time](/docs/concepts/realtime)
-- [Offline-first](/docs/concepts/offline-first)
-- [Local-first sync](/docs/concepts/local-first) — `subscribeShape` + shapes

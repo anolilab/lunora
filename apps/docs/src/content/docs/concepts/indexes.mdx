@@ -1,6 +1,12 @@
 ---
 title: Indexes
 description: Declare B-tree indexes on tables and query them with withIndex — every filtered read should hit one.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/relations
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/server
 ---
 
 An index is a sorted, B-tree-backed lookup over one or more columns. Declare it
@@ -100,10 +106,3 @@ messages: defineTable({
     .aggregateIndex("count_by_channel", { by: ["channelId"] });
 ```
 
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Relations](/docs/concepts/relations)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/server](/docs/packages/server)

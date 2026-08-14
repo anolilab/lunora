@@ -1,6 +1,12 @@
 ---
 title: Backups, export & import
 description: Snapshot a deployment, recover a shard to any moment in the last 30 days, and move data in and out as NDJSON.
+related:
+    - to: /docs/packages/cli
+    - to: /docs/concepts/migrations
+    - to: /docs/concepts/sharding
+    - to: /docs/production-checklist
+    - to: /docs/packages/runtime
 ---
 
 Lunora has three ways to get data back after something goes wrong, and they
@@ -266,10 +272,3 @@ hand: the unattended tier is the one whose failures nobody watches.
 
 Do this before you need it, and again whenever the schema changes shape.
 
-## See also
-
-- [@lunora/cli — backup, export, import](/docs/packages/cli)
-- [Migrations](/docs/concepts/migrations)
-- [Sharding](/docs/concepts/sharding)
-- [Production checklist](/docs/production-checklist)
-- [@lunora/runtime](/docs/packages/runtime)

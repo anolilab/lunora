@@ -131,7 +131,7 @@ const PackagesListing: FC = () => {
                     box, so any padding here would be a transparent strip with cards
                     scrolling through it. The spacing lives on the section above and
                     on the grid below. */}
-                <Shell className="sticky top-28 z-40">
+                <Shell className="sticky top-[var(--site-nav-height)] z-40">
                     <div className="flex flex-col gap-4 border border-hairline bg-canvas px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <CategoryFilter active={activeCategory} onChange={setActiveCategory} />
                         <div className="relative">

@@ -1,6 +1,15 @@
 ---
 title: Solid
 description: Use Lunora with SolidJS — a provider, live createQuery/createMutation primitives, and the SSR-seed → live reactive-loader handoff.
+related:
+    - to: /docs/packages/solid
+      note: "the full primitive + server reference"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff"
+    - to: /docs/concepts/realtime
+      note: "how subscriptions and deltas work"
 ---
 
 `@lunora/solid` is the SolidJS adapter, an idiomatic layer over
@@ -161,9 +170,3 @@ Effects do not run during SSR, so the subscription is strictly client-side: the
 seed is the only value the server render sees. See
 [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 
-## See also
-
-- [@lunora/solid](/docs/packages/solid) — the full primitive + server reference
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
-- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

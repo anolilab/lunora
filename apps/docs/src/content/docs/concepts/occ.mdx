@@ -1,6 +1,12 @@
 ---
 title: OCC & atomicity
 description: Why mutations in one shard are serialized rather than retried, where optimistic-concurrency conflicts still arise, and what atomicity means across shards.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/error-handling
+    - to: /docs/architecture
+    - to: /docs/limits
 ---
 
 A mutation runs inside a single Durable Object, and that DO runs one mutation at
@@ -135,10 +141,3 @@ that reads following your own writes see them, but a mutation that writes both a
 shard-local and a `.global()` table is not writing both atomically. Treat the
 global write as a separate step that can fail independently.
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Error handling](/docs/concepts/error-handling)
-- [Architecture](/docs/architecture)
-- [Limits](/docs/limits)

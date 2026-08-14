@@ -1,6 +1,12 @@
 ---
 title: Actions
 description: Non-deterministic functions for external APIs and side effects — the action builder and its ActionCtx.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/internal-functions
+    - to: /docs/concepts/http-endpoints
+    - to: /docs/packages/server
+    - to: /docs/packages/scheduler
 ---
 
 An **action** runs outside Lunora's transaction. A `query` reads only and a
@@ -104,10 +110,3 @@ export const startDripCampaign = action.input({ userId: v.id("users") }).action(
 `runAfter(delayMs, ref, args)` fires after a delay; `runAt(timestampMs, ref, args)`
 fires at an absolute time. Both return a job id you can later `ctx.scheduler.cancel(id)`.
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Internal functions](/docs/concepts/internal-functions)
-- [HTTP endpoints](/docs/concepts/http-endpoints)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/scheduler](/docs/packages/scheduler)

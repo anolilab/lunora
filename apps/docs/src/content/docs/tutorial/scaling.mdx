@@ -1,6 +1,12 @@
 ---
 title: "Tutorial: scaling the chat app"
 description: Take the chat app from one Durable Object to many — shard by channel, put identities in a global table, and keep cross-shard reads off the hot path.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/occ
+    - to: /docs/concepts/migrations
+    - to: /docs/limits
+    - to: /docs/architecture
 ---
 
 The [realtime chat tutorial](/docs/tutorial/realtime-chat) left you with a
@@ -204,10 +210,3 @@ shards to confirm rows landed where you expected.
 - Sharding turns the shard key into an untrusted input, so gate it.
 - Adding a shard key to a populated table is a data migration.
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [OCC & atomicity](/docs/concepts/occ)
-- [Migrations](/docs/concepts/migrations)
-- [Limits](/docs/limits)
-- [Architecture](/docs/architecture)

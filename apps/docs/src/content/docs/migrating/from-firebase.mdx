@@ -1,6 +1,15 @@
 ---
 title: Migrating from Firebase
 description: Side-by-side mapping — Firestore, Cloud Functions, Auth, Storage, and real-time listeners.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/rls
+    - to: /docs/packages/auth
+      note: "sessions, OAuth, password flows"
+    - to: /docs/packages/cli
+      note: "`lunora migrate generate`, `lunora run`"
+    - to: /docs/architecture
 ---
 
 Firebase and Lunora solve the same problem — a real-time backend with client
@@ -431,11 +440,3 @@ each:
   browser, function runner, metrics, migrations, scheduled jobs, advisors),
   gated by your own `LUNORA_ADMIN_TOKEN`.
 
-## See also
-
-- [Concepts: schema](/docs/concepts/schema)
-- [Concepts: sharding](/docs/concepts/sharding)
-- [Concepts: RLS](/docs/concepts/rls)
-- [@lunora/auth](/docs/packages/auth) — sessions, OAuth, password flows
-- [@lunora/cli](/docs/packages/cli) — `lunora migrate generate`, `lunora run`
-- [Architecture](/docs/architecture)

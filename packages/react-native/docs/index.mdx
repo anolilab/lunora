@@ -1,6 +1,10 @@
 ---
 title: "@lunora/react-native"
 description: React Native / Expo bindings for Lunora — the @lunora/react hooks plus an AsyncStorage-backed client factory and a better-auth Expo bridge.
+related:
+    - to: /docs/frameworks/react-native
+    - to: /docs/packages/react
+    - to: /docs/packages/client
 ---
 
 `@lunora/react-native` is the React Native / Expo entry to Lunora. It
@@ -99,8 +103,3 @@ On the server, add better-auth's `expo()` **and** `bearer()` plugins, and fold
 the socket's `?token=` into an `Authorization` header in `resolveIdentity` (see
 [`@lunora/auth`](/docs/packages/auth)).
 
-## See also
-
-- [React Native / Expo guide](/docs/frameworks/react-native)
-- [@lunora/react](/docs/packages/react)
-- [@lunora/client](/docs/packages/client)

@@ -1,6 +1,12 @@
 ---
 title: Document IDs
 description: Every row carries an _id and a _creationTime — how they are minted, how v.id types a reference, and what an id does and does not guarantee.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/data-types
+    - to: /docs/concepts/relations
+    - to: /docs/concepts/constraints
+    - to: /docs/concepts/generated-code
 ---
 
 Every document Lunora stores carries two framework-managed fields you never
@@ -101,10 +107,3 @@ exist. Confirm existence with a `get` when it matters.
 identity: references between tables still resolve after a round trip. Import a
 referenced table before the table that points at it.
 
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Data types](/docs/concepts/data-types)
-- [Relations](/docs/concepts/relations)
-- [Constraints](/docs/concepts/constraints)
-- [Generated code](/docs/concepts/generated-code)

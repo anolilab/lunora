@@ -1,6 +1,17 @@
 ---
 title: Security
 description: Lunora's secure-by-default posture — the protections you get for free, how to opt out, and the advisor lints that catch the gaps.
+related:
+    - to: /docs/concepts/advisors
+      note: "the full lint catalog and how findings surface"
+    - to: /docs/concepts/rls
+      note: "per-row authorization"
+    - to: /docs/concepts/masking
+      note: "per-field redaction"
+    - to: /docs/packages/ratelimit
+      note: "the limiter `protectPublic` chains"
+    - to: /docs/packages/auth
+      note: "sessions, cookies, and Turnstile verification"
 ---
 
 Lunora is **secure by default**. The edge protections, auth-cookie hardening, and
@@ -241,10 +252,3 @@ through wrangler `vars`:
 This is the build-time twin of the runtime construction throw, so the
 misconfiguration surfaces before you deploy.
 
-## See also
-
-- [Advisors](/docs/concepts/advisors) — the full lint catalog and how findings surface.
-- [Row-level security](/docs/concepts/rls) — per-row authorization.
-- [Data masking](/docs/concepts/masking) — per-field redaction.
-- [Rate limiting](/docs/packages/ratelimit) — the limiter `protectPublic` chains.
-- [Auth](/docs/packages/auth) — sessions, cookies, and Turnstile verification.

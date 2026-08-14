@@ -1,6 +1,13 @@
 ---
 title: Migrations
 description: Schema-change SQL for global tables and online, resumable data migrations.
+related:
+    - to: /docs/concepts/schema
+      note: "tables, validators, indexes, sharding, and `.global()`"
+    - to: /docs/packages/cli
+      note: "full `lunora migrate`, `lunora deploy`, and `lunora reset` reference"
+    - to: /docs/packages/studio#database
+      note: "the Migrations panel and the rest of the data console"
 ---
 
 Lunora has two distinct migration surfaces, because it has two distinct
@@ -215,8 +222,3 @@ lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
 
 This only touches local state; it never reaches a deployed worker or D1.
 
-## See also
-
-- [Schema](/docs/concepts/schema) — tables, validators, indexes, sharding, and `.global()`.
-- [CLI](/docs/packages/cli) — full `lunora migrate`, `lunora deploy`, and `lunora reset` reference.
-- [Studio › Database](/docs/packages/studio#database) — the Migrations panel and the rest of the data console.

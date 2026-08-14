@@ -1,6 +1,15 @@
 ---
 title: Migrating from Supabase
 description: Side-by-side mapping — Postgres tables, RLS, Edge Functions, Auth, Storage, and Realtime.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/rls
+    - to: /docs/packages/auth
+      note: "sessions, OAuth, password flows"
+    - to: /docs/packages/cli
+      note: "`lunora migrate generate`, `lunora run`"
+    - to: /docs/architecture
 ---
 
 Supabase and Lunora both give you a typed backend with auth, storage,
@@ -469,11 +478,3 @@ above cover each:
   `lunora dev` serves at `/__lunora` (data browser, function runner, metrics,
   migrations, scheduled jobs, advisors), gated by your own `LUNORA_ADMIN_TOKEN`.
 
-## See also
-
-- [Concepts: schema](/docs/concepts/schema)
-- [Concepts: sharding](/docs/concepts/sharding)
-- [Concepts: RLS](/docs/concepts/rls)
-- [@lunora/auth](/docs/packages/auth) — sessions, OAuth, password flows
-- [@lunora/cli](/docs/packages/cli) — `lunora migrate generate`, `lunora run`
-- [Architecture](/docs/architecture)

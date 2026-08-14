@@ -1,6 +1,11 @@
 ---
 title: HTTP endpoints
 description: Public HTTP routes with httpAction and the Hono-based httpRouter.
+related:
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/internal-functions
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/packages/server
 ---
 
 Queries, mutations, and actions are reached through Lunora's typed client over
@@ -132,9 +137,3 @@ The lifting middleware throws if the context is absent, so this only trips when
 the router is run outside the runtime. The misconfiguration surfaces loudly
 rather than leaving `c.var.lunora` silently `undefined`.
 
-## See also
-
-- [Actions](/docs/concepts/actions)
-- [Internal functions](/docs/concepts/internal-functions)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [API: @lunora/server](/docs/packages/server)

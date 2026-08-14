@@ -1,6 +1,11 @@
 ---
 title: Real-time
 description: How subscriptions, deltas, and hibernation fit together.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/packages/react
+    - to: /docs/deployment
+      note: "platform config & non-goals"
 ---
 
 Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
@@ -112,8 +117,3 @@ device ingest (IoT clients speaking MQTT directly), a narrow niche. We'll
 revisit only if Pub/Sub reaches GA and a concrete need to ingest from
 native-MQTT devices appears; until then there is nothing to configure.
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [API: @lunora/react](/docs/packages/react)
-- [Deployment](/docs/deployment) — platform config & non-goals

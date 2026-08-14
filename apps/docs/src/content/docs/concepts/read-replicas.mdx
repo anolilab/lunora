@@ -1,6 +1,11 @@
 ---
 title: Read replicas & placement
 description: Serve one-shot queries from a copy of the shard in the caller's region, pin where a shard is created, and terminate sockets near the client.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/data-residency
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/backups
 ---
 
 A shard lives in exactly one place. That is what makes its writes serialized and
@@ -166,9 +171,3 @@ threshold.
     implemented.
 </Callout>
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [Data residency](/docs/concepts/data-residency)
-- [Realtime](/docs/concepts/realtime)
-- [Backups](/docs/concepts/backups)

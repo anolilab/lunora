@@ -1,6 +1,11 @@
 ---
 title: Middleware
 description: Compose cross-cutting concerns — auth checks, rate limiting, logging — and augment ctx for downstream handlers.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/actions
+    - to: /docs/packages/server
+    - to: /docs/packages/ratelimit
 ---
 
 Middleware wraps a procedure builder so a piece of logic runs before the
@@ -98,9 +103,3 @@ import { composePluginMiddleware } from "lunorash/server";
 const c2 = c.query.use(composePluginMiddleware([ratelimit, audit]));
 ```
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Actions](/docs/concepts/actions)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/ratelimit](/docs/packages/ratelimit)

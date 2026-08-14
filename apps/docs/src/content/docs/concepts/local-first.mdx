@@ -1,6 +1,17 @@
 ---
 title: Local-first sync
 description: Shapes, the poke diff protocol, and custom mutators — the Zero-class sync engine.
+related:
+    - to: /docs/packages/db
+      note: "`lunoraCollectionOptions`, `bindMutators`"
+    - to: /docs/packages/client
+      note: "`subscribeShape`"
+    - to: /docs/concepts/offline-first
+      note: "the lower tier these build on"
+    - to: /docs/concepts/realtime
+      note: "the legacy subscribe/delta path"
+    - to: /docs/concepts/rls
+      note: "how shapes compose with RLS"
 ---
 
 The [offline-first](/docs/concepts/offline-first) layer gives you a durable
@@ -275,10 +286,3 @@ across. Two supported answers:
    coordinator/poll-refreshed (latency-tiered), **not** poke-live — D1 has no
    per-DO op-log.
 
-## See also
-
-- [@lunora/db](/docs/packages/db) — `lunoraCollectionOptions`, `bindMutators`.
-- [@lunora/client](/docs/packages/client) — `subscribeShape`.
-- [Offline-first](/docs/concepts/offline-first) — the lower tier these build on.
-- [Real-time](/docs/concepts/realtime) — the legacy subscribe/delta path.
-- [Row-level security](/docs/concepts/rls) — how shapes compose with RLS.

@@ -1,6 +1,12 @@
 ---
 title: "@lunora/d1"
 description: D1 Sessions API client + migration runner for global tables.
+related:
+    - to: /docs/packages/cli
+      note: "the `lunora migrate generate` command"
+    - to: /docs/packages/do
+      note: "shard-local storage (no migrations needed)"
+    - to: /docs/concepts/schema
 ---
 
 `@lunora/d1` is the D1-backed storage adapter for tables marked
@@ -113,8 +119,3 @@ migration matches the table the runtime creates byte for byte. Exports
 `physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly
 — it exists so those two code paths stay in lockstep.
 
-## See also
-
-- [@lunora/cli](/docs/packages/cli) — the `lunora migrate generate` command
-- [@lunora/do](/docs/packages/do) — shard-local storage (no migrations needed)
-- [Concepts: schema](/docs/concepts/schema)

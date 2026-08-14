@@ -1,6 +1,12 @@
 ---
 title: "@lunora/flags"
 description: OpenFeature-based feature flags for Lunora — ctx.flags, useFlag, and a first-class Cloudflare Flagship provider with any OpenFeature provider pluggable.
+related:
+    - to: /docs/packages/server
+    - to: /docs/packages/react
+    - to: /docs/packages/vue
+    - to: /docs/packages/solid
+    - to: /docs/packages/svelte
 ---
 
 `@lunora/flags` brings feature flags to Lunora on top of [OpenFeature](https://openfeature.dev). Configure a provider once with `defineFlags` in `lunora/flags.ts`; codegen wires a typed `ctx.flags` surface onto every query, mutation, and action, and the `useFlag` / `useFlags` hooks make evaluations reactive on the client. Cloudflare Flagship is the first-class default provider, but any OpenFeature provider is pluggable.
@@ -188,10 +194,3 @@ Flagship binding mode needs a `flagship` binding in `wrangler.jsonc`. The `app_i
 
 HTTP-mode Flagship and other OpenFeature providers need no binding — they reach the service over the network using the credentials you pass to the provider factory.
 
-## See also
-
-- [@lunora/server](/docs/packages/server)
-- [@lunora/react](/docs/packages/react)
-- [@lunora/vue](/docs/packages/vue)
-- [@lunora/solid](/docs/packages/solid)
-- [@lunora/svelte](/docs/packages/svelte)

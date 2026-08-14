@@ -1,6 +1,12 @@
 ---
 title: Push notifications
 description: Configure defineNotify in lunora/notify.ts for Web Push + FCM, register browser subscriptions, and send via ctx.notify / ctx.push from an action.
+related:
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/scheduling
+    - to: /docs/packages/queue
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/notify
 ---
 
 `@lunora/notify` adds multi-channel notifications, wrapping the
@@ -115,10 +121,3 @@ await enqueuePushBroadcast(ctx.queues.push, { payload: { title: "New drop", body
 for (const message of batch.messages) await runPushBroadcastJob(ctx.push, message.body);
 ```
 
-## See also
-
-- [Actions](/docs/concepts/actions)
-- [Scheduling](/docs/concepts/scheduling)
-- [Queues](/docs/packages/queue)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/notify](/docs/packages/notify)

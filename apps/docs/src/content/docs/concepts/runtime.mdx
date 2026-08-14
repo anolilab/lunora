@@ -1,6 +1,12 @@
 ---
 title: Runtime & bundling
 description: Everything runs on the Workers runtime — what that means for Node APIs, dependencies, and the 10 MB bundle you have to fit into.
+related:
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/debugging
+    - to: /docs/limits
+    - to: /docs/deployment
+    - to: /docs/packages/container
 ---
 
 There is one runtime. Queries, mutations, actions, HTTP endpoints, scheduled
@@ -122,10 +128,3 @@ lunora deploy --prebuilt     # ship the bundle without redoing codegen
 `build` runs codegen, the schema-drift gate, and `wrangler.jsonc` validation, then
 writes the bundled worker without publishing. `--prebuilt` trusts that work.
 
-## See also
-
-- [Actions](/docs/concepts/actions)
-- [Debugging](/docs/concepts/debugging)
-- [Limits](/docs/limits)
-- [Deployment](/docs/deployment)
-- [@lunora/container](/docs/packages/container)

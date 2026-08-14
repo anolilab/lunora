@@ -15,6 +15,7 @@ import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as CloudRouteImport } from './routes/cloud'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
 import { Route as CompareRouteImport } from './routes/compare'
+import { Route as ExamplesRouteImport } from './routes/examples'
 import { Route as ImprintRouteImport } from './routes/imprint'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
@@ -66,6 +67,11 @@ const CodeOfConductRoute = CodeOfConductRouteImport.update({
 const CompareRoute = CompareRouteImport.update({
   id: '/compare',
   path: '/compare',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExamplesRoute = ExamplesRouteImport.update({
+  id: '/examples',
+  path: '/examples',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImprintRoute = ImprintRouteImport.update({
@@ -186,6 +192,7 @@ export interface FileRoutesByFullPath {
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -216,6 +223,7 @@ export interface FileRoutesByTo {
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -247,6 +255,7 @@ export interface FileRoutesById {
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -279,6 +288,7 @@ export interface FileRouteTypes {
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -309,6 +319,7 @@ export interface FileRouteTypes {
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -339,6 +350,7 @@ export interface FileRouteTypes {
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -370,6 +382,7 @@ export interface RootRouteChildren {
   CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
   CompareRoute: typeof CompareRoute
+  ExamplesRoute: typeof ExamplesRoute
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
@@ -436,6 +449,13 @@ declare module '@tanstack/react-router' {
       path: '/compare'
       fullPath: '/compare'
       preLoaderRoute: typeof CompareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/examples': {
+      id: '/examples'
+      path: '/examples'
+      fullPath: '/examples'
+      preLoaderRoute: typeof ExamplesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/imprint': {
@@ -602,6 +622,7 @@ const rootRouteChildren: RootRouteChildren = {
   CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,
   CompareRoute: CompareRoute,
+  ExamplesRoute: ExamplesRoute,
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,

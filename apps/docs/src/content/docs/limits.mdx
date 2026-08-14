@@ -1,6 +1,9 @@
 ---
 title: Limits
 description: Cloudflare ceilings you should keep in your head.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/deployment
 ---
 
 Lunora's design choices are driven by Cloudflare's per-primitive limits.
@@ -193,7 +196,3 @@ or it raises `SQLITE_ERROR`. Where Lunora can keep you under one it does so
 silently; where it cannot — the 2 MB document, the 100-column table — it raises
 an error naming the limit and what to do instead.
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [Deployment](/docs/deployment)

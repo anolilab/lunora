@@ -1,6 +1,19 @@
 ---
 title: Bring your framework
 description: Compose any meta-framework's SSR with Lunora realtime in one Cloudflare Worker.
+related:
+    - to: /docs/frameworks/reactive-loaders
+      note: "the differentiator"
+    - to: /docs/frameworks/deploy
+      note: "one worker, one deploy"
+    - to: /docs/frameworks/verify-live-loaders
+      note: "prove live loaders work"
+    - to: /docs/concepts/realtime
+    - to: /docs/packages/runtime
+      note: "`createWorker`, the `httpRouter` seam"
+    - to: /docs/packages/cli
+      note: "`lunora init -t <framework>`"
+    - to: /docs/deployment
 ---
 
 Lunora is not a web framework, and it does not try to be one. It is a reactive
@@ -307,12 +320,3 @@ export default defineConfig({
 Framework auto-detection from `package.json` and full one-worker emit for class-A
 frameworks are in progress.
 
-## See also
-
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the differentiator
-- [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
-- [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — prove live loaders work
-- [Real-time](/docs/concepts/realtime)
-- [@lunora/runtime](/docs/packages/runtime) — `createWorker`, the `httpRouter` seam
-- [@lunora/cli](/docs/packages/cli) — `lunora init -t <framework>`
-- [Deployment](/docs/deployment)

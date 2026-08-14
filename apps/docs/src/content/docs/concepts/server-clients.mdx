@@ -1,6 +1,12 @@
 ---
 title: Server-side & non-reactive clients
 description: Calling a Lunora deployment without a live subscription — from SSR loaders, scripts, other languages, or plain HTTP.
+related:
+    - to: /docs/concepts/rest-api
+    - to: /docs/concepts/wire-protocol
+    - to: /docs/frameworks/nextjs
+    - to: /docs/frameworks/reactive-loaders
+    - to: /docs/packages/client
 ---
 
 Most Lunora clients are reactive: a `useQuery` opens a WebSocket and re-renders
@@ -143,10 +149,3 @@ frames for partial replication, and the value codec are all documented in
 prove that spec is complete — it is the reference to read when porting to another
 language.
 
-## See also
-
-- [REST API](/docs/concepts/rest-api)
-- [Wire protocol](/docs/concepts/wire-protocol)
-- [Next.js](/docs/frameworks/nextjs)
-- [Reactive loaders](/docs/frameworks/reactive-loaders)
-- [@lunora/client](/docs/packages/client)

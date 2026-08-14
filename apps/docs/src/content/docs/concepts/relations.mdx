@@ -1,6 +1,19 @@
 ---
 title: Relations
 description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables, validators and indexes"
+    - to: /docs/concepts/indexes
+      note: "how `.index(...)` and `withIndex` work"
+    - to: /docs/concepts/queries-mutations
+      note: "reading and writing rows"
+    - to: /docs/concepts/constraints#foreign-key-integrity
+      note: "`onDelete` and FK integrity"
+    - to: /docs/packages/values
+      note: "the `v.id(\"table\")` validator"
+    - to: /docs/packages/server
+      note: "`defineSchema` / `defineTable`"
 ---
 
 A **relation** wires one table to another. Lunora has no join engine and no
@@ -180,11 +193,3 @@ const userWithPosts = await ctx.db.users.findFirst({
 The hydration is driven by the same FK + index, so the same advice applies:
 keep the FK indexed or the loader scans.
 
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables, validators and indexes
-- [Indexes](/docs/concepts/indexes) — how `.index(...)` and `withIndex` work
-- [Queries & mutations](/docs/concepts/queries-mutations) — reading and writing rows
-- [Constraints](/docs/concepts/constraints#foreign-key-integrity) — `onDelete` and FK integrity
-- [@lunora/values](/docs/packages/values) — the `v.id("table")` validator
-- [@lunora/server](/docs/packages/server) — `defineSchema` / `defineTable`

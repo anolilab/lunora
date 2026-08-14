@@ -1,6 +1,10 @@
 ---
 title: "@lunora/react"
 description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
+related:
+    - to: /docs/packages/client
+    - to: /docs/packages/storage#end-user-uploads-rls-gated
+    - to: /docs/packages/auth
 ---
 
 `@lunora/react` ships the official React bindings. It's a thin layer over
@@ -279,8 +283,3 @@ resumable protocols (TUS / chunked-REST). For a plain `<input type="file">`,
 `useFileInput` gives you the change-handler + selected-files plumbing; `useTusUpload`
 is the lower-level hook when you always want the resumable protocol.
 
-## See also
-
-- [@lunora/client](/docs/packages/client)
-- [@lunora/storage — end-user uploads](/docs/packages/storage#end-user-uploads-rls-gated)
-- [Add-on: auth](/docs/packages/auth)

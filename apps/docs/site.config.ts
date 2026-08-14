@@ -77,6 +77,7 @@ const siteConfig = {
                 links: [
                     { title: "Getting started", to: "/docs/getting-started" },
                     { title: "Documentation", to: "/docs" },
+                    { title: "Examples", to: "/examples" },
                     { title: "Lunora Cloud", to: "/cloud" },
                     { title: "Compare", to: "/compare" },
                     { title: "Blog", to: "/blog" },
@@ -131,6 +132,7 @@ const siteConfig = {
                 { href: "https://discord.gg/eajEZvk2PG", image: "community", subtitle: "Join us on Discord", title: "Community" },
             ],
             navItems: [
+                { description: "Thirteen runnable apps, five deploy in a click.", href: "/examples", icon: "Boxes", title: "Examples" },
                 { description: "Managed Lunora — join the waitlist.", href: "/cloud", icon: "Cloud", title: "Lunora Cloud" },
                 { description: "vs Convex, Supabase, Firebase, Appwrite.", href: "/compare", icon: "Scale", title: "Compare" },
                 { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: "LayoutDashboard", title: "Studio" },

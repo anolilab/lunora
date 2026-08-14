@@ -403,7 +403,7 @@ const Changelog: FC<{ feed: FeedItem[] }> = ({ feed }) => {
             <section className="pt-section" data-nav-theme="dark">
                 {/* Same sticky treatment as the package index: inset to the shell
                     rather than full-bleed, opaque, with its own frame. */}
-                <Shell className="sticky top-28 z-40">
+                <Shell className="sticky top-[var(--site-nav-height)] z-40">
                     <div className="flex flex-col gap-3 border border-hairline bg-canvas p-3 lg:flex-row lg:items-center">
                         <PackagePicker
                             onChange={(next) => {

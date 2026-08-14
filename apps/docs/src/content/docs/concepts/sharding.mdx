@@ -1,6 +1,9 @@
 ---
 title: Sharding
 description: Default __root__ DO, opt-in .shardBy(), and .global() escape hatch.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/architecture
 ---
 
 Lunora scales out, but starts on a single shard. New apps get one Durable
@@ -92,7 +95,3 @@ security boundary, each row authorizes itself. The runtime logs a one-time
 security warning while it is on and no `authorizeShard`/`authorizeFanOut` is
 configured.
 
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Architecture](/docs/architecture)

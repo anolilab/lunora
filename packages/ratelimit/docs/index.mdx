@@ -1,6 +1,13 @@
 ---
 title: "@lunora/ratelimit"
 description: Token-bucket, fixed-window, and sliding-window rate limiting as procedure middleware.
+related:
+    - to: /docs/concepts/rls
+      note: "the row-path `.use(...)` companion"
+    - to: /docs/concepts/masking
+      note: "the column-path `.use(...)` companion"
+    - to: /docs/packages/server
+      note: "the procedure builder whose `.use()` chain the middleware rides"
 ---
 
 `@lunora/ratelimit` enforces named rate limits over a pluggable store. You build
@@ -255,8 +262,3 @@ export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(
 The plugin ships no schema extension — persistence is whatever store the limiter
 was built with — so it is middleware-only and skipped by the plugin schema fold.
 
-## See also
-
-- [Row-level security](/docs/concepts/rls) — the row-path `.use(...)` companion.
-- [Data masking](/docs/concepts/masking) — the column-path `.use(...)` companion.
-- [@lunora/server](/docs/packages/server) — the procedure builder whose `.use()` chain the middleware rides.

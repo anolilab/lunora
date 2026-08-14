@@ -1,6 +1,11 @@
 ---
 title: System tables
 description: Read pending scheduled jobs and stored file metadata through ctx.db.system — a read-only, eventually consistent view outside the mutation snapshot.
+related:
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/file-storage
+    - to: /docs/concepts/function-context
+    - to: /docs/concepts/occ
 ---
 
 `ctx.db.system` is a read-only reader over Lunora's system tables. It lets a
@@ -81,9 +86,3 @@ One row per stored object:
 report that storage is not configured. The `_scheduled_functions` half is
 independent and keeps working either way.
 
-## See also
-
-- [Scheduling](/docs/concepts/scheduling)
-- [File storage](/docs/concepts/file-storage)
-- [Function context](/docs/concepts/function-context)
-- [OCC & atomicity](/docs/concepts/occ)

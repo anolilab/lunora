@@ -1,6 +1,11 @@
 ---
 title: "@lunora/server"
 description: Authoring API — defineSchema, query, mutation, action, validators.
+related:
+    - to: /docs/packages/client
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/local-first
+      note: "`defineShape` / `defineMutator`"
 ---
 
 `@lunora/server` is the authoring-side package. It provides `defineSchema`,
@@ -322,8 +327,3 @@ the emitted OpenAPI documents the headers a caller will observe.
   the generated `_generated/drizzle.*` files.
 - `@lunora/server/data-model` / `@lunora/server/types` — type-only helpers.
 
-## See also
-
-- [@lunora/client](/docs/packages/client)
-- [Concepts: schema](/docs/concepts/schema)
-- [Local-first sync](/docs/concepts/local-first) — `defineShape` / `defineMutator`

@@ -123,6 +123,7 @@ const menu: NavColumn[] = [
             },
         ],
         navItems: [
+            { description: "Thirteen runnable apps, five deploy in a click.", href: "/examples", icon: <Boxes />, title: "Examples" },
             { description: "Managed Lunora — join the waitlist.", href: "/cloud", icon: <Cloud />, title: "Lunora Cloud" },
             { description: "vs Convex, Supabase, Firebase, Appwrite.", href: "/compare", icon: <Scale />, title: "Compare" },
             { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: <LayoutDashboard />, title: "Studio" },
@@ -348,7 +349,7 @@ const Navbar = (): ReactElement => {
 
     return (
         <header className="fixed inset-x-0 top-0 z-100" data-theme="light" onMouseLeave={scheduleClose}>
-            <Shell className="relative flex h-28 items-center">
+            <Shell className="relative flex h-[var(--site-nav-height)] items-center">
                 {/* The bar. Shell-width rather than full-bleed, so the page
                     shows past both ends, and the CTA is exactly its height so the
                     two read as one object rather than a button floating inside a
@@ -362,7 +363,7 @@ const Navbar = (): ReactElement => {
                     off under `prefers-reduced-motion`. */}
                 <div
                     aria-hidden="true"
-                    className="animate-strip-hue pointer-events-none absolute inset-x-0 top-1/2 h-20 -translate-y-1/2 motion-reduce:animate-none"
+                    className="animate-strip-hue pointer-events-none absolute inset-x-0 top-1/2 h-14 -translate-y-1/2 motion-reduce:animate-none"
                     style={
                         {
                             "--strip-a": "var(--site-accent-tint)",
@@ -459,7 +460,7 @@ const Navbar = (): ReactElement => {
                     </a>
                     <Button
                         asChild
-                        className={cn("h-20 gap-2 rounded-none px-6 font-mono text-kicker uppercase", "bg-on-panel text-panel hover:opacity-90")}
+                        className={cn("h-14 gap-2 rounded-none px-6 font-mono text-kicker uppercase", "bg-on-panel text-panel hover:opacity-90")}
                         variant="ghost"
                     >
                         <Link to="/docs">
@@ -485,12 +486,16 @@ const Navbar = (): ReactElement => {
             </Shell>
 
             {/* mega-menu dropdown — a single centered box that morphs size between
-                menus. It docks at exactly the row height (`h-28`, 112px) — the
-                same offset the packages page gives its sticky filter bar, so the
-                open panel and that bar share one top line instead of missing it
-                by a couple of pixels. The tinted bar is `h-20` centred in the
-                row, ending 16px above its edge, so nothing is covered. */}
-            <div className="absolute top-28 left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+                menus. It docks at `--site-nav-height` — the same token the page
+                header's clearance and every sticky filter bar use, so the open
+                panel and those bars share one top line rather than missing it by
+                a couple of pixels. The tinted bar is `h-14` centred in the row,
+                so it ends inside that offset and nothing is covered. */}
+            <div
+                className="absolute top-[var(--site-nav-height)] left-1/2 hidden -translate-x-1/2 lg:block"
+                onMouseEnter={cancelClose}
+                onMouseLeave={scheduleClose}
+            >
                 <AnimatePresence>
                     {active ? (
                         <motion.div

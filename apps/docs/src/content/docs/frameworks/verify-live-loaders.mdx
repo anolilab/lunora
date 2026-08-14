@@ -1,6 +1,13 @@
 ---
 title: Manual end-to-end verification
 description: How to actually prove live loaders work — scaffold, SSR-curl the preloaded value, two-tab live update.
+related:
+    - to: /docs/frameworks/reactive-loaders
+      note: "the contract being verified"
+    - to: /docs/frameworks/bring-your-framework
+      note: "per-framework status"
+    - to: /docs/frameworks/deploy
+      note: "shipping the composed worker"
 ---
 
 The reactive-loader contract is covered by unit tests in `@lunora/react`
@@ -117,8 +124,3 @@ user:
 If all three pass, the live-loader contract holds for your framework: SSR data
 that hydrates into a live subscription with no flash.
 
-## See also
-
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the contract being verified
-- [Bring your framework](/docs/frameworks/bring-your-framework) — per-framework status
-- [Deploy your framework](/docs/frameworks/deploy) — shipping the composed worker

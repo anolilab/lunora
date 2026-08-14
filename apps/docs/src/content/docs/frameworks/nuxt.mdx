@@ -1,6 +1,15 @@
 ---
 title: Nuxt
 description: Run Lunora and Nuxt as one Cloudflare Worker — the @lunora/nuxt module mounts /_lunora/** into Nitro, plus reactive-loader server helpers.
+related:
+    - to: /docs/packages/nuxt
+      note: "the full module reference (incl. the h3 version note)"
+    - to: /docs/frameworks/vue
+      note: "the reactive layer: `useQuery` / `useMutation` / `hydratePreloaded`"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff"
 ---
 
 `@lunora/nuxt` is a **Nuxt module** that runs Lunora and Nuxt as a **single
@@ -184,9 +193,3 @@ topology choice, not a way to reach an unsupported preset:
 This trades the same-origin convenience of the mounted route for two
 independently deployed workers.
 
-## See also
-
-- [@lunora/nuxt](/docs/packages/nuxt) — the full module reference (incl. the h3 version note)
-- [Vue](/docs/frameworks/vue) — the reactive layer: `useQuery` / `useMutation` / `hydratePreloaded`
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff

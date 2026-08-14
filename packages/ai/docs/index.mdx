@@ -1,6 +1,11 @@
 ---
 title: "@lunora/ai"
 description: Workers AI inference from your functions, provider-agnostic, Workers AI by default.
+related:
+    - to: /docs/packages/server
+      note: "the function primitives whose `ctx.ai` this package backs"
+    - to: /docs/packages/bindings
+      note: "pair `embed` with `ctx.vectors` (Vectorize) for RAG"
 ---
 
 `@lunora/ai` is a small helper over the [Vercel AI SDK](https://ai-sdk.dev) and
@@ -254,7 +259,3 @@ The raw binding escape hatch — `ctx.ai.run(model, inputs)` (or `ai.run(...)`) 
 covers Workers-AI-only model families (image, ASR, translation) that aren't
 surfaced through the AI SDK provider.
 
-## See also
-
-- [@lunora/server](/docs/packages/server) — the function primitives whose `ctx.ai` this package backs
-- [@lunora/bindings](/docs/packages/bindings) — pair `embed` with `ctx.vectors` (Vectorize) for RAG

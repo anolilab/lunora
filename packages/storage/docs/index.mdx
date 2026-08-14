@@ -1,6 +1,10 @@
 ---
 title: "@lunora/storage"
 description: R2-backed object storage with worker-signed and S3 presigned URLs.
+related:
+    - to: /docs/packages/server
+    - to: /docs/packages/react#file-uploads-lunorareactupload
+    - to: /docs/architecture
 ---
 
 `@lunora/storage` wraps a Cloudflare R2 binding with a typed API (`upload`,
@@ -223,8 +227,3 @@ export default {
 (`@visulima/storage/provider/memory`) in tests to exercise the whole flow —
 progress, pause/resume, resume-after-drop — without a live bucket.
 
-## See also
-
-- [@lunora/server](/docs/packages/server)
-- [@lunora/react — file uploads](/docs/packages/react#file-uploads-lunorareactupload)
-- [Architecture](/docs/architecture)

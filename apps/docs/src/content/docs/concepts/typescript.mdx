@@ -1,6 +1,12 @@
 ---
 title: TypeScript
 description: Getting the most out of Lunora's end-to-end types — where types come from, what to annotate, and what to let inference do.
+related:
+    - to: /docs/concepts/generated-code
+    - to: /docs/concepts/validation
+    - to: /docs/concepts/data-types
+    - to: /docs/concepts/document-ids
+    - to: /docs/concepts/best-practices
 ---
 
 Lunora's types are not decoration. The schema is the single source of truth, and
@@ -167,10 +173,3 @@ lunora prepare    # the same pre-deploy pipeline, without the network
 schema drift — so it gates a merge. Without a gate like it, a stale `_generated/`
 deploys against old types and the type system silently stops describing reality.
 
-## See also
-
-- [Generated code](/docs/concepts/generated-code)
-- [Validation](/docs/concepts/validation)
-- [Data types](/docs/concepts/data-types)
-- [Document IDs](/docs/concepts/document-ids)
-- [Best practices](/docs/concepts/best-practices)

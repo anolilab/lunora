@@ -1,6 +1,15 @@
 ---
 title: Astro
 description: Compose Astro's @astrojs/cloudflare worker with Lunora realtime, plus reactive-loader server helpers for .astro frontmatter.
+related:
+    - to: /docs/frameworks/bring-your-framework
+      note: "the class-A/B/C composition matrix (Astro is class-B)"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff this page plugs into"
+    - to: /docs/frameworks/deploy
+      note: "one worker, one deploy"
+    - to: /docs/packages/runtime
+      note: "`withFrameworkWorker`, the composition primitive `withLunora` aliases"
 ---
 
 `@lunora/astro` is the Astro integration for Lunora. Astro is multi-framework at
@@ -241,9 +250,3 @@ the Astro build first so the adapter output exists, then deploy. See
     binds.
 </Callout>
 
-## See also
-
-- [Bring your framework](/docs/frameworks/bring-your-framework) — the class-A/B/C composition matrix (Astro is class-B)
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff this page plugs into
-- [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
-- [@lunora/runtime](/docs/packages/runtime) — `withFrameworkWorker`, the composition primitive `withLunora` aliases

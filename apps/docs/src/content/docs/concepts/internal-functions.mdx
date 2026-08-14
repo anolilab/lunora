@@ -1,6 +1,12 @@
 ---
 title: Internal functions
 description: internalQuery / internalMutation / internalAction — server-only functions never exposed to the client.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/http-endpoints
+    - to: /docs/packages/server
+    - to: /docs/packages/scheduler
 ---
 
 Every `query`, `mutation`, and `action` you export is **public** by default,
@@ -80,10 +86,3 @@ The same applies to cron jobs (`cronJobs`) and connection-lifecycle hooks
 (`onConnect` / `onDisconnect`), which are registered as internal mutations the
 runtime dispatches on a schedule or socket event rather than via a client call.
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Actions](/docs/concepts/actions)
-- [HTTP endpoints](/docs/concepts/http-endpoints)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/scheduler](/docs/packages/scheduler)

@@ -1,6 +1,13 @@
 ---
 title: Advisors
 description: Splinter-style lints that catch schema, performance, and security problems — many before you deploy.
+related:
+    - to: /docs/packages/studio#advisors
+      note: "the Security, RLS, and Insights panels"
+    - to: /docs/concepts/masking
+      note: "what `mask_uncovered_pii_column` guards"
+    - to: /docs/packages/workflow
+      note: "what the `workflow_*` lints guard"
 ---
 
 Advisors are lints over your schema and functions, modelled on Supabase's
@@ -97,8 +104,3 @@ const findings = runAdvisor(context, { source: "static" }); // or "runtime"
 Each finding carries a stable `cacheKey` so the Studio can dedup across runs and
 let you dismiss a specific finding without silencing the whole rule.
 
-## See also
-
-- [Studio](/docs/packages/studio#advisors) — the Security, RLS, and Insights panels.
-- [Data masking](/docs/concepts/masking) — what `mask_uncovered_pii_column` guards.
-- [Workflows](/docs/packages/workflow) — what the `workflow_*` lints guard.

@@ -1,6 +1,17 @@
 ---
 title: Validation
 description: The v.* validators that type your columns and parse query / mutation / action inputs and outputs end to end.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables and column validators"
+    - to: /docs/concepts/indexes
+      note: "accelerating the reads your handlers run"
+    - to: /docs/concepts/queries-mutations
+      note: "the function kinds and `ctx`"
+    - to: /docs/packages/values
+      note: "the full `v.*` reference, `Infer` and `Id`"
+    - to: /docs/packages/server
+      note: "`query` / `mutation` / `action` builders"
 ---
 
 A **validator** is a single runtime object that does two jobs at once: it
@@ -136,10 +147,3 @@ carries the `path` to the offending field (rendered via `formatPath` as
 boundary failure points at exactly which input was wrong. See
 [`@lunora/values`](/docs/packages/values#validationerror).
 
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables and column validators
-- [Indexes](/docs/concepts/indexes) — accelerating the reads your handlers run
-- [Queries & mutations](/docs/concepts/queries-mutations) — the function kinds and `ctx`
-- [@lunora/values](/docs/packages/values) — the full `v.*` reference, `Infer` and `Id`
-- [@lunora/server](/docs/packages/server) — `query` / `mutation` / `action` builders

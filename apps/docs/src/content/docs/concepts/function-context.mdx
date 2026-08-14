@@ -1,6 +1,11 @@
 ---
 title: Function context
 description: The ctx object passed to every query, mutation, and action — and what each kind is allowed to do with it.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/actions
+    - to: /docs/packages/server
+    - to: /docs/packages/ratelimit
 ---
 
 Every Lunora function receives a `ctx` as the first argument of its handler.
@@ -121,9 +126,3 @@ declare these; they appear only after codegen detects the add-on. Middleware
 can also augment `ctx` for downstream handlers (see
 [Middleware](/docs/concepts/middleware)).
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Actions](/docs/concepts/actions)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/ratelimit](/docs/packages/ratelimit)

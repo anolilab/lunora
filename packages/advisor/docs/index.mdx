@@ -1,6 +1,15 @@
 ---
 title: "@lunora/advisor"
 description: "Schema and query lints — splinter-style advisors that surface in the Studio Advisors view, most of them at codegen time before you ship."
+related:
+    - to: /docs/packages/server
+      note: "the `defineSchema` / `defineTable` these lints analyze"
+    - to: /docs/packages/studio
+      note: "renders the Advisors view"
+    - to: /docs/packages/hyperdrive
+      note: "the `hyperdrive_outside_action` lint"
+    - to: /docs/packages/bindings
+      note: "the `r2sql_outside_action` lint and the Analytics SQL client the runtime feeder reads"
 ---
 
 `@lunora/advisor` is a set of lints over your Lunora app, modeled on Supabase's
@@ -334,9 +343,3 @@ context straight from the feeder.
     than their procedure's row. Closing that gap is tracked work on the codegen feeder.
 </Callout>
 
-## See also
-
-- [@lunora/server](/docs/packages/server) — the `defineSchema` / `defineTable` these lints analyze
-- [@lunora/studio](/docs/packages/studio) — renders the Advisors view
-- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the `hyperdrive_outside_action` lint
-- [@lunora/bindings](/docs/packages/bindings) — the `r2sql_outside_action` lint and the Analytics SQL client the runtime feeder reads

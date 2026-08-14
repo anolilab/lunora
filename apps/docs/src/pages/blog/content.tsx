@@ -257,7 +257,7 @@ const BlogPost: FC<{
 
                     {toc.length > 0 ? (
                         <aside className="hidden lg:block">
-                            <div className="sticky top-28">
+                            <div className="sticky top-[var(--site-nav-height)]">
                                 <TableOfContents items={toc} />
                             </div>
                         </aside>

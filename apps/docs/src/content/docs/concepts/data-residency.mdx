@@ -1,6 +1,13 @@
 ---
 title: Data residency
 description: Pin Durable Objects to a Cloudflare jurisdiction with .jurisdiction(), and the export→import runbook for moving regions.
+related:
+    - to: /docs/concepts/sharding
+      note: "the `__root__` DO, `.shardBy()`, and `.global()`"
+    - to: /docs/concepts/migrations
+      note: "`defineMigration` and the pre-deploy drift gate"
+    - to: /docs/packages/cli
+      note: "full `lunora export`, `lunora import`, and `lunora deploy` reference"
 ---
 
 Cloudflare [Durable Object jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
@@ -181,8 +188,3 @@ leave them to expire or delete them from the Cloudflare dashboard.
     put.
 </Callout>
 
-## See also
-
-- [Sharding](/docs/concepts/sharding) — the `__root__` DO, `.shardBy()`, and `.global()`.
-- [Migrations](/docs/concepts/migrations) — `defineMigration` and the pre-deploy drift gate.
-- [CLI](/docs/packages/cli) — full `lunora export`, `lunora import`, and `lunora deploy` reference.

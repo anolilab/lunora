@@ -1,6 +1,13 @@
 ---
 title: Migrating from a Convex toolkit
 description: The second translation step a Drizzle-style schema DSL and a tRPC-style procedure builder add on top of the raw Convex mapping.
+related:
+    - to: /docs/migrating/from-convex
+      note: "the base mapping, including auth, storage and the flattened API namespaces"
+    - to: /docs/concepts/monorepos-and-iac
+      note: "if the toolkit app lives in a repo with other Workers"
+    - to: /docs/packages/workflow
+      note: "the vehicle for anything that used to be one atomic cross-document write"
 ---
 
 [Migrating from Convex](/docs/migrating/from-convex) maps raw Convex to Lunora.
@@ -132,8 +139,3 @@ primitive.
     live turned out to be `.count()` and one ordered index — both native. Roughly 70 call sites disappeared instead of moving.
 </Callout>
 
-## See also
-
-- [Migrating from Convex](/docs/migrating/from-convex) — the base mapping, including auth, storage and the flattened API namespaces
-- [Monorepos and external IaC](/docs/concepts/monorepos-and-iac) — if the toolkit app lives in a repo with other Workers
-- [`@lunora/workflow`](/docs/packages/workflow) — the vehicle for anything that used to be one atomic cross-document write

@@ -1,6 +1,11 @@
 ---
 title: TTL & auto-expiry
 description: Declare a table-level .ttl() so a DO alarm sweep auto-deletes expired rows — sessions, OTPs, and other ephemeral data.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/server
 ---
 
 Ephemeral rows — sessions, one-time passcodes, short-lived tokens, transient
@@ -77,9 +82,3 @@ The [Advisors](/docs/concepts/advisors) lint a `.ttl()` whose target column is
 not a timestamp (an epoch-millisecond number), surfacing it in the Studio before
 the sweep would silently no-op on unparsable values.
 
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Scheduling](/docs/concepts/scheduling)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/server](/docs/packages/server)

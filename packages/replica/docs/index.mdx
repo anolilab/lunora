@@ -1,6 +1,11 @@
 ---
 title: "@lunora/replica"
 description: Local-first replica runtime for Lunora — EventEmitter, subscriptions, snapshot DO, and replay.
+related:
+    - to: /docs/packages/server
+      note: "server primitives and action context"
+    - to: /docs/concepts/offline-first
+      note: "event sourcing for offline resilience"
 ---
 
 `@lunora/replica` provides a local-first replica runtime and local SQLite mirror for
@@ -197,7 +202,3 @@ export const myAction = action({
 });
 ```
 
-## See also
-
-- [@lunora/server](/docs/packages/server) — server primitives and action context.
-- [Concepts: Offline-first](/docs/concepts/offline-first) — event sourcing for offline resilience.

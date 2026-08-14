@@ -1,6 +1,12 @@
 ---
 title: Full-text search
 description: Declare a search index on a table and run relevance-ordered full-text queries.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/relations
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/server
 ---
 
 A `searchIndex` adds a full-text index over one string column so you can match
@@ -229,10 +235,3 @@ instead, GIN-indexed, and lets Postgres match and rank.
 Either way a write updates only the companion rows for the document it touched,
 and a search never scans the source table.
 
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Relations](/docs/concepts/relations)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/server](/docs/packages/server)

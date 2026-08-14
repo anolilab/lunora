@@ -1,6 +1,9 @@
 ---
 title: Deployment
 description: Wrangler bindings, secrets, and the deploy flow.
+related:
+    - to: /docs/limits
+    - to: /docs/architecture
 ---
 
 Lunora apps deploy as a single Cloudflare Worker plus Durable Object class,
@@ -323,7 +326,3 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
   binding; the only thing it adds is native-MQTT device ingest, a narrow case
   we'll revisit if it reaches GA and a concrete need appears.
 
-## See also
-
-- [Limits](/docs/limits)
-- [Architecture](/docs/architecture)

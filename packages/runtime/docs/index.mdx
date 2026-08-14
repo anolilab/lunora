@@ -1,6 +1,10 @@
 ---
 title: "@lunora/runtime"
 description: The Worker entrypoint — createWorker, RPC envelope, shard routing.
+related:
+    - to: /docs/packages/do
+    - to: /docs/packages/d1
+    - to: /docs/architecture
 ---
 
 `@lunora/runtime` is the low-level Worker runtime. In a normal Lunora app you
@@ -415,8 +419,3 @@ stalling the shard** — the tap is a reader, so writes proceed. `POST` body:
 Snowflake / BigQuery / Airbyte / Fivetran connectors are a Lunora Cloud concern
 — the framework ships the tap.
 
-## See also
-
-- [@lunora/do](/docs/packages/do)
-- [@lunora/d1](/docs/packages/d1)
-- [Architecture](/docs/architecture)

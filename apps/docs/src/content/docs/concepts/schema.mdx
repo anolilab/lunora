@@ -1,6 +1,9 @@
 ---
 title: Schema
 description: Declarative tables, validators, indexes and sharding.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/sharding
 ---
 
 A Lunora schema is a single TypeScript file. It is the source of truth for
@@ -59,7 +62,3 @@ export default defineSchema({
 `q.withIndex(name, ...)` in queries. `.searchIndex(name, { field, filterFields })`
 adds a full-text index over `field` — see [Full-text search](/docs/concepts/search).
 
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Sharding](/docs/concepts/sharding)

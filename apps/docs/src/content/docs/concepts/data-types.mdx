@@ -1,6 +1,13 @@
 ---
 title: Data types
 description: The value types a Lunora document can hold, how each is stored, and which ones need the wire codec to survive JSON.
+related:
+    - to: /docs/concepts/validation
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/document-ids
+    - to: /docs/concepts/wire-protocol
+    - to: /docs/limits
+    - to: /docs/packages/values
 ---
 
 A Lunora document is a JSON-shaped object stored as a row in SQLite. The
@@ -139,11 +146,3 @@ that reads the schema rather than the value:
 - **JSON Schema.** The OpenAPI/OpenRPC surface documents the column as
   unconstrained, because there is nothing for it to read.
 
-## See also
-
-- [Validation](/docs/concepts/validation)
-- [Schema](/docs/concepts/schema)
-- [Document IDs](/docs/concepts/document-ids)
-- [Wire protocol](/docs/concepts/wire-protocol)
-- [Limits](/docs/limits)
-- [@lunora/values](/docs/packages/values)
