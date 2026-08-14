@@ -29,6 +29,8 @@ A Rivet Actor is the closest primitive to a Durable Object outside Cloudflare: o
 
 A snapshot rather than a statement journal, because replaying `random()` or `datetime('now')` reconstructs a different database. The cost is the honest one: a commit is O(database size), and the shard must fit in the actor's memory — a small-shard strategy that `.shardBy()` keeps in range.
 
+Rivet caps an actor at **10 GiB of storage shared between SQLite and KV**, and stores its SQLite through that KV layer. Base64 makes a working copy of size N occupy ~1.33 N durably, so the hard ceiling is ~7.5 GiB of shard data — and resident memory binds long before that. See [`plans/rivet-host-findings.md`](../../plans/rivet-host-findings.md) §7.
+
 ## Wiring
 
 Rivet delivers schedules by invoking an **action on the actor**, so three one-line handlers have to exist. The action names are exported constants.

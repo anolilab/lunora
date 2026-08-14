@@ -149,7 +149,36 @@ alone would pull the napi and wasm binaries, `drizzle-orm`, `hono` and `pino`
 into every install of this repo. The copy catches a projection that was always
 wrong; it catches drift only when somebody refreshes it against a newer release.
 
-## 7. Not built
+## 7. The published limits, and how they bound this design
+
+From [Limits](https://rivet.dev/actors/docs/limits.md). These were read after
+the host was built and sharpen the "small shard" caveat from a hand-wave into a
+number.
+
+| Limit                                         | Value                                | Why it matters here                                  |
+| --------------------------------------------- | ------------------------------------ | ---------------------------------------------------- |
+| Storage per actor (SQLite **and** KV, shared) | 10 GiB hard                          | The absolute shard ceiling                           |
+| HTTP request / response body                  | 20 MiB hard                          | Bounds one shard RPC — the `ShardStub.fetch` payload |
+| `onRequest` timeout                           | 60 s (from `actionTimeout`)          | Bounds one shard round trip                          |
+| WebSocket outgoing message                    | 1 MiB soft / 32 MiB hard             | Bounds a poke, delta or whisper frame                |
+| Buffered while hibernating                    | 128 MiB / 65,535 msgs per connection | What a sleeping actor can absorb before a wake       |
+| Wake timeout                                  | 90 s                                 | Past this the hibernated client is disconnected      |
+| Queue message                                 | 64 KiB soft / 128 KiB                | Only relevant if `c.queue` is ever adopted           |
+
+Two of these bite the snapshot strategy specifically:
+
+- **10 GiB is shared between SQLite and KV**, and the snapshot is base64, so a
+  working copy of size N occupies ~1.33 N durably. The ceiling is therefore
+  ~7.5 GiB of shard data — and memory, not storage, binds long before that,
+  since the working copy is resident.
+- **Rivet's SQLite is itself stored through the KV layer.** A whole-database
+  snapshot per commit is not merely O(N) bytes written; it is O(N) bytes written
+  _through KV_. This is the strongest argument yet for revisiting the facade
+  (§2) rather than treating it as settled — a dirty-page-level or incremental
+  snapshot would cut the constant enormously, and a BLOB column instead of
+  base64 would cut a further third.
+
+## 8. Not built
 
 No `lunora dev --target rivet`, no `@lunora/config` deploy driver, no
 `.global()` table backend, no queue/object-storage/AI bindings. This is the host
