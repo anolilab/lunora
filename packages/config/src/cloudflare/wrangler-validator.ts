@@ -104,7 +104,10 @@ interface WranglerConfig {
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; `validateContainers` guards against that at runtime.
     containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
-    d1_databases?: ReadonlyArray<{ binding?: string }>;
+    // The `database_id` / `database_name` are remote resources Lunora can't mint
+    // (`wrangler d1 create`) — `validateD1Databases` checks the shape (binding +
+    // at least one of the two) only.
+    d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string; database_name?: string } | null | undefined>;
     // Workers for Platforms dispatch namespaces — passthrough/shape-check only
     // (the `outbound` shape is deep WfP territory Lunora does not police). See
     // `validateDispatchNamespaces`.
@@ -139,7 +142,21 @@ interface WranglerConfig {
     // The worker entry, relative to the config file. Read to check that every
     // declared Durable Object / Workflow class is actually exported by it.
     main?: string;
-    migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string> } | null | undefined>;
+    // Durable Object class history wrangler applies IN ORDER to compute which
+    // classes currently exist — a class can be added, renamed, and/or deleted
+    // across several entries over a project's lifetime. See
+    // `foldMigrationClasses`, which is the only code that should read the
+    // `renamed_classes` / `deleted_classes` shape below.
+    migrations?: ReadonlyArray<
+        | {
+              deleted_classes?: ReadonlyArray<string>;
+              new_classes?: ReadonlyArray<string>;
+              new_sqlite_classes?: ReadonlyArray<string>;
+              renamed_classes?: ReadonlyArray<{ from?: string; to?: string } | null | undefined>;
+          }
+        | null
+        | undefined
+    >;
     // mTLS client-certificate bindings (`Fetcher` that presents a client cert on
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
     // `validateMtlsCertificates`.
@@ -159,7 +176,10 @@ interface WranglerConfig {
         consumers?: ReadonlyArray<WranglerQueueConsumer | null | undefined>;
         producers?: ReadonlyArray<WranglerQueueProducer | null | undefined>;
     };
-    r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    // Structural only (`validateR2Buckets`): a declared bucket needs a
+    // `bucket_name` — the remote bucket itself (`wrangler r2 bucket create`) is
+    // out of scope for a pure validator.
+    r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string } | null | undefined>;
     // Cloudflare Secrets Store bindings (`env.<BINDING>.get()`). Each references a
     // remote store + secret by name (created out-of-band); `validateSecretsStore`
     // shape-checks the entries. See also the `ctx.secrets` core built-in.
@@ -448,8 +468,78 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
  * non-object entries (a trailing comma in JSONC parses to `[null]`), so callers
  * can safely `.find`/`.map` string fields without a raw `TypeError`.
  */
-const objectBindingEntries = <T>(value: ReadonlyArray<T> | undefined): T[] =>
-    Array.isArray(value) ? value.filter((entry): entry is object & T => entry !== null && typeof entry === "object") : [];
+const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | undefined): T[] =>
+    Array.isArray(value) ? (value.filter((entry): entry is T => entry !== null && typeof entry === "object") as T[]) : [];
+
+/**
+ * Fold `wrangler.migrations[]` IN ORDER into the set of Durable Object classes
+ * that currently exist, applying each entry's `new_classes` +
+ * `new_sqlite_classes` (add), then its `renamed_classes` (from → to), then its
+ * `deleted_classes` (remove) — in that order, one entry at a time.
+ *
+ * This must stay a fold, not a single-entry membership scan: a class added in
+ * one entry and renamed in a later one is only findable under its NEW name,
+ * and a class added then later deleted must NOT be findable at all. A naive
+ * "does this class appear anywhere in migrations" check gets both cases
+ * wrong. See plan 353.
+ */
+const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => {
+    const classes = new Set<string>();
+
+    for (const migration of migrations ?? []) {
+        if (!migration || typeof migration !== "object") {
+            continue;
+        }
+
+        for (const name of migration.new_classes ?? []) {
+            classes.add(name);
+        }
+
+        for (const name of migration.new_sqlite_classes ?? []) {
+            classes.add(name);
+        }
+
+        for (const rename of migration.renamed_classes ?? []) {
+            if (rename && isNonEmptyString(rename.from) && isNonEmptyString(rename.to)) {
+                classes.delete(rename.from);
+                classes.add(rename.to);
+            }
+        }
+
+        for (const name of migration.deleted_classes ?? []) {
+            classes.delete(name);
+        }
+    }
+
+    return classes;
+};
+
+/**
+ * Every `durable_objects.bindings[]` entry whose class lives in THIS script
+ * (no `script_name`) must be a class {@link foldMigrationClasses} says
+ * currently exists — otherwise `wrangler deploy` fails with "You must add a
+ * new migration for the following durable object classes: X", a hard deploy
+ * failure this validator exists to catch before deploy time. A binding
+ * naming a class in ANOTHER script is that script's migrations to carry, not
+ * this config's (same carve-out as {@link collectUnexportedClassErrors}).
+ */
+const validateDurableObjectMigrations = (wrangler: WranglerConfig, errors: string[]): void => {
+    const currentClasses = foldMigrationClasses(wrangler.migrations);
+
+    for (const binding of objectBindingEntries(wrangler.durable_objects?.bindings)) {
+        if (
+            binding.script_name === undefined &&
+            isNonEmptyString(binding.class_name) &&
+            !currentClasses.has(binding.class_name)
+        ) {
+            errors.push(
+                `durable_objects.bindings declares class "${binding.class_name}" but it is missing from migrations — ` +
+                    `add a migration entry with "new_sqlite_classes": ["${binding.class_name}"] (or "new_classes" for a non-SQLite-backed class), ` +
+                    "or run `lunora dev` to auto-reconcile wrangler.jsonc",
+            );
+        }
+    }
+};
 
 /**
  * Every `containers[]` entry must be a container-enabled Durable Object the
@@ -770,7 +860,65 @@ const REQUIRED_FIELD_BINDING_RULES = [
         key: "mtls_certificates",
         objectMessage: (label: string) => `${label} must be a { binding, certificate_id } object`,
     },
+    {
+        // Unlike kv_namespaces/hyperdrive/pipelines (HINT_BINDING_RULES), the
+        // bucket_name is not a remote id Lunora waits on Cloudflare to mint —
+        // it is chosen by the project, so a missing one is a structural error,
+        // not a hint.
+        arrayMessage: "r2_buckets must be an array of { binding, bucket_name } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the R2 bucket binding` },
+            { field: "bucket_name", message: (label: string) => `${label} must have a non-empty "bucket_name" naming the deployed bucket` },
+        ],
+        key: "r2_buckets",
+        objectMessage: (label: string) => `${label} must be a { binding, bucket_name } object`,
+    },
 ] as const satisfies ReadonlyArray<RequiredFieldsRule & { key: keyof WranglerConfig }>;
+
+/**
+ * Structural check for every `d1_databases[]` entry: a non-empty `binding`,
+ * plus a `database_id` or a `database_name` identifying which database it
+ * binds. Both are remote-ish (created via `wrangler d1 create`, which prints
+ * an id and takes a name), but unlike the HINT_BINDING_RULES bindings a D1
+ * entry with NEITHER is unusable, so this stays an error like the other
+ * structural checks — matching {@link REQUIRED_FIELD_BINDING_RULES}'s bar
+ * rather than the hint-only one. "Either field" doesn't fit
+ * {@link RequiredFieldsRule} (which requires every listed field), so this is
+ * hand-rolled rather than a table entry.
+ */
+const validateD1Databases = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { d1_databases: d1Databases } = wrangler;
+
+    if (d1Databases === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(d1Databases)) {
+        errors.push("d1_databases must be an array of { binding, database_id | database_name } entries");
+
+        return;
+    }
+
+    for (const [index, entry] of asBindingEntries(d1Databases).entries()) {
+        const label = `d1_databases[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, database_id | database_name } object`);
+
+            continue;
+        }
+
+        if (!isNonEmptyString(entry.binding)) {
+            errors.push(`${label} must have a non-empty "binding" naming the D1 binding`);
+        }
+
+        if (!isNonEmptyString(entry.database_id) && !isNonEmptyString(entry.database_name)) {
+            errors.push(
+                `${label} must have a "database_id" or a "database_name" — run \`wrangler d1 create\` and set one, or the binding can't resolve`,
+            );
+        }
+    }
+};
 
 /**
  * `send_email[]` (Email Routing outbound, used for auto-reply/forward from an
@@ -1121,6 +1269,8 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
         );
     }
 
+    validateDurableObjectMigrations(wrangler, errors);
+
     const compatibilityDate = wrangler.compatibility_date ?? "";
 
     // Lexical `<` only matches numeric comparison for strict `YYYY-MM-DD`; a
@@ -1159,6 +1309,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
         }
     }
 
+    validateD1Databases(wrangler, errors);
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
     validateContainers(wrangler, errors, warnings);
