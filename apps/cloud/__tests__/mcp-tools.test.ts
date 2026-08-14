@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RegisteredRoute } from "../src/deploy/route-registry";
 import { createDeployRouter } from "../src/deploy/router";
 import { createMcpRouteHandler } from "../src/mcp/handler";
+import readJson from "./_helpers/read-json";
 
 const noop = (): Promise<Response> => Promise.resolve(new Response());
 
@@ -50,8 +51,7 @@ describe(createMcpRouteHandler, () => {
             verifyKey: () => Promise.resolve(true),
         });
         const response = await handler(rpc("tools/list"), {});
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
-        const payload = (await response.json()) as { result: { tools: { name: string }[] } };
+        const payload = await readJson<{ result: { tools: { name: string }[] } }>(response);
 
         expect(payload.result.tools.map((tool) => tool.name)).toStrictEqual(["deployments.rollback"]);
     });
@@ -76,8 +76,7 @@ describe(createMcpRouteHandler, () => {
 
         const handler = createMcpRouteHandler({ jsonError, routes: [capturing], verifyKey: () => Promise.resolve(true) });
         const response = await handler(rpc("tools/call", { arguments: { deploymentId: "dep_1", organizationId: "org_1" }, name: "deployments.rollback" }), {});
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
-        const payload = (await response.json()) as { result: { isError: boolean } };
+        const payload = await readJson<{ result: { isError: boolean } }>(response);
 
         expect(seen).toStrictEqual({
             authorization: "Bearer dk_agent", // gitleaks:allow -- the same fabricated fixture, asserted as forwarded verbatim
@@ -91,8 +90,7 @@ describe(createMcpRouteHandler, () => {
     it("reports isError for an unknown tool without dispatching anywhere", async () => {
         const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
         const response = await handler(rpc("tools/call", { name: "nope" }), {});
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; this assertion is what types the payload, and `tsc --noEmit` fails without it
-        const payload = (await response.json()) as { result: { isError: boolean } };
+        const payload = await readJson<{ result: { isError: boolean } }>(response);
 
         expect(payload.result.isError).toBe(true);
     });

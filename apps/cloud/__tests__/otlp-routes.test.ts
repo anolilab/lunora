@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createDeployRouter } from "../src/deploy/router";
+import readJson from "./_helpers/read-json";
 
 /**
  * Handler-level tests for the standard OTLP ingest routes: exercise auth, the
@@ -66,9 +67,10 @@ describe("oTLP ingest routes", () => {
             { authorization: "Bearer valid" },
         );
 
+        const body = await readJson<{ partialSuccess: { rejectedSpans: number } }>(response);
+
         expect(response.status).toBe(200);
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- `Response.json()` resolves to `unknown`; without the assertion `tsc --noEmit` fails
-        expect(((await response.json()) as { partialSuccess: { rejectedSpans: number } }).partialSuccess.rejectedSpans).toBe(100);
+        expect(body.partialSuccess.rejectedSpans).toBe(100);
     });
 
     it("accepts an OTLP/protobuf body (no longer 415s it)", async () => {
