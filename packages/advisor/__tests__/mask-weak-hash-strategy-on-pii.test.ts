@@ -75,6 +75,32 @@ describe("mask_weak_hash_strategy_on_pii", () => {
         expect(findings).toHaveLength(0);
     });
 
+    it.each(["email", "email_address", "emailAddress", "dateOfBirth", "ssn"])('flags a "hash" strategy on the PII-shaped column "%s"', (column) => {
+        expect.assertions(1);
+
+        const findings = run([strategy({ column, strategy: "hash" })]);
+
+        expect(findings).toHaveLength(1);
+    });
+
+    it.each(["adobeAssetId", "classSnapshot"])('does not flag a "hash" strategy on the PII-fragment-only column "%s"', (column) => {
+        expect.assertions(1);
+
+        // Regression guard for the substring-match bug: `dob` inside "adobeAssetId" and
+        // `ssn` inside "classSnapshot" must no longer trigger a false positive.
+        const findings = run([strategy({ column, strategy: "hash" })]);
+
+        expect(findings).toHaveLength(0);
+    });
+
+    it('flags a "hash" strategy on "phoneNumber" (guards against over-narrowing)', () => {
+        expect.assertions(1);
+
+        const findings = run([strategy({ column: "phoneNumber", strategy: "hash" })]);
+
+        expect(findings).toHaveLength(1);
+    });
+
     it('does not flag a "redact" strategy on a PII-named column', () => {
         expect.assertions(1);
 
