@@ -83,29 +83,59 @@ live subscriptions, the shape/poke protocol and resume-across-reconnect, and eve
 client is safe to share across threads. All eight get typed argument and result
 models generated from your schema.
 
-One deliberate gap:
+All eight also implement the two client-side write features, ported from
+`@lunora/client` and held to the same golden fixtures:
 
-- **Optimistic updates and the offline queue are JS and Dart only.** The other six
-  clients speak the protocol; they do not implement the client-side mutation queue.
+- **Optimistic updates.** Patch any number of subscribed queries before the server
+  answers. A prediction is a LAYER, so an unrelated push re-folds it onto the new
+  value rather than wiping it, and it is released the moment a frame carries the
+  write's own commit cursor — not when the HTTP call returns, which races the
+  socket. A failed write unwinds it.
+- **An offline mutation queue.** A write issued while disconnected is held and
+  replayed in order on reconnect, under the same idempotency key the call minted,
+  so a write the server already committed is not applied twice. The queue is a
+  bounded FIFO: overflow drops the OLDEST write, a stale precondition drops one
+  before it replays, and a write queued under one identity never replays under
+  another. Give the client a persistence adapter to survive a process restart.
 
-Three things only Dart gets, because a mobile client is disconnected routinely
-rather than exceptionally:
+Two deliberate gaps everywhere:
+
+- **No multi-tab leader election.** A browser concern; there are no tabs here.
+- **No built-in HTTP or socket.** Both are injected, which is what lets you keep
+  your own stack — see below.
+
+How you reach the queued write path differs in one place, and it is worth knowing
+before you look for a method that is not there:
+
+- **Everywhere except Dart, `submit` is the queued write path and `mutation` is
+  unchanged.** `mutation` stays one direct round-trip that fails when the
+  deployment is unreachable, because the generated typed wrappers call it. `submit`
+  returns immediately with a `status` of `committed` or `queued`; the eventual
+  verdict on a queued write arrives through the client's settled callback rather
+  than by blocking a thread. Stamp the queue's identity yourself with
+  `client.identity` — a stable, non-secret subject such as a user id.
+- **Dart uses `mutation` directly and learns about connectivity from you.** It does
+  not own a socket, so `setConnected(true|false)` is what flushes the queue, and its
+  `LunoraPersistence` adapter is asynchronous where the other seven's is
+  synchronous.
+
+Two things only Dart gets, because a mobile client is disconnected routinely rather
+than exceptionally:
 
 - **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
   hands back a `Stream` a Flutter `StreamBuilder` consumes directly. It subscribes
   on first listen and unsubscribes when the last listener cancels, so disposing the
   widget disposes the subscription. The callback-shaped `subscribeList(...)` every
   other language has is there too.
-- **Optimistic updates.** Pass `optimisticUpdate` to a generated mutation to patch
-  any number of subscribed queries before the server answers. A prediction is a
-  layer, so an unrelated push re-folds it onto the new value rather than wiping it,
-  and it is released the moment a frame carries the write's own commit — not when
-  the HTTP call returns, which races the socket. A failed write unwinds it.
-- **An offline mutation queue.** A write issued while disconnected is held and
-  replayed in order on reconnect, under the same idempotency key the call minted,
-  so a write the server already committed is not applied twice. Tell the client
-  about connectivity with `setConnected(true|false)`; give it a `LunoraPersistence`
-  to survive a process restart.
+- **Batched replay.** A reconnect flushing two or more writes coalesces them into
+  `/_lunora/rpc-batch` round trips instead of one request per write. The other seven
+  replay sequentially.
+
+One thing only Dart lacks: a **per-shard drain**. The other seven own a socket per
+shard, so one shard reconnecting flushes just its writes; Dart has a single
+connectivity signal, so one reconnect drains everything.
+
+In Dart, that rides the generated mutation:
 
 ```dart
 await api.messages.send(
@@ -116,6 +146,25 @@ await api.messages.send(
     args: listArgs,
   ),
 );
+```
+
+Everywhere else it rides `submit`, which answers straight away with where the
+write went:
+
+```python
+outcome = await client.submit(
+    SubmitOptions(
+        function_path="messages:send",
+        args={"channel": "general", "text": "hi"},
+        optimistic_update=lambda store, _: store.set_query(
+            "messages:list",
+            {"channel": "general"},
+            [*(store.get_query("messages:list", {"channel": "general"}) or []), pending],
+        ),
+    )
+)
+
+outcome.status  # "committed", or "queued" while the socket is down
 ```
 
 <Callout type="warn">
