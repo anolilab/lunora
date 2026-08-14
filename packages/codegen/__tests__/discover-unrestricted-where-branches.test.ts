@@ -177,6 +177,84 @@ export const notAShape = somethingElse({ where: (x: { ok: boolean }) => (x.ok ? 
         expect(discover()).toStrictEqual([]);
     });
 
+    it("leaves the mirror allow-position ternary alone (admin sees everything)", () => {
+        expect.assertions(1);
+
+        // `{}` on the TRUE arm of a positive condition is the intentional "no further
+        // restriction" for admins, not the deny arm — the false positive this fix removes.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.isAdmin ? {} : { userId: ctx.auth.userId }) });
+`,
+        );
+
+        expect(discover()).toStrictEqual([]);
+    });
+
+    it("flags an if-return-plus-fallthrough guard whose deny arm returns {} (positive orientation)", () => {
+        expect.assertions(1);
+
+        // The if-branch fires when the negative-shaped condition is true (not logged
+        // in) — that IS the deny arm, same bug as the ternary case, if-form idiom.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({
+    table: "nodes",
+    where: (ctx) => {
+        if (!ctx.auth.userId) return {};
+
+        return { userId: ctx.auth.userId };
+    },
+});
+`,
+        );
+
+        expect(discover()).toMatchObject([{ exportName: "s", form: "empty-object", key: "where", owner: "defineShape" }]);
+    });
+
+    it("leaves the if-return-plus-fallthrough mirror alone (admin sees everything)", () => {
+        expect.assertions(1);
+
+        // If-branch fires for the positive condition (isAdmin) and returns `{}` — the
+        // intentional allow-everything arm, mirroring the ternary case above.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({
+    table: "nodes",
+    where: (ctx) => {
+        if (ctx.auth.isAdmin) return {};
+
+        return { userId: ctx.auth.userId };
+    },
+});
+`,
+        );
+
+        expect(discover()).toStrictEqual([]);
+    });
+
+    it("leaves an arm returning allowAll() alone even in the deny position", () => {
+        expect.assertions(1);
+
+        // `allowAll()` sits on the ternary's false arm — structurally the deny
+        // candidate — but it is an explicit, intentional marker and must never flag.
+        write(
+            "shapes.ts",
+            `import { allowAll, defineShape } from "@lunora/server";
+
+export const s = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.userId ? { userId: ctx.auth.userId } : allowAll()) });
+`,
+        );
+
+        expect(discover()).toStrictEqual([]);
+    });
+
     it("resolves an aliased defineShape import", () => {
         expect.assertions(1);
 
