@@ -205,7 +205,7 @@ module Lunora
         @offline_queue
       end
 
-      queue.clear
+      report_discarded(queue.clear)
     end
 
     def query(function_path, args = nil, shard_key = nil) = rpc(function_path, args, shard_key, nil)
@@ -371,11 +371,15 @@ module Lunora
     # +on_mutation_settled+.
     def hydrate_offline_queue
       queue = @mutex.synchronize { @offline_queue }
-      restored = queue.hydrate
+      restored, evicted = queue.hydrate
 
       queue.items.each do |item|
         attach_hydrated_settlers(item) if item.on_resolve.nil? && item.on_reject.nil?
       end
+
+      # Restored records the cap dropped never get settlers of their own, so they
+      # are reported directly rather than through one.
+      report_discarded(evicted)
 
       restored
     end
@@ -394,11 +398,15 @@ module Lunora
       report = FlushReport.empty
       queue, current_identity = @mutex.synchronize { [@offline_queue, @identity] }
 
-      queue.drain_conflict.each do |item|
-        queue.unpersist(item.id)
-        report.conflicted << item.id
-        report.rejected << item.id
+      conflicted = queue.drain_conflict
+
+      conflicted.each do |discarded|
+        queue.unpersist(discarded.entry.id)
+        report.conflicted << discarded.entry.id
+        report.rejected << discarded.entry.id
       end
+
+      report_discarded(conflicted)
 
       drained = queue.drain { |item| item.shard_key == shard_key }
       return report if drained.empty?
@@ -726,7 +734,9 @@ module Lunora
         shard_key: shard_key
       )
 
-      @mutex.synchronize { queue.enqueue(entry) }
+      # Safe under the lock now that +enqueue+ invokes no callback: it returns what
+      # the cap evicted instead, and those settle below.
+      report_discarded(@mutex.synchronize { queue.enqueue(entry) })
     end
 
     # Give a restored write the observer-only settlers it lost in the restart.
@@ -745,6 +755,17 @@ module Lunora
     end
 
     def settle_rejected(item, error) = item.on_reject&.call(error)
+
+    # Settle every write the queue let go of without sending it.
+    #
+    # Runs with the lock RELEASED: a rejection rolls optimistic layers back, which
+    # re-acquires it, and Ruby's Mutex is not reentrant. Every discard path funnels
+    # through here, so an eviction can never drop a durable write in silence —
+    # which matters most for a hydrated record, whose original caller did not
+    # survive the restart.
+    def report_discarded(discarded)
+      discarded.each { |item| settle_rejected(item.entry, item.error) }
+    end
 
     # Run a write's confirms or rollbacks under the lock and deliver the
     # resulting notifications outside it.

@@ -579,6 +579,46 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
     submit_queues_while_offline(case["confirmedCommitCursor"].as_i64().expect("cursor"));
     submit_before_first_connect_fails_fast();
     submit_rolls_back_a_rejected_write();
+    overflow_during_submit_settles();
+}
+
+/// An eviction raised from inside `submit` settles exactly once.
+///
+/// Never a hazard here — the client carries no lock, because `&mut self` is the
+/// exclusion — but the sibling ports had to be moved onto this shape to make it
+/// true: rejecting an evicted write inside the queue re-entered the very lock
+/// `submit` was holding, which self-deadlocked Go and had Ruby swallow the
+/// verdict. This asserts the behaviour every port now shares.
+fn overflow_during_submit_settles() {
+    let case = queue_case("overflow");
+    let max_items = case["maxItems"].as_u64().expect("cap") as usize;
+    let settled = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&settled);
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(|_url, _headers, _body| Ok((200, br#"{"result":null}"#.to_vec())))),
+    );
+
+    client.offline_queue = OfflineQueue::new().with_max_items(max_items).with_queue_before_first_connect(true);
+    client.on_mutation_settled(Box::new(move |event| {
+        observer
+            .lock()
+            .expect("settled")
+            .push((event.status, event.error.as_ref().map(|error| error.code.clone()).unwrap_or_default()));
+    }));
+
+    for _ in 0..ids(&case["enqueue"]).len() {
+        client
+            .submit(SubmitOptions::new("messages:send", WireValue::Object(Vec::new())))
+            .expect("queued");
+    }
+
+    assert_eq!(
+        *settled.lock().expect("settled"),
+        vec![(MutationStatus::Rejected, CODE_OFFLINE_QUEUE_OVERFLOW.to_string())],
+        "the evicted write settles exactly once, with the documented code"
+    );
+    assert_eq!(client.pending_mutation_count(), max_items, "and the cap is respected");
 }
 
 /// A write made with the socket down is queued, keeps its overlay, and replays on

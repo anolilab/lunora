@@ -353,7 +353,7 @@ class Client(
             offlineQueue
         }
 
-        queue.clear()
+        reportDiscarded(queue.clear())
     }
 
     fun query(functionPath: String, args: WireValue? = null, shardKey: String? = null): WireValue = rpc(functionPath, args, shardKey, null)
@@ -635,13 +635,17 @@ class Client(
      */
     fun hydrateOfflineQueue(): List<String?> {
         val queue = synchronized(lock) { offlineQueue }
-        val restored = queue.hydrate()
+        val hydrated = queue.hydrate()
 
         for (item in queue.items()) {
             if (item.resolve == null && item.reject == null) attachHydratedSettlers(item)
         }
 
-        return restored
+        // Restored records the cap dropped never get settlers of their own, so they
+        // are reported directly rather than through one.
+        reportDiscarded(hydrated.evicted)
+
+        return hydrated.shardKeys
     }
 
     /**
@@ -665,11 +669,15 @@ class Client(
             current = identity
         }
 
-        for (item in queue.drainConflict()) {
-            queue.unpersist(item.id)
-            report.conflicted.add(item.id)
-            report.rejected.add(item.id)
+        val conflicted = queue.drainConflict()
+
+        for (discarded in conflicted) {
+            queue.unpersist(discarded.entry.id)
+            report.conflicted.add(discarded.entry.id)
+            report.rejected.add(discarded.entry.id)
         }
+
+        reportDiscarded(conflicted)
 
         val drained = queue.drain { it.shardKey == shardKey }
 
@@ -687,10 +695,10 @@ class Client(
             }
 
             queue.unpersist(item.id)
-            item.reject?.invoke(
-                OfflineException(OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay"),
-            )
             report.rejected.add(item.id)
+            reportDiscarded(
+                listOf(Discarded(item, OFFLINE_IDENTITY_CHANGED, "offline mutation skipped: auth identity changed before replay")),
+            )
         }
 
         replay(queue, sendable, report)
@@ -802,7 +810,28 @@ class Client(
             emitSettled(MutationSettled(writeId, MutationStatus.REJECTED, null, error, true), options.onSettled)
         }
 
-        synchronized(lock) { queue.enqueue(entry) }
+        // Safe under the monitor now that `enqueue` invokes no callback: it returns
+        // what the cap evicted instead, and those settle below.
+        reportDiscarded(synchronized(lock) { queue.enqueue(entry) })
+    }
+
+    /**
+     * Settles every write the queue let go of without sending it.
+     *
+     * Runs with the monitor RELEASED: a rejection rolls optimistic layers back, and
+     * a consumer's callback must never run inside the critical section that guards
+     * the subscription registry. Every discard path funnels through here, so an
+     * eviction can never drop a durable write in silence — which matters most for a
+     * hydrated record, whose original caller did not survive the restart.
+     */
+    private fun reportDiscarded(discarded: List<Discarded>) {
+        for (item in discarded) {
+            try {
+                item.entry.reject?.invoke(item.error())
+            } catch (error: RuntimeException) {
+                // A consumer's rejection handler throwing is not this client's failure.
+            }
+        }
     }
 
     /** Gives a restored write the observer-only settlers it lost in the restart. */

@@ -48,22 +48,21 @@ module QueueFixtures
     fixture("offline-optimistic.json").fetch("offlineQueue").fetch(name)
   end
 
-  def entry(id, shard_key: nil, precondition: nil, identity: Lunora::ABSENT_IDENTITY, codes: nil)
+  def entry(id, shard_key: nil, precondition: nil, identity: Lunora::ABSENT_IDENTITY)
     Lunora::QueuedMutation.new(
       args: { "n" => id },
       function_path: "messages:send",
       id: id,
       identity: identity,
       precondition: precondition,
-      on_reject: codes.nil? ? nil : ->(error) { codes << [id, coded(error)] },
       shard_key: shard_key
     )
   end
 
   def ids(items) = items.map(&:id)
 
-  # The coded reason a write was rejected, or nil for an uncoded failure.
-  def coded(error) = error.respond_to?(:code) ? error.code : nil
+  # The (id, code) pairs a queue reported letting go of.
+  def discarded_pairs(discarded) = discarded.map { |item| [item.entry.id, item.code] }
 
   # Turn a fixture's `persisted` list into durable records.
   def persisted_records(case_data)
@@ -129,36 +128,30 @@ class TestQueueOverflow < Minitest::Test
   def test_overflow_evicts_the_oldest_write
     ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
     case_data = scenario("overflow")
-    codes = []
     evicted = []
     store = MemoryStore.new
-    queue = Lunora::OfflineQueue.new(
-      max_items: case_data["maxItems"],
-      on_evict: ->(item, error) { evicted << [item.id, error.code] },
-      persistence: store
-    )
+    queue = Lunora::OfflineQueue.new(max_items: case_data["maxItems"], persistence: store)
 
-    case_data["enqueue"].each { |id| queue.enqueue(entry(id, codes: codes)) }
+    case_data["enqueue"].each { |id| evicted.concat(queue.enqueue(entry(id))) }
 
     assert_equal case_data["remaining"], ids(queue.items)
-    assert_equal case_data["evicted"].map { |id| [id, case_data["code"]] }, codes
-    # The evict observer is the only report a HYDRATED entry can produce — its
-    # original caller did not survive the restart.
-    assert_equal case_data["evicted"].map { |id| [id, case_data["code"]] }, evicted
+    # Returned, not rejected in place: the caller settles it once it has released
+    # its lock. A hydrated entry has no live caller at all, so this is the only
+    # thing standing between an eviction and a durable write vanishing in silence.
+    assert_equal case_data["evicted"].map { |id| [id, case_data["code"]] }, discarded_pairs(evicted)
     assert_equal case_data["persistRemoveCalls"], store.removed
   end
 
   def test_close_rejects_every_queued_write_but_keeps_the_durable_records
     ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
     case_data = scenario("clear")
-    codes = []
     store = MemoryStore.new
     queue = Lunora::OfflineQueue.new(persistence: store)
 
-    case_data["enqueue"].each { |id| queue.enqueue(entry(id, codes: codes)) }
-    queue.clear
+    case_data["enqueue"].each { |id| queue.enqueue(entry(id)) }
+    discarded = queue.clear
 
-    assert_equal case_data["rejected"].map { |id| [id, case_data["code"]] }, codes
+    assert_equal case_data["rejected"].map { |id| [id, case_data["code"]] }, discarded_pairs(discarded)
     assert_equal 0, queue.size
     # Closing must NOT discard writes the next session will restore.
     assert_equal case_data["persistRemoveCalls"], store.removed
@@ -172,19 +165,17 @@ class TestQueuePrecondition < Minitest::Test
   def test_a_stale_write_is_dropped_before_it_replays
     ConformanceManifest.covers("offline_queue_precondition_drops_stale_write")
     case_data = scenario("precondition")
-    codes = []
     queue = Lunora::OfflineQueue.new
 
     case_data["entries"].each do |spec|
       verdict = spec["precondition"]
-      queue.enqueue(entry(spec["id"], codes: codes, precondition: -> { verdict }))
+      queue.enqueue(entry(spec["id"], precondition: -> { verdict }))
     end
 
     conflicted = queue.drain_conflict
 
-    assert_equal case_data["conflicted"], ids(conflicted)
+    assert_equal case_data["conflicted"].map { |id| [id, case_data["code"]] }, discarded_pairs(conflicted)
     assert_equal case_data["remaining"], ids(queue.items)
-    assert_equal case_data["conflicted"].map { |id| [id, case_data["code"]] }, codes
   end
 end
 
@@ -200,8 +191,9 @@ class TestQueueHydration < Minitest::Test
     # Submitted during the boot window, BEFORE the durable load returns.
     case_data["liveEnqueue"].each { |id| queue.enqueue(entry(id)) }
 
-    shard_keys = queue.hydrate
+    shard_keys, evicted = queue.hydrate
 
+    assert_empty evicted, "nothing exceeded the default capacity"
     # The durable store's order is authoritative: a prior-session write is always
     # older, so replaying the boot-time write first would let last-writer-wins
     # clobber newer data with stale.
@@ -214,19 +206,19 @@ class TestQueueHydration < Minitest::Test
   def test_hydration_respects_the_capacity_cap
     ConformanceManifest.covers("offline_queue_hydrates_persisted_writes")
     case_data = scenario("hydrateOverflow")
-    evicted = []
     store = MemoryStore.new(persisted_records(case_data))
     queue = Lunora::OfflineQueue.new(
       max_items: case_data["maxItems"],
-      on_evict: ->(item, _error) { evicted << item.id },
       persistence: store,
       version: case_data["version"]
     )
 
-    shard_keys = queue.hydrate
+    shard_keys, evicted = queue.hydrate
+
+    evicted_ids = evicted.map { |item| item.entry.id }
 
     assert_equal case_data["queuedAfterHydrate"], ids(queue.items)
-    assert_equal case_data["evicted"], evicted
+    assert_equal case_data["evicted"], evicted_ids
     # Only the shards whose writes SURVIVED — a key gathered before eviction
     # would send the caller to open a socket with nothing queued behind it.
     assert_equal case_data["shardKeys"], shard_keys
@@ -425,6 +417,30 @@ class TestFlushIntegration < Minitest::Test
 
     assert_equal :queued, outcome.status
     assert_equal 1, client.pending_mutation_count
+  end
+
+  # An eviction triggered from inside +submit+ settles rather than re-entering the
+  # client's Mutex.
+  #
+  # This is the regression: the queue used to reject an evicted write in place,
+  # and that rejection rolls optimistic layers back — which re-acquires the very
+  # Mutex +submit+ was holding. Ruby's Mutex is not reentrant, so it raised a
+  # ThreadError that the queue's own rescue swallowed: the write never rolled back
+  # and never settled.
+  def test_an_overflow_during_submit_settles_rather_than_re_entering_the_lock
+    ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
+    case_data = scenario("overflow")
+    settled = []
+
+    client = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, _body) { [200, { "result" => nil }] })
+    client.offline_queue = Lunora::OfflineQueue.new(max_items: case_data["maxItems"], queue_before_first_connect: true)
+    client.on_mutation_settled(->(event) { settled << event })
+
+    case_data["enqueue"].each { client.submit("messages:send", {}) }
+
+    assert_equal [:rejected], settled.map(&:status)
+    assert_equal case_data["code"], settled.first.error.code
+    assert_equal case_data["maxItems"], client.pending_mutation_count
   end
 
   def test_a_failed_online_write_rolls_its_overlay_back

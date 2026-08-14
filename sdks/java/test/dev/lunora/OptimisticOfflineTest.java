@@ -305,16 +305,19 @@ final class OptimisticOfflineTest {
         }
     }
 
-    private static QueuedMutation entry(String id, String shardKey, List<String> codes) {
-        QueuedMutation item =
-                new QueuedMutation("messages:send", new LinkedHashMap<>(), shardKey, id);
+    private static QueuedMutation entry(String id, String shardKey) {
+        return new QueuedMutation("messages:send", new LinkedHashMap<>(), shardKey, id);
+    }
 
-        if (codes != null) {
-            item.reject =
-                    error -> codes.add(error instanceof OfflineException coded ? coded.code : "?");
+    /** The "id:code" pairs a queue reported letting go of. */
+    private static List<String> discardedPairs(List<Offline.Discarded> discarded) {
+        List<String> out = new ArrayList<>();
+
+        for (Offline.Discarded item : discarded) {
+            out.add(item.entry().id + ":" + item.code());
         }
 
-        return item;
+        return out;
     }
 
     private static List<String> ids(List<QueuedMutation> items) {
@@ -347,7 +350,7 @@ final class OptimisticOfflineTest {
         queue.onSizeChange = sizes::add;
 
         for (String id : strings(fifo.get("enqueue"))) {
-            queue.enqueue(entry(id, null, null));
+            queue.enqueue(entry(id, null));
         }
 
         check(queue.size() == count(fifo.get("sizeAfterEnqueue")), "every write is queued");
@@ -367,8 +370,7 @@ final class OptimisticOfflineTest {
             sharded.enqueue(
                     entry(
                             (String) spec.get("id"),
-                            spec.get("shardKey") == null ? null : spec.get("shardKey").toString(),
-                            null));
+                            spec.get("shardKey") == null ? null : spec.get("shardKey").toString()));
         }
 
         String target =
@@ -390,7 +392,7 @@ final class OptimisticOfflineTest {
         OfflineQueue durable = new OfflineQueue().persistence(store);
 
         for (String id : strings(requeue.get("enqueue"))) {
-            durable.enqueue(entry(id, null, null));
+            durable.enqueue(entry(id, null));
         }
 
         List<String> wanted = strings(requeue.get("requeued"));
@@ -418,16 +420,13 @@ final class OptimisticOfflineTest {
         covers("offline_queue_overflow_evicts_oldest");
 
         Map<String, Object> testCase = scenario("offlineQueue", "overflow");
-        List<String> codes = new ArrayList<>();
-        List<String> evicted = new ArrayList<>();
+        List<Offline.Discarded> evicted = new ArrayList<>();
         MemoryStore store = new MemoryStore();
         OfflineQueue queue =
                 new OfflineQueue().maxItems(count(testCase.get("maxItems"))).persistence(store);
 
-        queue.onEvict = (item, error) -> evicted.add(item.id + ":" + error.code);
-
         for (String id : strings(testCase.get("enqueue"))) {
-            queue.enqueue(entry(id, null, codes));
+            evicted.addAll(queue.enqueue(entry(id, null)));
         }
 
         String code = (String) testCase.get("code");
@@ -436,33 +435,34 @@ final class OptimisticOfflineTest {
         check(
                 ids(queue.items()).equals(strings(testCase.get("remaining"))),
                 "the newest writes survive the cap");
+        // Returned, not rejected in place: the caller settles it once it has left the monitor. A
+        // hydrated entry has no live caller at all, so this is the only thing standing between an
+        // eviction and a durable write vanishing in silence.
         check(
-                codes.equals(List.of(code)),
-                "the evicted write is rejected with the documented code");
-        // The evict observer is the only report a HYDRATED entry can produce — its original caller
-        // did not survive the restart.
-        check(
-                evicted.equals(List.of(wantEvicted.get(0) + ":" + code)),
-                "and the eviction is reported to the observer");
+                discardedPairs(evicted).equals(List.of(wantEvicted.get(0) + ":" + code)),
+                "the OLDEST write is returned as discarded, with the documented code");
         check(
                 store.removed.equals(strings(testCase.get("persistRemoveCalls"))),
                 "an evicted write is un-persisted");
 
         Map<String, Object> clear = scenario("offlineQueue", "clear");
-        List<String> clearCodes = new ArrayList<>();
         MemoryStore clearStore = new MemoryStore();
         OfflineQueue closing = new OfflineQueue().persistence(clearStore);
         List<String> enqueued = strings(clear.get("enqueue"));
 
         for (String id : enqueued) {
-            closing.enqueue(entry(id, null, clearCodes));
+            closing.enqueue(entry(id, null));
         }
 
-        closing.clear();
+        List<String> wantClosed = new ArrayList<>();
+
+        for (String id : strings(clear.get("rejected"))) {
+            wantClosed.add(id + ":" + clear.get("code"));
+        }
 
         check(
-                clearCodes.equals(List.of(clear.get("code"), clear.get("code"))),
-                "closing rejects every queued write");
+                discardedPairs(closing.clear()).equals(wantClosed),
+                "closing returns every queued write, with the documented code");
         check(closing.size() == 0, "and empties the queue");
         // Closing must NOT discard writes the next session will restore.
         check(clearStore.removed.isEmpty(), "but leaves the durable records alone");
@@ -473,29 +473,29 @@ final class OptimisticOfflineTest {
         covers("offline_queue_precondition_drops_stale_write");
 
         Map<String, Object> testCase = scenario("offlineQueue", "precondition");
-        List<String> codes = new ArrayList<>();
         OfflineQueue queue = new OfflineQueue();
 
         for (Object raw : list(testCase.get("entries"))) {
             Map<String, Object> spec = map(raw);
             boolean verdict = Boolean.TRUE.equals(spec.get("precondition"));
-            QueuedMutation item = entry((String) spec.get("id"), null, codes);
+            QueuedMutation item = entry((String) spec.get("id"), null);
 
             item.precondition = () -> verdict;
             queue.enqueue(item);
         }
 
-        List<QueuedMutation> conflicted = queue.drainConflict();
+        List<String> wantConflicted = new ArrayList<>();
+
+        for (String id : strings(testCase.get("conflicted"))) {
+            wantConflicted.add(id + ":" + testCase.get("code"));
+        }
 
         check(
-                ids(conflicted).equals(strings(testCase.get("conflicted"))),
-                "only the write whose precondition failed is dropped");
+                discardedPairs(queue.drainConflict()).equals(wantConflicted),
+                "only the write whose precondition failed is dropped, with the documented code");
         check(
                 ids(queue.items()).equals(strings(testCase.get("remaining"))),
                 "and the valid writes keep their FIFO order");
-        check(
-                codes.equals(List.of(testCase.get("code"))),
-                "the dropped write carries the documented code");
     }
 
     private static List<Map<String, Object>> persistedRecords(Map<String, Object> testCase) {
@@ -526,10 +526,13 @@ final class OptimisticOfflineTest {
 
         // Submitted during the boot window, BEFORE the durable load returns.
         for (String id : strings(testCase.get("liveEnqueue"))) {
-            queue.enqueue(entry(id, null, null));
+            queue.enqueue(entry(id, null));
         }
 
-        List<String> shardKeys = queue.hydrate();
+        OfflineQueue.Hydrated hydrated = queue.hydrate();
+        List<String> shardKeys = hydrated.shardKeys();
+
+        check(hydrated.evicted().isEmpty(), "nothing exceeded the default capacity");
 
         // The durable store's order is authoritative: a prior-session write is always older, so
         // replaying the boot-time write first would let last-writer-wins clobber newer data.
@@ -545,17 +548,19 @@ final class OptimisticOfflineTest {
                 "the surviving writes' shard keys are reported");
 
         Map<String, Object> overflow = scenario("offlineQueue", "hydrateOverflow");
-        List<String> evicted = new ArrayList<>();
         MemoryStore overflowStore = new MemoryStore(persistedRecords(overflow));
         OfflineQueue capped =
                 new OfflineQueue()
                         .maxItems(count(overflow.get("maxItems")))
                         .persistence(overflowStore)
                         .version((String) overflow.get("version"));
+        OfflineQueue.Hydrated cappedHydrated = capped.hydrate();
+        List<String> cappedKeys = cappedHydrated.shardKeys();
+        List<String> evicted = new ArrayList<>();
 
-        capped.onEvict = (item, error) -> evicted.add(item.id);
-
-        List<String> cappedKeys = capped.hydrate();
+        for (Offline.Discarded item : cappedHydrated.evicted()) {
+            evicted.add(item.entry().id);
+        }
 
         check(
                 ids(capped.items()).equals(strings(overflow.get("queuedAfterHydrate"))),
@@ -732,6 +737,7 @@ final class OptimisticOfflineTest {
         submitQueuesWhileOffline(count(testCase.get("confirmedCommitCursor")));
         submitBeforeFirstConnectFailsFast();
         submitRollsBackARejectedWrite();
+        overflowDuringSubmitSettles();
     }
 
     /** A write made with the socket down is queued, keeps its overlay, and replays on the flush. */
@@ -817,6 +823,40 @@ final class OptimisticOfflineTest {
 
         check(outcome.status() == MutationStatus.QUEUED, "the opt-in queues it instead");
         check(client.pendingMutationCount() == 1, "and the queue holds it");
+    }
+
+    /**
+     * An eviction triggered from inside {@code submit} settles rather than running a consumer's
+     * callback inside the monitor that guards the subscription registry.
+     *
+     * <p>This is the regression: the queue used to reject an evicted write in place, and that
+     * rejection rolls optimistic layers back — which re-enters the very monitor {@code submit} was
+     * holding. A {@code synchronized} block is reentrant so this port never hung, but its Go
+     * sibling self-deadlocked and its Ruby sibling swallowed the verdict entirely.
+     */
+    private static void overflowDuringSubmitSettles() throws IOException {
+        Map<String, Object> testCase = scenario("offlineQueue", "overflow");
+        int maxItems = count(testCase.get("maxItems"));
+        List<Client.MutationSettled> settled = new ArrayList<>();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> new Response(200, "{\"result\":null}"));
+
+        client.offlineQueue(new OfflineQueue().maxItems(maxItems).queueBeforeFirstConnect(true));
+        client.onMutationSettled(settled::add);
+
+        for (int index = 0; index < strings(testCase.get("enqueue")).size(); index++) {
+            client.submit(new SubmitOptions("messages:send", new LinkedHashMap<>()));
+        }
+
+        check(settled.size() == 1, "the evicted write settles exactly once");
+        check(settled.get(0).status() == MutationStatus.REJECTED, "as a rejection");
+        check(
+                settled.get(0).error() instanceof OfflineException coded
+                        && coded.code.equals(testCase.get("code")),
+                "carrying the documented overflow code");
+        check(client.pendingMutationCount() == maxItems, "and the cap is respected");
     }
 
     /** A rejected write takes its optimistic overlay down with it. */

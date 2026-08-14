@@ -428,8 +428,33 @@ here. **Batched replay** over `/_lunora/rpc-batch` is ported in Dart alone (see
 `protocol/README.md` §4.3); the other seven replay sequentially on `/rpc`, which
 is the reference client's own single-write path.
 
-Two ports carry one further shape change apiece, and both are the language
-talking rather than a decision:
+### The queue never calls back; it returns what it let go of
+
+In all seven ports, every queue method that lets go of a write — an overflow
+eviction, a failed precondition, a close — **returns** the discarded entry with a
+coded reason instead of rejecting it in place. The client settles those once it
+has released its lock.
+
+This is not stylistic. The queue is called with the owning client's lock held (it
+carries none of its own, deliberately), and settling a write rolls its optimistic
+layers back — which needs that same lock. Rejecting inside the queue therefore
+re-enters it, and the four lock flavours across these ports fail four different
+ways:
+
+| Lock                                    | What rejecting in place did                                                                                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Go `sync.Mutex`, non-reentrant          | **Self-deadlock.** The second offline write past capacity hung the calling goroutine outright.                                                                     |
+| Ruby `Mutex`, non-reentrant             | **Silently swallowed.** It raised `ThreadError`, which the queue's own `rescue StandardError` then ate — so the evicted write never rolled back and never settled. |
+| Java / Kotlin `synchronized`, reentrant | No hang, but a consumer's callback ran inside the critical section guarding the subscription registry.                                                             |
+| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other five now match.                                                          |
+
+The Ruby failure is the instructive one: the mechanism that was supposed to stop
+an eviction dropping a durable write in silence was itself dropping it in silence.
+Every port now has a case asserting that an eviction raised from inside `submit`
+settles exactly once, with the documented code.
+
+Two ports carry one further shape change apiece, and both are the language talking
+rather than a decision:
 
 - **Rust** hands out a `(subscription id, layer id)` pair instead of a settle
   object, because storing a `&mut` borrow of the subscription for later use is
@@ -437,19 +462,17 @@ talking rather than a decision:
   `Option<WireValue>` rather than throwing, because Rust has no exceptions and a
   layer that cannot produce a value already has a value for saying so. The
   multi-query patch set is declared up front (`optimistic_queries`) and read with
-  `query_value` / `all_queries` beforehand, rather than through a callback handed
-  a `&mut` store. Nothing in the Rust queue holds a rejection callback either —
-  every method that discards a write RETURNS the discarded entries and the client
-  reports them, which is also what lets the compiler prove none is dropped
-  silently.
-- **Swift** returns discarded entries the same way, for the same reason its
-  `LunoraOfflineQueue` is not internally locked: the client already holds a
-  non-recursive `NSLock` over the registry the queue is settled against.
+  `query_value` / `all_queries` beforehand, rather than through a callback handed a
+  `&mut` store.
+- **Swift**'s `LunoraOfflineQueue` is likewise not internally locked, because the
+  client already holds a non-recursive `NSLock` over the registry the queue is
+  settled against.
 
-Everywhere except Rust, the engine never invokes a callback itself: it appends
-thunks to a `deferred` list the caller drains once it has left the critical
-section, which is the discipline the frame handlers already use. Rust needs no
-such thing — its client carries no lock, because `&mut self` is the exclusion.
+Everywhere except Rust, the optimistic engine also never invokes a callback
+itself: it appends thunks to a `deferred` list the caller drains once it has left
+the critical section, which is the discipline the frame handlers already use. Rust
+needs no such thing — its client carries no lock, because `&mut self` is the
+exclusion.
 
 ## Lint and format
 

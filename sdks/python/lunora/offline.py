@@ -27,7 +27,6 @@ its own reconnect logic.
 
 from __future__ import annotations
 
-import contextlib
 import os
 import struct
 import threading
@@ -134,6 +133,31 @@ class PersistenceAdapter(Protocol):
     def remove(self, mutation_id: str) -> None: ...
 
     def clear(self) -> None: ...
+
+
+class Discarded:
+    """A write the queue let go of without sending it, and the coded reason.
+
+    Returned rather than rejected in place, which is the whole point: the client
+    calls into this queue with its own lock held (see :class:`OfflineQueue`), and
+    a rejection handler rolls optimistic layers back — which needs that same
+    lock. Invoking it here re-enters a non-reentrant lock, which cost a
+    self-deadlock in the Go port and a silently swallowed verdict in the Ruby one
+    before every port was moved onto this shape. The caller settles these once it
+    has released the lock.
+    """
+
+    __slots__ = ("code", "entry", "message")
+
+    def __init__(self, entry: QueuedMutation, code: str, message: str) -> None:
+        self.entry = entry
+        self.code = code
+        self.message = message
+
+    def error(self) -> OfflineError:
+        """The coded error this write settles with."""
+
+        return OfflineError(self.code, self.message)
 
 
 class QueuedMutation:
@@ -247,6 +271,11 @@ class OfflineQueue:
     subscription registry. Two locks over one logical operation is how a deadlock
     gets built. Call these methods with the owning client's lock held (which is
     what ``LunoraClient`` does), or from one thread.
+
+    Nothing here invokes a consumer's callback, which is what makes calling it
+    under that lock safe: every method that lets go of a write RETURNS it as a
+    :class:`Discarded` instead, and the client settles those once it has
+    released the lock. See :class:`Discarded` for what the alternative cost.
     """
 
     def __init__(
@@ -255,7 +284,6 @@ class OfflineQueue:
         queue_before_first_connect: bool = False,
         persistence: Optional[PersistenceAdapter] = None,
         version: Optional[str] = None,
-        on_evict: Optional[Callable[[QueuedMutation, OfflineError], None]] = None,
         on_size_change: Optional[Callable[[int], None]] = None,
         on_persistence_error: Optional[Callable[[str, Exception, Optional[str]], None]] = None,
     ) -> None:
@@ -266,7 +294,6 @@ class OfflineQueue:
         self.queue_before_first_connect = queue_before_first_connect
         self.persistence = persistence
         self.version = version
-        self.on_evict = on_evict
         self.on_size_change = on_size_change
         self.on_persistence_error = on_persistence_error
         self._items: list[QueuedMutation] = []
@@ -280,16 +307,24 @@ class OfflineQueue:
 
         return list(self._items)
 
-    def enqueue(self, entry: QueuedMutation) -> None:
+    def enqueue(self, entry: QueuedMutation) -> list:
+        """Add a write to the back, persist it, and cap the queue.
+
+        Returns whatever the cap evicted, for the caller to report.
+        """
+
         self._items.append(entry)
 
         if self.persistence is not None:
             self._persist("append", entry.id, lambda: self.persistence.append(entry.to_record(self.version)))
 
-        self._evict_overflow()
+        evicted = self._evict_overflow()
+
         self._notify_size()
 
-    def hydrate(self) -> list:
+        return evicted
+
+    def hydrate(self) -> tuple:
         """Restore writes persisted in a prior session, oldest first.
 
         Restored records are UNSHIFTED ahead of whatever is already queued rather
@@ -299,13 +334,13 @@ class OfflineQueue:
         prior-session write is always older. Appending would let a boot-time
         write replay first and last-writer-wins clobber newer data with stale.
 
-        Returns the distinct shard keys of the records that SURVIVED, so the
-        caller can open exactly those sockets to trigger a flush. A no-op with no
-        adapter configured.
+        Returns the distinct shard keys of the records that SURVIVED — so the
+        caller can open exactly those sockets to trigger a flush — alongside
+        whatever the capacity cap evicted. A no-op with no adapter configured.
         """
 
         if self.persistence is None:
-            return []
+            return [], []
 
         persisted = self.persistence.load()
         restored: list[QueuedMutation] = []
@@ -327,7 +362,7 @@ class OfflineQueue:
 
         # A store holding more than ``max_items`` (the cap was lowered between
         # sessions, or writes piled up across restarts) must not bypass it.
-        self._evict_overflow()
+        evicted = self._evict_overflow()
         self._notify_size()
 
         # Shard keys are read AFTER eviction, from the entries that actually
@@ -339,7 +374,7 @@ class OfflineQueue:
             if id(entry) in survivors and entry.shard_key not in shard_keys:
                 shard_keys.append(entry.shard_key)
 
-        return shard_keys
+        return shard_keys, evicted
 
     def drain(self, predicate: Optional[Callable[[QueuedMutation], bool]] = None) -> list:
         """Remove and return queued writes, oldest first.
@@ -384,7 +419,7 @@ class OfflineQueue:
         self._notify_size()
 
     def drain_conflict(self) -> list:
-        """Drop writes whose precondition no longer holds, rejecting each.
+        """Drop and return the writes whose precondition no longer holds.
 
         Run at the start of a flush to weed out writes whose assumptions died
         while the client was offline. The admitted writes keep their FIFO order.
@@ -403,10 +438,7 @@ class OfflineQueue:
             self._items = kept
             self._notify_size()
 
-            for item in conflicted:
-                self._settle_rejected(item, OfflineError(OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay"))
-
-        return conflicted
+        return [Discarded(item, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay") for item in conflicted]
 
     def unpersist(self, mutation_id: Optional[str]) -> None:
         """Forget one write's durable record, after it has terminally settled."""
@@ -416,8 +448,8 @@ class OfflineQueue:
 
         self._persist("remove", mutation_id, lambda: self.persistence.remove(mutation_id))
 
-    def clear(self) -> None:
-        """Reject every pending write so no caller hangs on a closed client.
+    def clear(self) -> list:
+        """Empty the queue and return every pending write, so none is left waiting.
 
         Durable storage is left INTACT on purpose: closing must not discard
         writes a future session will restore. Use the adapter's own ``clear`` to
@@ -428,36 +460,28 @@ class OfflineQueue:
         self._items.clear()
         self._notify_size()
 
-        for item in drained:
-            self._settle_rejected(item, OfflineError(CLIENT_CLOSED, "client closed with the write still queued"))
+        return [Discarded(item, CLIENT_CLOSED, "client closed with the write still queued") for item in drained]
 
     # --- internals ---------------------------------------------------------
 
-    def _evict_overflow(self) -> None:
+    def _evict_overflow(self) -> list:
         """Drop from the FRONT (the oldest) until the queue is within capacity.
 
         Shared by ``enqueue`` and ``hydrate`` so an overflow always drops the same
-        way regardless of which side pushed past the cap.
+        way regardless of which side pushed past the cap. The dropped entries are
+        returned, never rejected here — a hydrated record has no live caller, so
+        the caller reporting them is the only thing that keeps an eviction from
+        dropping a durable write in total silence.
         """
+
+        evicted: list = []
 
         while len(self._items) > self.max_items:
             dropped = self._items.pop(0)
             self.unpersist(dropped.id)
-            error = OfflineError(OFFLINE_QUEUE_OVERFLOW, "offline queue overflow")
-            self._settle_rejected(dropped, error)
+            evicted.append(Discarded(dropped, OFFLINE_QUEUE_OVERFLOW, "offline queue overflow"))
 
-            # Also reported to the evict observer: a hydrated record has no live
-            # caller, so without this an eviction would drop a durable write in
-            # total silence.
-            if self.on_evict is not None:
-                self.on_evict(dropped, error)
-
-    def _settle_rejected(self, item: QueuedMutation, error: OfflineError) -> None:
-        if item.reject is None:
-            return
-
-        with contextlib.suppress(Exception):
-            item.reject(error)
+        return evicted
 
     def _persist(self, operation: str, mutation_id: Optional[str], call: Callable[[], None]) -> None:
         try:

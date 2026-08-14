@@ -571,6 +571,41 @@ extension ConformanceTests {
         try submitQueuesWhileOffline(commitCursor: count(testCase["confirmedCommitCursor"]))
         try submitBeforeFirstConnectFailsFast()
         try submitRollsBackARejectedWrite()
+        try overflowDuringSubmitSettles()
+    }
+
+    /// An eviction raised from inside ``LunoraClient/submit(_:)`` settles exactly
+    /// once.
+    ///
+    /// Never a hazard here — ``LunoraOfflineQueue`` returns what it discarded
+    /// rather than rejecting in place — but the sibling ports had to be moved onto
+    /// this shape to make it true: rejecting inside the queue re-entered the very
+    /// lock `submit` was holding, which self-deadlocked Go and had Ruby swallow the
+    /// verdict. This asserts the behaviour every port now shares.
+    private func overflowDuringSubmitSettles() throws {
+        let testCase = try scenario("offlineQueue", "overflow")
+        let maxItems = count(testCase["maxItems"])
+        var settled: [LunoraMutationSettled] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in (200, Data("{\"result\":null}".utf8)) }
+        )
+
+        client.offlineQueue = LunoraOfflineQueue(maxItems: maxItems, queueBeforeFirstConnect: true)
+        client.onMutationSettled { settled.append($0) }
+
+        for _ in 0..<ids(testCase["enqueue"]).count {
+            _ = try client.submit(LunoraSubmitOptions(functionPath: "messages:send"))
+        }
+
+        XCTAssertEqual(settled.count, 1, "the evicted write settles exactly once")
+        XCTAssertEqual(settled.first?.status, .rejected, "as a rejection")
+        XCTAssertEqual(
+            (settled.first?.error as? LunoraAPIError)?.code,
+            lunoraOfflineQueueOverflow,
+            "carrying the documented overflow code"
+        )
+        XCTAssertEqual(client.pendingMutationCount, maxItems, "and the cap is respected")
     }
 
     /// A write made with the socket down is queued, keeps its overlay, and replays

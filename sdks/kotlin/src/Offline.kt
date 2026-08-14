@@ -80,6 +80,22 @@ interface PersistenceAdapter {
     fun clear()
 }
 
+/**
+ * A write the queue let go of without sending it, and the coded reason.
+ *
+ * Returned rather than rejected in place, which is the whole point: the client
+ * calls into this queue with its own monitor held (see [OfflineQueue]), and a
+ * rejection handler rolls optimistic layers back — which needs that same monitor.
+ * `synchronized` is reentrant, so this port never deadlocked over it, but it did
+ * run a consumer's callback inside the critical section that guards the
+ * subscription registry. Its Go sibling, whose mutex is not reentrant,
+ * self-deadlocked outright. The caller settles these once it has left the monitor.
+ */
+data class Discarded(val entry: QueuedMutation, val code: String, val message: String) {
+    /** The coded error this write settles with. */
+    fun error(): OfflineException = OfflineException(code, message)
+}
+
 /** One write waiting for the socket to come back. */
 class QueuedMutation(
     /**
@@ -230,6 +246,11 @@ fun isStaleVersion(current: String?, stamped: String?): Boolean = current != nul
  * gets built. Call these with the owning client's monitor held — which is what
  * [Client] does — or from one thread.
  *
+ * Nothing here invokes a consumer's callback, which is what makes calling it under
+ * that monitor safe: every method that lets go of a write RETURNS it as a
+ * [Discarded] instead, and the client settles those once it has left the monitor.
+ * See [Discarded] for what the alternative cost.
+ *
  * **Divergences from `@lunora/client`**, all recorded in `sdks/README.md`: the
  * persistence adapter is SYNCHRONOUS; the identity stamp is an opaque string the
  * CONSUMER sets ([Client.identity]) rather than a fingerprint derived from an auth
@@ -254,9 +275,6 @@ class OfflineQueue(
 ) {
     private val items = mutableListOf<QueuedMutation>()
 
-    /** Notified when the cap discards a write, with the coded reason. */
-    var onEvict: ((QueuedMutation, OfflineException) -> Unit)? = null
-
     /** Notified with the new depth after any size change. */
     var onSizeChange: ((Int) -> Unit)? = null
 
@@ -268,21 +286,30 @@ class OfflineQueue(
     /** A snapshot of the queued writes, oldest first. */
     fun items(): List<QueuedMutation> = items.toList()
 
-    fun enqueue(entry: QueuedMutation) {
+    /**
+     * Adds a write to the back of the queue, persisting it and capping the queue.
+     * Returns whatever the cap evicted, for the caller to report.
+     */
+    fun enqueue(entry: QueuedMutation): List<Discarded> {
         if (entry.id.isEmpty()) entry.id = randomId()
 
         items.add(entry)
 
         persistence?.let { store -> persist("append", entry.id) { store.append(entry.record(version)) } }
 
-        evictOverflow()
+        val evicted = evictOverflow()
+
         notifySize()
+
+        return evicted
     }
 
     /**
-     * Restores writes persisted in a prior session, returning the distinct shard
-     * keys of the records that SURVIVED so the caller can open exactly those
-     * sockets to trigger a flush. A no-op with no adapter configured.
+     * Restores writes persisted in a prior session.
+     *
+     * Returns the distinct shard keys of the records that SURVIVED — so the caller
+     * can open exactly those sockets to trigger a flush — alongside whatever the
+     * capacity cap evicted. A no-op with no adapter configured.
      *
      * Restored records are placed AHEAD of whatever is already queued. Hydration
      * runs after construction (a durable load takes time), so a write submitted
@@ -291,8 +318,8 @@ class OfflineQueue(
      * let a boot-time write replay first and last-writer-wins clobber newer data
      * with stale.
      */
-    fun hydrate(): List<String?> {
-        val store = persistence ?: return emptyList()
+    fun hydrate(): Hydrated {
+        val store = persistence ?: return Hydrated(emptyList(), emptyList())
         val seen = items.mapTo(mutableSetOf()) { it.id }
         val restored = mutableListOf<QueuedMutation>()
 
@@ -314,16 +341,21 @@ class OfflineQueue(
 
         // A store holding more than maxItems (the cap was lowered between
         // sessions, or writes piled up across restarts) must not bypass it.
-        evictOverflow()
+        val evicted = evictOverflow()
+
         notifySize()
 
         // Shard keys are read AFTER eviction, from the entries that actually
         // survived: eviction drops from the front — the oldest restored records —
         // so a key gathered beforehand can name a shard with nothing queued.
         val survivors = items.mapTo(mutableSetOf()) { System.identityHashCode(it) }
+        val shardKeys = restored.filter { System.identityHashCode(it) in survivors }.map { it.shardKey }.distinct()
 
-        return restored.filter { System.identityHashCode(it) in survivors }.map { it.shardKey }.distinct()
+        return Hydrated(shardKeys, evicted)
     }
+
+    /** What one [hydrate] restored: the surviving shard keys, and what the cap dropped. */
+    data class Hydrated(val shardKeys: List<String?>, val evicted: List<Discarded>)
 
     /**
      * Removes and returns queued writes, oldest first. A null predicate drains
@@ -370,23 +402,12 @@ class OfflineQueue(
     }
 
     /**
-     * Drops the writes whose precondition no longer holds, rejecting each, and
-     * returns them. Run at the start of a flush to weed out writes whose
-     * assumptions died while the client was offline; the admitted writes keep their
-     * FIFO order.
+     * Drops and returns the writes whose precondition no longer holds. Run at the
+     * start of a flush to weed out writes whose assumptions died while the client
+     * was offline; the admitted writes keep their FIFO order.
      */
-    fun drainConflict(): List<QueuedMutation> {
-        val conflicted = drain { item -> item.precondition?.let { !it() } == true }
-
-        for (item in conflicted) {
-            settleRejected(
-                item,
-                OfflineException(OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay"),
-            )
-        }
-
-        return conflicted
-    }
+    fun drainConflict(): List<Discarded> = drain { item -> item.precondition?.let { !it() } == true }
+        .map { Discarded(it, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay") }
 
     /** Forgets one write's durable record, after it has terminally settled. */
     fun unpersist(mutationId: String?) {
@@ -398,50 +419,41 @@ class OfflineQueue(
     }
 
     /**
-     * Rejects every pending write so no caller waits on a dead client.
+     * Empties the queue and returns every pending write, so none is left waiting on
+     * a dead client.
      *
      * Durable storage is left INTACT on purpose: closing must not discard writes a
      * future session will restore. Use the adapter's own `clear` to purge them.
      */
-    fun clear() {
+    fun clear(): List<Discarded> {
         val drained = items.toList()
 
         items.clear()
         notifySize()
 
-        for (item in drained) {
-            settleRejected(item, OfflineException(CLIENT_CLOSED, "client closed with the write still queued"))
-        }
+        return drained.map { Discarded(it, CLIENT_CLOSED, "client closed with the write still queued") }
     }
 
     /**
      * Drops from the FRONT (the oldest) until the queue is within capacity. Shared
      * by [enqueue] and [hydrate] so an overflow always drops the same way
      * regardless of which side pushed past the cap.
+     *
+     * The dropped entries are returned, never rejected here — a hydrated record has
+     * no live caller, so the caller reporting them is the only thing that keeps an
+     * eviction from dropping a durable write in total silence.
      */
-    private fun evictOverflow() {
+    private fun evictOverflow(): List<Discarded> {
+        val evicted = mutableListOf<Discarded>()
+
         while (items.size > maxItems) {
             val dropped = items.removeAt(0)
 
             unpersist(dropped.id)
-
-            val error = OfflineException(OFFLINE_QUEUE_OVERFLOW, "offline queue overflow")
-
-            settleRejected(dropped, error)
-
-            // Also reported to the evict observer: a hydrated record has no live
-            // caller, so without this an eviction would drop a durable write in
-            // total silence.
-            onEvict?.invoke(dropped, error)
+            evicted.add(Discarded(dropped, OFFLINE_QUEUE_OVERFLOW, "offline queue overflow"))
         }
-    }
 
-    private fun settleRejected(item: QueuedMutation, error: OfflineException) {
-        try {
-            item.reject?.invoke(error)
-        } catch (thrown: RuntimeException) {
-            // A consumer's rejection handler throwing is not this queue's problem.
-        }
+        return evicted
     }
 
     private fun persist(operation: String, mutationId: String?, call: () -> Unit) {

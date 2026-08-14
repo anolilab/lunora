@@ -197,15 +197,10 @@ private class MemoryStore(seeded: List<Map<String, Any?>> = emptyList()) : Persi
     }
 }
 
-private fun entry(id: String, shardKey: String? = null, codes: MutableList<String>? = null): QueuedMutation {
-    val item = QueuedMutation(id, "messages:send", WireValue.Obj(emptyList()), shardKey)
+private fun entry(id: String, shardKey: String? = null): QueuedMutation = QueuedMutation(id, "messages:send", WireValue.Obj(emptyList()), shardKey)
 
-    if (codes != null) {
-        item.reject = { error -> codes.add((error as? OfflineException)?.code ?: "?") }
-    }
-
-    return item
-}
+/** The "id:code" pairs a queue reported letting go of. */
+private fun discardedPairs(discarded: List<Discarded>): List<String> = discarded.map { "${it.entry.id}:${it.code}" }
 
 private fun queuedIds(items: List<QueuedMutation>): List<String?> = items.map { it.id }
 
@@ -272,36 +267,38 @@ private fun offlineQueueOverflowEvictsOldest() {
     covers("offline_queue_overflow_evicts_oldest")
 
     val case = scenario("offlineQueue", "overflow")
-    val codes = mutableListOf<String>()
-    val evicted = mutableListOf<String>()
+    val evicted = mutableListOf<Discarded>()
     val store = MemoryStore()
     val queue = OfflineQueue(maxItems = count(case["maxItems"]), persistence = store)
 
-    queue.onEvict = { item, error -> evicted.add("${item.id}:${error.code}") }
-
-    for (id in ids(case["enqueue"])) queue.enqueue(entry(id!!, codes = codes))
+    for (id in ids(case["enqueue"])) evicted.addAll(queue.enqueue(entry(id!!)))
 
     val code = case["code"] as String
     val wantEvicted = ids(case["evicted"])
 
     check(queuedIds(queue.items()) == ids(case["remaining"]), "the newest writes survive the cap")
-    check(codes == listOf(code), "the evicted write is rejected with the documented code")
-    // The evict observer is the only report a HYDRATED entry can produce — its
-    // original caller did not survive the restart.
-    check(evicted == listOf("${wantEvicted[0]}:$code"), "and the eviction is reported to the observer")
+    // Returned, not rejected in place: the caller settles it once it has left the
+    // monitor. A hydrated entry has no live caller at all, so this is the only
+    // thing standing between an eviction and a durable write vanishing in silence.
+    check(
+        discardedPairs(evicted) == listOf("${wantEvicted[0]}:$code"),
+        "the OLDEST write is returned as discarded, with the documented code",
+    )
     check(store.removed == ids(case["persistRemoveCalls"]), "an evicted write is un-persisted")
 
     val clear = scenario("offlineQueue", "clear")
-    val clearCodes = mutableListOf<String>()
     val clearStore = MemoryStore()
     val closing = OfflineQueue(persistence = clearStore)
     val enqueued = ids(clear["enqueue"])
 
-    for (id in enqueued) closing.enqueue(entry(id!!, codes = clearCodes))
+    for (id in enqueued) closing.enqueue(entry(id!!))
 
-    closing.clear()
+    val closed = closing.clear()
 
-    check(clearCodes == enqueued.map { clear["code"] as String }, "closing rejects every queued write")
+    check(
+        discardedPairs(closed) == ids(clear["rejected"]).map { "$it:${clear["code"]}" },
+        "closing returns every queued write, with the documented code",
+    )
     check(closing.size == 0, "and empties the queue")
     // Closing must NOT discard writes the next session will restore.
     check(clearStore.removed.isEmpty(), "but leaves the durable records alone")
@@ -312,13 +309,12 @@ private fun offlineQueuePreconditionDropsStaleWrite() {
     covers("offline_queue_precondition_drops_stale_write")
 
     val case = scenario("offlineQueue", "precondition")
-    val codes = mutableListOf<String>()
     val queue = OfflineQueue()
 
     for (raw in case["entries"] as List<*>) {
         val spec = raw as Map<*, *>
         val verdict = spec["precondition"] as Boolean
-        val item = entry(spec["id"] as String, codes = codes)
+        val item = entry(spec["id"] as String)
 
         item.precondition = { verdict }
         queue.enqueue(item)
@@ -326,9 +322,11 @@ private fun offlineQueuePreconditionDropsStaleWrite() {
 
     val conflicted = queue.drainConflict()
 
-    check(queuedIds(conflicted) == ids(case["conflicted"]), "only the write whose precondition failed is dropped")
+    check(
+        discardedPairs(conflicted) == ids(case["conflicted"]).map { "$it:${case["code"]}" },
+        "only the write whose precondition failed is dropped, with the documented code",
+    )
     check(queuedIds(queue.items()) == ids(case["remaining"]), "and the valid writes keep their FIFO order")
-    check(codes == listOf(case["code"]), "the dropped write carries the documented code")
 }
 
 private fun offlineQueueHydratesPersistedWrites() {
@@ -341,8 +339,10 @@ private fun offlineQueueHydratesPersistedWrites() {
     // Submitted during the boot window, BEFORE the durable load returns.
     for (id in ids(case["liveEnqueue"])) queue.enqueue(entry(id!!))
 
-    val shardKeys = queue.hydrate()
+    val hydrated = queue.hydrate()
+    val shardKeys = hydrated.shardKeys
 
+    check(hydrated.evicted.isEmpty(), "nothing exceeded the default capacity")
     // The durable store's order is authoritative: a prior-session write is always
     // older, so replaying the boot-time write first would let last-writer-wins
     // clobber newer data with stale.
@@ -352,20 +352,17 @@ private fun offlineQueueHydratesPersistedWrites() {
     check(shardKeys.toSet() == ids(case["shardKeys"]).toSet(), "the surviving writes' shard keys are reported")
 
     val overflow = scenario("offlineQueue", "hydrateOverflow")
-    val evicted = mutableListOf<String>()
     val overflowStore = MemoryStore(persistedRecords(overflow))
     val capped = OfflineQueue(
         maxItems = count(overflow["maxItems"]),
         persistence = overflowStore,
         version = overflow["version"] as String,
     )
-
-    capped.onEvict = { item, _ -> evicted.add(item.id) }
-
-    val cappedKeys = capped.hydrate()
+    val cappedHydrated = capped.hydrate()
+    val cappedKeys = cappedHydrated.shardKeys
 
     check(queuedIds(capped.items()) == ids(overflow["queuedAfterHydrate"]), "hydration respects the capacity cap")
-    check(evicted == ids(overflow["evicted"]), "dropping the oldest restored write")
+    check(cappedHydrated.evicted.map { it.entry.id } == ids(overflow["evicted"]), "dropping the oldest restored write")
     // Only the shards whose writes SURVIVED — a key gathered before eviction would
     // send the caller to open a socket with nothing queued behind it.
     check(cappedKeys == ids(overflow["shardKeys"]), "and reports only the surviving shards")
@@ -484,6 +481,33 @@ private fun offlineFlushReplaysAndConfirmsOptimistic() {
     submitQueuesWhileOffline(count(case["confirmedCommitCursor"]))
     submitBeforeFirstConnectFailsFast()
     submitRollsBackARejectedWrite()
+    overflowDuringSubmitSettles()
+}
+
+/**
+ * An eviction triggered from inside [Client.submit] settles rather than running a
+ * consumer's callback inside the monitor that guards the subscription registry.
+ *
+ * This is the regression: the queue used to reject an evicted write in place, and
+ * that rejection rolls optimistic layers back — which re-enters the very monitor
+ * `submit` was holding. `synchronized` is reentrant so this port never hung, but
+ * its Go sibling self-deadlocked and its Ruby sibling swallowed the verdict.
+ */
+private fun overflowDuringSubmitSettles() {
+    val case = scenario("offlineQueue", "overflow")
+    val maxItems = count(case["maxItems"])
+    val settled = mutableListOf<MutationSettled>()
+    val client = Client("https://app.example", { _, _, _ -> HttpResponse(200, "{\"result\":null}") })
+
+    client.offlineQueue = OfflineQueue(maxItems = maxItems, queueBeforeFirstConnect = true)
+    client.onMutationSettled { settled.add(it) }
+
+    repeat(ids(case["enqueue"]).size) { client.submit(SubmitOptions("messages:send")) }
+
+    check(settled.size == 1, "the evicted write settles exactly once")
+    check(settled[0].status == MutationStatus.REJECTED, "as a rejection")
+    check((settled[0].error as? OfflineException)?.code == case["code"], "carrying the documented overflow code")
+    check(client.pendingMutationCount() == maxItems, "and the cap is respected")
 }
 
 /** A write made with the socket down is queued, keeps its overlay, and replays on the flush. */

@@ -107,6 +107,26 @@ type PersistenceAdapter interface {
 	Clear() error
 }
 
+// Discarded is a write the queue let go of without sending it, and the coded
+// reason.
+//
+// Returned rather than rejected in place, which is the whole point: the client
+// calls into this queue with its own mutex held (see OfflineQueue), and a
+// rejection handler rolls optimistic layers back — which needs that same mutex.
+// Invoking it here re-enters a sync.Mutex, which is not reentrant: it
+// self-deadlocked this port outright, and had the Ruby one swallow the verdict.
+// The caller settles these once it has unlocked.
+type Discarded struct {
+	Entry   *QueuedMutation
+	Code    string
+	Message string
+}
+
+// Err is the coded error this write settles with.
+func (d Discarded) Err() OfflineError {
+	return OfflineError{Code: d.Code, Message: d.Message}
+}
+
 // QueuedMutation is one write waiting for the socket to come back.
 type QueuedMutation struct {
 	// ID is the stable idempotency key the replay sends as
@@ -249,7 +269,6 @@ type OfflineQueueOptions struct {
 	// Version stamps persisted writes; a record from another version is purged on
 	// hydrate. "" turns gating off.
 	Version            string
-	OnEvict            func(entry *QueuedMutation, err OfflineError)
 	OnSizeChange       func(size int)
 	OnPersistenceError func(operation string, err error, mutationID string)
 }
@@ -262,6 +281,11 @@ type OfflineQueueOptions struct {
 // subscription registry. Two locks over one logical operation is how a deadlock
 // gets built. Call these with the owning client's mutex held — which is what
 // Client does — or from one goroutine.
+//
+// Nothing here invokes a consumer's callback, which is what makes calling it
+// under that mutex safe: every method that lets go of a write RETURNS it as a
+// Discarded instead, and the client settles those once it has unlocked. See
+// Discarded for what the alternative cost.
 type OfflineQueue struct {
 	options OfflineQueueOptions
 	items   []*QueuedMutation
@@ -292,7 +316,7 @@ func (q *OfflineQueue) Items() []*QueuedMutation {
 }
 
 // Enqueue adds a write to the back of the queue, persisting and capping it.
-func (q *OfflineQueue) Enqueue(entry *QueuedMutation) {
+func (q *OfflineQueue) Enqueue(entry *QueuedMutation) []Discarded {
 	if entry.ID == "" {
 		entry.ID = RandomID()
 	}
@@ -303,27 +327,32 @@ func (q *OfflineQueue) Enqueue(entry *QueuedMutation) {
 		q.report("append", q.options.Persistence.Append(entry.Record(q.options.Version)), entry.ID)
 	}
 
-	q.evictOverflow()
+	evicted := q.evictOverflow()
+
 	q.notifySize()
+
+	return evicted
 }
 
-// Hydrate restores writes persisted in a prior session, returning the distinct
-// shard keys of the records that SURVIVED so the caller can open exactly those
-// sockets to trigger a flush. A no-op with no adapter configured.
+// Hydrate restores writes persisted in a prior session.
+//
+// It returns the distinct shard keys of the records that SURVIVED — so the
+// caller can open exactly those sockets to trigger a flush — alongside whatever
+// the capacity cap evicted. A no-op with no adapter configured.
 //
 // Restored records are prepended rather than appended. Hydrate runs after
 // construction (a durable load takes time), so a write submitted during that boot
 // window is already in the slice — and the store's order is authoritative, since
 // a prior-session write is always older. Appending would let a boot-time write
 // replay first and last-writer-wins clobber newer data with stale.
-func (q *OfflineQueue) Hydrate() ([]string, error) {
+func (q *OfflineQueue) Hydrate() ([]string, []Discarded, error) {
 	if q.options.Persistence == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	persisted, err := q.options.Persistence.Load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	seen := map[string]bool{}
@@ -355,7 +384,8 @@ func (q *OfflineQueue) Hydrate() ([]string, error) {
 
 	// A store holding more than MaxItems (the cap was lowered between sessions,
 	// or writes piled up across restarts) must not bypass it.
-	q.evictOverflow()
+	evicted := q.evictOverflow()
+
 	q.notifySize()
 
 	// Shard keys are read AFTER eviction, from the entries that actually
@@ -378,7 +408,7 @@ func (q *OfflineQueue) Hydrate() ([]string, error) {
 		}
 	}
 
-	return shardKeys, nil
+	return shardKeys, evicted, nil
 }
 
 // Drain removes and returns queued writes, oldest first. A nil predicate drains
@@ -426,11 +456,10 @@ func (q *OfflineQueue) Requeue(items []*QueuedMutation) {
 	q.notifySize()
 }
 
-// DrainConflict drops the writes whose precondition no longer holds, rejecting
-// each, and returns them. Run at the start of a flush to weed out writes whose
-// assumptions died while the client was offline; the admitted writes keep their
-// FIFO order.
-func (q *OfflineQueue) DrainConflict() []*QueuedMutation {
+// DrainConflict drops and returns the writes whose precondition no longer holds.
+// Run at the start of a flush to weed out writes whose assumptions died while the
+// client was offline; the admitted writes keep their FIFO order.
+func (q *OfflineQueue) DrainConflict() []Discarded {
 	var conflicted, kept []*QueuedMutation
 
 	for _, item := range q.items {
@@ -448,14 +477,17 @@ func (q *OfflineQueue) DrainConflict() []*QueuedMutation {
 	q.items = kept
 	q.notifySize()
 
+	discarded := make([]Discarded, 0, len(conflicted))
+
 	for _, item := range conflicted {
-		reject(item, OfflineError{
+		discarded = append(discarded, Discarded{
 			Code:    CodeOfflinePreconditionFailed,
+			Entry:   item,
 			Message: "offline mutation skipped: precondition failed before replay",
 		})
 	}
 
-	return conflicted
+	return discarded
 }
 
 // Unpersist forgets one write's durable record, after it has terminally settled.
@@ -467,39 +499,51 @@ func (q *OfflineQueue) Unpersist(mutationID string) {
 	q.report("remove", q.options.Persistence.Remove(mutationID), mutationID)
 }
 
-// Clear rejects every pending write so no caller waits on a dead client.
+// Clear empties the queue and returns every pending write, so none is left
+// waiting on a dead client.
 //
 // Durable storage is left INTACT on purpose: closing must not discard writes a
 // future session will restore. Use the adapter's own Clear to purge them.
-func (q *OfflineQueue) Clear() {
+func (q *OfflineQueue) Clear() []Discarded {
 	drained := q.items
 	q.items = nil
 	q.notifySize()
 
+	discarded := make([]Discarded, 0, len(drained))
+
 	for _, item := range drained {
-		reject(item, OfflineError{Code: CodeClientClosed, Message: "client closed with the write still queued"})
+		discarded = append(discarded, Discarded{
+			Code:    CodeClientClosed,
+			Entry:   item,
+			Message: "client closed with the write still queued",
+		})
 	}
+
+	return discarded
 }
 
 // evictOverflow drops from the FRONT (the oldest) until the queue is within
 // capacity. Shared by Enqueue and Hydrate so an overflow always drops the same
 // way regardless of which side pushed past the cap.
-func (q *OfflineQueue) evictOverflow() {
+//
+// The dropped entries are returned, never rejected here — a hydrated record has
+// no live caller, so the caller reporting them is the only thing that keeps an
+// eviction from dropping a durable write in total silence.
+func (q *OfflineQueue) evictOverflow() []Discarded {
+	var evicted []Discarded
+
 	for len(q.items) > q.options.MaxItems {
 		dropped := q.items[0]
 		q.items = q.items[1:]
 		q.Unpersist(dropped.ID)
-
-		err := OfflineError{Code: CodeOfflineQueueOverflow, Message: "offline queue overflow"}
-		reject(dropped, err)
-
-		// Also reported to the evict observer: a hydrated record has no live
-		// caller, so without this an eviction would drop a durable write in
-		// total silence.
-		if q.options.OnEvict != nil {
-			q.options.OnEvict(dropped, err)
-		}
+		evicted = append(evicted, Discarded{
+			Code:    CodeOfflineQueueOverflow,
+			Entry:   dropped,
+			Message: "offline queue overflow",
+		})
 	}
+
+	return evicted
 }
 
 func (q *OfflineQueue) report(operation string, err error, mutationID string) {
@@ -511,11 +555,5 @@ func (q *OfflineQueue) report(operation string, err error, mutationID string) {
 func (q *OfflineQueue) notifySize() {
 	if q.options.OnSizeChange != nil {
 		q.options.OnSizeChange(len(q.items))
-	}
-}
-
-func reject(item *QueuedMutation, err error) {
-	if item.Reject != nil {
-		item.Reject(err)
 	}
 }

@@ -257,7 +257,7 @@ func (c *Client) Close() {
 	queue := c.offline
 	c.mu.Unlock()
 
-	queue.Clear()
+	c.reportDiscarded(queue.Clear())
 }
 
 // argsOrEmpty normalises a nil argument record to the empty object the wire

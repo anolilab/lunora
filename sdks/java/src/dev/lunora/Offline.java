@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 import java.util.function.Predicate;
@@ -128,6 +127,24 @@ public final class Offline {
         void remove(String mutationId);
 
         void clear();
+    }
+
+    /**
+     * A write the queue let go of without sending it, and the coded reason.
+     *
+     * <p>Returned rather than rejected in place, which is the whole point: the client calls into
+     * this queue with its own monitor held (see {@link OfflineQueue}), and a rejection handler
+     * rolls optimistic layers back — which needs that same monitor. A {@code synchronized} block is
+     * reentrant, so this port never deadlocked over it, but it did run a consumer's callback inside
+     * the critical section that guards the subscription registry. Its Go sibling, whose mutex is
+     * not reentrant, self-deadlocked outright. The caller settles these once it has left the
+     * monitor.
+     */
+    public record Discarded(QueuedMutation entry, String code, String message) {
+        /** The coded error this write settles with. */
+        public OfflineException error() {
+            return new OfflineException(code, message);
+        }
     }
 
     /** One write waiting for the socket to come back. */
@@ -281,6 +298,11 @@ public final class Offline {
      * the client that owns the queue already holds a monitor over its subscription registry. Two
      * locks over one logical operation is how a deadlock gets built. Call these with the owning
      * client's monitor held — which is what {@link Client} does — or from one thread.
+     *
+     * <p>Nothing here invokes a consumer's callback, which is what makes calling it under that
+     * monitor safe: every method that lets go of a write RETURNS it as a {@link Discarded} instead,
+     * and the client settles those once it has left the monitor. See {@link Discarded} for what the
+     * alternative cost.
      */
     public static final class OfflineQueue {
         private final List<QueuedMutation> items = new ArrayList<>();
@@ -295,9 +317,6 @@ public final class Offline {
 
         private PersistenceAdapter persistence;
         private String version;
-
-        /** Notified when the cap discards a write, with the coded reason. */
-        public BiConsumer<QueuedMutation, OfflineException> onEvict;
 
         /** Notified with the new depth after any size change. */
         public IntConsumer onSizeChange;
@@ -347,7 +366,11 @@ public final class Offline {
             return List.copyOf(items);
         }
 
-        public void enqueue(QueuedMutation entry) {
+        /**
+         * Adds a write to the back of the queue, persisting it and capping the queue. Returns
+         * whatever the cap evicted, for the caller to report.
+         */
+        public List<Discarded> enqueue(QueuedMutation entry) {
             if (entry.id == null) {
                 entry.id = randomId();
             }
@@ -358,13 +381,18 @@ public final class Offline {
                 persist("append", entry.id, () -> persistence.append(entry.record(version)));
             }
 
-            evictOverflow();
+            List<Discarded> evicted = evictOverflow();
+
             notifySize();
+
+            return evicted;
         }
 
         /**
-         * Restores writes persisted in a prior session, returning the distinct shard keys of the
-         * records that SURVIVED so the caller can open exactly those sockets to trigger a flush. A
+         * Restores writes persisted in a prior session.
+         *
+         * <p>Returns the distinct shard keys of the records that SURVIVED — so the caller can open
+         * exactly those sockets to trigger a flush — alongside whatever the capacity cap evicted. A
          * no-op with no adapter configured.
          *
          * <p>Restored records are placed AHEAD of whatever is already queued. Hydration runs after
@@ -373,9 +401,9 @@ public final class Offline {
          * is always older. Appending would let a boot-time write replay first and last-writer-wins
          * clobber newer data with stale.
          */
-        public List<String> hydrate() {
+        public Hydrated hydrate() {
             if (persistence == null) {
-                return List.of();
+                return new Hydrated(List.of(), List.of());
             }
 
             Set<String> seen = new HashSet<>();
@@ -408,7 +436,8 @@ public final class Offline {
 
             // A store holding more than maxItems (the cap was lowered between sessions, or writes
             // piled up across restarts) must not bypass it.
-            evictOverflow();
+            List<Discarded> evicted = evictOverflow();
+
             notifySize();
 
             // Shard keys are read AFTER eviction, from the entries that actually survived: eviction
@@ -423,8 +452,13 @@ public final class Offline {
                 }
             }
 
-            return new ArrayList<>(shardKeys);
+            return new Hydrated(new ArrayList<>(shardKeys), evicted);
         }
+
+        /**
+         * What one {@link #hydrate} restored: the surviving shard keys, and what the cap dropped.
+         */
+        public record Hydrated(List<String> shardKeys, List<Discarded> evicted) {}
 
         /**
          * Removes and returns queued writes, oldest first. A null predicate drains everything;
@@ -474,18 +508,18 @@ public final class Offline {
         }
 
         /**
-         * Drops the writes whose precondition no longer holds, rejecting each, and returns them.
-         * Run at the start of a flush to weed out writes whose assumptions died while the client
-         * was offline; the admitted writes keep their FIFO order.
+         * Drops and returns the writes whose precondition no longer holds. Run at the start of a
+         * flush to weed out writes whose assumptions died while the client was offline; the
+         * admitted writes keep their FIFO order.
          */
-        public List<QueuedMutation> drainConflict() {
-            List<QueuedMutation> conflicted =
-                    drain(item -> item.precondition != null && !item.precondition.get());
+        public List<Discarded> drainConflict() {
+            List<Discarded> conflicted = new ArrayList<>();
 
-            for (QueuedMutation item : conflicted) {
-                settleRejected(
-                        item,
-                        new OfflineException(
+            for (QueuedMutation item :
+                    drain(item -> item.precondition != null && !item.precondition.get())) {
+                conflicted.add(
+                        new Discarded(
+                                item,
                                 OFFLINE_PRECONDITION_FAILED,
                                 "offline mutation skipped: precondition failed before replay"));
             }
@@ -503,59 +537,48 @@ public final class Offline {
         }
 
         /**
-         * Rejects every pending write so no caller waits on a dead client.
+         * Empties the queue and returns every pending write, so none is left waiting on a dead
+         * client.
          *
          * <p>Durable storage is left INTACT on purpose: closing must not discard writes a future
          * session will restore. Use the adapter's own {@code clear} to purge them.
          */
-        public void clear() {
-            List<QueuedMutation> drained = new ArrayList<>(items);
+        public List<Discarded> clear() {
+            List<Discarded> discarded = new ArrayList<>();
+
+            for (QueuedMutation item : new ArrayList<>(items)) {
+                discarded.add(
+                        new Discarded(
+                                item, CLIENT_CLOSED, "client closed with the write still queued"));
+            }
 
             items.clear();
             notifySize();
 
-            for (QueuedMutation item : drained) {
-                settleRejected(
-                        item,
-                        new OfflineException(
-                                CLIENT_CLOSED, "client closed with the write still queued"));
-            }
+            return discarded;
         }
 
         /**
          * Drops from the FRONT (the oldest) until the queue is within capacity. Shared by {@link
          * #enqueue} and {@link #hydrate} so an overflow always drops the same way regardless of
          * which side pushed past the cap.
+         *
+         * <p>The dropped entries are returned, never rejected here — a hydrated record has no live
+         * caller, so the caller reporting them is the only thing that keeps an eviction from
+         * dropping a durable write in total silence.
          */
-        private void evictOverflow() {
+        private List<Discarded> evictOverflow() {
+            List<Discarded> evicted = new ArrayList<>();
+
             while (items.size() > maxItems) {
                 QueuedMutation dropped = items.remove(0);
 
                 unpersist(dropped.id);
-
-                OfflineException error =
-                        new OfflineException(OFFLINE_QUEUE_OVERFLOW, "offline queue overflow");
-
-                settleRejected(dropped, error);
-
-                // Also reported to the evict observer: a hydrated record has no live caller, so
-                // without this an eviction would drop a durable write in total silence.
-                if (onEvict != null) {
-                    onEvict.accept(dropped, error);
-                }
-            }
-        }
-
-        private static void settleRejected(QueuedMutation item, OfflineException error) {
-            if (item.reject == null) {
-                return;
+                evicted.add(
+                        new Discarded(dropped, OFFLINE_QUEUE_OVERFLOW, "offline queue overflow"));
             }
 
-            try {
-                item.reject.accept(error);
-            } catch (RuntimeException ignored) {
-                // A consumer's rejection handler throwing is not this queue's problem.
-            }
+            return evicted;
         }
 
         private void persist(String operation, String mutationId, Runnable call) {

@@ -159,7 +159,7 @@ func (c *Client) HydrateOfflineQueue() ([]string, error) {
 	queue := c.offline
 	c.mu.Unlock()
 
-	shardKeys, err := queue.Hydrate()
+	shardKeys, evicted, err := queue.Hydrate()
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +169,10 @@ func (c *Client) HydrateOfflineQueue() ([]string, error) {
 			c.attachHydratedSettlers(item)
 		}
 	}
+
+	// Restored records the cap dropped never get settlers of their own, so they
+	// are reported directly rather than through one.
+	c.reportDiscarded(evicted)
 
 	return shardKeys, nil
 }
@@ -190,11 +194,15 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 	identity := c.Identity
 	c.mu.Unlock()
 
-	for _, item := range queue.DrainConflict() {
-		queue.Unpersist(item.ID)
-		report.Conflicted = append(report.Conflicted, item.ID)
-		report.Rejected = append(report.Rejected, item.ID)
+	conflicted := queue.DrainConflict()
+
+	for _, discarded := range conflicted {
+		queue.Unpersist(discarded.Entry.ID)
+		report.Conflicted = append(report.Conflicted, discarded.Entry.ID)
+		report.Rejected = append(report.Rejected, discarded.Entry.ID)
 	}
+
+	c.reportDiscarded(conflicted)
 
 	drained := queue.Drain(func(item *QueuedMutation) bool { return item.ShardKey == shardKey })
 	if len(drained) == 0 {
@@ -213,11 +221,12 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 		}
 
 		queue.Unpersist(item.ID)
-		reject(item, OfflineError{
-			Code:    CodeOfflineIdentityChanged,
-			Message: "offline mutation skipped: auth identity changed before replay",
-		})
 		report.Rejected = append(report.Rejected, item.ID)
+		c.reportDiscarded([]Discarded{{
+			Code:    CodeOfflineIdentityChanged,
+			Entry:   item,
+			Message: "offline mutation skipped: auth identity changed before replay",
+		}})
 	}
 
 	for index, item := range sendable {
@@ -243,11 +252,30 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 		}
 
 		queue.Unpersist(item.ID)
-		reject(item, err)
+		c.settleRejected(item, err)
 		report.Rejected = append(report.Rejected, item.ID)
 	}
 
 	return report
+}
+
+// reportDiscarded settles every write the queue let go of without sending it.
+//
+// Runs with the mutex RELEASED: a rejection rolls optimistic layers back, which
+// re-acquires it, and sync.Mutex is not reentrant. Every discard path funnels
+// through here, so an eviction can never drop a durable write in silence — which
+// matters most for a hydrated record, whose original caller did not survive the
+// restart.
+func (c *Client) reportDiscarded(discarded []Discarded) {
+	for _, item := range discarded {
+		c.settleRejected(item.Entry, item.Err())
+	}
+}
+
+func (c *Client) settleRejected(entry *QueuedMutation, err error) {
+	if entry.Reject != nil {
+		entry.Reject(err)
+	}
 }
 
 // isTransient reports whether a failed replay may be retried rather than dropped.
@@ -388,8 +416,12 @@ func (c *Client) enqueueWrite(
 	}
 
 	c.mu.Lock()
-	queue.Enqueue(entry)
+	// Safe under the mutex now that Enqueue invokes no callback: it returns what
+	// the cap evicted instead, and those settle below.
+	evicted := queue.Enqueue(entry)
 	c.mu.Unlock()
+
+	c.reportDiscarded(evicted)
 }
 
 // attachHydratedSettlers gives a restored write the observer-only settlers it

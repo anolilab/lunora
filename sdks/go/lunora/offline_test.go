@@ -104,21 +104,15 @@ func queuedIDs(items []*QueuedMutation) []string {
 	return out
 }
 
-// recordingEntry builds a queued write whose rejection code lands in codes.
-func recordingEntry(id string, shardKey string, codes *[]string) *QueuedMutation {
-	return &QueuedMutation{
-		Args:         map[string]any{"n": id},
-		FunctionPath: "messages:send",
-		ID:           id,
-		Reject: func(err error) {
-			var offline OfflineError
+// discardedPairs is the (id, code) pairs a queue reported letting go of.
+func discardedPairs(discarded []Discarded) []string {
+	out := make([]string, 0, len(discarded))
 
-			if errors.As(err, &offline) {
-				*codes = append(*codes, offline.Code)
-			}
-		},
-		ShardKey: shardKey,
+	for _, item := range discarded {
+		out = append(out, item.Entry.ID+":"+item.Code)
 	}
+
+	return out
 }
 
 func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
@@ -211,22 +205,13 @@ func TestOfflineQueueOverflowEvictsOldest(t *testing.T) {
 
 	scenario := queueFixture(t, "overflow")
 
-	var (
-		codes   []string
-		evicted []string
-	)
-
 	store := &memoryStore{}
-	queue := NewOfflineQueue(OfflineQueueOptions{
-		MaxItems: int(scenario["maxItems"].(float64)),
-		OnEvict: func(entry *QueuedMutation, err OfflineError) {
-			evicted = append(evicted, entry.ID+":"+err.Code)
-		},
-		Persistence: store,
-	})
+	queue := NewOfflineQueue(OfflineQueueOptions{MaxItems: int(scenario["maxItems"].(float64)), Persistence: store})
+
+	var evicted []Discarded
 
 	for _, id := range fixtureStrings(scenario["enqueue"]) {
-		queue.Enqueue(recordingEntry(id, "", &codes))
+		evicted = append(evicted, queue.Enqueue(&QueuedMutation{FunctionPath: "messages:send", ID: id})...)
 	}
 
 	if got, want := queuedIDs(queue.Items()), fixtureStrings(scenario["remaining"]); !reflect.DeepEqual(got, want) {
@@ -236,14 +221,11 @@ func TestOfflineQueueOverflowEvictsOldest(t *testing.T) {
 	code, _ := scenario["code"].(string)
 	wantEvicted := fixtureStrings(scenario["evicted"])
 
-	if len(codes) != len(wantEvicted) || (len(codes) > 0 && codes[0] != code) {
-		t.Fatalf("rejection codes: got %v, want %d× %s", codes, len(wantEvicted), code)
-	}
-
-	// The evict observer is the only report a HYDRATED entry can produce — its
-	// original caller did not survive the restart.
-	if len(evicted) != 1 || evicted[0] != wantEvicted[0]+":"+code {
-		t.Fatalf("evict observer: got %v, want [%s]", evicted, wantEvicted[0]+":"+code)
+	// Returned, not rejected in place: the caller settles it once it has unlocked.
+	// A hydrated entry has no live caller at all, so this is the only thing
+	// standing between an eviction and a durable write disappearing in silence.
+	if got, want := discardedPairs(evicted), []string{wantEvicted[0] + ":" + code}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("evicted: got %v, want %v", got, want)
 	}
 
 	if got, want := store.removed, fixtureStrings(scenario["persistRemoveCalls"]); !reflect.DeepEqual(got, want) {
@@ -256,21 +238,24 @@ func TestOfflineQueueClearKeepsDurableRecords(t *testing.T) {
 
 	scenario := queueFixture(t, "clear")
 
-	var codes []string
-
 	store := &memoryStore{}
 	queue := NewOfflineQueue(OfflineQueueOptions{Persistence: store})
 	enqueued := fixtureStrings(scenario["enqueue"])
 
 	for _, id := range enqueued {
-		queue.Enqueue(recordingEntry(id, "", &codes))
+		queue.Enqueue(&QueuedMutation{FunctionPath: "messages:send", ID: id})
 	}
 
-	queue.Clear()
-
+	discarded := queue.Clear()
 	code, _ := scenario["code"].(string)
-	if len(codes) != len(fixtureStrings(scenario["rejected"])) || codes[0] != code {
-		t.Fatalf("rejection codes: got %v, want %s", codes, code)
+
+	want := make([]string, 0, len(enqueued))
+	for _, id := range fixtureStrings(scenario["rejected"]) {
+		want = append(want, id+":"+code)
+	}
+
+	if got := discardedPairs(discarded); !reflect.DeepEqual(got, want) {
+		t.Fatalf("discarded on clear: got %v, want %v", got, want)
 	}
 
 	// Closing must NOT discard writes the next session will restore.
@@ -288,8 +273,6 @@ func TestOfflineQueuePreconditionDropsStaleWrite(t *testing.T) {
 
 	scenario := queueFixture(t, "precondition")
 
-	var codes []string
-
 	queue := NewOfflineQueue(OfflineQueueOptions{})
 	entries, _ := scenario["entries"].([]any)
 
@@ -297,24 +280,25 @@ func TestOfflineQueuePreconditionDropsStaleWrite(t *testing.T) {
 		spec, _ := raw.(map[string]any)
 		id, _ := spec["id"].(string)
 		verdict, _ := spec["precondition"].(bool)
-		entry := recordingEntry(id, "", &codes)
+		entry := &QueuedMutation{FunctionPath: "messages:send", ID: id}
 		entry.Precondition = func() bool { return verdict }
 		queue.Enqueue(entry)
 	}
 
 	conflicted := queue.DrainConflict()
+	code, _ := scenario["code"].(string)
 
-	if got, want := queuedIDs(conflicted), fixtureStrings(scenario["conflicted"]); !reflect.DeepEqual(got, want) {
+	want := make([]string, 0, 1)
+	for _, id := range fixtureStrings(scenario["conflicted"]) {
+		want = append(want, id+":"+code)
+	}
+
+	if got := discardedPairs(conflicted); !reflect.DeepEqual(got, want) {
 		t.Fatalf("conflicted: got %v, want %v", got, want)
 	}
 
 	if got, want := queuedIDs(queue.Items()), fixtureStrings(scenario["remaining"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("remaining: got %v, want %v", got, want)
-	}
-
-	code, _ := scenario["code"].(string)
-	if len(codes) != 1 || codes[0] != code {
-		t.Fatalf("rejection codes: got %v, want [%s]", codes, code)
 	}
 }
 
@@ -354,9 +338,13 @@ func TestOfflineQueueHydratesPersistedWrites(t *testing.T) {
 	// are interesting below.
 	store.appended = nil
 
-	shardKeys, err := queue.Hydrate()
+	shardKeys, evicted, err := queue.Hydrate()
 	if err != nil {
 		t.Fatalf("hydrate: %v", err)
+	}
+
+	if len(evicted) != 0 {
+		t.Fatalf("evicted: got %v, want none — nothing exceeded the default capacity", discardedPairs(evicted))
 	}
 
 	// The durable store's order is authoritative: a prior-session write is always
@@ -386,17 +374,14 @@ func TestOfflineQueueHydrationRespectsCapacity(t *testing.T) {
 	scenario := queueFixture(t, "hydrateOverflow")
 	version, _ := scenario["version"].(string)
 
-	var evicted []string
-
 	store := &memoryStore{records: persistedRecords(scenario)}
 	queue := NewOfflineQueue(OfflineQueueOptions{
 		MaxItems:    int(scenario["maxItems"].(float64)),
-		OnEvict:     func(entry *QueuedMutation, _ OfflineError) { evicted = append(evicted, entry.ID) },
 		Persistence: store,
 		Version:     version,
 	})
 
-	shardKeys, err := queue.Hydrate()
+	shardKeys, evicted, err := queue.Hydrate()
 	if err != nil {
 		t.Fatalf("hydrate: %v", err)
 	}
@@ -405,7 +390,12 @@ func TestOfflineQueueHydrationRespectsCapacity(t *testing.T) {
 		t.Fatalf("after hydrate: got %v, want %v", got, want)
 	}
 
-	if got, want := evicted, fixtureStrings(scenario["evicted"]); !reflect.DeepEqual(got, want) {
+	evictedIDs := make([]string, 0, len(evicted))
+	for _, item := range evicted {
+		evictedIDs = append(evictedIDs, item.Entry.ID)
+	}
+
+	if got, want := evictedIDs, fixtureStrings(scenario["evicted"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("evicted: got %v, want %v", got, want)
 	}
 
@@ -738,6 +728,51 @@ func TestSubmitBeforeTheFirstConnectFailsFast(t *testing.T) {
 
 	if outcome.Status != MutationQueued || client.PendingMutationCount() != 1 {
 		t.Fatalf("status=%s pending=%d", outcome.Status, client.PendingMutationCount())
+	}
+}
+
+// An eviction triggered from inside Submit settles rather than re-entering the
+// client's mutex.
+//
+// This is the regression: the queue used to reject an evicted write in place,
+// and that rejection rolls optimistic layers back — which re-acquires the very
+// mutex Submit was holding. sync.Mutex is not reentrant, so the client
+// self-deadlocked on the second offline write past capacity.
+func TestOverflowDuringSubmitSettlesInsteadOfDeadlocking(t *testing.T) {
+	covers("offline_flush_replays_and_confirms_optimistic")
+
+	scenario := queueFixture(t, "overflow")
+	maxItems := int(scenario["maxItems"].(float64))
+	code, _ := scenario["code"].(string)
+
+	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
+		return 200, []byte(`{"result":null}`), nil
+	})
+
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{MaxItems: maxItems, QueueBeforeFirstConnect: true}))
+
+	var settled []MutationSettled
+
+	client.OnMutationSettled(func(event MutationSettled) { settled = append(settled, event) })
+
+	for range fixtureStrings(scenario["enqueue"]) {
+		if _, err := client.Submit(SubmitOptions{FunctionPath: "messages:send"}); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+	}
+
+	if len(settled) != 1 || settled[0].Status != MutationRejected {
+		t.Fatalf("settled: got %+v, want one rejection", settled)
+	}
+
+	var offline OfflineError
+
+	if !errors.As(settled[0].Err, &offline) || offline.Code != code {
+		t.Fatalf("settled error: got %v, want code %s", settled[0].Err, code)
+	}
+
+	if client.PendingMutationCount() != maxItems {
+		t.Fatalf("pending: got %d, want %d", client.PendingMutationCount(), maxItems)
 	}
 }
 

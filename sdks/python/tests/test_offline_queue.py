@@ -54,20 +54,25 @@ class _Store:
         self.records = []
 
 
-def _entry(mutation_id, shard_key=None, precondition=None, identity=ABSENT_IDENTITY, rejected=None):
+def _entry(mutation_id, shard_key=None, precondition=None, identity=ABSENT_IDENTITY):
     return QueuedMutation(
         args={"n": mutation_id},
         function_path="messages:send",
         identity=identity,
         mutation_id=mutation_id,
         precondition=precondition,
-        reject=(lambda error, mid=mutation_id: rejected.append((mid, getattr(error, "code", None)))) if rejected is not None else None,
         shard_key=shard_key,
     )
 
 
 def _ids(items):
     return [item.id for item in items]
+
+
+def _discarded(items):
+    """The (id, code) pairs a queue reported letting go of."""
+
+    return [(item.entry.id, item.code) for item in items]
 
 
 class TestQueueOrdering(unittest.TestCase):
@@ -121,40 +126,33 @@ class TestQueueOverflow(unittest.TestCase):
     def test_overflow_evicts_the_oldest_write(self):
         covers("offline_queue_overflow_evicts_oldest")
         case = FIXTURES["overflow"]
-        rejected = []
         evicted = []
         store = _Store()
-        queue = OfflineQueue(
-            max_items=case["maxItems"],
-            on_evict=lambda item, error: evicted.append((item.id, error.code)),
-            persistence=store,
-        )
+        queue = OfflineQueue(max_items=case["maxItems"], persistence=store)
 
         for mutation_id in case["enqueue"]:
-            queue.enqueue(_entry(mutation_id, rejected=rejected))
+            evicted.extend(queue.enqueue(_entry(mutation_id)))
 
         self.assertEqual(_ids(queue.items()), case["remaining"])
-        self.assertEqual([item[0] for item in rejected], case["evicted"])
-        self.assertEqual([item[1] for item in rejected], [case["code"]] * len(case["evicted"]))
-        # The evict observer is the only report a HYDRATED entry can produce —
-        # its original caller did not survive the restart.
-        self.assertEqual(evicted, [(case["evicted"][0], case["code"])])
+        # Returned, not rejected in place: the caller settles it once it has
+        # released its lock. A hydrated entry has no live caller at all, so this
+        # is the only thing standing between an eviction and a durable write
+        # disappearing in silence.
+        self.assertEqual(_discarded(evicted), [(case["evicted"][0], case["code"])])
         self.assertEqual(store.removed, case["persistRemoveCalls"])
 
     def test_close_rejects_every_queued_write_but_keeps_the_durable_records(self):
         covers("offline_queue_overflow_evicts_oldest")
         case = FIXTURES["clear"]
-        rejected = []
         store = _Store()
         queue = OfflineQueue(persistence=store)
 
         for mutation_id in case["enqueue"]:
-            queue.enqueue(_entry(mutation_id, rejected=rejected))
+            queue.enqueue(_entry(mutation_id))
 
-        queue.clear()
+        discarded = queue.clear()
 
-        self.assertEqual([item[0] for item in rejected], case["rejected"])
-        self.assertEqual([item[1] for item in rejected], [case["code"]] * len(case["rejected"]))
+        self.assertEqual(_discarded(discarded), [(mutation_id, case["code"]) for mutation_id in case["rejected"]])
         self.assertEqual(queue.size, 0)
         # Closing must NOT discard writes the next session will restore.
         self.assertEqual(store.removed, case["persistRemoveCalls"])
@@ -165,18 +163,16 @@ class TestQueuePrecondition(unittest.TestCase):
     def test_a_stale_write_is_dropped_before_it_replays(self):
         covers("offline_queue_precondition_drops_stale_write")
         case = FIXTURES["precondition"]
-        rejected = []
         queue = OfflineQueue()
 
         for spec in case["entries"]:
             verdict = spec["precondition"]
-            queue.enqueue(_entry(spec["id"], precondition=lambda held=verdict: held, rejected=rejected))
+            queue.enqueue(_entry(spec["id"], precondition=lambda held=verdict: held))
 
         conflicted = queue.drain_conflict()
 
-        self.assertEqual(_ids(conflicted), case["conflicted"])
+        self.assertEqual(_discarded(conflicted), [(mutation_id, case["code"]) for mutation_id in case["conflicted"]])
         self.assertEqual(_ids(queue.items()), case["remaining"])
-        self.assertEqual([item[1] for item in rejected], [case["code"]] * len(case["conflicted"]))
 
 
 class TestQueueHydration(unittest.TestCase):
@@ -195,8 +191,9 @@ class TestQueueHydration(unittest.TestCase):
         for mutation_id in case["liveEnqueue"]:
             queue.enqueue(_entry(mutation_id))
 
-        shard_keys = queue.hydrate()
+        shard_keys, evicted = queue.hydrate()
 
+        self.assertEqual(evicted, [], "nothing exceeded the default capacity")
         # The durable store's order is authoritative: a prior-session write is
         # always older, so replaying the boot-time write first would let
         # last-writer-wins clobber newer data with stale.
@@ -208,24 +205,18 @@ class TestQueueHydration(unittest.TestCase):
     def test_hydration_respects_the_capacity_cap(self):
         covers("offline_queue_hydrates_persisted_writes")
         case = FIXTURES["hydrateOverflow"]
-        evicted = []
         store = _Store(
             [
                 {"args": {}, "functionPath": "messages:send", "id": spec["id"], "shardKey": spec["shardKey"], "version": spec["version"]}
                 for spec in case["persisted"]
             ]
         )
-        queue = OfflineQueue(
-            max_items=case["maxItems"],
-            on_evict=lambda item, _error: evicted.append(item.id),
-            persistence=store,
-            version=case["version"],
-        )
+        queue = OfflineQueue(max_items=case["maxItems"], persistence=store, version=case["version"])
 
-        shard_keys = queue.hydrate()
+        shard_keys, evicted = queue.hydrate()
 
         self.assertEqual(_ids(queue.items()), case["queuedAfterHydrate"])
-        self.assertEqual(evicted, case["evicted"])
+        self.assertEqual([item.entry.id for item in evicted], case["evicted"])
         # Only the shards whose writes SURVIVED — a key gathered before eviction
         # would send the caller to open a socket with nothing queued behind it.
         self.assertEqual(sorted(shard_keys, key=str), sorted(case["shardKeys"], key=str))
@@ -422,6 +413,27 @@ class TestFlushIntegration(unittest.TestCase):
 
         self.assertEqual(outcome.status, "queued")
         self.assertEqual(client.pending_mutation_count, 1)
+
+    def test_an_overflow_during_submit_settles_rather_than_re_entering_the_lock(self):
+        covers("offline_flush_replays_and_confirms_optimistic")
+        case = FIXTURES["overflow"]
+        settled = []
+
+        client = LunoraClient("https://app.example", http_post=lambda _url, _headers, _body: (200, {"result": None}))
+        client.offline_queue = OfflineQueue(max_items=case["maxItems"], queue_before_first_connect=True)
+        client.on_mutation_settled(settled.append)
+
+        for _ in range(len(case["enqueue"])):
+            asyncio.run(client.submit("messages:send", {}))
+
+        # The queue evicts while the client holds its own lock, and settling the
+        # evicted write rolls optimistic layers back — which re-acquires it. The
+        # queue therefore RETURNS what it dropped rather than rejecting in place;
+        # doing the latter self-deadlocked the Go port and had the Ruby one
+        # swallow the verdict entirely.
+        self.assertEqual([event.status for event in settled], ["rejected"])
+        self.assertEqual(getattr(settled[0].error, "code", None), case["code"])
+        self.assertEqual(client.pending_mutation_count, case["maxItems"])
 
     def test_a_failed_online_write_rolls_its_overlay_back(self):
         covers("offline_flush_replays_and_confirms_optimistic")

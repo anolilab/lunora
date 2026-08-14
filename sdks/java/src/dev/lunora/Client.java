@@ -259,7 +259,7 @@ public final class Client {
             queue = offlineQueue;
         }
 
-        queue.clear();
+        reportDiscarded(queue.clear());
     }
 
     /** Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when null. */
@@ -1118,7 +1118,7 @@ public final class Client {
      */
     public List<String> hydrateOfflineQueue() {
         OfflineQueue queue = offlineQueue();
-        List<String> restored = queue.hydrate();
+        OfflineQueue.Hydrated hydrated = queue.hydrate();
 
         for (QueuedMutation item : queue.items()) {
             if (item.resolve == null && item.reject == null) {
@@ -1126,7 +1126,11 @@ public final class Client {
             }
         }
 
-        return restored;
+        // Restored records the cap dropped never get settlers of their own, so they are reported
+        // directly rather than through one.
+        reportDiscarded(hydrated.evicted());
+
+        return hydrated.shardKeys();
     }
 
     /**
@@ -1149,11 +1153,15 @@ public final class Client {
             current = identity;
         }
 
-        for (QueuedMutation item : queue.drainConflict()) {
-            queue.unpersist(item.id);
-            report.conflicted.add(item.id);
-            report.rejected.add(item.id);
+        List<Offline.Discarded> conflicted = queue.drainConflict();
+
+        for (Offline.Discarded discarded : conflicted) {
+            queue.unpersist(discarded.entry().id);
+            report.conflicted.add(discarded.entry().id);
+            report.rejected.add(discarded.entry().id);
         }
+
+        reportDiscarded(conflicted);
 
         List<QueuedMutation> drained =
                 queue.drain(
@@ -1178,12 +1186,14 @@ public final class Client {
             }
 
             queue.unpersist(item.id);
-            settleRejected(
-                    item,
-                    new OfflineException(
-                            Offline.OFFLINE_IDENTITY_CHANGED,
-                            "offline mutation skipped: auth identity changed before replay"));
             report.rejected.add(item.id);
+            reportDiscarded(
+                    List.of(
+                            new Offline.Discarded(
+                                    item,
+                                    Offline.OFFLINE_IDENTITY_CHANGED,
+                                    "offline mutation skipped: auth identity changed before"
+                                            + " replay")));
         }
 
         replay(queue, sendable, report);
@@ -1370,8 +1380,29 @@ public final class Client {
                             options.onSettled);
                 };
 
+        List<Offline.Discarded> evicted;
+
+        // Safe under the monitor now that `enqueue` invokes no callback: it returns what the cap
+        // evicted instead, and those settle below.
         synchronized (lock) {
-            queue.enqueue(entry);
+            evicted = queue.enqueue(entry);
+        }
+
+        reportDiscarded(evicted);
+    }
+
+    /**
+     * Settles every write the queue let go of without sending it.
+     *
+     * <p>Runs with the monitor RELEASED: a rejection rolls optimistic layers back, and a consumer's
+     * callback must never run inside the critical section that guards the subscription registry.
+     * Every discard path funnels through here, so an eviction can never drop a durable write in
+     * silence — which matters most for a hydrated record, whose original caller did not survive the
+     * restart.
+     */
+    private void reportDiscarded(List<Offline.Discarded> discarded) {
+        for (Offline.Discarded item : discarded) {
+            settleRejected(item.entry(), item.error());
         }
     }
 
@@ -1409,8 +1440,14 @@ public final class Client {
     }
 
     private static void settleRejected(QueuedMutation item, RuntimeException error) {
-        if (item.reject != null) {
+        if (item.reject == null) {
+            return;
+        }
+
+        try {
             item.reject.accept(error);
+        } catch (RuntimeException ignored) {
+            // A consumer's rejection handler throwing is not this client's failure.
         }
     }
 

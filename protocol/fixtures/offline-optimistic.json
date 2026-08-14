@@ -101,7 +101,7 @@
             "persistAppendCalls": 3
         },
         "overflow": {
-            "$comment": "Bounded FIFO: past capacity the OLDEST entry is evicted, rejected with a coded error, un-persisted, and reported to the evict observer — a hydrated entry has no awaiter, so without the observer an eviction would drop a durable write in silence.",
+            "$comment": "Bounded FIFO: past capacity the OLDEST entry is evicted, un-persisted, and RETURNED to the caller with a coded reason rather than rejected in place — the queue is called with the owning client's lock held, and a rejection rolls optimistic layers back through that same lock. A hydrated entry has no awaiter either, so the caller reporting what came back is the only thing keeping an eviction from dropping a durable write in silence.",
             "maxItems": 2,
             "enqueue": ["m1", "m2", "m3"],
             "evicted": ["m1"],
@@ -110,14 +110,14 @@
             "persistRemoveCalls": ["m1"]
         },
         "clear": {
-            "$comment": "Closing the client rejects every pending write so an awaiting caller cannot hang forever. Durable storage is left INTACT on purpose — closing a tab must not discard writes the next session will restore.",
+            "$comment": "Closing the client hands back every pending write so an awaiting caller cannot hang forever. Durable storage is left INTACT on purpose — closing a tab must not discard writes the next session will restore.",
             "enqueue": ["m1", "m2"],
             "code": "CLIENT_CLOSED",
             "rejected": ["m1", "m2"],
             "persistRemoveCalls": []
         },
         "precondition": {
-            "$comment": "Checked just before replay: a write whose assumptions no longer hold (the row it edited was deleted while offline) is dropped instead of replayed. The valid writes keep their FIFO order.",
+            "$comment": "Checked just before replay: a write whose assumptions no longer hold (the row it edited was deleted while offline) is dropped and handed back instead of replayed. The valid writes keep their FIFO order.",
             "entries": [
                 { "id": "m1", "precondition": true },
                 { "id": "m2", "precondition": false },

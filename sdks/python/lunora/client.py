@@ -442,7 +442,7 @@ class LunoraClient:
             self._send = None
             queue = self.offline_queue
 
-        queue.clear()
+        self._report_discarded(queue.clear())
 
     # --- HTTP RPC -----------------------------------------------------------
 
@@ -585,11 +585,15 @@ class LunoraClient:
         with self._lock:
             queue = self.offline_queue
 
-        restored = queue.hydrate()
+        restored, evicted = queue.hydrate()
 
         for item in queue.items():
             if item.reject is None and item.resolve is None:
                 self._attach_hydrated_settlers(item)
+
+        # Restored records that the cap dropped never get settlers of their own,
+        # so they are reported directly rather than through one.
+        self._report_discarded(evicted)
 
         return restored
 
@@ -614,10 +618,14 @@ class LunoraClient:
             queue = self.offline_queue
             current_identity = self.identity
 
-        for item in queue.drain_conflict():
-            queue.unpersist(item.id)
-            report.conflicted.append(item.id)
-            report.rejected.append(item.id)
+        conflicted = queue.drain_conflict()
+
+        for discarded in conflicted:
+            queue.unpersist(discarded.entry.id)
+            report.conflicted.append(discarded.entry.id)
+            report.rejected.append(discarded.entry.id)
+
+        self._report_discarded(conflicted)
 
         key = shard_key or ""
         drained = queue.drain(lambda item: (item.shard_key or "") == key)
@@ -775,8 +783,11 @@ class LunoraClient:
 
         with self._lock:
             queue = self.offline_queue
+            # Safe under the lock now that `enqueue` invokes no callback: it
+            # returns what the cap evicted instead, and those settle below.
+            evicted = queue.enqueue(entry)
 
-        queue.enqueue(entry)
+        self._report_discarded(evicted)
 
     def _attach_hydrated_settlers(self, item: QueuedMutation) -> None:
         """Give a restored write the observer-only settlers it lost in the restart."""
@@ -784,6 +795,18 @@ class LunoraClient:
         item.live_awaiter = False
         item.resolve = lambda value, mutation_id=item.id: self._emit_settled(MutationSettled(mutation_id, "committed", value=value))
         item.reject = lambda error, mutation_id=item.id: self._emit_settled(MutationSettled(mutation_id, "rejected", error=error))
+
+    def _report_discarded(self, discarded: list) -> None:
+        """Settle every write the queue let go of without sending it.
+
+        Runs with the lock RELEASED: a rejection rolls optimistic layers back,
+        which re-acquires it. Every discard path funnels through here, so an
+        eviction can never drop a durable write in silence — which matters most
+        for a hydrated record, whose original caller did not survive the restart.
+        """
+
+        for item in discarded:
+            self._settle_rejected(item.entry, item.error())
 
     def _settle_committed(self, item: QueuedMutation, value: Any, commit_cursor: Optional[int]) -> None:
         # The overlay is confirmed BEFORE the caller is told, so the gapless drop

@@ -39,6 +39,19 @@ module Lunora
     end
   end
 
+  # A write the queue let go of without sending it, and the coded reason.
+  #
+  # Returned rather than rejected in place, which is the whole point: the client
+  # calls into this queue with its own Mutex held (see OfflineQueue), and a
+  # rejection handler rolls optimistic layers back — which needs that same Mutex.
+  # Ruby's Mutex is not reentrant, so invoking it here raised a ThreadError that
+  # the queue's own rescue then swallowed: the evicted write never rolled back and
+  # never settled. The caller settles these once it has released the lock.
+  Discarded = Struct.new(:entry, :code, :message) do
+    # The coded error this write settles with.
+    def error = OfflineError.new(code, message)
+  end
+
   # One write waiting for the socket to come back.
   #
   # +id+ is the stable idempotency key the replay sends as x-lunora-mutation-id,
@@ -135,6 +148,11 @@ module Lunora
   # with the owning client's lock held (which is what Client does) or from one
   # thread.
   #
+  # Nothing here invokes a consumer's callback, which is what makes calling it
+  # under that lock safe: every method that lets go of a write RETURNS it as a
+  # Discarded instead, and the client settles those once it has released the
+  # lock. See Discarded for what the alternative cost.
+  #
   # The persistence adapter is any object answering +append+, +load+, +remove+
   # and +clear+, SYNCHRONOUSLY. The browser client's is async because IndexedDB
   # is; a consumer here injects whatever it likes and owns its own threading,
@@ -153,12 +171,11 @@ module Lunora
     attr_reader :queue_before_first_connect
 
     def initialize(max_items: DEFAULT_MAX_ITEMS, queue_before_first_connect: false, persistence: nil, version: nil,
-                   on_evict: nil, on_size_change: nil, on_persistence_error: nil)
+                   on_size_change: nil, on_persistence_error: nil)
       @max_items = max_items
       @queue_before_first_connect = queue_before_first_connect
       @persistence = persistence
       @version = version
-      @on_evict = on_evict
       @on_size_change = on_size_change
       @on_persistence_error = on_persistence_error
       @items = []
@@ -169,19 +186,25 @@ module Lunora
     # A snapshot of the queued writes, oldest first.
     def items = @items.dup
 
+    # Add a write to the back, persist it, and cap the queue. Returns whatever the
+    # cap evicted, for the caller to report.
     def enqueue(entry)
       entry.id ||= Lunora.random_id
       @items << entry
 
       persist("append", entry.id) { @persistence.append(entry.to_record(@version)) } unless @persistence.nil?
 
-      evict_overflow
+      evicted = evict_overflow
       notify_size
+
+      evicted
     end
 
-    # Restore writes persisted in a prior session, returning the distinct shard
-    # keys of the records that SURVIVED so the caller can open exactly those
-    # sockets to trigger a flush. A no-op with no adapter configured.
+    # Restore writes persisted in a prior session.
+    #
+    # Returns the distinct shard keys of the records that SURVIVED — so the caller
+    # can open exactly those sockets to trigger a flush — alongside whatever the
+    # capacity cap evicted. A no-op with no adapter configured.
     #
     # Restored records are UNSHIFTED ahead of whatever is already queued.
     # +hydrate+ runs after construction (a durable load takes time), so a write
@@ -190,7 +213,7 @@ module Lunora
     # Appending would let a boot-time write replay first and last-writer-wins
     # clobber newer data with stale.
     def hydrate
-      return [] if @persistence.nil?
+      return [[], []] if @persistence.nil?
 
       # A Hash rather than a Set so the file needs no extra require on 3.1,
       # where Set is not yet autoloaded.
@@ -215,7 +238,7 @@ module Lunora
 
       # A store holding more than max_items (the cap was lowered between
       # sessions, or writes piled up across restarts) must not bypass it.
-      evict_overflow
+      evicted = evict_overflow
       notify_size
 
       # Shard keys are read AFTER eviction, from the entries that actually
@@ -223,7 +246,9 @@ module Lunora
       # so a key gathered beforehand can name a shard with nothing queued.
       survivors = {}.compare_by_identity
       @items.each { |item| survivors[item] = true }
-      restored.select { |entry| survivors.key?(entry) }.map(&:shard_key).uniq
+      shard_keys = restored.select { |entry| survivors.key?(entry) }.map(&:shard_key).uniq
+
+      [shard_keys, evicted]
     end
 
     # Remove and return queued writes, oldest first. With no block this drains
@@ -260,10 +285,9 @@ module Lunora
       notify_size
     end
 
-    # Drop the writes whose precondition no longer holds, rejecting each, and
-    # return them. Run at the start of a flush to weed out writes whose
-    # assumptions died while the client was offline; the admitted writes keep
-    # their FIFO order.
+    # Drop and return the writes whose precondition no longer holds. Run at the
+    # start of a flush to weed out writes whose assumptions died while the client
+    # was offline; the admitted writes keep their FIFO order.
     def drain_conflict
       conflicted, kept = @items.partition { |item| !item.precondition.nil? && !item.precondition.call }
       return [] if conflicted.empty?
@@ -271,12 +295,9 @@ module Lunora
       @items = kept
       notify_size
 
-      conflicted.each do |item|
-        settle_rejected(item, OfflineError.new(OFFLINE_PRECONDITION_FAILED,
-                                               "offline mutation skipped: precondition failed before replay"))
+      conflicted.map do |item|
+        Discarded.new(item, OFFLINE_PRECONDITION_FAILED, "offline mutation skipped: precondition failed before replay")
       end
-
-      conflicted
     end
 
     # Forget one write's durable record, after it has terminally settled.
@@ -286,7 +307,8 @@ module Lunora
       persist("remove", mutation_id) { @persistence.remove(mutation_id) }
     end
 
-    # Reject every pending write so no caller waits on a dead client.
+    # Empty the queue and return every pending write, so none is left waiting on a
+    # dead client.
     #
     # Durable storage is left INTACT on purpose: closing must not discard writes
     # a future session will restore. Use the adapter's own +clear+ to purge them.
@@ -295,7 +317,7 @@ module Lunora
       @items = []
       notify_size
 
-      drained.each { |item| settle_rejected(item, OfflineError.new(CLIENT_CLOSED, "client closed with the write still queued")) }
+      drained.map { |item| Discarded.new(item, CLIENT_CLOSED, "client closed with the write still queued") }
     end
 
     private
@@ -303,25 +325,20 @@ module Lunora
     # Drop from the FRONT (the oldest) until the queue is within capacity. Shared
     # by +enqueue+ and +hydrate+ so an overflow always drops the same way
     # regardless of which side pushed past the cap.
+    #
+    # The dropped entries are returned, never rejected here — a hydrated record
+    # has no live caller, so the caller reporting them is the only thing that
+    # keeps an eviction from dropping a durable write in total silence.
     def evict_overflow
+      evicted = []
+
       while @items.length > @max_items
         dropped = @items.shift
         unpersist(dropped.id)
-        error = OfflineError.new(OFFLINE_QUEUE_OVERFLOW, "offline queue overflow")
-        settle_rejected(dropped, error)
-
-        # Also reported to the evict observer: a hydrated record has no live
-        # caller, so without this an eviction would drop a durable write in total
-        # silence.
-        @on_evict&.call(dropped, error)
+        evicted << Discarded.new(dropped, OFFLINE_QUEUE_OVERFLOW, "offline queue overflow")
       end
-    end
 
-    def settle_rejected(item, error)
-      item.on_reject&.call(error)
-    rescue StandardError
-      # A consumer's rejection handler raising is not this queue's problem.
-      nil
+      evicted
     end
 
     def persist(operation, mutation_id)
