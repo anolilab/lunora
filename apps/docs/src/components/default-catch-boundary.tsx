@@ -16,13 +16,18 @@ import { ArticleHeader } from "@/kit/page-header";
  * renders this in place of whatever the reader asked for, so it should not look
  * like the app fell over.
  *
- * The message is shown, the stack is not — in production a stack trace is a
- * description of the server's internals handed to whoever provoked it. In dev
- * it goes to the console, where the person who can act on it is already
+ * Nothing about the thrown error reaches the reader in production. A route
+ * error can carry the text of an upstream response or a description of the
+ * server's internals, and this boundary renders for whoever provoked it, so
+ * production gets one fixed sentence. In dev both the message and the full
+ * error go to the console, where the person who can act on them is already
  * looking.
  */
 
 const isError = (value: unknown): value is Error => value instanceof Error;
+
+/** What the reader is told when the real reason is not theirs to see. */
+const PUBLIC_MESSAGE = "The page could not be rendered.";
 
 const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
     const router = useRouter();
@@ -31,8 +36,10 @@ const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
         strict: false,
     });
 
-    // eslint-disable-next-line no-console -- the stack is not rendered, so this is the only place a developer can see it
-    console.error("Route error:", error);
+    if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console -- dev only, and the only place a developer can see the stack
+        console.error("Route error:", error);
+    }
 
     const handleTryAgain = (): void => {
         router.invalidate().catch(() => {
@@ -44,7 +51,7 @@ const DefaultCatchBoundary = ({ error }: ErrorComponentProps): JSX.Element => {
         router.history.back();
     };
 
-    const message = isError(error) ? error.message : "The page could not be rendered.";
+    const message = import.meta.env.DEV && isError(error) ? error.message : PUBLIC_MESSAGE;
 
     return (
         <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
