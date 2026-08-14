@@ -1,6 +1,19 @@
 ---
 title: Generated code
 description: What @lunora/codegen emits from your schema.ts, and how api / Id / Doc keep server and client in sync.
+related:
+    - to: /docs/concepts/schema
+      note: "`defineSchema` / `defineTable`, the input to codegen"
+    - to: /docs/concepts/queries-mutations
+      note: "the functions `api` references"
+    - to: /docs/concepts/indexes
+      note: "what the typed `ctx.db` query builder exposes"
+    - to: /docs/packages/codegen
+      note: "the emitter package"
+    - to: /docs/packages/react
+      note: "consuming `api` from hooks"
+    - to: /docs/concepts/advisors
+      note: "the static lints run during codegen"
 ---
 
 `@lunora/codegen` reads your `schema.ts` (and the functions it discovers) and
@@ -12,13 +25,13 @@ error, not a runtime surprise.
 
 Three files are emitted from `schema.ts`:
 
-| File           | What it gives you                                                                |
-| -------------- | -------------------------------------------------------------------------------- |
-| `api.ts`       | the typed `api.*` (public) and `internal.*` (server-only) function registries    |
-| `server.ts`    | the project-typed server helpers — `query`/`mutation`/`action`, `v`, typed `ctx` |
-| `dataModel.ts` | the data-model types — `Id<"table">`, `Doc<"table">`, and insert/document shapes |
+| File           | What it gives you                                                               |
+| -------------- | ------------------------------------------------------------------------------- |
+| `api.ts`       | the typed `api.*` (public) and `internal.*` (server-only) function registries   |
+| `server.ts`    | the project-typed server helpers: `query`/`mutation`/`action`, `v`, typed `ctx` |
+| `dataModel.ts` | the data-model types: `Id<"table">`, `Doc<"table">`, and insert/document shapes |
 
-## `api.ts` — function references
+## `api.ts`: function references
 
 `api` is a typed registry of your **public** functions; `internal` is the same
 registry for functions you mark internal. Each entry is a `FunctionReference`
@@ -40,7 +53,7 @@ accidentally call one from the browser. Internal functions are reachable only
 server-side via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`, passing an
 `internal.*` reference.
 
-## `server.ts` — typed helpers
+## `server.ts`: typed helpers
 
 `server.ts` re-exports the procedure builders and `v` validators **bound to your
 schema**, so `ctx.db` knows your tables. Author functions by importing from the
@@ -48,14 +61,14 @@ generated `server` (not the base package); then `ctx.db.query("messages")`,
 `ctx.db.insert("messages", …)`, and `ctx.db.get(id)` are all typed against your
 real schema with no casts.
 
-## `dataModel.ts` — `Id` and `Doc`
+## `dataModel.ts`: `Id` and `Doc`
 
 Two types you reach for constantly:
 
-- **`Id<"table">`** — a branded string id. It carries its table name in the type,
+- **`Id<"table">`**: a branded string id. It carries its table name in the type,
   so `ctx.db.get(id)` resolves to the right document type and you can't pass a
   `users` id where a `messages` id is expected.
-- **`Doc<"table">`** — the full stored document shape for a table, including the
+- **`Doc<"table">`**: the full stored document shape for a table, including the
   built-in `_id` and `_creationTime`.
 
 ```ts
@@ -68,7 +81,7 @@ function format(message: Doc<"messages">): string {
 ```
 
 `dataModel.ts` imports nothing. It carries only the shapes derived from your
-schema, so a sibling package — a web app, another Worker — can compile it (and
+schema, so a sibling package (a web app, another Worker) can compile it (and
 `api.ts` through it) with `@lunora/client` alone. The query-DSL bindings that
 need `@lunora/server` live in `server.ts` instead, which only your function code
 imports. See [Monorepos and IaC](/docs/concepts/monorepos-and-iac#consuming-the-generated-api-from-a-sibling-package)
@@ -105,8 +118,8 @@ from your `package.json` on every feature install, with no prompt.
 
 The paths excluded are `lunora/_generated/`, `lunora/.lunora-schema.json`,
 `lunora.advisor.map.json`, `.lunora/`, and `.wrangler/`. Two of those are
-committed on purpose — the schema-drift baseline is the whole point of the
-[deploy gate](/docs/concepts/migrations) — which is why `.gitignore` alone does
+committed on purpose, since the schema-drift baseline is the whole point of the
+[deploy gate](/docs/concepts/migrations), which is why `.gitignore` alone does
 not cover it.
 
 Each tool gets its own mechanism, because there is no shared ignore format:
@@ -120,7 +133,7 @@ Each tool gets its own mechanism, because there is no shared ignore format:
 
 <Callout type="info">
     Two cases are reported for you to apply by hand rather than written: an **existing** ESLint flat config (it is arbitrary JavaScript, so it is not rewritten
-    on your behalf) and a config **inherited from a workspace root** (writing a nested one would shadow it — ESLint 9 stops at the first flat config it finds
+    on your behalf) and a config **inherited from a workspace root** (writing a nested one would shadow it: ESLint 9 stops at the first flat config it finds
     walking up, so a package-level file holding only `ignores` would silently switch off every rule the root enforced). Both print the exact entry to add.
 </Callout>
 
@@ -144,13 +157,13 @@ lunora codegen
 
 One run is enough. Codegen emits the declaration surface (`dataModel.ts`,
 `server.ts`) before it infers any handler's return type, so a single pass
-converges even from a cold `_generated/` or after adding a table — you do not
-need to run it twice, and you do not need a loop that re-runs it until the output
-stops changing. A failed run writes nothing, leaving the previous output intact.
+converges even from a cold `_generated/` or after adding a table. You do not need
+to run it twice, and you do not need a loop that re-runs it until the output
+stops changing. A failed run writes nothing, so the previous output stays intact.
 
 ### Running your own step after codegen
 
-`lunora prepare` and `lunora deploy` generate **in-process** — they do not shell
+`lunora prepare` and `lunora deploy` generate **in-process**: they do not shell
 out to your project's `codegen` script. So wrapping the CLI in your own script
 does not make a post-step part of a deploy:
 
@@ -160,7 +173,7 @@ does not make a post-step part of a deploy:
 ```
 
 Declare it as `postcodegen` instead. `prepare` and `deploy` invoke it directly,
-on every package manager — and npm, pnpm and bun also run `postX` after `run X`
+on every package manager, and npm, pnpm and bun also run `postX` after `run X`
 automatically, so it fires for your own `codegen` script there too:
 
 ```jsonc
@@ -176,15 +189,6 @@ A non-zero exit fails the run, so a deploy cannot ship output your post-step
 rejected.
 
 <Callout type="warn">
-    **Yarn Berry (2+) does not run automatic `postX` hooks.** `lunora prepare` and `lunora deploy` still invoke `postcodegen` themselves — that part is the
-    CLI's, not the package manager's — but `yarn codegen` will not. Chain it explicitly there: `"codegen": "lunora codegen && yarn postcodegen"`.
+    **Yarn Berry (2+) does not run automatic `postX` hooks.** `lunora prepare` and `lunora deploy` still invoke `postcodegen` themselves (that part is the
+    CLI's, not the package manager's), but `yarn codegen` will not. Chain it explicitly there: `"codegen": "lunora codegen && yarn postcodegen"`.
 </Callout>
-
-## See also
-
-- [Schema](/docs/concepts/schema) — `defineSchema` / `defineTable`, the input to codegen.
-- [Queries & mutations](/docs/concepts/queries-mutations) — the functions `api` references.
-- [Indexes](/docs/concepts/indexes) — what the typed `ctx.db` query builder exposes.
-- [@lunora/codegen](/docs/packages/codegen) — the emitter package.
-- [@lunora/react](/docs/packages/react) — consuming `api` from hooks.
-- [Advisors](/docs/concepts/advisors) — the static lints run during codegen.

@@ -3,7 +3,7 @@ title: Caching
 description: Edge caching with Cloudflare Workers Cache — declarative headers on HTTP routes and programmatic cache purging from actions.
 ---
 
-Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design — not cacheable at the edge — so caching is exposed only on `httpRoute` HTTP endpoints and `httpAction` handlers.
+Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design and not cacheable at the edge, so caching is exposed only on `httpRoute` HTTP endpoints and `httpAction` handlers.
 
 ## Enabling Workers Cache
 
@@ -17,7 +17,7 @@ Add the `cache` block to `wrangler.jsonc`:
 }
 ```
 
-When `cache.enabled` is `true`, the dev server (`lunora dev` or the Vite plugin) and the CLI (`lunora prepare` / `lunora deploy`) automatically bump `compatibility_date` to at least `2026-05-01` if it is lower. You do not need to know or set the date manually — Lunora reconciles it for you, preserving comments and formatting in `wrangler.jsonc`.
+When `cache.enabled` is `true`, the dev server (`lunora dev` or the Vite plugin) and the CLI (`lunora prepare` / `lunora deploy`) automatically bump `compatibility_date` to at least `2026-05-01` if it is lower. You do not need to know or set the date manually. Lunora reconciles it for you and preserves the comments and formatting in `wrangler.jsonc`.
 
 You can also enable cache per entrypoint in `exports`:
 
@@ -34,7 +34,7 @@ You can also enable cache per entrypoint in `exports`:
 
 ## Declarative cache headers on `httpRoute`
 
-The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the response — both JSON and streaming (SSE) responses.
+The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the response, both JSON and streaming (SSE).
 
 | Method                 | Header          | Purpose                                             |
 | ---------------------- | --------------- | --------------------------------------------------- |
@@ -80,8 +80,8 @@ export const refreshProducts = action.action(async ({ ctx }) => {
 
 `ctx.cache.purge` accepts:
 
-- `tags?: string[]` — purge every cached response whose `Cache-Tag` matches any listed tag.
-- `purgeEverything?: boolean` — wipe the entire cache for this worker.
+- `tags?: string[]` purges every cached response whose `Cache-Tag` matches any listed tag.
+- `purgeEverything?: boolean` wipes the entire cache for this worker.
 
 ## Why only actions?
 
@@ -96,9 +96,9 @@ needs code.
 
 ### If the action is fetching from an upstream API, cache the fetch
 
-Model metadata, pricing tables, currency rates — anything you read over HTTP and
-that changes on a slow clock — should be cached at the `fetch`, not at the
-action. Cloudflare does this for you:
+Anything you read over HTTP that changes on a slow clock (model metadata, pricing
+tables, currency rates) should be cached at the `fetch`, not at the action.
+Cloudflare does this for you:
 
 ```ts
 const response = await fetch("https://api.example.com/models", {
@@ -107,12 +107,13 @@ const response = await fetch("https://api.example.com/models", {
 });
 ```
 
-No Lunora code, no table, no TTL bookkeeping, and every colocation shares one
-cached copy. Reach for the recipe below only when there is no URL to key on.
+That needs no Lunora code, no table and no TTL bookkeeping, and every colocation
+shares one cached copy. Reach for the recipe below only when there is no URL to
+key on.
 
 ### Otherwise, memoize into a table
 
-For a genuinely computed result — an embedding, a derived summary — store it in
+For a genuinely computed result (an embedding, a derived summary), store it in
 a table keyed by a hash of the arguments:
 
 ```ts
@@ -199,13 +200,13 @@ return fresh;
 ```
 
 <Callout type="info">
-    **The Durable Object makes the *claim* atomic — that is the part you would otherwise have to build.** A cold key with a hundred concurrent callers is the
+    **The Durable Object makes the *claim* atomic, and that is the part you would otherwise have to build.** A cold key with a hundred concurrent callers is the
     classic stampede. `claimOrRead` is a mutation, and a mutation runs to completion inside one Durable Object without interleaving, so exactly one caller can
     observe "no live lease" and take it. The other ninety-nine get `claimed: false` on their first round-trip.
 
     What is **not** free: the compute itself has to stay outside the mutation. A mutation runs in a transaction that can roll back and must not do slow external
-    I/O, so the winner computes in the action and writes back after. That means the lease is what serialises callers, not the write — and a lease needs a
-    duration, so pick one longer than the work and shorter than your patience.
+    I/O, so the winner computes in the action and writes back after. That means the lease is what serialises callers, not the write. A lease needs a duration,
+    so pick one longer than the work and shorter than your patience.
 
     This is why Lunora ships no cache add-on: the hard half is the atomic claim, and a Durable Object gives you that in a single mutation.
 
@@ -251,4 +252,4 @@ Uncomment the cache lines and adjust the values for your use case.
 2. **Use `stale-while-revalidate` for reads.** `public, max-age=300, stale-while-revalidate=3600` means Cloudflare serves from cache for 5 minutes, then revalidates in the background for up to an hour. Your backend sees reduced load.
 3. **Vary on content negotiation.** If your endpoint returns different formats based on `Accept` or compresses differently per `Accept-Encoding`, add `.vary("Accept-Encoding")` so Cloudflare stores separate variants.
 4. **Invalidate eagerly, cache generously.** Cache reads for a long TTL, then purge immediately when a mutation changes the underlying data. A short TTL is a band-aid for missing invalidation.
-5. **Keep cache headers deterministic.** `.cacheControl()` and `.cacheTag()` accept plain strings. There's no built-in parsing or validation — a typo in the header value is sent verbatim. Test your headers with `curl -I` or the Cloudflare dashboard.
+5. **Keep cache headers deterministic.** `.cacheControl()` and `.cacheTag()` accept plain strings. There's no built-in parsing or validation, so a typo in the header value is sent verbatim. Test your headers with `curl -I` or the Cloudflare dashboard.

@@ -106,6 +106,26 @@ export default defineConfig(async ({ mode }) => {
                         url.searchParams.set("progressive", "true");
                     }
 
+                    // Product captures ship as 2880-wide PNGs and are never
+                    // displayed above ~1024 CSS pixels. Re-encoding to WebP at
+                    // 2048 still covers a 2x screen exactly and takes the hero
+                    // capture from 185K to 44K.
+                    //
+                    // Applied here rather than as import query strings so the
+                    // call sites stay plain `.png` imports and keep their types.
+                    // Every capture is 2880x1760, so 2048 always yields
+                    // 2048x1252 and the width/height attributes at the call
+                    // sites hold for all of them.
+                    if (url.pathname.endsWith(".png") && url.pathname.includes("/assets/studio/")) {
+                        if (!url.searchParams.get("format")) {
+                            url.searchParams.set("format", "webp");
+                        }
+
+                        if (!url.searchParams.get("w")) {
+                            url.searchParams.set("w", "2048");
+                        }
+                    }
+
                     return url.searchParams;
                 },
             }),
@@ -159,6 +179,20 @@ export default defineConfig(async ({ mode }) => {
             // resvg-wasm: load from node_modules at runtime, don't bundle (avoids the
             // bundler resolving its .wasm asset at build time).
             external: ["@resvg/resvg-wasm"],
+            // Bundle c15t into the server output instead of resolving it from
+            // node_modules at runtime.
+            //
+            // `@c15t/react` is imported by `__root.tsx`, so it is in the SSR graph
+            // for every route. Left external, the deployed function imports it by
+            // specifier — and it reaches `@c15t/ui/styles/primitives/*.module.js`
+            // through a wildcard `exports` map, which Netlify's file tracer does
+            // not follow. Those files were therefore never uploaded, and the
+            // function threw ERR_MODULE_NOT_FOUND on cold start: every invocation
+            // returned 502, taking out `/api/og`, the 404 page, and the loader
+            // call behind every client-side navigation. Prerendered pages hid it,
+            // because `preferStatic` serves those without touching the function —
+            // which is why a hard refresh worked and clicking a link did not.
+            noExternal: ["@c15t/react", "@c15t/ui"],
             optimizeDeps: {
                 exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-wasm"],
                 include: ["react", "react-dom"],

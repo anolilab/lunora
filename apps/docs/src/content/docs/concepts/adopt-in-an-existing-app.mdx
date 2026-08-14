@@ -9,9 +9,6 @@ own Worker with its own routes, and a data layer it can't switch off on a Tuesda
 Lunora comes in beside all of that, takes over one slice of sync, and proves itself
 before anything is deleted.
 
-This page is that path: what to keep, what to wire, and the specific things that
-will otherwise cost you an afternoon.
-
 <Callout type="info">
     **Keep your auth.** The single most common wrong turn is standing up a second signup stack. Don't. Your existing session authority stays authoritative;
     Lunora reads it.
@@ -56,7 +53,7 @@ export default createWorker({
 ### Memoize it
 
 `resolveIdentity` is called **once per RPC and once per fan-out leg**, so a
-cross-shard query verifies the session once per shard — and the
+cross-shard query verifies the session once per shard, and the
 `createAuth(...)` line above runs every time too. Wrap it:
 
 ```ts
@@ -66,9 +63,9 @@ resolveIdentity: memoizeIdentityPerRequest(async (request, env) => { … }),
 ```
 
 `memoizeIdentityPerRequest` is keyed on the `Request` object, so it cannot serve a
-stale identity — it just stops the duplication. If verification is genuinely expensive
+stale identity; it just stops the duplication. If verification is genuinely expensive
 (a JWKS fetch, a database read), `memoizeIdentity(resolver, { ttlMs: 5000 })` also
-caches across requests. `ttlMs` is in **milliseconds** — `5000` is five seconds — and it
+caches across requests. `ttlMs` is in **milliseconds** (`5000` is five seconds), and it
 is your revocation delay, so keep it to a few seconds.
 
 ## Declare ownership once
@@ -97,13 +94,13 @@ import { deny } from "lunorash/server";
 where: (ctx, { channelId }) => (ctx.auth.userId === null ? deny() : { channelId }),
 ```
 
-`deny()` is `{ OR: [] }` — a disjunction over zero branches, which matches nothing.
+`deny()` is `{ OR: [] }`, a disjunction over zero branches, which matches nothing.
 The plausible-looking `{}` is its exact opposite and replicates the entire table,
 silently. `false` works as sugar for the same thing.
 
 ## Call Lunora from your own Worker
 
-Your app probably has server-side code that needs Lunora data — an MCP server, a
+Your app probably has server-side code that needs Lunora data: an MCP server, a
 webhook handler, a cron, an admin route. Don't reach for the raw DO stub and
 hand-roll the protocol. Use the typed client:
 
@@ -124,14 +121,14 @@ under that user's RLS context. Pass `{ system: false }` if you want it to behave
 exactly like an end-user RPC.
 
 <Callout type="warn">
-    `createShardClient` does **not** run `authorizeShard` — you chose the shard key. Verify the identity owns the shard first, normally the same one-line check
-    your worker's `authorizeShard` does.
+    `createShardClient` does **not** run `authorizeShard`, because you chose the shard key. Verify the identity owns the shard first, normally the same one-line
+    check your worker's `authorizeShard` does.
 </Callout>
 
 ## Dev proxy: two silent failures
 
 If Vite serves your app and proxies `/_lunora` to a separately-running worker, two
-things go wrong in a way that looks identical — the page loads, HTTP RPC answers, and
+things go wrong in a way that looks identical: the page loads, HTTP RPC answers, and
 the live query never arrives, so the UI sits on its loading state with nothing in the
 console.
 
@@ -180,7 +177,7 @@ and your server-side code (MCP, webhooks) agree about which backend owns their d
 
 ### Move the data
 
-One-shot import per user. Chunk it — a per-row loop pays a round-trip _and_ a
+One-shot import per user. Chunk it: a per-row loop pays a round-trip _and_ a
 watermark wait per row:
 
 ```ts
@@ -193,13 +190,13 @@ await client.importRows(api.migrate.importNodes, rows, {
 ```
 
 Back the receiving mutation with `ctx.db.insertMany(...)` (or `insertManyUnsafe` for
-data you vouch for). For the reverse — a user leaving, or GDPR erasure — use
+data you vouch for). For the reverse (a user leaving, or GDPR erasure), use
 `ctx.db.wipeShard()` from an `internalMutation`.
 
 ## Test it without a worker
 
 Don't stand up a worker and a DO per e2e test, and don't hand-roll the wire protocol
-either — the watermark bookkeeping is easy to get subtly wrong, and then the failure
+either. The watermark bookkeeping is easy to get subtly wrong, and then the failure
 looks like a Lunora bug:
 
 ```ts
@@ -223,7 +220,7 @@ lunora.failWrites("CONFLICT"); // reproduce a rejected mutation
 ## When something is stuck
 
 `client.debug()` answers the questions that are otherwise unanswerable from outside
-the client — is the socket open, what watermark has the server confirmed for this
+the client: is the socket open, what watermark has the server confirmed for this
 shard, has this subscription been acked, is anything queued:
 
 ```ts

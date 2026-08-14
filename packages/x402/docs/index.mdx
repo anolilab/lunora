@@ -4,17 +4,17 @@ description: Agentic payments over the x402 protocol — charge agents per reque
 ---
 
 [x402](https://x402.org) turns HTTP `402 Payment Required` into a
-machine-payable rail: no accounts, no API keys, no webhooks — an agent pays per
+machine-payable rail with no accounts, API keys, or webhooks: an agent pays per
 request in stablecoin (USDC) and a third-party **facilitator** verifies and
 settles the payment on-chain.
 
 `@lunora/x402` gives a Lunora app both sides of that exchange, as two
 independently tree-shakeable subpaths:
 
-| Subpath               | Rail       | Who uses it                                                                                        |
-| --------------------- | ---------- | -------------------------------------------------------------------------------------------------- |
-| `@lunora/x402/charge` | **charge** | Your deployment **sells** — gate an HTTP-action route, a procedure, or an MCP tool behind a price. |
-| `@lunora/x402/pay`    | **pay**    | Your action/agent **buys** — pay an x402-gated resource on the way out.                            |
+| Subpath               | Rail       | Who uses it                                                                                       |
+| --------------------- | ---------- | ------------------------------------------------------------------------------------------------- |
+| `@lunora/x402/charge` | **charge** | Your deployment **sells**: gate an HTTP-action route, a procedure, or an MCP tool behind a price. |
+| `@lunora/x402/pay`    | **pay**    | Your action/agent **buys**: pay an x402-gated resource on the way out.                            |
 
 The root export (`@lunora/x402`) carries only the shared config/types
 (`X402Network`, `FacilitatorConfig`, price helpers).
@@ -40,14 +40,14 @@ bun add @lunora/x402
 </Tabs>
 
 **Networks.** EVM chains (Base, Arbitrum, Ethereum, Polygon, …) are signed via
-`@x402/evm` + viem — pass a raw CAIP-2 id for chains without a friendly alias.
+`@x402/evm` + viem; pass a raw CAIP-2 id for chains without a friendly alias.
 Solana is signed via `@x402/svm`. The facilitator defaults to the public,
 Coinbase-operated `https://x402.org/facilitator` (no key required); override it
 via `facilitator: { url, headers }` for a self-hosted or keyed CDP facilitator.
 
-## The charge rail — sell a resource
+## The charge rail: sell a resource
 
-The server side needs only a **recipient address** — no private key — because
+The server side needs only a **recipient address**, not a private key, because
 the facilitator performs settlement. Every gated surface runs the same
 four-step flow: unpaid request → `402` + `PAYMENT-REQUIRED` challenge; the
 client's `X-PAYMENT` payload is verified (via the facilitator); then the
@@ -73,7 +73,7 @@ export const report = httpAction(
 (the handler's response is passed to settlement as transport context). A
 settlement failure on this path cannot undo a handler that already ran, so a
 handler gated with `withX402` **must be idempotent or compensatable** if it has
-side effects — a retried/duplicate charge attempt (or a settlement failure
+side effects: a retried/duplicate charge attempt (or a settlement failure
 after the handler already committed something) must not double-apply that
 effect.
 
@@ -93,12 +93,12 @@ const gate = createProcedureChargeGate({ network: "base", recipient: { evm: env.
 ```
 
 Each paid function bakes its own price and its `functionPath` as the challenge
-`resource`. Internal functions have no `.x402` — they are server-to-server and
+`resource`. Internal functions have no `.x402`: they are server-to-server and
 never client-reachable, so there is nothing to charge.
 
 **Settlement order:** the procedure gate settles **before** dispatching the
 function (settle-first), because dispatch is what commits a paid mutation's
-writes. A settlement failure therefore means the function never runs at all —
+writes. A settlement failure therefore means the function never runs at all;
 there is no window where a paid mutation's write commits without the payment
 having settled. Once settlement succeeds the payment is final (on-chain); a
 function failure after that point is a normal application error, not a payment
@@ -121,16 +121,16 @@ mcp.paidTool({ name: "premium_report", description: "the paid report", inputSche
 ### Receipts
 
 `onReceipt` is an opt-in, one-way telemetry sink fired once per settled
-payment — best-effort, never blocking the paid response. Use it (with
+payment: best-effort, never blocking the paid response. Use it (with
 `toPaymentEventRow`) to mirror x402 revenue into a durable table or
 `@lunora/payment`'s `events` table so it surfaces in Studio. On Workers, wire
 the request's `ctx.waitUntil` to the gate's `deps.waitUntil` (where the caller
-has one to give — e.g. `@lunora/runtime`'s `x402Charge` seam) so the sink is
+has one to give, e.g. `@lunora/runtime`'s `x402Charge` seam) so the sink is
 registered with `waitUntil` and survives past the response; otherwise
 workerd cancels the in-flight sink promise at isolate teardown once the
 response returns, before an async sink (e.g. a database insert) resolves.
 
-## The pay rail — buy a resource
+## The pay rail: buy a resource
 
 The pay rail spends real money autonomously, so it is **ActionCtx-only** (the
 only ctx with outbound network + secret access) and **fail-closed**: the
@@ -153,30 +153,30 @@ const pay = await createX402Pay(
 const res = await pay.fetch("https://api.example/paid-report");
 ```
 
-The returned `fetch` transparently answers `402` challenges — sign, retry,
-done — within the policy.
+The returned `fetch` answers `402` challenges transparently, signing and
+retrying within the policy.
 
 ### Wallet custody
 
 The `signer` config selects who holds the key, with three shapes:
 
-- **`{ type: "raw-key", secretName }`** — a self-custodied 32-byte private key
+- **`{ type: "raw-key", secretName }`**: a self-custodied 32-byte private key
   read from `ctx.secrets` (viem on EVM, a `@solana/kit` keypair on Solana).
   Works on **EVM and Solana**. Simplest.
-- **`{ type: "cdp", account }`** — a Coinbase-managed
+- **`{ type: "cdp", account }`**: a Coinbase-managed
   [CDP](https://docs.cdp.coinbase.com) server wallet via the optional
   `@coinbase/cdp-sdk` peer. The SDK gets-or-creates the named account and
   signs the EIP-712 authorization, so the key never leaves Coinbase. The three
   CDP credentials are read from `ctx.secrets` (`CDP_API_KEY_ID` /
   `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET` by default, each overridable).
-  **EVM only today**: CDP-managed Solana custody throws `NOT_IMPLEMENTED` — a
-  CDP Solana account is not a `@solana/kit` signer. Build a `@solana/kit`
+  **EVM only today**: CDP-managed Solana custody throws `NOT_IMPLEMENTED`,
+  because a CDP Solana account is not a `@solana/kit` signer. Build a `@solana/kit`
   signer around your CDP account and pass it via the `"signer"` escape hatch,
   or use `"raw-key"`.
-- **`{ type: "signer", signer }`** — the **escape hatch**: hand in a signer
+- **`{ type: "signer", signer }`**: the **escape hatch**. Hand in a signer
   you built yourself. Any custody provider (Turnkey, Privy, Fireblocks, an
   AWS/GCP KMS `toAccount`, CDP's viem adapter, …) works once adapted to the
-  structural `ClientEvmSigner` (EVM) or `ClientSvmSigner` (Solana) shape —
+  structural `ClientEvmSigner` (EVM) or `ClientSvmSigner` (Solana) shape;
   `@lunora/x402` takes no dependency on any provider's SDK, and no secret is
   read.
 
@@ -188,26 +188,26 @@ The `signer` config selects who holds the key, with three shapes:
 `SpendPolicy` is the security seam that keeps an autonomous wallet from
 overspending. At least one bound must be set or the rail refuses to build:
 
-| Field               | Meaning                                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `maxPerCall`        | Hard ceiling on a single payment, in USD.                                                                                      |
-| `maxPerRun`         | Hard ceiling on cumulative spend across the wallet's lifetime (the ctx, for `ctx.x402`).                                       |
-| `allowedAssets`     | Which stablecoins may be paid, each with its own `decimals`. Defaults to canonical USDC per friendly network.                  |
-| `allowedRecipients` | Only these `payTo` addresses may be paid.                                                                                      |
-| `allowedNetworks`   | Only these networks may be paid on.                                                                                            |
-| `onPaymentRequired` | Async approval gate called with the selected requirement before signing — return `false` to refuse. Use for human-in-the-loop. |
+| Field               | Meaning                                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `maxPerCall`        | Hard ceiling on a single payment, in USD.                                                                                     |
+| `maxPerRun`         | Hard ceiling on cumulative spend across the wallet's lifetime (the ctx, for `ctx.x402`).                                      |
+| `allowedAssets`     | Which stablecoins may be paid, each with its own `decimals`. Defaults to canonical USDC per friendly network.                 |
+| `allowedRecipients` | Only these `payTo` addresses may be paid.                                                                                     |
+| `allowedNetworks`   | Only these networks may be paid on.                                                                                           |
+| `onPaymentRequired` | Async approval gate called with the selected requirement before signing; return `false` to refuse. Use for human-in-the-loop. |
 
 Only `maxPerCall`, `maxPerRun`, or `onPaymentRequired` count as a bound.
 `allowedRecipients` / `allowedNetworks` / `allowedAssets` narrow _where_ money can
 go but cap no amount, so a policy carrying only allowlists is refused.
 
 Enforcement is fail-closed at every step. Requirement selection drops every offer
-that isn't in an allowed asset, over the per-call cap, or off the allowlists —
+that isn't in an allowed asset, over the per-call cap, or off the allowlists; if
 nothing survives, nothing is signed. A pre-signature guard then enforces the
 stateful per-run cap and the confirmation gate, _reserving_ the amount the moment
 the check passes so concurrent paid fetches can't each pass against the same
 running total; a failed signature releases the reservation. USD amounts are
-converted to atomic units digit-by-digit — no float drift can round a cap the
+converted to atomic units digit-by-digit, so no float drift can round a cap the
 wrong way.
 
 **Why the asset matters.** A 402 server names the token contract the payment
@@ -226,7 +226,7 @@ policy: {
 }
 ```
 
-Every entry must be dollar-pegged — the caps are USD and the per-run ledger sums
+Every entry must be dollar-pegged: the caps are USD and the per-run ledger sums
 atomic units, so a non-$1 asset mis-prices both. One run also stays locked to a
 single decimal precision: paying USDC on Base and USDC on Solana under one cap is
 fine (both 6-decimal), but mixing a 6- and an 18-decimal asset is refused rather
@@ -234,12 +234,12 @@ than summed into a meaningless total.
 
 The default list covers the networks with a friendly alias **except Ethereum
 mainnet** (`eip155:1`), which the underlying SDK ships no default stablecoin for.
-Paying there needs an explicit `allowedAssets` entry — without one every
+Paying there needs an explicit `allowedAssets` entry; without one every
 requirement is filtered out, which looks like a silent failure to pay.
 
 ## Safety notes
 
-- The pay rail is deliberately unavailable on queries and mutations — only
+- The pay rail is deliberately unavailable on queries and mutations; only
   actions can spend.
 - A failed rail build (e.g. an unbounded policy) is memoised, so a misconfigured
   wallet stays deterministically closed instead of retrying into a signature.

@@ -1,6 +1,15 @@
 ---
 title: Testing
 description: Unit-test queries, mutations, and actions in memory with lunoraTest — no worker, no network.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "the `query` / `mutation` / `action` functions the harness runs"
+    - to: /docs/frameworks/verify-live-loaders
+      note: "proving the full live-loader path"
+    - to: /docs/deployment
+      note: "the `lunora verify` CI gate"
+    - to: /docs/packages/testing
+      note: "full harness and mail-catcher reference"
 ---
 
 You test Lunora functions the same way you write them: as plain handlers that
@@ -35,7 +44,7 @@ bun add -D @lunora/testing
 database, builds the same `ctx.db` writer the real `ShardDO` builds, and returns
 a harness whose methods execute a registered function's handler directly. All
 methods share one database, so a write from a mutation is visible to a later
-query, which is exactly the reactivity guarantee your app relies on.
+query.
 
 ```ts
 import { defineSchema, defineTable, initLunora, v } from "lunorash/server";
@@ -263,10 +272,3 @@ Cloudflare account or `wrangler` login needed. Two things to wire up:
 pnpm lunora verify
 pnpm run test
 ```
-
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
-- [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — proving the full live-loader path
-- [Deployment](/docs/deployment) — the `lunora verify` CI gate
-- [@lunora/testing](/docs/packages/testing) — full harness and mail-catcher reference

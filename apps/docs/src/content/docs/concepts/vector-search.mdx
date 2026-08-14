@@ -1,6 +1,15 @@
 ---
 title: Vector search
 description: Typed Vectorize indexes on ctx.vectors — automatic write sync, similarity search, and RAG with embeddings.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "why search is on a query and embedding is on an action"
+    - to: /docs/packages/bindings
+      note: "full adapter reference (standalone indexes, sync internals, Studio panel)"
+    - to: /docs/packages/ai
+      note: "embeddings and the AI SDK helpers used for RAG"
+    - to: /docs/deployment
+      note: "wiring the `vectorize` binding"
 ---
 
 [`@lunora/bindings/vectors`](/docs/packages/bindings) is the Cloudflare
@@ -65,7 +74,7 @@ export default defineSchema({
 
 When the embedded text is derived from multiple columns, use the standalone
 `defineVectorIndex(...)` form with a `source.select(row)` projection. See the
-[package reference](/docs/packages/bindings#standalone--definevectorindexoptions)
+[package reference](/docs/packages/bindings#vectors--lunorabindingsvectors)
 for the full shape.
 
 ## Automatic write sync
@@ -105,7 +114,7 @@ reactive `query`.
 function. `filter` and `namespace` scope the search.
 
 `topK` is capped at 100 for id/score-only queries, and at 20 once the query also
-asks for the heavy payload — `returnValues: true` or `returnMetadata: "all"`.
+asks for the heavy payload (`returnValues: true` or `returnMetadata: "all"`).
 Over either ceiling the call is refused locally with a message naming which one
 applied, rather than being silently capped at the far side.
 
@@ -202,10 +211,3 @@ export const ShardDO = createShardDO({
 
 Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
 error on first use.
-
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations) — why search is on a query and embedding is on an action
-- [@lunora/bindings/vectors](/docs/packages/bindings) — full adapter reference (standalone indexes, sync internals, Studio panel)
-- [@lunora/ai](/docs/packages/ai) — embeddings and the AI SDK helpers used for RAG
-- [Deployment](/docs/deployment) — wiring the `vectorize` binding

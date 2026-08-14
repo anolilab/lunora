@@ -7,8 +7,8 @@ description: Optimistic, offline-first client data layer on TanStack DB.
 data layer: live, indexed client collections for reads, and a durable, retried
 **offline outbox** for writes. A sent message renders instantly, survives a
 reload or an offline window, is superseded by the real server row on
-acknowledgement, and rolls back if the server rejects it — without you
-hand-writing any sync glue.
+acknowledgement, and rolls back if the server rejects it. You write none of that
+sync glue yourself.
 
 It sits on top of `@lunora/client`'s transport (the same WebSocket subscriptions
 and RPC the React hooks use). You keep your schema and functions exactly as they
@@ -52,7 +52,7 @@ The generator reads `schema.ts` and `_generated/api.ts` and wires each table:
 
 - **reads** from the table's `list` query,
 - **`scopeBy`** for sharded tables (from their `shardBy`),
-- **writes** from the mutation that calls `ctx.db.insert("<table>", …)` — attributed
+- **writes** from the mutation that calls `ctx.db.insert("<table>", …)`, attributed
   by behaviour, with `toArgs` mapped from the mutation's real arguments.
 
 The result is a ready-to-use `createCollections(client)`:
@@ -96,8 +96,8 @@ export const createCollections = (client: LunoraClient) =>
 ```
 
 Build it once (it owns the outbox, so keep a single instance) and use it in your
-components. The collections it returns are the single source of truth per table —
-see [One source of truth per table](#one-source-of-truth-per-table):
+components. The collections it returns are the single source of truth per table.
+See [One source of truth per table](#one-source-of-truth-per-table):
 
 ```tsx
 import { useLiveQuery } from "@tanstack/react-db";
@@ -122,12 +122,12 @@ function Chat({ channelId }: { channelId: Id<"channels"> }) {
 
 Each table's rows live in exactly one place: the collection `defineCollections`
 created for it. Keep a **single `db` instance** and never mirror a collection's
-rows into a parallel store of your own — a hand-rolled cache, a global store, or
+rows into a parallel store of your own: a hand-rolled cache, a global store, or
 a second `createCollection`. The two can only diverge: an optimistic write, a
 rollback, or an incoming sync delta is applied to the Lunora collection, not to
 your copy.
 
-The failure is quiet. Code that reads the copy doesn't error — it reads **stale**
+The failure is quiet. Code that reads the copy doesn't error; it reads **stale**
 rows. A derived index (a tree, a search index, an undo capture) built from the
 copy runs against data that no longer matches what the UI renders through
 `useLiveQuery`, so the symptom is "this command does nothing" or a confusing
@@ -136,7 +136,7 @@ the _only_ read path:
 
 - Read through `db.collections.*` / `useLiveQuery` everywhere. Don't re-export
   rows from your own store into code that is supposed to be Lunora-backed.
-- Don't copy a collection out to "cache" it — it already is the live, indexed
+- Don't copy a collection out to "cache" it; it already is the live, indexed
   cache. Copy only for a concrete snapshot you pass by value (an export, a
   payload).
 - When adopting Lunora over an existing store, delete the old read paths rather
@@ -164,7 +164,7 @@ const { data } = useLiveQuery((q) =>
 );
 ```
 
-No extra server round-trip — the author name and ordering are derived from the
+No extra server round-trip: the author name and ordering are derived from the
 two synced collections.
 
 ## Writes — optimistic + durable outbox
@@ -173,10 +173,10 @@ Each `insert` binding produces an action under `db.actions.<table>`. Calling it:
 
 1. **inserts the optimistic row immediately** (so the UI updates with no latency),
 2. **persists the write to a durable outbox** (IndexedDB) and sends it via your
-   Lunora mutation, retrying with backoff until it succeeds — so a write made
+   Lunora mutation, retrying with backoff until it succeeds, so a write made
    offline is never lost and replays on reconnect,
 3. **supersedes the optimistic row** with the real server row on acknowledgement
-   (matched by id — see [client ids](#client-generated-ids)),
+   (matched by id, see [client ids](#client-generated-ids)),
 4. **rolls the optimistic row back** if the server _rejects_ the mutation (a
    validation or conflict error). Transient network/HTTP failures are retried,
    not rolled back.
@@ -194,9 +194,9 @@ await transaction.isPersisted.promise;
 Awaiting `transaction.isPersisted.promise` only works for the caller that
 holds the `transaction`. A write made in one session and replayed in the next
 (after a reload), or any fire-and-forget `db.actions.*` call, has no such
-awaiter — so a permanent rejection would roll the optimistic row back with no UI
+awaiter, so a permanent rejection would roll the optimistic row back with no UI
 signal. Pass `onWriteRejected` to get an aggregate, fire-and-forget-safe channel
-that fires once per **permanently** rejected write (a coded application error —
+that fires once per **permanently** rejected write (a coded application error:
 validation, RLS denial, conflict). Transient failures (offline, 5xx) are retried
 by the outbox, not reported here:
 
@@ -222,17 +222,17 @@ const db = defineCollections(client, defs, {
 
 `onStorageFailure` is the collection-layer counterpart to the standalone client's
 `offlineQueue.onPersistenceError`; `onLeadershipChange(isLeader)` is also
-available (informational — only the leader tab drains the outbox).
+available (informational: only the leader tab drains the outbox).
 
 This is the same durable-outbox and reconciliation model `@lunora/client`
-exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
-lower-level `persistence` + `queryCache` options, the service-worker app-shell
-recipe, and the connection-status APIs, if you want offline reads and writes
-without adopting the full TanStack DB collection layer.
+exposes directly. If you want offline reads and writes without adopting the
+TanStack DB collection layer, see [Offline-first](/docs/concepts/offline-first)
+for the lower-level `persistence` + `queryCache` options, the service-worker
+app-shell recipe, and the connection-status APIs.
 
 ## Scoped (sharded) collections
 
-A `scopeBy` field makes a collection re-pointable — for a [sharded](/docs/concepts/sharding)
+A `scopeBy` field makes a collection re-pointable. For a [sharded](/docs/concepts/sharding)
 query like `messages.list({ channelId })`, call `db.scope.<table>(args)` to switch
 which shard it syncs, or with no args to detach:
 
@@ -243,8 +243,8 @@ db.scope.messages(); // detach (e.g. on unmount)
 
 ## When collections load
 
-Each collection chooses _when_ it starts syncing — together with `scopeBy` this
-gives the full lazy / partial / eager load taxonomy declaratively:
+Each collection chooses _when_ it starts syncing. Together with `scopeBy` that
+gives the lazy / partial / eager load taxonomy declaratively:
 
 ```ts
 defineCollections(client, {
@@ -265,7 +265,7 @@ on a `scopeBy` collection (nothing to sync until you `scope` it).
 For the optimistic row and the persisted server row to reconcile by key, the
 client must choose the row id up front. The `insert` binding generates a UUID,
 hands it to `optimistic` (as the row's `_id`) and forwards it to the mutation via
-`toArgs` — your mutation persists it with the validated `clientId` option:
+`toArgs`; your mutation persists it with the validated `clientId` option:
 
 ```ts title="lunora/messages.ts"
 import { v } from "@lunora/values";
@@ -288,8 +288,8 @@ Lunora mints the id as usual. See [`ctx.db.insert`](/docs/packages/server#client
 
 The `insert`/outbox path above syncs **whole tables** through each table's `list`
 query. For [partial replication](/docs/concepts/local-first#shapes--partial-replication)
-— replicating only the rows a client needs, scoped by a server-resolved predicate
-— point a collection at a [shape](/docs/packages/server#defineshapedefinition--partial-replication)
+(replicating only the rows a client needs, scoped by a server-resolved
+predicate), point a collection at a [shape](/docs/packages/server#defineshapedefinition--partial-replication)
 instead of a `list`, via `lunoraCollectionOptions`:
 
 ```ts
@@ -309,7 +309,7 @@ scope({ channelId: "general" }); // re-point a scoped collection (or call with n
 `lunoraCollectionOptions` is the reusable core `defineCollections` is built on:
 it returns `{ config, scope, checkpoints }`. Pass exactly one of `list` (full
 table) or `shape` (partial replication). The `checkpoints` registry resolves
-optimistic-overlay drops against the server's confirmed watermarks — it's what
+optimistic-overlay drops against the server's confirmed watermarks; it's what
 `bindMutators` uses below.
 
 ## Custom mutators
@@ -319,7 +319,7 @@ impl second (rather than the `insert`-binding outbox), use the
 [custom-mutator](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative)
 runtime on the `@lunora/db/mutators` subpath. Declare the optimistic body with
 `defineMutator` (its `serverRef` points at the server `defineMutator` it pushes
-to — pass the generated `api.mutators.<name>` reference so a rename or typo is a
+to; pass the generated `api.mutators.<name>` reference so a rename or typo is a
 type error, not a runtime failure), then bind the set to your client +
 collections:
 
@@ -348,7 +348,7 @@ await tx.isPersisted.promise; // resolves on confirm, rejects on rollback
 
 Each call opens a TanStack DB optimistic transaction, runs `apply` against the
 local collections, and pushes the authoritative write under a monotonic
-per-client `clientSeq`. The rebase is free — TanStack re-derives pending overlays
+per-client `clientSeq`. The rebase is free: TanStack re-derives pending overlays
 over the latest synced base on every sync tick. Pass the `checkpoints` registry
 from `lunoraCollectionOptions` so the overlay is held until the server echoes the
 matching watermark (no flicker); omit it to drop the overlay as soon as the write
@@ -357,7 +357,7 @@ is accepted.
 #### Typing the collections map
 
 `Collection` is invariant in its row type, so the shared map type can't accept a
-generated collection without a cast — and hands `apply` a row type too wide to be
+generated collection without a cast, and hands `apply` a row type too wide to be
 useful. Bind your map once with `initMutators` and both ends are typed:
 
 ```ts
@@ -392,7 +392,7 @@ bindMutators(client, { collections, onWriteRejected: ({ error, mutator }) => not
 ### Framework hooks
 
 The framework adapters wrap a bound handle in a small `{ mutate, pending, error,
-isError, reset }` hook — reads stay on the existing `useLiveQuery`:
+isError, reset }` hook; reads stay on the existing `useLiveQuery`:
 
 | Framework | Import                               | Helper                  |
 | --------- | ------------------------------------ | ----------------------- |
@@ -415,23 +415,23 @@ clears only once every concurrent call settles.
 
 `defineCollections(client, defs)` is the underlying API. Each entry is:
 
-- `list` — the Lunora query that lists the rows (the sync source). **Required.**
-- `getKey?` — row key extractor; defaults to `row._id`.
-- `scopeBy?` — a field that scopes the list (a shard key); makes the collection
+- `list`: the Lunora query that lists the rows (the sync source). **Required.**
+- `getKey?`: row key extractor; defaults to `row._id`.
+- `scopeBy?`: a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.
-- `load?` — `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
+- `load?`: `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
   (see [When collections load](#when-collections-load)).
-- `insert?` — `{ mutation, optimistic, toArgs }` to make the table writable
+- `insert?`: `{ mutation, optimistic, toArgs }` to make the table writable
   through the outbox.
 
-A `CollectionDef` may also carry `onError?` — notified when its `list`
+A `CollectionDef` may also carry `onError?`, notified when its `list`
 subscription errors (the read side), distinct from `onWriteRejected` (the write
 side) below.
 
 An optional third argument carries layer-wide options:
 
-- `onWriteRejected?` — fires once per **permanently** rejected write, _as_ it is
-  rejected (the optimistic-row rollback follows) — so read the event's `row` /
+- `onWriteRejected?`: fires once per **permanently** rejected write, _as_ it is
+  rejected (the optimistic-row rollback follows), so read the event's `row` /
   `error` directly rather than the collection's post-rollback state (see
   [Surfacing rejected writes](#surfacing-rejected-writes)).
 

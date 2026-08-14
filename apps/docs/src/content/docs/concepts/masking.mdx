@@ -45,8 +45,8 @@ export const listUsers = query
 
 ## Roles and bypass
 
-A `MaskFn` receives a context with an `auth` view — `auth.can(permission)`,
-`auth.roles`, `auth.userId`, `auth.identity` — so masking can be role-aware. Wire
+A `MaskFn` receives a context with an `auth` view (`auth.can(permission)`,
+`auth.roles`, `auth.userId`, `auth.identity`), so masking can be role-aware. Wire
 the permissions that back `auth.can(...)` through the `roles` option, and use
 `bypass` to skip masking entirely for privileged callers:
 
@@ -96,7 +96,8 @@ mask({
   throw `MASK_UNSUPPORTED` (HTTP 422): a group key _is_ the raw value and an
   aggregate is computed _from_ it, so neither can be served without leaking.
 - **Filtering and sorting by a masked column fail closed too.** A `where` /
-  `filter` that references a masked column also throws `MASK_UNSUPPORTED` (HTTP 422) — on `findMany`, `findFirst`, and `count` alike. A predicate like
+  `filter` that references a masked column also throws `MASK_UNSUPPORTED`
+  (HTTP 422), on `findMany`, `findFirst`, and `count` alike. A predicate like
   `where: { ssn: { eq: X } }` (row present ⇒ value confirmed) or a range check
   turns the mask into a value oracle, so it is rejected. You can't filter or
   sort by a value the mask hides. The server-injected RLS filter is exempt: it
@@ -108,18 +109,18 @@ mask({
 
 ## Tooling
 
-- **Studio** — the [data browser](/docs/packages/studio#database) shows a "Mask
+- **Studio**: the [data browser](/docs/packages/studio#database) shows a "Mask
   sensitive columns" toggle that previews redact/hash/custom output client-side
   and flags masked columns in the grid header. Codegen emits the
   `(table, column, strategy)` map it reads.
-- **Advisor** — the [`mask_uncovered_pii_column`](/docs/concepts/advisors) lint
+- **Advisor**: the [`mask_uncovered_pii_column`](/docs/concepts/advisors) lint
   warns when a **public** procedure reads a table whose columns are masked
   elsewhere but the procedure has no `.use(mask(...))`, the opt-in gap that
   would return PII in the clear.
 
 ## See also
 
-- [Row-level security](/docs/concepts/rls) — the row-path companion that shares
+- [Row-level security](/docs/concepts/rls): the row-path companion that shares
   roles/permissions with masking.
-- [Advisors](/docs/concepts/advisors) — the `mask_uncovered_pii_column` lint.
-- [Studio](/docs/packages/studio) — the masking preview in the data browser.
+- [Advisors](/docs/concepts/advisors): the `mask_uncovered_pii_column` lint.
+- [Studio](/docs/packages/studio): the masking preview in the data browser.

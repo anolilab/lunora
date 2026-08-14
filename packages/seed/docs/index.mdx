@@ -3,7 +3,7 @@ title: "@lunora/seed"
 description: "Deterministic, schema-driven seeding: realistic fake data generated from defineSchema."
 ---
 
-`@lunora/seed` fills a Lunora database with realistic fake data derived from your `defineSchema`. It reads every table, maps each column to a generator (field-name aware — a `string` column named `email` becomes an email, `firstName` a first name), inserts foreign-key parents before their children, and lets you override any value.
+`@lunora/seed` fills a Lunora database with realistic fake data derived from your `defineSchema`. It reads every table, maps each column to a generator (field-name aware: a `string` column named `email` becomes an email, `firstName` a first name), inserts foreign-key parents before their children, and lets you override any value.
 
 Generation is deterministic. The same `seed` value and schema always produce the same rows and ids, so fixtures are reproducible across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
 
@@ -26,7 +26,7 @@ pnpm add @lunora/seed
 
 ## `seedPlan` — the pure core
 
-`seedPlan(schema, options)` returns one `TablePlan` per seeded table (`{ table, rows }`), ordered so a table's FK parents come first. It performs no I/O — every adapter (test harness, CLI, client) builds on it.
+`seedPlan(schema, options)` returns one `TablePlan` per seeded table (`{ table, rows }`), ordered so a table's FK parents come first. It performs no I/O: every adapter (test harness, CLI, client) builds on it.
 
 ```ts
 import { seedPlan } from "@lunora/seed";
@@ -112,7 +112,7 @@ seed.$reset(); // clear store/ids to drive a fresh run
 
 ### Generated, project-bound client
 
-When `@lunora/seed` is a declared dependency, codegen emits `_generated/seed.ts` — a `createSeedClient` with your schema and `InsertModel` already bound, so every table method is fully typed without passing a type argument.
+When `@lunora/seed` is a declared dependency, codegen emits `_generated/seed.ts`, a `createSeedClient` with your schema and `InsertModel` already bound, so every table method is fully typed without passing a type argument.
 
 ```ts
 import { createSeedClient } from "@/lunora/_generated/seed";
@@ -152,7 +152,7 @@ lunora seed --reset                      # wipe local .wrangler/state first (loc
 
 Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt).
 
-<Callout type="warn">`--reset` clears local `.wrangler/state` only — it cannot be combined with `--prod` or a remote `--url`.</Callout>
+<Callout type="warn">`--reset` clears local `.wrangler/state` only; it cannot be combined with `--prod` or a remote `--url`.</Callout>
 
 ## Limitations
 
@@ -161,6 +161,6 @@ Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worke
 
 ## Related
 
-- [`@lunora/server`](/docs/packages/server) — defines the `defineSchema` that seeding introspects.
-- [`@lunora/testing`](/docs/packages/testing) — the in-memory harness `@lunora/seed/testing` seeds.
-- [`@lunora/cli`](/docs/packages/cli) — ships the `lunora seed` command.
+- [`@lunora/server`](/docs/packages/server): defines the `defineSchema` that seeding introspects.
+- [`@lunora/testing`](/docs/packages/testing): the in-memory harness `@lunora/seed/testing` seeds.
+- [`@lunora/cli`](/docs/packages/cli): ships the `lunora seed` command.

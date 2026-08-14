@@ -5,17 +5,17 @@ description: Bring-your-own Postgres/MySQL via Cloudflare Hyperdrive — an acti
 
 `@lunora/hyperdrive` lets an **action** read and write an existing
 Postgres/MySQL database through [Cloudflare
-Hyperdrive](https://developers.cloudflare.com/hyperdrive/) — pooled, cached
+Hyperdrive](https://developers.cloudflare.com/hyperdrive/): pooled, cached
 connections from the edge. It surfaces the binding's connection string and a
 driver-agnostic `ctx.sql` client.
 
 <Callout type="warn">
-**Integrate an existing database — don't replace the Lunora data layer.**
+**Integrate an existing database; don't replace the Lunora data layer.**
 Hyperdrive points at a database Lunora has no visibility into, so two
 invariants the rest of Lunora relies on do **not** hold for it:
 
 1. **Non-deterministic.** A SQL query over the network is an external,
-   mutable read — exactly like `fetch`. It is therefore **forbidden in
+   mutable read, exactly like `fetch`. It is therefore **forbidden in
    `query`/`mutation`** and available only on `ActionCtx`. The
    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
    query or mutation.
@@ -53,7 +53,7 @@ bun add @lunora/hyperdrive
 
 </Tabs>
 
-No driver is bundled — `postgres`, `pg`, and `mysql2` are heavy and the choice
+No driver is bundled: `postgres`, `pg`, and `mysql2` are heavy and the choice
 is yours. They are declared as **optional peer dependencies**; install the one
 you use:
 
@@ -91,7 +91,7 @@ pnpm add mysql2          # mysql2        → fromMysql2
     ```
 
 Lunora validates the binding (it errors when `binding` is missing and warns when
-`id` is empty — a placeholder id can't connect), but it does **not**
+`id` is empty, since a placeholder id can't connect), but it does **not**
 auto-provision the `id`: that's a remote resource only `wrangler hyperdrive create`
 can mint, so importing `@lunora/hyperdrive` surfaces a hint rather than writing the
 binding for you.
@@ -119,7 +119,7 @@ export const importLegacyOrders = action.input({ orgId: v.string() }).action(asy
 ```
 
 When the codegen detects `ctx.sql` usage it adds `sql: SqlClient` to **`ActionCtx`
-only** — never `QueryCtx` or `MutationCtx` — with a JSDoc restating the
+only** (never `QueryCtx` or `MutationCtx`), with a JSDoc restating the
 determinism/realtime caveat.
 
 ### Drivers & placeholders
@@ -130,13 +130,13 @@ determinism/realtime caveat.
 | `pg` (node-postgres)     | `fromNodePg`     | `$1, $2, …`  |
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
-The package never rewrites SQL — use your driver's native positional syntax.
+The package never rewrites SQL; use your driver's native positional syntax.
 
 ## Making external data reactive
 
 Lunora cannot observe external writes, so a subscription over a `defineSchema`
 table won't re-fire when Postgres changes. To make external data reactive,
-**project** it into a DO/D1 table inside the same action — that write _is_ on
+**project** it into a DO/D1 table inside the same action. That write _is_ on
 the change-feed, so live queries reading the projection re-run:
 
 ```ts
@@ -161,7 +161,7 @@ export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, a
 
 A common shape of the pattern above: a **multitenant** Postgres is the source of
 truth, and you want each tenant (or agent) to work against **only its own slice**,
-materialized into its own sharded Durable Object — with clients riding the same
+materialized into its own sharded Durable Object, with clients riding the same
 live slice. `.shardBy()` gives each tenant a private DO + SQLite; `pullSourceRows`
 (read side) and `materializeExternalRows` (write side) bridge the Postgres slice
 into it; `defineShape` carries it to clients with no extra wiring.
@@ -215,7 +215,7 @@ Refresh on a schedule with `@lunora/scheduler` (`ctx.scheduler.runAfter(...)` /
 a cron) so each tenant's slice stays current.
 
 > **Tenant scoping is the correctness boundary.** Per-shard SQLite isolation only
-> controls _where_ rows land — not _what the query pulls_. The shard key MUST bind
+> controls _where_ rows land, not _what the query pulls_. The shard key MUST bind
 > into the source `WHERE` (as a parameter), or every tenant's DO would replicate the
 > whole table. **Deletes:** the empty-baseline call above is upsert-only; to
 > propagate upstream deletes, pass the table's current membership as the baseline so
@@ -224,8 +224,8 @@ a cron) so each tenant's slice stays current.
 ### Or skip the boilerplate: the declarative `.source()` modifier
 
 The manual bridge above is the escape hatch. For the common case, declare the
-source on the table and Lunora runs the whole loop for you — full-pull diff, tenant
-scoping, and a poll cadence — on the DO's alarm (no action/mutation/cron to write):
+source on the table and Lunora runs the whole loop on the DO's alarm: full-pull
+diff, tenant scoping, and a poll cadence, with no action, mutation, or cron to write:
 
 ```ts
 // lunora/schema.ts
@@ -242,7 +242,7 @@ export default defineSchema({
 export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
 ```
 
-You provide the driver once, when constructing the shard DO — one resolver for every
+You provide the driver once, when constructing the shard DO: one resolver for every
 sourced binding (build the `SqlClient` exactly as above). Lunora memoizes it per
 binding and polls each tenant's slice on the alarm:
 
@@ -253,21 +253,20 @@ createShardDO({
 ```
 
 Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sourced
-
-- `.shardBy()` table omits `tenantBy` (the runtime fail-safe), and the
-  `external_source_unscoped` advisor lint flags it earlier, at build time, in your
-  terminal + Studio. `defineSchema` likewise rejects combining `.source()` with
-  `.global()` (contradictory tiers). Clients consume the slice with
-  `useShape(api.shapes.tenantDocs)` — no client change, since it is an ordinary table.
+`.shardBy()` table omits `tenantBy` (the runtime fail-safe), and the
+`external_source_unscoped` advisor lint flags it earlier, at build time, in your
+terminal + Studio. `defineSchema` likewise rejects combining `.source()` with
+`.global()` (contradictory tiers). Clients consume the slice with
+`useShape(api.shapes.tenantDocs)`, with no client change, since it is an ordinary table.
 
 **Refresh cadence.** Omit `refresh` to poll on every DO alarm tick (the floor), or
 pass `refresh: { everyMs }` to throttle a large slice to at most one pull per
-interval. `refresh: "manual"` tells Lunora **not** to auto-poll — use it when you
+interval. `refresh: "manual"` tells Lunora **not** to auto-poll; use it when you
 drive the refresh yourself (the manual `pullSourceRows` → `materializeExternalRows`
 bridge above, on your own schedule).
 
 **Delete detection: `mode`.** The default `mode: "full-pull"` reads the whole tenant
-slice each tick and diffs it, so upstream deletes are observed for free — but it
+slice each tick and diffs it, so upstream deletes are observed for free, but it
 costs a full read per tick (bench ceiling ~10k rows). For a large, low-churn slice
 past that cap, `mode: "incremental"` pulls **only rows changed since a durable
 watermark**:
@@ -302,11 +301,11 @@ re-pull idempotently rather than being skipped).
 Because an incremental slice can't see a delete (an absent row means "unchanged", not
 "deleted"), incremental **requires** a delete-visibility path: `reconcileEveryMs` (a
 periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the
-cursor query returns, turned into a local delete — don't filter it out of the query).
+cursor query returns, turned into a local delete; don't filter it out of the query).
 `defineSchema` throws, and the `external_source_incremental_no_delete_path` advisor
 lint fails the build, if an incremental source declares neither.
 
-The cursor column must be **strictly commit-monotonic** — a value that only ever
+The cursor column must be **strictly commit-monotonic**: a value that only ever
 increases as rows become visible, never assigned below the current max after a later
 commit. A plain `updated_at` set from wall-clock time can violate this under clock
 skew or a long transaction (a row commits with a timestamp below a watermark already
@@ -320,8 +319,8 @@ or a logical replication LSN).
 
 The `@lunora/hyperdrive/global` subpath is the inverse trade-off: instead of an
 escape hatch onto a DB Lunora doesn't own, it makes a Postgres/MySQL database a
-**first-class, reactive** `.global()` storage backend, alongside D1. Lunora owns
-the schema — a `.global()` table gets a real column-per-field layout and every
+**reactive** `.global()` storage backend, alongside D1. Lunora owns
+the schema: a `.global()` table gets a real column-per-field layout and every
 write routes through the shared store core, so live queries stay reactive with no
 extra wiring.
 
@@ -356,7 +355,7 @@ const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 ### Full-text search
 
 `.searchIndex()` works on a Hyperdrive-backed `.global()` table exactly as it
-does on D1 — same tokenizer, same matching rules, same relevance order (see
+does on D1: same tokenizer, same matching rules, same relevance order (see
 [Full-text search](/docs/concepts/search)). Neither Postgres nor MySQL ships
 SQLite's FTS5, so the store maintains a portable inverted companion instead: one
 indexed `(token, document, occurrences)` row per distinct token, updated with
@@ -374,16 +373,16 @@ it yourself with `backfillSqlSearchIndexes`.
 Ranking aggregates over every matching token row, so the 1024-document limit
 bounds what you get back, not what the database reads. On Postgres you can trade
 that away with `.searchIndex({ strategy: "native" })`, which stores a `tsvector`
-per document and lets a GIN index answer the match — same documents, ordered by
+per document and lets a GIN index answer the match: same documents, ordered by
 the engine rather than by Lunora's scorer.
 
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:
 
-- `buildPgExec(client)` / `buildMysqlExec(connection)` — turn a driver into the
+- `buildPgExec(client)` / `buildMysqlExec(connection)` turn a driver into the
   store's `SqlExec`.
-- `postgresDialect` / `mysqlDialect` — the engine dialects.
-- `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` — the
+- `postgresDialect` / `mysqlDialect` are the engine dialects.
+- `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
   general factory the two convenience constructors call.
 
 ## Non-goals
@@ -419,8 +418,8 @@ From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 
 ## See also
 
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — why
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations): why
   actions are the only non-deterministic context
-- [Concepts: advisors](/docs/concepts/advisors) — the
+- [Concepts: advisors](/docs/concepts/advisors): the
   `hyperdrive_outside_action` lint
-- [Concepts: real-time](/docs/concepts/realtime) — what the change-feed tracks
+- [Concepts: real-time](/docs/concepts/realtime): what the change-feed tracks

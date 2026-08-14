@@ -1,6 +1,17 @@
 ---
 title: "@lunora/mcp"
 description: Model Context Protocol servers for Lunora — one exposing a deployment to AI agents, one exposing the framework's documentation.
+related:
+    - to: /docs/packages/client
+      note: "the HTTP RPC client backing every tool"
+    - to: /docs/packages/server
+      note: "defines the queries, mutations, and actions the tools call"
+    - to: /docs/packages/agent
+      note: "the durable agents the `agent_<name>` tools front"
+    - to: /docs/packages/cli
+      note: "deploy the app the server introspects"
+    - to: /docs/concepts/sharding
+      note: "the `shardKey` the run-tools accept"
 ---
 
 `@lunora/mcp` ships two [Model Context Protocol](https://modelcontextprotocol.io)
@@ -15,12 +26,12 @@ over HTTP RPC. It needs an admin token.
 
 The **documentation** server (`@lunora/mcp/docs`) exposes the framework's docs,
 so an agent writing Lunora code can look up the real API instead of inventing
-one. It reads published documentation only — no credentials, no writes — which
-is why it can be hosted unauthenticated; Lunora runs it at
+one. It reads published documentation only, with no credentials and no writes,
+which is why it can be hosted unauthenticated; Lunora runs it at
 `https://lunora.sh/mcp`.
 
 <Callout>
-    Most users never install this package. `lunora mcp install` wires both servers into whichever editor they use — see [AI coding
+    Most users never install this package. `lunora mcp install` wires both servers into whichever editor they use. See [AI coding
     agents](/docs/concepts/ai-tooling).
 </Callout>
 
@@ -45,8 +56,8 @@ bun add @lunora/mcp
 </Tabs>
 
 The server is transport-agnostic. The shipped `lunora-mcp` binary speaks
-JSON-RPC over **stdio** — the transport MCP clients use when they spawn a
-process — or you can build a server with `createLunoraMcpServer` and connect
+JSON-RPC over **stdio** (the transport MCP clients use when they spawn a
+process), or you can build a server with `createLunoraMcpServer` and connect
 any transport yourself.
 
 ## The `lunora-mcp` binary
@@ -55,13 +66,13 @@ MCP clients spawn the `lunora-mcp` binary and talk to it over stdio.
 Configuration comes from the environment, so the spawn config stays a plain
 `{ command, env }`:
 
-- `LUNORA_URL` (**required**) — base URL of the deployed Worker.
-- `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
-- `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose
+- `LUNORA_URL` (**required**): base URL of the deployed Worker.
+- `LUNORA_ADMIN_TOKEN` (optional): bearer token sent on every RPC.
+- `LUNORA_MCP_ALLOW_WRITES` (optional): set to `1`/`true`/`yes`/`on` to expose
   the mutation/action run tools. Default: **read-only** (writes disabled).
-- `LUNORA_MCP_ALLOW_AGENTS` (optional) — set to `1`/`true`/`yes`/`on` to expose
+- `LUNORA_MCP_ALLOW_AGENTS` (optional): set to `1`/`true`/`yes`/`on` to expose
   the [agent tools](#expose-an-agent). Default: **agents disabled**.
-- `LUNORA_MCP_AGENTS` (optional) — a `;`-separated list of `name:description`
+- `LUNORA_MCP_AGENTS` (optional): a `;`-separated list of `name:description`
   pairs selecting which agents to expose (see [Expose an agent](#expose-an-agent)).
 
 ```jsonc
@@ -101,19 +112,19 @@ is the registered tool surface; `callTool` dispatches a call against a client.
 <Callout type="warn">
     The server is **read-only by default**: only the introspection tools and `lunora_run_query` are exposed. `lunora_run_mutation` and `lunora_run_action` are
     hidden from the advertised tool list *and* refused at dispatch unless you set `LUNORA_MCP_ALLOW_WRITES` (or pass `allowWrites: true` when building a server
-    programmatically). Grant a **least-privilege** token scoped to what the agent actually needs — never the deployment's admin token.
+    programmatically). Grant a **least-privilege** token scoped to what the agent actually needs, never the deployment's admin token.
 </Callout>
 
 The three run-tools share one input schema:
 
-- `functionPath` (**required**, string) — a function reference, e.g.
+- `functionPath` (**required**, string): a function reference, e.g.
   `"messages:send"`.
-- `args` (object) — the arguments object passed to the function. Anything that
+- `args` (object): the arguments object passed to the function. Anything that
   isn't a plain object (including arrays) is coerced to an empty bag.
-- `shardKey` (string) — an optional shard key when the function is
+- `shardKey` (string): an optional shard key when the function is
   [`.shardBy()`](/docs/concepts/sharding)-partitioned.
 
-Results are returned as MCP `content` text — the function's return value JSON,
+Results are returned as MCP `content` text: the function's return value JSON,
 or the JSON `null` literal for a void-returning mutation/action. Unknown tools
 and thrown errors come back as `isError` tool results (not rejections), so the
 calling model sees the failure as tool output.
@@ -122,9 +133,9 @@ calling model sees the failure as tool output.
 
 An agent discovers the surface before it calls anything:
 
-1. `lunora_list_functions` — discover the available paths and their kinds.
-2. `lunora_get_function_schema` — fetch the argument descriptors for one path.
-3. `lunora_run_query` / `lunora_run_mutation` / `lunora_run_action` — call the
+1. `lunora_list_functions`: discover the available paths and their kinds.
+2. `lunora_get_function_schema`: fetch the argument descriptors for one path.
+3. `lunora_run_query` / `lunora_run_mutation` / `lunora_run_action`: call the
    function with a well-formed `args` object.
 
 `lunora_get_function_schema` returns `{ path, kind, args }`, where `kind` is
@@ -156,7 +167,7 @@ await connectStdio({ url: process.env.LUNORA_URL, token: process.env.LUNORA_ADMI
 ```
 
 `LunoraMcpServerOptions` accepts either a `url` (with optional `token` and
-`fetch`) or a pre-built `client` — the latter is the injection point for tests.
+`fetch`) or a pre-built `client`; the latter is the injection point for tests.
 You must supply one or the other; passing neither throws.
 
 ## Auth and admin gating
@@ -165,7 +176,7 @@ The `token` (sourced from `LUNORA_ADMIN_TOKEN` for the binary) is set as the
 client's auth token and sent as a bearer token on **every** RPC the tools make.
 Gating is enforced by your deployment: the tools call ordinary queries,
 mutations, and actions, so whatever auth those functions require applies
-unchanged. Run-tools open no WebSocket — every call is plain HTTP RPC — so the
+unchanged. Run-tools open no WebSocket (every call is plain HTTP RPC), so the
 server is safe to run as a short-lived stdio process.
 
 ## Connecting an MCP client
@@ -173,15 +184,15 @@ server is safe to run as a short-lived stdio process.
 Any MCP client that can spawn a stdio server works. With the `mcpServers` config
 above, an agent like Claude can call `lunora_list_functions` to discover the
 deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
-`lunora_run_action` to invoke it — passing `functionPath` (e.g.
+`lunora_run_action` to invoke it, passing `functionPath` (e.g.
 `"messages:list"`), an `args` object, and an optional `shardKey`.
 
 ## Resources and annotations
 
 Both servers implement MCP **tools**. The documentation server additionally
 exposes every page as an MCP **resource** (`lunora-docs:/docs/…`,
-`text/markdown`), so a client can list and attach a page on the user's behalf —
-the moment before the model knows what to search for.
+`text/markdown`), so a client can list and attach a page on the user's behalf,
+before the model knows what to search for.
 
 Every tool carries **annotations** (`readOnlyHint`, `destructiveHint`,
 `idempotentHint`, `openWorldHint`, `title`), so a client can badge the read-only
@@ -212,7 +223,7 @@ import { createDocsMcpFetchHandler } from "@lunora/mcp/docs";
 const handle = createDocsMcpFetchHandler({ index: myDocsIndex });
 ```
 
-Anything else — the CLI's `lunora mcp serve`, a script — reads a published site
+Anything else (the CLI's `lunora mcp serve`, a script) reads a published site
 over its `/api/search`, `/llms.mdx/*`, and `/llms.txt` endpoints:
 
 ```ts
@@ -229,7 +240,7 @@ identical hits whichever one answered.
 `createDocsMcpFetchHandler` screens each request before the transport sees it,
 because this surface is meant to be public and unauthenticated:
 
-- **Bodies are capped** — 128&nbsp;KiB by default, overridable with
+- **Bodies are capped**: 128&nbsp;KiB by default, overridable with
   `maxRequestBytes`.
 - **JSON-RPC batches are refused.** The stateless transport buffers a whole
   batch's replies into one response body, so a single small request carrying
@@ -257,8 +268,8 @@ await connectLocalStdio({
 ```
 
 `deployment` accepts a **resolver**, consulted on every tool call. An editor
-spawns its MCP servers when the project opens — usually before a dev server is
-running — and keeps them alive across every restart, so a URL captured once at
+spawns its MCP servers when the project opens, usually before a dev server is
+running, and keeps them alive across every restart, so a URL captured once at
 startup would be absent for the whole first session and stale after the first
 restart. The deployment tools are advertised either way (clients cache the tool
 list); calling one with nothing running returns an actionable error.
@@ -269,16 +280,16 @@ A deployment's durable [`@lunora/agent`](/docs/packages/agent) agents can be
 fronted as MCP tools. Like writes, this is **opt-in and fail-closed**: starting
 an agent run is a side effect, so the agent tools are hidden from the advertised
 list _and_ refused at dispatch unless you enable them. `@lunora/mcp` takes no
-dependency on `@lunora/agent` — it calls the agent's public `agents:agentRun`
+dependency on `@lunora/agent`; it calls the agent's public `agents:agentRun`
 mutation over HTTP RPC like any other function.
 
 Enable it with two env vars (or the matching `createLunoraMcpServer` options):
 
-- `LUNORA_MCP_ALLOW_AGENTS` — `1`/`true`/`yes`/`on` to expose the agent tools.
-- `LUNORA_MCP_AGENTS` — a `;`-separated list of `name:description` pairs
+- `LUNORA_MCP_ALLOW_AGENTS`: `1`/`true`/`yes`/`on` to expose the agent tools.
+- `LUNORA_MCP_AGENTS`: a `;`-separated list of `name:description` pairs
   selecting which agents to expose, e.g.
   `"support:Support questions;billing:Billing help"`.
-- `LUNORA_MCP_AGENT_TIMEOUT_MS` (optional) — wall-clock budget a single
+- `LUNORA_MCP_AGENT_TIMEOUT_MS` (optional): wall-clock budget a single
   `agent_<name>` call awaits before returning a pending result to poll.
 
 ```jsonc
@@ -299,26 +310,18 @@ Enable it with two env vars (or the matching `createLunoraMcpServer` options):
 
 Each exposed agent gets an `agent_<name>` tool taking:
 
-- `prompt` (**required**, string) — the task or message for the agent.
-- `threadKey` (string) — reuse to continue a conversation; omit to start a new
+- `prompt` (**required**, string): the task or message for the agent.
+- `threadKey` (string): reuse to continue a conversation; omit to start a new
   thread. The tool returns the `threadKey` it used either way.
-- `title` (string) — an optional thread title, applied on the first run only.
+- `title` (string): an optional thread title, applied on the first run only.
 
 The tool starts a durable run and awaits it up to the timeout budget. If the run
-outlasts the budget, the tool returns a **pending** result — `{ status:
-"running", threadKey, runId, hint }` — instead of hanging. Feed that `threadKey`
+outlasts the budget, the tool returns a **pending** result (`{ status:
+"running", threadKey, runId, hint }`) instead of hanging. Feed that `threadKey`
 to the generic `lunora_agent_status` tool to poll for the final answer once the
 run finishes.
 
 <Callout type="warn">
     Agent runs are **owner-scoped** to the identity the configured `token` resolves to. Grant a **least-privilege** token mapped to a bot identity so each
-    deployment's threads stay isolated — never the deployment's admin token. If the token resolves to no identity, threads are not owner-isolated.
+    deployment's threads stay isolated, never the deployment's admin token. If the token resolves to no identity, threads are not owner-isolated.
 </Callout>
-
-## See also
-
-- [@lunora/client](/docs/packages/client) — the HTTP RPC client backing every tool
-- [@lunora/server](/docs/packages/server) — defines the queries, mutations, and actions the tools call
-- [@lunora/agent](/docs/packages/agent) — the durable agents the `agent_<name>` tools front
-- [@lunora/cli](/docs/packages/cli) — deploy the app the server introspects
-- [Sharding](/docs/concepts/sharding) — the `shardKey` the run-tools accept

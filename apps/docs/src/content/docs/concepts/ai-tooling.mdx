@@ -1,9 +1,15 @@
 ---
 title: AI coding agents
 description: Teach Claude Code, Cursor, and Copilot how to use Lunora — agent skills, agent-aware dev mode, the docs server, and the MCP server.
+related:
+    - to: /docs/packages/mcp
+    - to: /docs/packages/agent
+    - to: /docs/concepts/generated-code
+    - to: /docs/concepts/debugging
+    - to: /docs/packages/cli
 ---
 
-Lunora ships five things for AI coding agents, addressing different problems:
+Lunora ships five things for AI coding agents, each for a different problem:
 
 | You want                                      | Use              |
 | --------------------------------------------- | ---------------- |
@@ -13,12 +19,12 @@ Lunora ships five things for AI coding agents, addressing different problems:
 | One local endpoint carrying all of the above  | The local server |
 | The agent to query and call a live deployment | The MCP server   |
 
-If you only do one thing, run `lunora mcp install` — it wires the docs server
-and your project's local server into whichever editor you use.
+If you only do one thing, run `lunora mcp install`. It wires the docs server and
+your project's local server into whichever editor you use.
 
 ## Agent skills
 
-Skills are portable instructions that teach an agent how Lunora works — the
+Skills are portable instructions that teach an agent how Lunora works: the
 schema API, the procedure builders, indexing rules, the deploy flow. Install them
 into your project and any skill-aware agent picks them up:
 
@@ -33,7 +39,7 @@ lunora rules check --strict       # exit non-zero when missing — a CI gate
 Copilot all discover, so one install covers every agent on the project.
 
 The shipped set is a **router skill** (`lunora`) plus focused skills it delegates
-to — quickstart, functions, realtime, auth setup, package authoring, migrations,
+to: quickstart, functions, realtime, auth setup, package authoring, migrations,
 deploy, and performance auditing. The router's presence is what marks the rule
 set as installed, because every other skill is reachable through it.
 
@@ -43,8 +49,8 @@ Studio all nudge you when the rules are missing.
 
 ## Agent mode
 
-When the CLI detects it is being driven by a coding agent — Claude Code, Cursor,
-Codex, Gemini CLI, Cline, and others — it changes two defaults so the agent does
+When the CLI detects it is being driven by a coding agent (Claude Code, Cursor,
+Codex, Gemini CLI, Cline, and others), it changes two defaults so the agent does
 not get stuck:
 
 - **Background dev server.** `lunora dev` detaches instead of blocking forever on
@@ -57,8 +63,8 @@ or `=1` to force it on.
 
 The background server is managed rather than fire-and-forget. A state record at
 `.lunora/dev.json` acts as a lockfile, so starting twice reports the running
-instance instead of spawning a conflict, and every subcommand is idempotent —
-stopping when nothing runs succeeds silently:
+instance instead of spawning a conflict, and every subcommand is idempotent
+(stopping when nothing runs succeeds silently):
 
 ```bash
 lunora dev --background   # detach; blocks until ready, prints URL + PID
@@ -67,7 +73,7 @@ lunora dev logs           # captured output (--lines n, 0 = all)
 lunora dev stop           # SIGTERM, then SIGKILL after 10s
 ```
 
-Agents can also poll `GET /_lunora/status` on the running worker — a public,
+Agents can also poll `GET /_lunora/status` on the running worker, a public,
 secret-free health probe answering `{"ok":true}`.
 
 JSON logs are available to everyone, agent or not, via `lunora dev --json` or
@@ -77,7 +83,7 @@ JSON logs are available to everyone, agent or not, via `lunora dev --json` or
 
 Skills teach an agent Lunora's shape; the docs server lets it look up specifics
 while it works. `https://lunora.sh/mcp` serves these docs over the
-[Model Context Protocol](https://modelcontextprotocol.io) — `lunora_search_docs`,
+[Model Context Protocol](https://modelcontextprotocol.io) as `lunora_search_docs`,
 `lunora_get_doc`, and `lunora_list_docs`. It reads published documentation only,
 so there is nothing to authenticate and no token to manage.
 
@@ -94,14 +100,14 @@ same URL in every project; this project's local server goes in the **project**
 config. `--global` / `--project` override that.
 
 `install` knows where each client keeps its servers and what an entry looks like
-there — `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor,
+there: `.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor,
 `.vscode/mcp.json` (whose key is `servers`, not `mcpServers`) for VS Code, and so
 on. Existing entries are left alone unless you pass `--force`, comments in a
 JSONC config survive the edit, and a config it cannot parse is never rewritten.
 Clients configured in TOML (Codex) get a printed snippet instead.
 
 Inside a Lunora project `install` also adds a second server, `lunora`, which runs
-`lunora mcp serve` — the local counterpart described next. Use `--docs-only` or
+`lunora mcp serve`, the local counterpart described next. Use `--docs-only` or
 `--local-only` to install just one.
 
 Adding the docs server by hand takes one line:
@@ -114,7 +120,7 @@ claude mcp add --transport http lunora-docs https://lunora.sh/mcp
 
 `lunora mcp serve` is the stdio server your editor spawns for a project. It
 carries the docs tools, two dev-server tools (`lunora_dev_status`,
-`lunora_dev_logs`), and — pointed at whatever `lunora dev` is running — the
+`lunora_dev_logs`), and, pointed at whatever `lunora dev` is running, the
 deployment tools below.
 
 Its config takes no arguments and no environment:
@@ -132,8 +138,8 @@ Its config takes no arguments and no environment:
 
 The dev server's URL comes from `.lunora/dev.json` and the admin token from
 `.dev.vars`, both re-read per tool call. That matters because an editor spawns
-this process when the project opens — usually before `lunora dev` is running —
-and keeps it alive across every restart afterward. Start the dev server later
+this process when the project opens (usually before `lunora dev` is running) and
+keeps it alive across every restart afterward. Start the dev server later
 and the deployment tools begin working without reconnecting.
 
 ## The MCP server
@@ -158,9 +164,9 @@ queries, mutations, and actions.
 ```
 
 <Callout type="warn">
-    The server is **read-only by default**, and deliberately so — an agent gets introspection and queries, but not writes. Mutations and actions are exposed
-    only when you set `LUNORA_MCP_ALLOW_WRITES` (`lunora mcp serve --allow-writes` locally), and agent tools only when you set `LUNORA_MCP_ALLOW_AGENTS`. Point
-    it at a development deployment before you point it at production.
+    The server is **read-only by default**, and deliberately so: an agent gets introspection and queries, but not writes. Mutations and actions are exposed only
+    when you set `LUNORA_MCP_ALLOW_WRITES` (`lunora mcp serve --allow-writes` locally), and agent tools only when you set `LUNORA_MCP_ALLOW_AGENTS`. Point it at
+    a development deployment before you point it at production.
 </Callout>
 
 See [@lunora/mcp](/docs/packages/mcp) for the full tool list, the
@@ -169,18 +175,10 @@ See [@lunora/mcp](/docs/packages/mcp) for the full tool list, the
 
 ## Keeping generated types honest
 
-An agent editing your schema is an agent that can leave `_generated/` stale.
-Gate it the same way you would a human contributor:
+An agent editing your schema can leave `_generated/` stale. Gate it the same way
+you would a human contributor:
 
 ```bash
 lunora verify              # wrangler validation + codegen dry-run + tsc --noEmit
 lunora rules check --strict
 ```
-
-## See also
-
-- [@lunora/mcp](/docs/packages/mcp)
-- [@lunora/agent](/docs/packages/agent)
-- [Generated code](/docs/concepts/generated-code)
-- [Debugging](/docs/concepts/debugging)
-- [@lunora/cli](/docs/packages/cli)

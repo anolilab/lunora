@@ -4,8 +4,8 @@ description: Internal dialect-parameterized SQL store core behind the .global() 
 ---
 
 <Callout type="warn">
-    **Internal package.** `@lunora/sql-store` is published for transparency and version alignment, but it is not a public API surface. Depend on the adapters —
-    [`@lunora/d1`](/docs/packages/d1) or [`@lunora/hyperdrive`](/docs/packages/hyperdrive) — and let them call into it. Its exports may change shape between
+    **Internal package.** `@lunora/sql-store` is published for transparency and version alignment, but it is not a public API surface. Depend on the adapters,
+    [`@lunora/d1`](/docs/packages/d1) or [`@lunora/hyperdrive`](/docs/packages/hyperdrive), and let them call into it. Its exports may change shape between
     minor versions without a deprecation cycle.
 </Callout>
 
@@ -13,13 +13,13 @@ description: Internal dialect-parameterized SQL store core behind the .global() 
 backends: one store implementation (`createSqlCtxDb`) that drives any SQL
 engine through a `SqlDialect` parameter.
 
-- **SQLite** — assembled by [`@lunora/d1`](/docs/packages/d1) for Cloudflare D1.
-- **Postgres / MySQL** — assembled by
+- **SQLite**: assembled by [`@lunora/d1`](/docs/packages/d1) for Cloudflare D1.
+- **Postgres / MySQL**: assembled by
   [`@lunora/hyperdrive`](/docs/packages/hyperdrive) for PlanetScale, Neon, or
   any Hyperdrive-reachable database.
 
 The adapters own the concrete dialect (placeholder style, type mapping,
-migration SQL) and wrap this core; reactivity is unaffected either way — the
+migration SQL) and wrap this core; reactivity is unaffected either way, because the
 global writer is injected into the shard's ctx-db, whose broadcast hook drives
 live queries regardless of engine.
 

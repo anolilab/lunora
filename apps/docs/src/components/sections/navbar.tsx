@@ -5,7 +5,6 @@ import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link, useLocation } from "@tanstack/react-router";
 import { useSearchContext } from "fumadocs-ui/contexts/search";
 import {
-    Book,
     Bot,
     Boxes,
     ChevronRight,
@@ -20,7 +19,6 @@ import {
     LayoutDashboard,
     LayoutTemplate,
     Menu,
-    Rocket,
     Scale,
     ScrollText,
     Search,
@@ -29,7 +27,7 @@ import {
     X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
@@ -39,6 +37,7 @@ import homeImg from "@/assets/studio/dark/home.png";
 import schemaImg from "@/assets/studio/dark/schema.png";
 import { Button } from "@/components/ui/button";
 import stats from "@/data/stats.json";
+import { Shell } from "@/kit/layout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -106,9 +105,7 @@ const menu: NavColumn[] = [
             },
         ],
         navItems: [
-            { description: "Build your first app in minutes.", href: "/docs/getting-started", icon: <Rocket />, title: "Quickstart" },
             { description: "Scaffold an app for your framework.", href: "/start", icon: <LayoutTemplate />, title: "Starter kits" },
-            { description: "The full Lunora framework reference.", href: "/docs/", icon: <Book />, title: "Documentation" },
             { description: "Auth: email/password, OAuth, passkeys.", href: "/packages/auth", icon: <KeyRound />, title: "Auth" },
             { description: "Workers AI on the Vercel AI SDK.", href: "/packages/ai", icon: <Bot />, title: "AI" },
             { description: "runAfter / runAt + Cron Triggers.", href: "/packages/scheduler", icon: <Clock />, title: "Scheduler" },
@@ -126,6 +123,7 @@ const menu: NavColumn[] = [
             },
         ],
         navItems: [
+            { description: "Thirteen runnable apps, five deploy in a click.", href: "/examples", icon: <Boxes />, title: "Examples" },
             { description: "Managed Lunora — join the waitlist.", href: "/cloud", icon: <Cloud />, title: "Lunora Cloud" },
             { description: "vs Convex, Supabase, Firebase, Appwrite.", href: "/compare", icon: <Scale />, title: "Compare" },
             { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: <LayoutDashboard />, title: "Studio" },
@@ -140,7 +138,7 @@ const menu: NavColumn[] = [
     },
 ];
 
-const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
+const Logo = ({ onTint = true, pathname }: { onTint?: boolean; pathname: string }) => {
     const [isOpen, setIsOpen] = useState(false);
 
     useEffect(() => {
@@ -161,8 +159,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
         };
     }, [isOpen]);
 
-    const itemClass =
-        "flex items-center gap-2 select-none p-3 text-sm leading-none text-white/80 no-underline transition-colors hover:bg-white/10 hover:text-white";
+    const itemClass = "flex items-center gap-2 select-none p-3 text-sm leading-none text-ink-muted no-underline transition-colors hover:bg-wash hover:text-ink";
 
     return (
         <div className="relative">
@@ -173,13 +170,13 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                     setIsOpen(true);
                 }}
             >
-                <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs/$" : "/"}>
+                <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs" : "/"}>
                     <LunoraLogo className="h-7 w-7" title="Lunora" />
-                    <span className={cn("text-[15px] font-semibold tracking-tight", light ? "text-[hsl(240_14%_10%)]" : "text-white")}>Lunora</span>
+                    <span className={cn("text-body font-semibold tracking-tight", onTint ? "text-[hsl(240_14%_10%)]" : "text-ink")}>Lunora</span>
                 </Link>
             </div>
             {isOpen && (
-                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-none border border-white/[0.08] bg-[#0e0e11] p-2 text-white shadow-xl">
+                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-none border border-hairline bg-canvas p-2 text-ink shadow-xl">
                     <li>
                         <button
                             className={cn(itemClass, "w-full cursor-pointer rounded-none")}
@@ -190,7 +187,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                         </button>
                     </li>
                     <li className="py-1">
-                        <hr className="border-white/10" />
+                        <hr className="border-hairline" />
                     </li>
                     <li>
                         <Link className={cn(itemClass, "rounded-none")} to="/">
@@ -206,16 +203,16 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void }) => {
     const content = (
         <>
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-none border border-white/10 bg-white/[0.04] text-white/80 transition-colors group-hover/leaf:border-white/20 group-hover/leaf:text-white [&>svg]:size-5">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none border border-hairline bg-wash text-ink-muted transition-colors group-hover/leaf:border-hairline-strong group-hover/leaf:text-ink [&>svg]:size-5">
                 {leaf.icon}
             </span>
             <span className="flex flex-col gap-0.5">
-                <span className="text-sm leading-none font-semibold text-white">{leaf.title}</span>
-                <span className="max-w-[200px] text-xs leading-snug text-white/45">{leaf.description}</span>
+                <span className="text-sm leading-none font-semibold text-ink">{leaf.title}</span>
+                <span className="max-w-[200px] text-xs leading-snug text-ink-faint">{leaf.description}</span>
             </span>
         </>
     );
-    const className = "group/leaf flex items-start gap-3 rounded-none px-3 py-2.5 no-underline transition-colors hover:bg-white/[0.05]";
+    const className = "group/leaf flex items-start gap-3 rounded-none px-3 py-2.5 no-underline transition-colors hover:bg-wash";
 
     return leaf.href.startsWith("http") ? (
         <a className={className} href={leaf.href} onClick={onNavigate} rel="noreferrer" target="_blank">
@@ -240,13 +237,13 @@ const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean
             />
             <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
             <div className="relative z-10 p-5">
-                <p className="text-base font-semibold text-white">{feature.title}</p>
-                <p className="mt-0.5 text-sm text-white/70">{feature.subtitle}</p>
+                <p className="text-base font-semibold text-ink">{feature.title}</p>
+                <p className="mt-0.5 text-sm text-ink-muted">{feature.subtitle}</p>
             </div>
         </>
     );
     const className = cn(
-        "group/feat relative flex h-full min-h-[16rem] flex-col justify-end overflow-hidden rounded-none border border-white/[0.08] no-underline",
+        "group/feat relative flex h-full min-h-[16rem] flex-col justify-end overflow-hidden rounded-none border border-hairline no-underline",
         single ? "w-[420px]" : "w-[244px]",
     );
 
@@ -278,7 +275,7 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
         <div className="flex gap-2">
             <ul className="flex w-[316px] flex-col">
                 {column.navItems.map((leaf, index) => (
-                    <li className={index > 0 ? "border-t border-white/[0.08]" : undefined} key={leaf.title}>
+                    <li className={index > 0 ? "border-t border-hairline" : undefined} key={leaf.title}>
                         <LeafLink leaf={leaf} />
                     </li>
                 ))}
@@ -291,11 +288,11 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
                 </div>
                 {column.featureLink ? (
                     <Link
-                        className="group/all flex items-center justify-between rounded-none border border-white/[0.08] px-4 py-3 text-sm font-medium text-white no-underline transition-colors hover:bg-white/[0.05]"
+                        className="group/all flex items-center justify-between rounded-none border border-hairline px-4 py-3 text-sm font-medium text-ink no-underline transition-colors hover:bg-wash"
                         to={column.featureLink.href}
                     >
                         {column.featureLink.title}
-                        <ChevronRight className="size-4 text-white/40 transition-transform group-hover/all:translate-x-0.5 group-hover/all:text-white" />
+                        <ChevronRight className="size-4 text-ink-faint transition-transform group-hover/all:translate-x-0.5 group-hover/all:text-ink" />
                     </Link>
                 ) : null}
             </div>
@@ -303,20 +300,15 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
     );
 };
 
-const Kbd = ({ children }: { children: ReactNode }) => (
-    <kbd className="rounded-none bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/70">{children}</kbd>
-);
+const Kbd = ({ children }: { children: ReactNode }) => <kbd className="rounded-none bg-wash px-1.5 py-0.5 font-mono text-micro text-ink-muted">{children}</kbd>;
 
-const SearchButton = ({ light }: { light: boolean }) => {
+const SearchButton = () => {
     const { setOpenSearch } = useSearchContext();
 
     return (
         <button
             aria-label="Search"
-            className={cn(
-                "flex size-9 items-center justify-center rounded-none transition-colors",
-                light ? "text-black/60 hover:bg-black/[0.05]" : "text-white/70 hover:bg-white/[0.08] hover:text-white",
-            )}
+            className={cn("flex size-9 items-center justify-center rounded-none transition-colors", "text-on-panel/80 hover:bg-on-panel/[0.05]")}
             onClick={() => {
                 setOpenSearch(true);
             }}
@@ -330,45 +322,9 @@ const SearchButton = ({ light }: { light: boolean }) => {
 const Navbar = (): ReactElement => {
     const { pathname } = useLocation();
     const reduceMotion = useReducedMotion();
-    const [light, setLight] = useState(false);
     const [openMenu, setOpenMenu] = useState<string | null>(null);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        let ticking = false;
-
-        const handleScroll = () => {
-            if (ticking) {
-                return;
-            }
-
-            ticking = true;
-
-            requestAnimationFrame(() => {
-                const sections = document.querySelectorAll("section[data-nav-theme]");
-                let theme = "dark";
-
-                for (const section of sections) {
-                    const rect = section.getBoundingClientRect();
-
-                    if (rect.top <= 8 && rect.bottom > 8) {
-                        theme = (section as HTMLElement).dataset.navTheme ?? "dark";
-                    }
-                }
-
-                setLight(theme === "light");
-                ticking = false;
-            });
-        };
-
-        window.addEventListener("scroll", handleScroll, { passive: true });
-        handleScroll();
-
-        return () => {
-            window.removeEventListener("scroll", handleScroll);
-        };
-    }, []);
 
     const openWith = (title: string) => {
         if (closeTimer.current) {
@@ -390,16 +346,35 @@ const Navbar = (): ReactElement => {
     };
 
     const active = menu.find((column) => column.navTitle === openMenu);
-    const onDocs = pathname.startsWith("/docs");
 
     return (
-        <header
-            className={cn("fixed inset-x-0 top-0 z-100", onDocs && "border-b border-white/[0.08] bg-[#0e0e11]")}
-            data-theme={light ? "light" : "dark"}
-            onMouseLeave={scheduleClose}
-        >
-            <div className="relative mx-auto flex h-16 max-w-6xl items-center px-5">
-                <Logo light={light} pathname={pathname} />
+        <header className="fixed inset-x-0 top-0 z-100" data-theme="light" onMouseLeave={scheduleClose}>
+            <Shell className="relative flex h-[var(--site-nav-height)] items-center">
+                {/* The bar. Shell-width rather than full-bleed, so the page
+                    shows past both ends, and the CTA is exactly its height so the
+                    two read as one object rather than a button floating inside a
+                    taller strip.
+
+                    It runs the same 54s hue walk the platform strip used to —
+                    that band gave the treatment up, because two gradients 60px
+                    apart read as a mistake. Stops are set here rather than left
+                    to the `@property` defaults, which is what keeps a re-brand
+                    reaching them and what the bar paints when the animation is
+                    off under `prefers-reduced-motion`. */}
+                <div
+                    aria-hidden="true"
+                    className="animate-strip-hue pointer-events-none absolute inset-x-0 top-1/2 h-14 -translate-y-1/2 motion-reduce:animate-none"
+                    style={
+                        {
+                            "--strip-a": "var(--site-accent-tint)",
+                            "--strip-b": "var(--site-accent-2-tint)",
+                            backgroundImage: "linear-gradient(100deg, var(--strip-a), var(--strip-b))",
+                        } as CSSProperties
+                    }
+                />
+                <div className="relative pl-4">
+                    <Logo pathname={pathname} />
+                </div>
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
                     <div
@@ -410,10 +385,10 @@ const Navbar = (): ReactElement => {
                     >
                         <Link
                             className={cn(
-                                "flex w-max items-center px-3.5 py-2 text-sm font-medium transition-colors",
-                                light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
+                                "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
+                                "text-on-panel/80 hover:text-on-panel/80",
                             )}
-                            to="/docs/$"
+                            to="/docs"
                         >
                             Docs
                         </Link>
@@ -429,8 +404,8 @@ const Navbar = (): ReactElement => {
                             <button
                                 aria-expanded={openMenu === column.navTitle}
                                 className={cn(
-                                    "flex w-max cursor-default items-center px-3.5 py-2 text-sm font-medium transition-colors",
-                                    light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
+                                    "flex w-max cursor-default items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
+                                    "text-on-panel/80 hover:text-on-panel/80",
                                 )}
                                 onFocus={() => {
                                     openWith(column.navTitle);
@@ -449,8 +424,8 @@ const Navbar = (): ReactElement => {
                     >
                         <Link
                             className={cn(
-                                "flex w-max items-center px-3.5 py-2 text-sm font-medium transition-colors",
-                                light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
+                                "flex w-max items-center px-3.5 py-2 font-mono text-kicker uppercase transition-colors",
+                                "text-on-panel/80 hover:text-on-panel/80",
                             )}
                             to="/blog"
                         >
@@ -459,14 +434,11 @@ const Navbar = (): ReactElement => {
                     </div>
                 </nav>
 
-                <div className="ml-auto hidden items-center gap-2 lg:flex">
-                    <SearchButton light={light} />
+                <div className="relative ml-auto hidden items-center gap-2 lg:flex">
+                    <SearchButton />
                     <a
                         aria-label="Join the Lunora Discord"
-                        className={cn(
-                            "flex size-9 items-center justify-center rounded-none transition-colors",
-                            light ? "text-black/60 hover:bg-black/[0.05]" : "text-white/70 hover:bg-white/[0.08] hover:text-white",
-                        )}
+                        className={cn("flex size-9 items-center justify-center rounded-none transition-colors", "text-on-panel/80 hover:bg-on-panel/[0.05]")}
                         href="https://discord.gg/eajEZvk2PG"
                         rel="noreferrer"
                         target="_blank"
@@ -476,8 +448,8 @@ const Navbar = (): ReactElement => {
                     <a
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
-                            "flex h-9 items-center gap-1.5 rounded-none px-4 text-sm font-medium transition-colors",
-                            light ? "bg-neutral-900 text-white hover:bg-neutral-800" : "bg-white text-neutral-900 hover:bg-white/90",
+                            "flex h-10 items-center gap-2 rounded-none px-3 font-mono text-kicker uppercase transition-colors",
+                            "text-on-panel/85 hover:text-on-panel",
                         )}
                         href="https://github.com/anolilab/lunora"
                         rel="noreferrer"
@@ -486,8 +458,12 @@ const Navbar = (): ReactElement => {
                         <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
                         <span className="font-mono tabular-nums">{formatStars(stats.stars)}</span>
                     </a>
-                    <Button asChild className="h-9 gap-1 rounded-none px-4 text-sm font-semibold" variant="default">
-                        <Link to="/docs/$">
+                    <Button
+                        asChild
+                        className={cn("h-14 gap-2 rounded-none px-6 font-mono text-kicker uppercase", "bg-on-panel text-panel hover:opacity-90")}
+                        variant="ghost"
+                    >
+                        <Link to="/docs">
                             Get started
                             <ChevronRight className="size-4" />
                         </Link>
@@ -497,8 +473,8 @@ const Navbar = (): ReactElement => {
                 <button
                     aria-label="Open menu"
                     className={cn(
-                        "ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
-                        light ? "text-black/70 hover:bg-black/[0.05]" : "text-white/80 hover:bg-white/10",
+                        "relative ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
+                        "text-on-panel/85 hover:bg-on-panel/[0.05]",
                     )}
                     onClick={() => {
                         setIsMobileMenuOpen(true);
@@ -507,10 +483,19 @@ const Navbar = (): ReactElement => {
                 >
                     <Menu className="size-5" />
                 </button>
-            </div>
+            </Shell>
 
-            {/* mega-menu dropdown — a single centered box that morphs size between menus */}
-            <div className="absolute top-[4.25rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
+            {/* mega-menu dropdown — a single centered box that morphs size between
+                menus. It docks at `--site-nav-height` — the same token the page
+                header's clearance and every sticky filter bar use, so the open
+                panel and those bars share one top line rather than missing it by
+                a couple of pixels. The tinted bar is `h-14` centred in the row,
+                so it ends inside that offset and nothing is covered. */}
+            <div
+                className="absolute top-[var(--site-nav-height)] left-1/2 hidden -translate-x-1/2 lg:block"
+                onMouseEnter={cancelClose}
+                onMouseLeave={scheduleClose}
+            >
                 <AnimatePresence>
                     {active ? (
                         <motion.div
@@ -521,13 +506,13 @@ const Navbar = (): ReactElement => {
                             transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                         >
                             <motion.div
-                                className="overflow-hidden rounded-none border border-white/[0.08] bg-[#0e0e11] p-2 shadow-2xl shadow-black/70"
+                                className="overflow-hidden rounded-none border border-hairline bg-canvas p-2 shadow-2xl shadow-black/70"
                                 layout
                                 transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                             >
                                 <MegaPanel column={active} />
                             </motion.div>
-                            <div className="pointer-events-none mt-3 flex items-center justify-center gap-5 text-xs text-white/45">
+                            <div className="pointer-events-none mt-3 flex items-center justify-center gap-5 text-xs text-ink-faint">
                                 <span className="flex items-center gap-1.5">
                                     <Kbd>↓</Kbd> Enter menu
                                 </span>
@@ -545,12 +530,12 @@ const Navbar = (): ReactElement => {
 
             {/* mobile menu */}
             {isMobileMenuOpen && (
-                <div className="fixed inset-0 z-[110] overflow-y-auto bg-[#0e0e11] lg:hidden" data-theme="dark">
-                    <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-3.5">
-                        <Logo light={false} pathname={pathname} />
+                <div className="fixed inset-0 z-[110] overflow-y-auto bg-canvas lg:hidden" data-theme="dark">
+                    <div className="flex items-center justify-between border-b border-hairline px-5 py-3.5">
+                        <Logo onTint={false} pathname={pathname} />
                         <button
                             aria-label="Close menu"
-                            className="flex size-10 items-center justify-center rounded-none text-white/80 transition-colors hover:bg-white/10"
+                            className="flex size-10 items-center justify-center rounded-none text-ink-muted transition-colors hover:bg-wash"
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}
@@ -561,16 +546,16 @@ const Navbar = (): ReactElement => {
                     </div>
                     <div className="flex flex-col px-5 py-4">
                         <Link
-                            className="border-b border-white/[0.06] px-1 py-3 text-sm font-medium text-white"
+                            className="border-b border-hairline px-1 py-3 text-sm font-medium text-ink"
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}
-                            to="/docs/$"
+                            to="/docs"
                         >
                             Docs
                         </Link>
                         <Link
-                            className="border-b border-white/[0.06] px-1 py-3 text-sm font-medium text-white"
+                            className="border-b border-hairline px-1 py-3 text-sm font-medium text-ink"
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}
@@ -579,8 +564,8 @@ const Navbar = (): ReactElement => {
                             Blog
                         </Link>
                         {menu.map((column) => (
-                            <div className="border-b border-white/[0.06] py-3" key={column.navTitle}>
-                                <p className="px-1 pb-2 font-mono text-xs tracking-wider text-white/40 uppercase">{column.navTitle}</p>
+                            <div className="border-b border-hairline py-3" key={column.navTitle}>
+                                <p className="px-1 pb-2 font-mono text-xs tracking-wider text-ink-faint uppercase">{column.navTitle}</p>
                                 <div className="flex flex-col gap-0.5">
                                     {column.navItems.map((leaf) => (
                                         <LeafLink
@@ -595,13 +580,21 @@ const Navbar = (): ReactElement => {
                             </div>
                         ))}
                         <div className="mt-6 flex flex-col gap-2">
-                            <Button asChild className="h-11 gap-2 rounded-none border-white/15 bg-transparent text-sm font-medium text-white" variant="outline">
+                            <Button
+                                asChild
+                                className="h-11 gap-2 rounded-none border-hairline-strong bg-transparent text-sm font-medium text-ink"
+                                variant="outline"
+                            >
                                 <a href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
                                     <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
                                     Star on GitHub
                                 </a>
                             </Button>
-                            <Button asChild className="h-11 gap-2 rounded-none border-white/15 bg-transparent text-sm font-medium text-white" variant="outline">
+                            <Button
+                                asChild
+                                className="h-11 gap-2 rounded-none border-hairline-strong bg-transparent text-sm font-medium text-ink"
+                                variant="outline"
+                            >
                                 <a href="https://discord.gg/eajEZvk2PG" rel="noreferrer" target="_blank">
                                     <DiscordLogoIcon className="size-4 fill-current" title="Lunora on Discord" />
                                     Join Discord
@@ -612,7 +605,7 @@ const Navbar = (): ReactElement => {
                                     onClick={() => {
                                         setIsMobileMenuOpen(false);
                                     }}
-                                    to="/docs/$"
+                                    to="/docs"
                                 >
                                     Get started
                                     <ChevronRight className="size-4" />

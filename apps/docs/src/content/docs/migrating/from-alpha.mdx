@@ -46,7 +46,7 @@ release-channel dist-tag to an exact version at init time). When 1.0 ships:
 
 Packages in the experimental tier (see
 [Versioning & stability](/docs/versioning)) stay on prerelease versions after
-1.0 — keep those pinned to their own channel.
+1.0; keep those pinned to their own channel.
 
 ## Breaking changes already landed
 
@@ -54,7 +54,7 @@ Each of these shipped on the alpha channel as a `BREAKING CHANGE` (or a
 deliberate surface cut) on the road to 1.0. If your app started on an early
 alpha, work through them in order.
 
-### `@lunora/ratelimit` — `random` option removed
+### `@lunora/ratelimit`: `random` option removed
 
 The deprecated `RateLimiterOptions.random` shard-selection hook is gone. Shard
 selection has been a deterministic hash of the storage key since the option
@@ -71,11 +71,11 @@ const limiter = new RateLimiter({ limits, random: Math.random, shards: 8 });
 const limiter = new RateLimiter({ limits, shards: 8 });
 ```
 
-### `@lunora/runtime` — `authIntrospector` removed
+### `@lunora/runtime`: `authIntrospector` removed
 
 The deprecated `WorkerOptions.authIntrospector` read-only fallback and the
 exported `AuthIntrospector` type alias are removed. Wire
-`WorkerOptions.authAdmin` instead — e.g. `@lunora/auth`'s
+`WorkerOptions.authAdmin` instead, e.g. `@lunora/auth`'s
 `createAuthAdmin(auth)`.
 
 A browse-only plane still works: `listUsers` and `listSessions` are the only
@@ -93,7 +93,7 @@ import { createAuthAdmin } from "@lunora/auth";
 export default createWorker({ authAdmin: createAuthAdmin(auth) /* … */ });
 ```
 
-### `@lunora/server` — `mode: "incremental"` cut from external sources
+### `@lunora/server`: `mode: "incremental"` cut from external sources
 
 `mode: "incremental"` on `.source(...)` was accepted by the types but threw
 "not yet implemented" at `defineSchema` time. It is cut from the 1.0 surface:
@@ -102,10 +102,10 @@ incremental-only `reconcileEveryMs` knob is dropped. A stray mode is now a
 compile-time error instead of a runtime throw.
 
 **Migration:** if you declared `mode: "incremental"` (it never worked), switch
-to `mode: "full-pull"` — or omit `mode` entirely — and remove any
+to `mode: "full-pull"` (or omit `mode` entirely) and remove any
 `reconcileEveryMs`. Incremental pulls may return after 1.0 as a new feature.
 
-### `@lunora/cli` — `migrate create` requires a table
+### `@lunora/cli`: `migrate create` requires a table
 
 `lunora migrate create <name>` no longer writes a literal `TODO_table`
 placeholder when `--table` is omitted. Interactively it prompts for the target
@@ -128,13 +128,13 @@ lunora migrate create backfill_read_by --table messages
 
 ## See also
 
-- [Versioning & stability](/docs/versioning) — channels, tiers, and what the
+- [Versioning & stability](/docs/versioning): channels, tiers, and what the
   1.0 SemVer commitment covers.
-- [Production checklist](/docs/production-checklist) — verify the deployment
+- [Production checklist](/docs/production-checklist): verify the deployment
   after the upgrade.
-- [Migrating from Convex](/docs/migrating/from-convex) — coming from another
+- [Migrating from Convex](/docs/migrating/from-convex): coming from another
   backend instead.
-- [Migrating from Supabase](/docs/migrating/from-supabase) — Postgres, RLS,
+- [Migrating from Supabase](/docs/migrating/from-supabase): Postgres, RLS,
   Edge Functions, Auth, and Storage mapped to Lunora.
-- [Migrating from Firebase](/docs/migrating/from-firebase) — Firestore, Auth,
+- [Migrating from Firebase](/docs/migrating/from-firebase): Firestore, Auth,
   Cloud Functions, and Storage mapped to Lunora.

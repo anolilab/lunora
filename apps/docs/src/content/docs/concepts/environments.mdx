@@ -1,12 +1,18 @@
 ---
 title: Environments & releases
 description: Running staging next to production, shipping a preview per pull request, and rolling traffic back when something goes wrong.
+related:
+    - to: /docs/deployment
+    - to: /docs/production-checklist
+    - to: /docs/concepts/migrations
+    - to: /docs/concepts/backups
+    - to: /docs/concepts/environment-variables
 ---
 
 A Lunora deployment is a Cloudflare Worker, so environments are Wrangler
-environments and releases are Worker versions. This page covers how the two fit
-together — running more than one deployment, previewing a change before it takes
-traffic, and getting back to the last good version.
+environments and releases are Worker versions. This page covers running more than
+one deployment, previewing a change before it takes traffic, and getting back to
+the last good version.
 
 ## Multiple environments
 
@@ -18,7 +24,7 @@ lunora deploy --env staging
 lunora deploy --env production
 ```
 
-`--env` is understood by every command that talks to a deployed worker —
+`--env` is understood by every command that talks to a deployed worker:
 `deploy`, `logs`, `deployments`, `env push`, `containers`.
 
 Each environment gets its **own bindings and its own secrets**. Cloudflare
@@ -30,7 +36,7 @@ lunora env push --env staging       # push .dev.vars to one environment
 lunora env diff --prod              # compare local keys against the deployed set
 ```
 
-`env diff` compares secret **names**, not values — Cloudflare never returns a
+`env diff` compares secret **names**, not values; Cloudflare never returns a
 secret's value. `lunora env doctor` validates `.dev.vars` against the bindings
 your config declares, which catches the "deployed to staging, forgot the new
 secret" failure before the deploy rather than after.
@@ -51,8 +57,8 @@ lunora link --url https://my-app-staging.acme.workers.dev --env staging
 ```
 
 A first successful deploy writes the link automatically. Note the guardrail: the
-bulk and destructive commands — `export`, `import`, `migrate`, `backup`, `seed`,
-`insights` — only use the link under `--prod`, so a production link never
+bulk and destructive commands (`export`, `import`, `migrate`, `backup`, `seed`,
+`insights`) only use the link under `--prod`, so a production link never
 silently becomes the target of an unguarded write. The link stores public
 identifiers only, never secrets.
 
@@ -65,7 +71,7 @@ sending it any production traffic:
 lunora deploy --preview
 ```
 
-Because nothing goes live, the post-deploy steps are skipped — no migrations run,
+Because nothing goes live, the post-deploy steps are skipped: no migrations run,
 no baseline is re-blessed, and the project link is not rewritten. This is what
 the scaffolded CI pipelines use for every pull request:
 
@@ -101,7 +107,7 @@ lunora deployments promote <version-id> --yes # send 100% of traffic to a versio
 `rollback` and `promote` change live traffic, so both require `--yes`.
 
 <Callout type="warn">
-    Rolling back code does **not** roll back data. A release that ran a migration needs the data considered separately — see
+    Rolling back code does **not** roll back data. A release that ran a migration needs the data considered separately; see
     [Migrations](/docs/concepts/migrations) for the widen-migrate-narrow pattern that keeps a rollback safe, and [Backups](/docs/concepts/backups) for
     point-in-time recovery when it was not.
 </Callout>
@@ -120,14 +126,14 @@ lunora deploy --prebuilt     # ship it, skipping codegen and the drift gate
 
 A deployment is reachable at its `*.workers.dev` URL out of the box. To serve it
 from your own domain, attach a route or a custom domain in `wrangler.jsonc` the
-same way you would for any Worker — Cloudflare's
+same way you would for any Worker. Cloudflare's
 [custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
 documentation covers the DNS side.
 
 Two Lunora-specific things to remember when you do:
 
-- **Clients connect to the worker's origin.** Anything holding the URL —
-  `NEXT_PUBLIC_LUNORA_URL`, a mobile build, a `createServerClient` call — has to
+- **Clients connect to the worker's origin.** Anything holding the URL
+  (`NEXT_PUBLIC_LUNORA_URL`, a mobile build, a `createServerClient` call) has to
   be updated, and framework build-time variables are inlined, so they need a
   rebuild rather than a restart.
 - **Re-run `lunora link`** with the new URL so the CLI targets the right host.
@@ -147,16 +153,8 @@ signed in.
 ## Who changed what
 
 Each shard keeps a bounded, append-only audit log of the admin operations that
-mutate state — writing a row through the Studio, running a migration, importing a
+mutate state: writing a row through the Studio, running a migration, importing a
 shard, applying CDC, and running a function as another identity. Each entry
 records the acting user, and the log keeps the most recent 1 000 entries so it
 cannot grow without bound. Read it from the Studio's **Audit** page under
 Observability.
-
-## See also
-
-- [Deployment](/docs/deployment)
-- [Production checklist](/docs/production-checklist)
-- [Migrations](/docs/concepts/migrations)
-- [Backups, export & import](/docs/concepts/backups)
-- [Environment variables](/docs/concepts/environment-variables)

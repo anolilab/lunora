@@ -86,9 +86,21 @@ const RootDocument: FC<PropsWithChildren> = ({ children }) => {
                                 </defs>
                             </svg>
 
+                            {/* Every page opens with the same navbar and mega-menu, so a
+                                keyboard or screen-reader user otherwise tabs through the
+                                whole of it before reaching the page. Visible only on
+                                focus, and it clears the fixed bar when it appears. */}
+                            <a
+                                className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[200] focus:border focus:border-hairline-strong focus:bg-canvas focus:px-4 focus:py-3 focus:font-mono focus:text-kicker focus:text-ink focus:uppercase"
+                                href="#main"
+                            >
+                                Skip to content
+                            </a>
                             <RootProvider search={{ enabled: true }} theme={{ enabled: true, defaultTheme: "dark", forcedTheme: "dark" }}>
                                 <Navbar />
-                                <main className="relative">{children}</main>
+                                <main className="relative" id="main" tabIndex={-1}>
+                                    {children}
+                                </main>
                             </RootProvider>
                             <Footer />
                         </div>

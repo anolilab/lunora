@@ -1,6 +1,11 @@
 ---
 title: Real-time
 description: How subscriptions, deltas, and hibernation fit together.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/packages/react
+    - to: /docs/deployment
+      note: "platform config & non-goals"
 ---
 
 Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
@@ -54,7 +59,7 @@ the server can replay anything that was missed during the disconnect.
 
 A `.stream()` procedure is ephemeral by default: the producer belongs to the
 socket that opened it, so closing the tab ends the run and a reconnect starts
-over. That is right for a progress ticker and wrong for anything expensive —
+over. That is right for a progress ticker and wrong for anything expensive:
 a model's answer must not disappear because someone refreshed.
 
 Declare the stream durable and the run stops belonging to the socket:
@@ -74,7 +79,7 @@ Three things change:
 
 - **Every chunk is persisted before it is sent**, under a monotonic `seq`. A
   reconnecting client replays the frames it missed out of the shard's SQLite and
-  then continues live — the consumer's `for await` never sees the interruption.
+  then continues live; the consumer's `for await` never sees the interruption.
 - **The producer outlives the socket.** Close the tab mid-run and the run
   finishes anyway; the transcript is waiting when you come back.
 - **A live run is shared.** Its identity is `(identity, functionPath, args)`, so
@@ -95,7 +100,7 @@ Transcripts are trimmed after 24 hours by default, per procedure
 a runaway generator cannot fill the shard's storage.
 
 If the Durable Object is evicted mid-run, what happens depends on who asks next.
-A client **resuming** that transcript gets `STREAM_INTERRUPTED` — its tail cannot
+A client **resuming** that transcript gets `STREAM_INTERRUPTED`: its tail cannot
 be spliced back on, and re-generating would duplicate what it already has. A
 client asking **fresh** simply gets a new run: the dead one has no claim on its
 key. When you need a producer that survives eviction itself, the run belongs in a
@@ -111,9 +116,3 @@ Worker binding, and the only capability it adds over the DO path is native-MQTT
 device ingest (IoT clients speaking MQTT directly), a narrow niche. We'll
 revisit only if Pub/Sub reaches GA and a concrete need to ingest from
 native-MQTT devices appears; until then there is nothing to configure.
-
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [API: @lunora/react](/docs/packages/react)
-- [Deployment](/docs/deployment) — platform config & non-goals

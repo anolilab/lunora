@@ -4,7 +4,7 @@ description: Everything to verify before a Lunora app takes real traffic — bin
 ---
 
 A pre-deploy checklist for taking a Lunora app to production. Each section
-links to the page that covers the topic in depth — this page is the gate, not
+links to the page that covers the topic in depth; this page is the gate, not
 the manual. The mechanics of deploying (wrangler config, the deploy flow,
 containers, log drains) live in [Deployment](/docs/deployment).
 
@@ -12,12 +12,12 @@ containers, log drains) live in [Deployment](/docs/deployment).
 
 - [ ] `wrangler.jsonc` declares the Durable Object bindings (`SHARD`, and
       `SCHEDULER` if you schedule work), the D1 database for `.global()`
-      tables, and the R2 bucket for file storage — see the reference config in
+      tables, and the R2 bucket for file storage; see the reference config in
       [Deployment](/docs/deployment).
 - [ ] The `migrations` block lists your DO classes under `new_sqlite_classes`
       (Durable Object class migrations are wrangler config, not SQL).
 - [ ] `lunora verify` passes. It validates `wrangler.jsonc`, dry-runs codegen,
-      and runs `tsc --noEmit` without writing files — a stale `_generated/` or
+      and runs `tsc --noEmit` without writing files; a stale `_generated/` or
       a mistyped binding fails here instead of at runtime.
 - [ ] `lunora doctor` is clean: it preflights the project's wrangler bindings,
       placeholder values, and dev secrets.
@@ -35,69 +35,69 @@ Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
 - [ ] Generated secrets are strong. `lunora env generate` mints 32-byte-hex
       values for everything locally generatable; provider keys (Resend,
       Stripe, …) come from the provider dashboard.
-- [ ] `lunora env doctor` exits zero — it checks `.dev.vars` against the
+- [ ] `lunora env doctor` exits zero; it checks `.dev.vars` against the
       example for missing keys, still-unset placeholders, and stray extras,
       and works as a CI gate.
 - [ ] If you use Cloudflare Secrets Store bindings, functions read them with
-      `ctx.secrets.get(name)` — confirm the store binding exists in the target
+      `ctx.secrets.get(name)`; confirm the store binding exists in the target
       environment.
 - [ ] CI deploys rely on the built-in guard: a non-interactive `lunora deploy`
       **aborts** when a required secret is missing on the target worker.
 
 ## `LUNORA_ADMIN_TOKEN` and the admin plane
 
-The admin token gates every `/_lunora/admin/*` route plus `/_lunora/migrate` —
+The admin token gates every `/_lunora/admin/*` route plus `/_lunora/migrate`:
 data export/import, migrations, the Studio, scheduled-job admin.
 
 - [ ] `LUNORA_ADMIN_TOKEN` is set as a production secret and is **at least 24
       characters** (the `admin-token-weak` security advisor flags shorter
       ones; see [Security](/docs/concepts/security)).
-- [ ] It is stored only in your secret manager/CI — never in `wrangler.jsonc`
+- [ ] It is stored only in your secret manager/CI, never in `wrangler.jsonc`
       `vars` or the repo. Rotating it also invalidates every outstanding
       ephemeral WS sub-token, so rotation is your kill switch.
 - [ ] **Ephemeral WS tokens stay enforced.** A browser WebSocket cannot set an
-      `Authorization` header, so admin sockets authenticate via `?token=` —
+      `Authorization` header, so admin sockets authenticate via `?token=`,
       which lands in access logs and browser history. Instead of the raw
       master token, the worker mints a short-lived (60s) HMAC-signed sub-token
       via `POST /_lunora/admin/ws-token` (itself gated by the master token in
       the `Authorization` header). Enforcement is **on by default**: the WS
-      admin gate — worker and Durable Objects both — rejects the raw master
+      admin gate (worker and Durable Objects both) rejects the raw master
       token in `?token=`; only minted sub-tokens (or the master token in the
       `Authorization` header, which never leaks via URLs) authorize. The Studio
       mints sub-tokens itself. Only a legacy client that still puts the master
       token in the URL needs the opt-out (`requireEphemeralWsToken: false`, or
       `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN` set to `0` / `false` / `off` / `no` /
-      `disabled`) — verify it is _not_ set in your deployment.
+      `disabled`). Verify it is _not_ set in your deployment.
 
 ## Rate limiting and abuse
 
 - [ ] Public mutations that create users, send mail, or consume credits are
-      wrapped in [`@lunora/ratelimit`](/docs/packages/ratelimit) middleware —
+      wrapped in [`@lunora/ratelimit`](/docs/packages/ratelimit) middleware;
       the `public_mutation_without_ratelimit` advisor lint finds the gaps.
 - [ ] Consider `protectPublic({ rateLimit, captcha })` from `@lunora/server`
       to chain a rate limit and a CAPTCHA check onto a public procedure in one
-      `.use()` — see [Middleware](/docs/concepts/middleware).
+      `.use()`; see [Middleware](/docs/concepts/middleware).
 
 ## Auth and row-level security
 
 - [ ] Identity is wired: `resolveIdentity` (or `@lunora/auth`'s handler)
-      stamps `ctx.auth` on every call — see
+      stamps `ctx.auth` on every call; see
       [Authentication](/docs/concepts/authentication).
 - [ ] `authAdmin` is set if you use the Studio's auth panel (the deprecated
-      `authIntrospector` option is gone — see the
+      `authIntrospector` option is gone; see the
       [upgrade guide](/docs/migrating/from-alpha)).
 - [ ] Tables holding user data have [RLS](/docs/concepts/rls) policies, and
       fields that must never reach other users are
       [masked](/docs/concepts/masking).
 - [ ] The secure-by-default edge (CORS allowlist, CSRF guard, security
-      headers) is not switched off in production — the deployment-level
+      headers) is not switched off in production; the deployment-level
       security advisors (`cors-wildcard-credentials`,
       `security-headers-disabled`, `csrf-disabled`, …) audit the live worker.
       See [Security](/docs/concepts/security).
 
 ## Migrations
 
-Lunora has two migration surfaces — see [Migrations](/docs/concepts/migrations).
+Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 
 - [ ] **D1 schema migrations** for `.global()` tables are generated
       (`lunora migrate generate`) and committed. `lunora deploy` runs the D1
@@ -111,38 +111,38 @@ Lunora has two migration surfaces — see [Migrations](/docs/concepts/migrations
 
 ## Observability
 
-- [ ] An observability sink is configured on `createWorker` — `otlpSink` to a
+- [ ] An observability sink is configured on `createWorker`: `otlpSink` to a
       collector, `sentrySink`, `analyticsEngineSink`, or several via
       `combineSinks`. Without one, a deployed worker's telemetry goes nowhere.
       See [Observability](/docs/concepts/observability).
 - [ ] You know where errors surface: the Studio groups error events into
-      **Issues** — deterministic fingerprinting collapses the same error
+      **Issues**: deterministic fingerprinting collapses the same error
       across live events and request-log rows into one issue.
 - [ ] If the worker sits behind a gateway or mesh that sets `traceparent`
       itself and you want end-to-end waterfalls, `trustInboundTraceContext` is
-      set. Leave it off on anything an untrusted client can reach directly — the
+      set. Leave it off on anything an untrusted client can reach directly: the
       header is caller-supplied, so honouring it lets a client pick which trace
       its spans and logs join. See
       [Joining a trace from upstream](/docs/concepts/observability#joining-a-trace-from-upstream).
 - [ ] Log access is sorted: `lunora logs` tails a deployed worker live;
-      durable retention needs a `tail_consumers` Worker or `"logpush": true` —
-      see [Deployment → Streaming logs](/docs/deployment#streaming-logs).
+      durable retention needs a `tail_consumers` Worker or `"logpush": true`.
+      See [Deployment → Streaming logs](/docs/deployment#streaming-logs).
 
 ## Health and readiness endpoint
 
 The worker exposes two public probe routes an uptime monitor or load balancer
-can poll. They return a small JSON body — a status, per-check `up`/`down`, and
-static app metadata — and **never** leak a secret, env value, connection
+can poll. They return a small JSON body (a status, per-check `up`/`down`, and
+static app metadata) and **never** leak a secret, env value, connection
 string, or binding name.
 
-- `GET /_lunora/health` — the **aggregate** probe. It runs every registered
+- `GET /_lunora/health` is the **aggregate** probe. It runs every registered
   check and returns `200` when all _critical_ dependencies (the Durable Object
   namespace, D1) are up, `503` when any critical dependency is down. A
   non-critical failure (a presence gap on R2, a queue) degrades the reported
   `status` to `"degraded"` but keeps the `200`, since the deployment still
   serves traffic. The body's `status` is one of `"healthy"`, `"degraded"`, or
   `"unhealthy"`.
-- `GET /_lunora/health/ready` — the **readiness** gate. It runs only the
+- `GET /_lunora/health/ready` is the **readiness** gate. It runs only the
   readiness checks and returns `503` whenever any is unhealthy, so a load
   balancer stops routing to a not-yet-ready instance.
 
@@ -153,19 +153,19 @@ Checklist:
       critical-binding outage pages you. Use `/_lunora/health/ready` for a load
       balancer's origin health / readiness pool.
 - [ ] Decide the **auth posture**. The default is `"public"`: unauthenticated,
-      message-redacted, and **name-redacted** — each check surfaces only its
+      message-redacted, and **name-redacted**: each check surfaces only its
       probe _kind_ (`d1`, `r2`, `queue`, …, with a `#2` suffix if a kind
       repeats) plus `up`/`down`, so the operator's real binding keys never reach
       an anonymous caller. Set it to `"admin"` to bearer-gate the endpoint (via
       `LUNORA_ADMIN_TOKEN`) and include the runtime-authored per-check
-      `message`s **and** the full `kind:key` binding names to aid an operator —
+      `message`s **and** the full `kind:key` binding names to aid an operator,
       but a monitor polling it must then send the token.
 - [ ] Tune `cacheTtlMs` if needed. The last computed report is reused within the
       window so repeated probes (or an unauthenticated flood) don't re-hit the
       bindings on every request. It defaults to `5000` ms in the `"public"`
       posture and `0` (no cache) in `"admin"`; set `0` to always run live.
 - [ ] The Studio's **Deployment health** page (under Observability) reads these
-      same endpoints live — a quick operator view of liveness, readiness, and
+      same endpoints live: a quick operator view of liveness, readiness, and
       per-binding status.
 - [ ] Optionally gate CI on it: `lunora verify --health-url https://<your-app>`
       probes `/_lunora/health` and fails the run on a red status. The flag is
@@ -174,23 +174,23 @@ Checklist:
 ## Limits
 
 - [ ] You've read [Limits](/docs/limits) and know which Cloudflare ceiling
-      you'll hit first — DO SQLite size and per-DO request rate are the usual
+      you'll hit first: DO SQLite size and per-DO request rate are the usual
       sharding signals, subrequest counts bound fan-out reads.
 
 ## Advisors as the final gate
 
-- [ ] Codegen's static advisories are clean — they run on every `lunora dev`
+- [ ] Codegen's static advisories are clean; they run on every `lunora dev`
       save and on deploy, and catch unindexed foreign keys, filters without
       indexes, unguarded admin routes, and more before they ship.
 - [ ] The Studio's **Advisors** panels (Security, RLS, Insights) show no
-      unaddressed `ERROR`-level findings against a staging deployment — the
+      unaddressed `ERROR`-level findings against a staging deployment; the
       runtime lints (hot shards, index utilization, constraint violations)
       need observed traffic. See [Advisors](/docs/concepts/advisors).
 
 ## See also
 
-- [Deployment](/docs/deployment) — the deploy flow this page gates.
-- [Security](/docs/concepts/security) — the secure-by-default posture in
+- [Deployment](/docs/deployment): the deploy flow this page gates.
+- [Security](/docs/concepts/security): the secure-by-default posture in
   detail.
-- [Versioning & stability](/docs/versioning) — what you're pinning when you
+- [Versioning & stability](/docs/versioning): what you're pinning when you
   pin a version.

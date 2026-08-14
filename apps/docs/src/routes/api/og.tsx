@@ -11,8 +11,35 @@ const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/ind
 
 let wasmReady: Promise<void> | null = null;
 
+/** `initWasm` rejects with this once the module has been initialised. */
+const ALREADY_INITIALIZED = /already initialized/i;
+
+/**
+ * Initialises the wasm once per *process*, not once per module instance.
+ *
+ * Two failure modes, both of which made this endpoint answer 500 forever.
+ *
+ * First, `initWasm` throws "Already initialized. The `initWasm()` function can
+ * be used only once." A dev-server module reload drops `wasmReady` while the
+ * wasm itself stays initialised in the process, so the next request calls it
+ * again and fails — permanently, until the server restarts. That is what broke
+ * every generated cover on a dev server that had been up all day. The wasm is
+ * already there, so this is success, not an error.
+ *
+ * Second, caching the promise unconditionally caches a rejection: one failed
+ * fetch — a CDN blip, a cold start racing the network — and every later request
+ * rejects instantly from the cache. Clearing it lets the next request retry.
+ */
 const ensureWasm = (): Promise<void> => {
-    wasmReady ??= initWasm(fetch(RESVG_WASM_URL));
+    wasmReady ??= initWasm(fetch(RESVG_WASM_URL)).catch((error: unknown) => {
+        if (error instanceof Error && ALREADY_INITIALIZED.test(error.message)) {
+            return;
+        }
+
+        wasmReady = null;
+
+        throw error;
+    });
 
     return wasmReady;
 };
@@ -31,7 +58,9 @@ const fetchFont = async (url: string): Promise<ArrayBuffer> => {
     return response.arrayBuffer();
 };
 
-// Fonts are fetched once per cold start and reused (OG responses are cached a day).
+// Fonts are fetched once per cold start and reused (OG responses are cached a
+// day). Cleared on failure for the same reason as the wasm above: a cached
+// rejection would make every later render fail instantly and permanently.
 let fontsPromise: Promise<{ data: ArrayBuffer; name: string; style: "normal"; weight: 400 | 700 }[]> | null = null;
 
 const loadFonts = () => {
@@ -39,11 +68,17 @@ const loadFonts = () => {
         fetchFont(`${FONT_BASE}/geist@latest/latin-400-normal.ttf`),
         fetchFont(`${FONT_BASE}/geist@latest/latin-700-normal.ttf`),
         fetchFont(`${FONT_BASE}/geist-mono@latest/latin-400-normal.ttf`),
-    ]).then(([regular, bold, mono]) => [
-        { data: regular, name: "Geist", style: "normal" as const, weight: 400 as const },
-        { data: bold, name: "Geist", style: "normal" as const, weight: 700 as const },
-        { data: mono, name: "Geist Mono", style: "normal" as const, weight: 400 as const },
-    ]);
+    ])
+        .then(([regular, bold, mono]) => [
+            { data: regular, name: "Geist", style: "normal" as const, weight: 400 as const },
+            { data: bold, name: "Geist", style: "normal" as const, weight: 700 as const },
+            { data: mono, name: "Geist Mono", style: "normal" as const, weight: 400 as const },
+        ])
+        .catch((error: unknown) => {
+            fontsPromise = null;
+
+            throw error;
+        });
 
     return fontsPromise;
 };

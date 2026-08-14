@@ -1,6 +1,11 @@
 ---
 title: Function context
 description: The ctx object passed to every query, mutation, and action — and what each kind is allowed to do with it.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/actions
+    - to: /docs/packages/server
+    - to: /docs/packages/ratelimit
 ---
 
 Every Lunora function receives a `ctx` as the first argument of its handler.
@@ -24,11 +29,11 @@ export const send = mutation.mutation(async ({ ctx, args }) => {
 
 ## The three context types
 
-| Context       | Function kind | `ctx.db`         | Side effects                                       |
-| ------------- | ------------- | ---------------- | -------------------------------------------------- |
-| `QueryCtx`    | `query`       | `DatabaseReader` | none — pure reads                                  |
-| `MutationCtx` | `mutation`    | `DatabaseWriter` | transactional writes against one shard             |
-| `ActionCtx`   | `action`      | `DatabaseWriter` | unrestricted — `fetch`, external APIs, composition |
+| Context       | Function kind | `ctx.db`         | Side effects                                      |
+| ------------- | ------------- | ---------------- | ------------------------------------------------- |
+| `QueryCtx`    | `query`       | `DatabaseReader` | none (pure reads)                                 |
+| `MutationCtx` | `mutation`    | `DatabaseWriter` | transactional writes against one shard            |
+| `ActionCtx`   | `action`      | `DatabaseWriter` | unrestricted: `fetch`, external APIs, composition |
 
 ### `QueryCtx`
 
@@ -45,7 +50,7 @@ Reads plus transactional writes. `ctx.db` is a `DatabaseWriter` (`insert`,
 `patch`, `replace`, `delete` on top of the reader surface), running inside one
 shard's transactional scope. Adds `ctx.scheduler` (enqueue deferred work) and
 `ctx.workflows` (start/inspect durable workflows), and upgrades `ctx.vectors`
-to the mutating `VectorSearch`. `ctx.storage` stays read-only — R2 writes are a
+to the mutating `VectorSearch`. `ctx.storage` stays read-only; R2 writes are a
 side effect reserved for actions. A mutation can compose other mutations and
 queries (`ctx.runMutation`, `ctx.runQuery`), both reusing the same `db` writer.
 
@@ -63,17 +68,17 @@ transactional reads and writes inside a `mutation` and call it from the action.
 
 These are present regardless of kind:
 
-- **`ctx.auth`** — the authenticated identity. `ctx.auth.userId` is the verified
+- **`ctx.auth`**: the authenticated identity. `ctx.auth.userId` is the verified
   user id or `null`; `ctx.auth.getIdentity()` resolves the full claim set.
   Populated by `@lunora/auth` when a session is present.
-- **`ctx.log`** — a structured, function-attributed logger (`log`, `info`,
+- **`ctx.log`**: a structured, function-attributed logger (`log`, `info`,
   `warn`, `error`, `debug`). A drop-in for `console`, except each line is tagged
   with the function path and routed to your observability sink or the dev
   terminal.
-- **`ctx.ip`** — the caller's trusted `CF-Connecting-IP`, or `undefined` for a
+- **`ctx.ip`**: the caller's trusted `CF-Connecting-IP`, or `undefined` for a
   live-subscription re-run, a server-initiated dispatch, or non-Cloudflare
   hosting. Useful as a rate-limit key for anonymous traffic.
-- **`ctx.now`** — the wall-clock instant (epoch ms) the function began, captured
+- **`ctx.now`**: the wall-clock instant (epoch ms) the function began, captured
   once so the whole handler sees a single stable value. Read time from here in a
   `query`/`mutation` instead of `Date.now()`: those handlers must be
   deterministic (they may be re-run on OCC retry / subscription re-eval), and the
@@ -98,7 +103,7 @@ These are present regardless of kind:
 | `runMutation` | —                | ✓                | ✓                  |
 | `runAction`   | —                | —                | ✓                  |
 
-\* An action's `ctx.db` is not transactional — see above.
+\* An action's `ctx.db` is not transactional; see above.
 
 ## Add-on surfaces (codegen-wired)
 
@@ -120,10 +125,3 @@ The base `QueryCtx` / `MutationCtx` / `ActionCtx` in `@lunora/server` do not
 declare these; they appear only after codegen detects the add-on. Middleware
 can also augment `ctx` for downstream handlers (see
 [Middleware](/docs/concepts/middleware)).
-
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Actions](/docs/concepts/actions)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/ratelimit](/docs/packages/ratelimit)

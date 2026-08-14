@@ -1,10 +1,17 @@
 ---
 title: Data residency
 description: Pin Durable Objects to a Cloudflare jurisdiction with .jurisdiction(), and the export→import runbook for moving regions.
+related:
+    - to: /docs/concepts/sharding
+      note: "the `__root__` DO, `.shardBy()`, and `.global()`"
+    - to: /docs/concepts/migrations
+      note: "`defineMigration` and the pre-deploy drift gate"
+    - to: /docs/packages/cli
+      note: "full `lunora export`, `lunora import`, and `lunora deploy` reference"
 ---
 
 Cloudflare [Durable Object jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
-restrict where a DO runs and stores data — for GDPR, FedRAMP, or US data
+restrict where a DO runs and stores data, for GDPR, FedRAMP, or US data
 residency. Declare one on your schema and Lunora pins every DO the app reaches
 to that region.
 
@@ -25,32 +32,32 @@ Codegen reads `.jurisdiction(...)` off the schema and threads it through the
 generated worker, so a single declaration pins **every Durable Object the app
 reaches**:
 
-- **Shard DOs** — every shard-local table (`__root__` and `.shardBy(...)`), so all
+- **Shard DOs**: every shard-local table (`__root__` and `.shardBy(...)`), so all
   reads, writes, and the live-query subscriptions over them stay in-region.
-- **Fan-out** — cross-shard query coordination.
-- **`ctx.scheduler`** — the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
-- **`ctx.containers`** — container DOs and their lifecycle reporting.
+- **Fan-out**: cross-shard query coordination.
+- **`ctx.scheduler`**: the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
+- **`ctx.containers`**: container DOs and their lifecycle reporting.
 
 It does **not** pin, by design:
 
-- **`.global()` tables** — these are D1-backed, not Durable Objects. D1 has its
+- **`.global()` tables**: these are D1-backed, not Durable Objects. D1 has its
   own [location settings](https://developers.cloudflare.com/d1/configuration/data-location/);
   the DO jurisdiction does not apply.
-- **Auth sessions** — `@lunora/auth` stores sessions in D1 (better-auth), so they
+- **Auth sessions**: `@lunora/auth` stores sessions in D1 (better-auth), so they
   follow D1's residency, not this option.
-- **`@lunora/mail` inbound / capture shards** — mail is a scaffolded add-on, not
+- **`@lunora/mail` inbound / capture shards**: mail is a scaffolded add-on, not
   codegen-wired, so its shard access is **not** auto-pinned. Both entry points
   take an optional `jurisdiction` (`createMailerFromEnv({ jurisdiction })` for the
   dev capture inbox, `dispatchToLunoraFunction({ jurisdiction })` for inbound
-  routing) — pass the **same value** you declared on the schema so the mail shard
+  routing). Pass the **same value** you declared on the schema so the mail shard
   co-resides with app data. Omit it and mail uses the un-pinned global namespace.
 
 <Callout type="info">
     **Fail-closed.** If the bound DO namespace can't honour the jurisdiction (an older `@cloudflare/workers-types` without `.jurisdiction()`), the worker throws
-    rather than silently routing to the un-pinned global namespace — a dropped residency constraint is never allowed to leak data out of region.
+    rather than silently routing to the un-pinned global namespace: a dropped residency constraint is never allowed to leak data out of region.
 </Callout>
 
-## Set it once — changing it strands data
+## Set it once: changing it strands data
 
 A Durable Object name maps to a **different ID in each jurisdiction**. So
 toggling, changing, or removing `.jurisdiction(...)` on an app that has already
@@ -68,8 +75,8 @@ and strands all existing shard, scheduler, and session-DO data in the old region
 override the gate to proceed intentionally.
 ```
 
-Revert the change, or — if a region move is genuinely intended — follow the
-runbook below and override the gate explicitly.
+Revert the change, or, if a region move is genuinely intended, follow the runbook
+below and override the gate explicitly.
 
 ## Runbook: moving an app to a new jurisdiction
 
@@ -78,7 +85,7 @@ the worker can still read the old region, then import it after the worker is
 pinned to the new one.** Order matters: once you deploy the jurisdiction change,
 the old DOs become unreachable through the worker.
 
-Do this in a maintenance window — writes that land between the export and the
+Do this in a maintenance window: writes that land between the export and the
 import are not carried over.
 
 <Steps>
@@ -106,7 +113,7 @@ their rows in the import step.
 
 ### Verify the dump
 
-Confirm row counts and file size look right before you touch the schema — this
+Confirm row counts and file size look right before you touch the schema; this
 file is the only copy that bridges the two regions.
 
 ```bash
@@ -146,7 +153,7 @@ recorded shape:
 lunora deploy --allow-schema-drift --update-schema-baseline
 ```
 
-The worker now resolves DOs in the new region — they start empty.
+The worker now resolves DOs in the new region, and they start empty.
 
 </Step>
 
@@ -168,21 +175,15 @@ LUNORA_ADMIN_TOKEN=… lunora import backup.ndjson --prod --url https://app.exam
 ### Verify and clean up
 
 Check parity (row counts, a few spot reads) against the dump. The old region's
-DOs are now orphaned — they hold no further traffic and bill nothing once idle;
-leave them to expire or delete them from the Cloudflare dashboard.
+DOs are now orphaned: they hold no further traffic and bill nothing once idle.
+Leave them to expire or delete them from the Cloudflare dashboard.
 
 </Step>
 
 </Steps>
 
 <Callout type="warn">
-    **Scheduled jobs and sessions don't ride along.** `lunora export` covers table rows, not `SchedulerDO` timer state — in-flight `runAfter` / `runAt` / cron
+    **Scheduled jobs and sessions don't ride along.** `lunora export` covers table rows, not `SchedulerDO` timer state. In-flight `runAfter` / `runAt` / cron
     jobs in the old region are lost; re-enqueue anything that must survive the move. D1-backed auth sessions are unaffected by the jurisdiction change and stay
     put.
 </Callout>
-
-## See also
-
-- [Sharding](/docs/concepts/sharding) — the `__root__` DO, `.shardBy()`, and `.global()`.
-- [Migrations](/docs/concepts/migrations) — `defineMigration` and the pre-deploy drift gate.
-- [CLI](/docs/packages/cli) — full `lunora export`, `lunora import`, and `lunora deploy` reference.

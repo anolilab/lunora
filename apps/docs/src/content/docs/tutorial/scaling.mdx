@@ -1,6 +1,12 @@
 ---
 title: "Tutorial: scaling the chat app"
 description: Take the chat app from one Durable Object to many — shard by channel, put identities in a global table, and keep cross-shard reads off the hot path.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/occ
+    - to: /docs/concepts/migrations
+    - to: /docs/limits
+    - to: /docs/architecture
 ---
 
 The [realtime chat tutorial](/docs/tutorial/realtime-chat) left you with a
@@ -15,7 +21,7 @@ when the numbers say so.
 
 A Durable Object holds up to **10 GB of SQLite** and sustains roughly **1 000
 requests per second**. Lunora warns you well before either ceiling: when the
-`__root__` DO crosses 1 GB — 10% of the storage limit — the runtime logs once per
+`__root__` DO crosses 1 GB (10% of the storage limit), the runtime logs once per
 DO lifetime.
 
 ```text
@@ -34,14 +40,14 @@ lunora insights
 ```
 
 Write-conflict hot-spots mean writers are contending. Read
-[OCC & atomicity](/docs/concepts/occ) before assuming that means sharding —
+[OCC & atomicity](/docs/concepts/occ) before assuming that means sharding;
 a _persistent_ conflict is often a handler conflicting with itself. But
 contention spread across many callers is exactly what a shard key fixes.
 
-## Step 1 — shard the messages
+## Step 1: shard the messages
 
-Our chat has one DO holding every channel's messages. Channels are independent —
-nobody reads two channels in one transaction — which makes `channelId` a natural
+Our chat has one DO holding every channel's messages. Channels are independent
+(nobody reads two channels in one transaction), which makes `channelId` a natural
 shard key. That is the whole test for a good key: _what set of rows changes
 together?_
 
@@ -77,10 +83,10 @@ export const list = query.input({ channelId: v.id("channels") }).query(async ({ 
 It reads one channel, so it addresses one shard, and it is as fast at 5 000
 channels as it was at one.
 
-## Step 2 — put identities in a global table
+## Step 2: put identities in a global table
 
 Sharding by channel raises an immediate question: where do users live? A user is
-not owned by a channel — they appear in many — so `.shardBy("channelId")` is
+not owned by a channel (they appear in many), so `.shardBy("channelId")` is
 wrong for them.
 
 That is what `.global()` is for. The table moves to Cloudflare D1 instead of a
@@ -99,14 +105,14 @@ Reads can hit a regional replica, which makes them fast from anywhere; writes go
 through the primary. `@lunora/d1` wraps the Sessions API so a read following your
 own write sees it.
 
-The trade-off is real and worth stating: a mutation touching both a sharded table
-and a `.global()` table is **not** writing both atomically. Treat the global write
-as a step that can fail on its own.
+The trade-off: a mutation touching both a sharded table and a `.global()` table
+is **not** writing both atomically. Treat the global write as a step that can
+fail on its own.
 
-Everything you do not mark stays in `__root__` — app config, feature flags, small
-per-app state — where it is cheap and strongly consistent.
+Everything you do not mark stays in `__root__` (app config, feature flags, small
+per-app state), where it is cheap and strongly consistent.
 
-## Step 3 — keep fan-out off the hot path
+## Step 3: keep fan-out off the hot path
 
 Here is where a sharded app gets slow if you are not paying attention. This query
 looks harmless:
@@ -120,7 +126,7 @@ It does not pin a shard, so it becomes a **fan-out**: the query coordinator
 dispatches to every shard and merges the results. At 5 000 channels that is 5 000
 dispatches for 50 rows.
 
-Fan-out is a legitimate tool — a nightly report, an admin view, an aggregate you
+Fan-out is a legitimate tool: a nightly report, an admin view, an aggregate you
 compute on a schedule. It is not something to put behind a user-facing render.
 The fix is usually to make the shard explicit:
 
@@ -133,11 +139,11 @@ ctx.db
     .take(50);
 ```
 
-When you genuinely need a cross-channel number — "unread count across all my
-channels" — precompute it. Keep a per-user counter updated by the mutation that
+When you genuinely need a cross-channel number ("unread count across all my
+channels"), precompute it. Keep a per-user counter updated by the mutation that
 writes the message, and read the counter instead of scanning.
 
-## Step 4 — lock down shard access
+## Step 4: lock down shard access
 
 Once you shard, the shard key becomes a **client-supplied address**. Without a
 gate, one tenant could ask for another tenant's Durable Object.
@@ -145,7 +151,7 @@ gate, one tenant could ask for another tenant's Durable Object.
 Lunora default-denies this: a request naming a shard other than the default, or
 requesting a fan-out, is rejected with `403` unless the worker opts in. A
 single-DO app never names a non-default shard, so this changes nothing until the
-day you shard — and on that day it fails closed rather than open.
+day you shard, and on that day it fails closed rather than open.
 
 Wire `authorizeShard` to gate it, deriving the answer from the **verified**
 identity rather than from anything the caller sent:
@@ -166,7 +172,7 @@ createWorker({
 See [Securing shard access](/docs/concepts/sharding#securing-shard-access) for
 the details.
 
-## Step 5 — migrate the data you already have
+## Step 5: migrate the data you already have
 
 Adding `.shardBy()` to a table with rows in it is a data migration, not just a
 schema edit: existing rows live in `__root__` and need to move to their shards.
@@ -200,14 +206,6 @@ shards to confirm rows landed where you expected.
 
 - Shard by what changes together, and not before the numbers say to.
 - Cross-tenant data goes `.global()`; everything unmarked stays in `__root__`.
-- A query that does not pin a shard is a fan-out — keep it off user-facing paths.
+- A query that does not pin a shard is a fan-out, so keep it off user-facing paths.
 - Sharding turns the shard key into an untrusted input, so gate it.
 - Adding a shard key to a populated table is a data migration.
-
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [OCC & atomicity](/docs/concepts/occ)
-- [Migrations](/docs/concepts/migrations)
-- [Limits](/docs/limits)
-- [Architecture](/docs/architecture)

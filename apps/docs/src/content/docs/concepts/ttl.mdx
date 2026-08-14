@@ -1,10 +1,15 @@
 ---
 title: TTL & auto-expiry
 description: Declare a table-level .ttl() so a DO alarm sweep auto-deletes expired rows — sessions, OTPs, and other ephemeral data.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/server
 ---
 
-Ephemeral rows — sessions, one-time passcodes, short-lived tokens, transient
-events — should clean themselves up. A table-level `.ttl(field)` marks an
+Ephemeral rows (sessions, one-time passcodes, short-lived tokens, transient
+events) should clean themselves up. A table-level `.ttl(field)` marks an
 expiry-timestamp column, and a Durable Object alarm sweep deletes rows whose
 expiry has passed. It is coarse and cheap by design: a batched background sweep,
 not a precise per-row schedule.
@@ -14,7 +19,7 @@ not a precise per-row schedule.
 `.ttl(field, { after? })` names an **epoch-millisecond** column that carries the
 row's expiry. Without `after`, the column's value is the absolute expiry instant.
 With `after`, the row expires `after` milliseconds past the column's value
-(`field + after`) — so a single `createdAt` can drive expiry without writing a
+(`field + after`), so a single `createdAt` can drive expiry without writing a
 separate timestamp.
 
 ```ts
@@ -38,7 +43,7 @@ export default defineSchema({
 });
 ```
 
-Writing a row is ordinary — set the expiry column and the sweep does the rest:
+Writing a row is ordinary: set the expiry column and the sweep does the rest.
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
@@ -49,17 +54,17 @@ export const issueOtp = mutation.input({ email: v.string(), code: v.string() }).
 });
 ```
 
-## Sweep semantics — coarse, batched, bounded
+## Sweep semantics: coarse, batched, bounded
 
 The sweep is driven by a DO alarm and deletes expired rows **in batches** so it
 never stalls the shard. That means expiry is eventual within a **bounded
 window**, not to-the-second: a row is removed some time after its expiry passes,
-not at the exact instant. Treat the timestamp as authoritative in your reads —
+not at the exact instant. Treat the timestamp as authoritative in your reads:
 filter out rows whose `expiresAt` is already in the past rather than assuming the
 sweep has already deleted them.
 
 <Callout type="info">
-    `.ttl()` is table-level, coarse expiry — one policy per table, swept in bulk. If you need a precise, per-row schedule (fire an action at an exact time),
+    `.ttl()` is table-level, coarse expiry: one policy per table, swept in bulk. If you need a precise, per-row schedule (fire an action at an exact time),
     reach for [`ctx.scheduler`](/docs/concepts/scheduling) instead. TTL is the cheap default for "delete this whole class of ephemeral rows once they age out."
 </Callout>
 
@@ -76,10 +81,3 @@ the rows outright.
 The [Advisors](/docs/concepts/advisors) lint a `.ttl()` whose target column is
 not a timestamp (an epoch-millisecond number), surfacing it in the Studio before
 the sweep would silently no-op on unparsable values.
-
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Scheduling](/docs/concepts/scheduling)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/server](/docs/packages/server)

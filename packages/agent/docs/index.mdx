@@ -7,8 +7,8 @@ description: Durable AI agents — defineAgent compiles a replay-safe tool-loop 
 model + tools + memory; the definition compiles onto a **Cloudflare Workflow**
 where each LLM turn and each tool call is a named durable step, and every
 message persists idempotently into DO SQLite thread tables. The client
-subscribes to the thread query and watches the conversation stream in live —
-no new transport, no HTTP streaming infrastructure.
+subscribes to the thread query and watches the conversation stream in live, so
+there is no new transport and no HTTP streaming infrastructure to run.
 
 ```sh
 pnpm add @lunora/agent
@@ -45,7 +45,7 @@ durable loop persists through (`agents:agentAppendMessage`, `agents:agentEnsureT
 queries (`agents:agentMessages`, `agents:agentThread`), and wires the typed
 `ctx.agents.<name>` producer.
 
-Merge the thread tables into your schema — they auto-prefix to
+Merge the thread tables into your schema. They auto-prefix to
 `agent_threads` / `agent_messages` and can never collide with app tables:
 
 ```ts
@@ -74,7 +74,7 @@ const { id } = await ctx.agents.support.run({ input: message, owner: ctx.auth.us
 useSubscription(api.agents.agentMessages, { key: threadKey });
 ```
 
-Reuse the same `threadKey` to continue a conversation — the loop reads the
+Reuse the same `threadKey` to continue a conversation; the loop reads the
 persisted history each turn.
 
 `ctx.agents.<name>` is the typed producer surface on Mutation/Action ctx:
@@ -91,38 +91,38 @@ persisted history each turn.
 `defineAgent` exposes the AI SDK's loop-shaping seams, evaluated per turn inside
 the durable loop:
 
-- **`maxTurns`** — hard cap on LLM turns. Hitting it stops the run with
+- **`maxTurns`**: hard cap on LLM turns. Hitting it stops the run with
   `result.stopped === "maxTurns"`.
-- **`stopWhen`** — a stop condition (e.g. `stopWhen: hasToolCall("finalize")`);
+- **`stopWhen`**: a stop condition (e.g. `stopWhen: hasToolCall("finalize")`);
   stopping this way reports `result.stopped === "stopCondition"`. A clean
   final answer (no pending tool calls) reports `result.stopped === "final"`.
-- **`prepareStep`** — mutate the request just before a turn (swap the model,
-  trim messages, force a tool). Must be deterministic — it runs on replay.
-- **`repairToolCall`** — repair a malformed tool call the model emits (AI SDK
+- **`prepareStep`**: mutate the request just before a turn (swap the model,
+  trim messages, force a tool). Must be deterministic, because it runs on replay.
+- **`repairToolCall`**: repair a malformed tool call the model emits (AI SDK
   `experimental_repairToolCall`): given `{ toolCall, error, tools, inputSchema }`,
   return a corrected call or `null` to give up. Runs inside the turn, so keep it
   deterministic.
-- **`compaction`** — automatic history compaction. Set
+- **`compaction`**: automatic history compaction. Set
   `compaction: { maxMessages }` and once the thread history exceeds
   `maxMessages`, the loop summarizes the older messages (all but the most recent
   `keepRecent`, default `ceil(maxMessages / 2)`) into one system-message brief
-  and prompts the model with that brief plus the recent tail — keeping context
+  and prompts the model with that brief plus the recent tail, so context stays
   bounded as a conversation grows. The summary is produced inside the turn's
   memoized durable step (replay-safe) by a cheaper `compaction.model` if set,
   else the agent's model; `prepareStep` still runs after and can override
   further. Absent, the full history is sent every turn.
-- **`output`** — a `FlexibleSchema` (zod or `jsonSchema(...)`) for a structured
+- **`output`**: a `FlexibleSchema` (zod or `jsonSchema(...)`) for a structured
   final answer; the typed value is surfaced on `result.output`.
-- **`onStepFinish`** — a callback after each turn (observability/side channels).
-- **`usage`** — token usage is accumulated across turns and surfaced on the
+- **`onStepFinish`**: a callback after each turn (observability/side channels).
+- **`usage`**: token usage is accumulated across turns and surfaced on the
   run result and persisted onto the thread.
-- **`telemetry`** — an ai@7 `TelemetryOptions` handed to every turn; set
+- **`telemetry`**: an ai@7 `TelemetryOptions` handed to every turn; set
   `telemetry.integrations` to trace turns and tool calls.
-  the [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships
-  ready-made ones — `consoleTelemetry` (zero-dependency), `combineTelemetry`,
+  The [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships
+  ready-made ones: `consoleTelemetry` (zero-dependency), `combineTelemetry`,
   `otlpTelemetry` (ships `gen_ai.*` spans over OTLP to any collector), and the
   dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
-  (privacy-safe by default — no prompt/output recorded without opt-in).
+  (privacy-safe by default, with no prompt/output recorded without opt-in).
 
 ```ts
 import { hasToolCall } from "@lunora/ai";
@@ -139,26 +139,26 @@ export const support = defineAgent({
 ## Telemetry integrations
 
 The `@lunora/agent/telemetry` subpath ships ready-made `Telemetry` integrations
-for the `telemetry.integrations` array — each traces every LLM turn and tool call
+for the `telemetry.integrations` array; each traces every LLM turn and tool call
 in the durable loop. They are **privacy-safe by default**: `recordInputs` and
 `recordOutputs` both default to `false`, so no prompt, message, tool argument,
-generated text, or tool result is recorded without an explicit opt-in — only
-structural metadata (model id, finish reason, token counts, tool name, timing,
-success/failure).
+generated text, or tool result is recorded without an explicit opt-in. Only
+structural metadata is recorded (model id, finish reason, token counts, tool
+name, timing, success/failure).
 
-- **`consoleTelemetry`** — a **zero-dependency** structured console tracer.
-- **`combineTelemetry`** — fan the lifecycle out to several integrations and
+- **`consoleTelemetry`**: a **zero-dependency** structured console tracer.
+- **`combineTelemetry`**: fan the lifecycle out to several integrations and
   **nest** their execution wrappers (`executeLanguageModelCall`, `executeTool`)
   right-to-left, so the first integration is outermost.
-- **`sentryTelemetry`** / **`braintrustTelemetry`** — **dependency-injected**
-  bridges: you pass your own initialized Sentry namespace / Braintrust logger, so
+- **`sentryTelemetry`** / **`braintrustTelemetry`**: **dependency-injected**
+  bridges. You pass your own initialized Sentry namespace / Braintrust logger, so
   the heavy vendor SDK is never imported by Lunora. Sentry turns model calls and
   tool executions into spans (`op: "gen_ai.generate"` / `"gen_ai.execute_tool"`)
   and routes errors to `Sentry.captureException`; Braintrust logs `type: "llm"` /
   `type: "tool"` `logger.traced` spans.
-- **`otlpTelemetry`** — ships a `gen_ai.*` **generation span** per model turn (and
-  a span per tool call) over OTLP-over-HTTP to any collector — the Lunora cloud, or
-  your own — so agent generations land in the same trace store as the rest of your
+- **`otlpTelemetry`**: ships a `gen_ai.*` **generation span** per model turn (and
+  a span per tool call) over OTLP-over-HTTP to any collector, the Lunora cloud or
+  your own, so agent generations land in the same trace store as the rest of your
   app's [telemetry](/docs/concepts/observability#generation-spans-ai). Zero SDK
   dependency (it just `fetch`es). Pass `{ endpoint, token }` (read from the injected
   `LUNORA_OTLP_ENDPOINT` / `LUNORA_OTLP_TOKEN` on the platform) and, optionally, a
@@ -187,27 +187,27 @@ bridges.
 
 ## Concurrency + cancellation
 
-Only one run owns a thread at a time — two concurrent runs on the same
+Only one run owns a thread at a time: two concurrent runs on the same
 `threadKey` would interleave their messages into the shared per-thread sequence
 counter. The `onConcurrentRun` policy decides what happens when a run starts on
 a thread that already has a _different_ instance in flight:
 
-- **`"reject"`** (default) — fail the new run fast with a `CONFLICT` error.
-- **`"replace"`** — terminate the in-flight instance and take the thread over.
-- **`"queue"`** — reserved for a future durable queue; currently degrades to
+- **`"reject"`** (default): fail the new run fast with a `CONFLICT` error.
+- **`"replace"`**: terminate the in-flight instance and take the thread over.
+- **`"queue"`**: reserved for a future durable queue; currently degrades to
   `"reject"` (no queue exists yet).
 
 A workflow _replay_ re-enters under the same instance id and is never treated as
 a concurrent run.
 
 Cancel from the server with `ctx.agents.<name>.cancel(instanceId)`, or from the
-client through the framework hooks (below) — `cancel()` terminates the in-flight
+client through the framework hooks (below). `cancel()` terminates the in-flight
 instance and moves the thread to `"cancelled"`.
 
 ## Human-in-the-loop approvals
 
 Gate a side-effecting tool behind a human decision with `needsApproval` (a
-boolean, or a per-input predicate — mirrors the AI SDK's `needsApproval`):
+boolean, or a per-input predicate; this mirrors the AI SDK's `needsApproval`):
 
 ```ts
 chargeCard: defineAgentTool({
@@ -219,7 +219,7 @@ chargeCard: defineAgentTool({
 ```
 
 When the gate resolves truthy the run **pauses**: the thread moves to
-`"awaiting_input"` and the workflow **hibernates** on `approval:<toolCallId>` —
+`"awaiting_input"` and the workflow **hibernates** on `approval:<toolCallId>`, so
 no compute is billed while it waits. A client resolves it via the
 auto-registered `agents:agentResolveApproval` (the framework `approve`/`reject`
 helpers dispatch it). On approve the tool runs exactly as normal; on reject it
@@ -233,12 +233,12 @@ Every framework adapter ships two hooks over the same live subscription. The
 generated `api` drives them; you pass the `run`/`send` and `cancel` mutation
 references your app exposes.
 
-- **`useAgent`** (`useAgent` / `createAgent` / `agent`) — the thin driver:
+- **`useAgent`** (`useAgent` / `createAgent` / `agent`) is the thin driver:
   `{ run, cancel, pending, status, thread }`. `run(input, args?)` dispatches
   the run mutation with `{ input, threadKey }` merged over `runArgs`; `cancel()`
   terminates the in-flight instance (a no-op when nothing is running or no
   cancel ref was supplied); `status`/`thread` flow live from `agents:agentThread`.
-- **`useAgentChat`** — the batteries-included chat surface:
+- **`useAgentChat`** is the batteries-included chat surface:
   `{ send, approve, reject, cancel, messages, status, streamingText }`. `send`
   appends an optimistic user turn then starts/continues the run; `approve`/`reject`
   resolve a pending tool approval; `messages` is the live thread.
@@ -265,10 +265,10 @@ the remaining follow-up.
 
 ## Synced state
 
-Beyond the message log, a run carries a small **synced state** object — a
+Beyond the message log, a run carries a small **synced state** object: a
 `setState`-style scratchpad (the plan, a step counter, a progress summary) that
 a tool writes and a client watches live. Seed it with `initialState` on the
-agent (set once, on thread creation — first writer wins, so a replay never
+agent (set once, on thread creation, where first writer wins so a replay never
 re-seeds), then read and write it from any tool's ctx:
 
 ```ts
@@ -304,19 +304,19 @@ const planner = defineAgent({
 ```
 
 `setState(state)` is an **absolute replace** (not a patch). The value you pass
-must be **replay-stable** — a constant or derived purely from the tool's
+must be **replay-stable**: a constant or derived purely from the tool's
 `input`, never from `Date.now()` / `Math.random()`. A step that fails mid-body is
 retried at-least-once and re-runs the whole `execute` against state a prior
 attempt may already have written, so re-applying a replay-stable value is a
 no-op and a replay converges. A value derived from `getState()` is **not**
 replay-stable: a naive read-modify-write (`setState({ step: (await
 getState()).step + 1 })`) **double-advances** on a retry because the retry
-re-reads the already-written value — dedupe it on `idempotencyKey` as above.
+re-reads the already-written value; dedupe it on `idempotencyKey` as above.
 `getState()` reads the thread's current state through the owner-gated
-`agents:agentState` query — the same identity gate as the message reads, so only
+`agents:agentState` query, the same identity gate as the message reads, so only
 the thread's owner sees it.
 
-On the client, subscribe with **`useAgentState`** — a thin wrapper over the
+On the client, subscribe with **`useAgentState`**, a thin wrapper over the
 `agents:agentState` subscription that re-renders whenever a tool calls
 `setState` (a dedicated query with a per-socket JSON memo suppresses no-op
 pushes on unrelated thread writes):
@@ -335,19 +335,19 @@ that never touch `getState`/`setState` behaves exactly as before, and the
 
 ## Tools from anywhere
 
-Beyond inline `defineAgentTool`, three helpers pull tools from other surfaces —
-each returns an `AgentToolDefinition` you drop into the `tools` map:
+Beyond inline `defineAgentTool`, three helpers pull tools from other surfaces.
+Each returns an `AgentToolDefinition` you drop into the `tools` map:
 
-- **`functionTool`** — expose a Lunora function as a tool. `execute` dispatches
+- **`functionTool`**: expose a Lunora function as a tool. `execute` dispatches
   the referenced function; `inputSchema` should mirror its argument validator.
-- **`agentAsTool`** — adapt a declared agent into a tool so a supervisor can
+- **`agentAsTool`**: adapt a declared agent into a tool so a supervisor can
   delegate to specialists. It starts a **child run** on the child agent's
   Workflow binding, polls to completion, and returns the child's final answer.
   Child `threadKey` + instance id derive from the parent's (replay-stable), so a
   retried step reuses the same child run (idempotent). Options: `name` (child
   export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 120),
   `pollIntervalMs` (default 500).
-- **`mcpTools`** — adapt the tools an MCP server lists. Pass a pre-connected
+- **`mcpTools`**: adapt the tools an MCP server lists. Pass a pre-connected
   `client` (the SSE/HTTP transport cannot run in workerd), optionally filtered
   with `only` and namespaced with `prefix`.
 
@@ -363,10 +363,10 @@ tools: {
 
 ## Sandbox tools (batteries-included browser + containers + filesystem)
 
-Batteries-included tools give an agent a **headless browser**, a **sandboxed
-container**, and an **R2-backed filesystem** with minimal glue. Import them from
-`@lunora/agent` (or the `@lunora/agent/sandbox` subpath) and drop them into
-`tools` — codegen does the rest:
+These tools give an agent a **headless browser**, a **sandboxed container**, and
+an **R2-backed filesystem**. Import them from `@lunora/agent` (or the
+`@lunora/agent/sandbox` subpath) and drop them into `tools`; codegen does the
+rest:
 
 ```ts
 import { browserTool, containerTool, defineAgent, fsTool } from "@lunora/agent";
@@ -387,14 +387,14 @@ export const operator = defineAgent({
 - **`browserTool(opts?)`** exposes Cloudflare Browser Rendering as one tool. The
   model sets `op` to `screenshot` \| `pdf` \| `content` \| `scrape` plus a `url`;
   `screenshot`/`pdf` return base64 bytes, `content`/`scrape` return HTML. The
-  model picks the `url` with no allowlist, so this is an **SSRF surface** — a
+  model picks the `url` with no allowlist, so this is an **SSRF surface**: a
   prompt-injected model can aim it at an internal/link-local endpoint. It runs
   **unattended by default**; pass `opts.needsApproval` (a boolean or a predicate)
   to gate it.
 - **`containerTool(name, opts?)`** talks to the declared container at
   `ctx.containers.<name>`. `op: "fetch"` sends an HTTP request (`path`, `method`,
   `body`); `op: "exec"` runs a command (routed as a `POST /exec` the container
-  app serves). **Command execution is gated behind a human approval by default** —
+  app serves). **Command execution is gated behind a human approval by default**:
   an `exec`, and a `fetch` whose path resolves to that same `/exec` route (both
   reach the container's command path, so gating on the `op` name alone would let a
   `fetch` to `/exec` run a command unattended). A `fetch` to any _other_ route
@@ -402,7 +402,7 @@ export const operator = defineAgent({
   `opts.needsApproval` (a boolean or a predicate over the input) to widen or
   disable the gate.
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
-  filesystem** — `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
+  filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.
   `"agents/coder"`); a `..` that would escape the root is rejected server-side, so
   the model can only touch its own prefix. **The writing ops (`write`/`rm`) are
@@ -413,13 +413,13 @@ export const operator = defineAgent({
 
 Why it needs little wiring: a tool's `execute` runs inside the durable tool step,
 which has no `ctx.browser`/`ctx.containers`. Both tools instead dispatch to a
-single internal action — `sandbox:invoke` — that codegen **auto-registers** the
+single internal action, `sandbox:invoke`, that codegen **auto-registers** the
 moment a `lunora/` file imports either helper (no re-export boilerplate). That
 action runs on an action ctx, which is where `ctx.browser` lives (and
 `ctx.containers` rides every ctx once you declare a container). Importing
 `browserTool` also makes codegen provision the `BROWSER` wrangler binding.
 `browserTool` still needs `ctx.browser` wired the same way a direct
-`@lunora/browser` user does — supply a `config.browser` thunk
+`@lunora/browser` user does: supply a `config.browser` thunk
 (`createBrowser({ binding: env.BROWSER, launch })`, with the optional
 `@cloudflare/playwright` `launch` peer) to `createShardDO()`; codegen never
 injects that peer, so the browser op throws a directed error until it is wired.
@@ -428,7 +428,7 @@ identical text.
 
 ## Code mode (`codeTool`)
 
-Normally the model calls one tool per turn — a round-trip each. `codeTool` lets
+Normally the model calls one tool per turn, a round-trip each. `codeTool` lets
 it compose **several** tool calls in **one** turn as a script, feeding a later
 call's input from an earlier call's output:
 
@@ -453,7 +453,7 @@ in one turn it can `findUser`, then feed `{ "$from": "u", "$path": "id" }` into
 each step's output plus the `final` one.
 
 This is a **safe interpreted data-flow** between the whitelisted tools you hand
-`codeTool` — not arbitrary JavaScript — so there is no `eval` or isolate and it
+`codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
 durable context a normal call gets, keeping its RLS and its own `needsApproval`
 gate (a script can't smuggle a call past a sub-tool's approval). Scripts are
@@ -462,10 +462,10 @@ isolate (the Cloudflare Worker Loader path) is a separate future mode.
 
 ## Skills
 
-A **skill** is a reusable bundle of expertise — an instruction fragment, tools,
-and retrieval knowledge — that many agents can share. `defineSkill` packages
-them; `defineAgent({ skills: [...] })` composes them in. It is reuse-first: a
-skill's `tools` carry the **same** `AgentToolDefinition` shape agents already use
+A **skill** is a reusable bundle many agents can share: an instruction fragment,
+tools, and retrieval knowledge. `defineSkill` packages them;
+`defineAgent({ skills: [...] })` composes them in. A skill's `tools` carry the
+**same** `AgentToolDefinition` shape agents already use
 (`functionTool` / `mcpTools` / `agentAsTool`), and `knowledge` reuses `memory`'s
 retrieval verbatim.
 
@@ -500,8 +500,8 @@ export const support = defineAgent({
 `defineAgent` folds the skills at declaration time:
 
 - **Tools merge into one flat namespace.** A skill's tools join the agent's own
-  `tools`. The model sees a single namespace, so a name **collision** — between a
-  skill and the agent, or between two skills — throws at `defineAgent` (name the
+  `tools`. The model sees a single namespace, so a name **collision**, between a
+  skill and the agent or between two skills, throws at `defineAgent` (name the
   colliding tool and rename one). This is the strict cousin of `mcpTools`'
   `prefix`.
 - **Instructions compose in order.** The agent's own `instructions` come first,
@@ -514,7 +514,7 @@ export const support = defineAgent({
   keeps the historic `memory:retrieve` step name, so adding skills never disturbs
   an in-flight run's replay.
 
-Skills carry no runtime of their own — they are pure config the agent absorbs,
+Skills carry no runtime of their own; they are pure config the agent absorbs,
 so an agent with skills compiles onto the same durable Workflow as one without.
 
 ### Authoring a skill as markdown
@@ -557,15 +557,15 @@ skill in markdown pay for it.
 
 The `name` travels **with** the file, so a skill moves between projects without a
 matching TypeScript wrapper. Tools and `knowledge` stay in the second argument,
-because they are code — everything else behaves exactly as the object form,
+because they are code. Everything else behaves exactly as the object form,
 including the name rules, so a reserved or malformed `name` fails identically.
 
 Three things worth knowing:
 
 - **Pass the source, not a path.** A Worker has no filesystem to read one from at
   runtime, so the markdown is imported (`?raw` under Vite) and bundled.
-- **The frontmatter is real YAML.** Keys this does not read — `description`,
-  licences, tool allow-lists meant for other tooling — parse rather than confuse
+- **The frontmatter is real YAML.** Keys this does not read (`description`,
+  licences, tool allow-lists meant for other tooling) parse rather than confuse
   it, including list- and nested-valued ones.
 - **Invalid YAML fails as invalid YAML.** It does not degrade to "no
   frontmatter", which would report a missing `name` for a file whose real problem
@@ -595,7 +595,7 @@ Each fire is an independent run (its own instance id), so give recurring jobs a
 stable `threadKey` only if you want them to share one conversation thread.
 
 For a **one-off delay** (rather than a recurring cron), pass the same
-`agents.<name>` reference to `ctx.scheduler.runAfter`/`runAt` — each starts a
+`agents.<name>` reference to `ctx.scheduler.runAfter`/`runAt`. Each starts a
 single durable run when the timer fires, with the trailing object as its
 `AgentRunInput`:
 
@@ -610,7 +610,7 @@ Give an agent an `onEmail` mapper and codegen wires it onto the worker's
 top-level `email()` handler (via `@lunora/agent/inbound`), so a message routed by
 [Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/)
 starts a durable run. The mapper turns a parsed `InboundEmail` into an
-`AgentRunInput` — or returns `null`/`undefined` to decline. When several agents
+`AgentRunInput`, or returns `null`/`undefined` to decline. When several agents
 declare `onEmail`, each received message is offered to them in order and the
 **first** that returns a run claims it:
 
@@ -639,7 +639,7 @@ export const support = defineAgent({
 });
 ```
 
-**Security — inbound mail is untrusted and a run dispatches privileged.**
+**Security: inbound mail is untrusted and a run dispatches privileged.**
 Cloudflare Email Routing authenticates only the _recipient_ domain, not the
 _sender_: the envelope `from`, subject, and body are trivially spoofable. Make
 trust decisions on `email.authentication` (the DKIM/SPF/DMARC verdicts) and treat
@@ -684,7 +684,7 @@ const handler = dispatchAgentChannel([{ agent: support, binding: "SUPPORT_AGENT"
 ```
 
 `dispatchAgentChannel` detects the channel from the signature headers and
-verifies the request **over the raw body** before any mapper runs — Slack HMAC
+verifies the request **over the raw body** before any mapper runs: Slack HMAC
 over `v0:timestamp:body` (with a timestamp-freshness replay guard), GitHub HMAC
 over the body, Discord Ed25519 over `timestamp+body` (and it answers the Discord
 PING with a PONG). A request that fails verification is rejected `401` and never
@@ -694,21 +694,21 @@ are exported too if you wire your own routing.
 > **Security.** Trust comes ONLY from the signature check; the payload is
 > attacker-controlled. Derive the run `owner` from the verified channel identity
 > (the workspace / installation the secret belongs to), never from an arbitrary
-> payload field — the run dispatches RLS-bypassed under whatever `owner` you set.
+> payload field; the run dispatches RLS-bypassed under whatever `owner` you set.
 
 ## Access control
 
 Pass `owner: ctx.auth.userId` when starting a run. An **owned** thread's public
 queries (`agents:agentThread`, `agents:agentMessages`) answer only for a caller
-with that verified identity — for anyone else the thread is indistinguishable
+with that verified identity; for anyone else the thread is indistinguishable
 from one that doesn't exist, so key-guessing leaks nothing. The owner is
 immutable after the first run. Omitting `owner` leaves the thread readable by
-anyone who knows its key — only appropriate for single-tenant or anonymous
-apps.
+anyone who knows its key, which is only appropriate for single-tenant or
+anonymous apps.
 
 The agent tables are RLS-exempt (`.public()`): under a `.rls("required")`
 schema the auto-registered runtime functions cannot engage app RLS policies,
-so access control is enforced _inside_ them instead — the owner gate on reads,
+so access control is enforced _inside_ them instead: the owner gate on reads,
 and internal-only visibility on every write.
 
 ## Replay-safety (the correctness core)
@@ -719,7 +719,7 @@ and internal-only visibility on every write.
   crashed run resumes without re-charging a card or re-paying for a model
   call.
 - **Failed steps retry at-least-once.** A tool that dies mid-body will run
-  again — side-effecting tools receive their step name as
+  again, so side-effecting tools receive their step name as
   `ctx.idempotencyKey` and must dedupe on it.
 - **Messages persist idempotently.** Every write is keyed
   `INSTANCE:ROLE:POSITION` and deduped by a unique index, so replays never
@@ -728,7 +728,7 @@ and internal-only visibility on every write.
 ## Memory (RAG)
 
 Point `memory.source` at an action that wraps
-[`@lunora/ai/rag`](/docs/packages/ai)'s `retrieve` — the loop runs it as a
+[`@lunora/ai/rag`](/docs/packages/ai)'s `retrieve`. The loop runs it as a
 durable step at run start and injects the returned `context` into every
 turn's prompt:
 
@@ -742,15 +742,15 @@ export const searchDocs = action.input({ query: v.string(), topK: v.optional(v.n
 export const support = defineAgent({ memory: { source: "rag:searchDocs", topK: 5 }, model: "..." });
 ```
 
-Dispatching to a real action keeps retrieval inside a fully wired ctx —
-codegen-resolved vector bindings, RLS, observability — instead of
+Dispatching to a real action keeps retrieval inside a fully wired ctx
+(codegen-resolved vector bindings, RLS, observability) instead of
 re-plumbing vectors into the workflow runtime.
 
 ### Agentic retrieval (`mode: "agentic"`)
 
 The default (`mode: "inject"`) fetches top-k context **once** per run. Set
 `mode: "agentic"` and the loop instead mints a **`searchMemory` tool** the model
-calls _mid-reasoning_ — deciding for itself what to look up, and searching again
+calls _mid-reasoning_: it decides for itself what to look up, and searches again
 with a refined query if the first hits fall short (multi-hop "read what you
 need", à la Recursive-LM). No context is auto-injected; nothing reaches the
 prompt until the model asks for it.
@@ -763,7 +763,7 @@ export const support = defineAgent({
 });
 ```
 
-`searchMemory` returns a **compact** projection — ranked `{ id, sourceId, score,
+`searchMemory` returns a **compact** projection: ranked `{ id, sourceId, score,
 snippet }` hits plus deduped `sources`, with the giant joined `.context` string
 dropped (each `snippet` is truncated to `snippetChars`, default 240). The model
 reads the snippets and decides what, if anything, to pull in full.
@@ -780,12 +780,12 @@ export const support = defineAgent({
 ```
 
 Because every tool call is already a memoized durable step
-(`tool:searchMemory:<id>`), multi-hop retrieval is **crash-safe for free** — a
+(`tool:searchMemory:<id>`), multi-hop retrieval is **crash-safe for free**: a
 resume replays completed searches from the journal rather than re-querying. A
 skill's agentic `knowledge` mints the same tools namespaced by skill name
 (`search_<skill>` / `read_<skill>`).
 
-> **`activeTools` and the memory tools.** The memory tools are ordinary tools —
+> **`activeTools` and the memory tools.** The memory tools are ordinary tools:
 > subject to `activeTools`, `toolChoice`, `stopWhen`, and bounded by `maxTurns`.
 > If you pin `activeTools`, you **must** list every minted memory tool name (e.g.
 > `searchMemory`); `defineAgent` **throws at declaration time** if `activeTools`
@@ -797,7 +797,7 @@ skill's agentic `knowledge` mints the same tools namespaced by skill name
 Semantic memory (the default `kind: "semantic"`) retrieves _passages_. A
 **graph** memory instead builds structured, persistent knowledge: it extracts
 the **entities** and **relations** stated in each run and traverses them on the
-next one. Set `kind: "graph"` — no `source` action is needed, and none of your
+next one. Set `kind: "graph"`; no `source` action is needed, and none of your
 own infrastructure either:
 
 ```ts
@@ -810,8 +810,8 @@ export const support = defineAgent({
 - **Owner-scoped, persists across threads.** The graph is keyed by the run's
   `owner` (the verified identity), so a fact learned in one conversation is
   available in _every_ later conversation that same user has. An **anonymous run
-  (no `owner`) no-ops** the graph tier for that run — it is owner-scoped by
-  design.
+  (no `owner`) no-ops** the graph tier for that run, because the tier is
+  owner-scoped by design.
 - **Owner-scoped, _not_ agent-scoped.** The `agent_entities` / `agent_edges`
   rows carry an `owner` but no agent discriminator, so **every graph-memory agent
   in the deployment shares one graph per owner**. A fact one agent extracts is
@@ -827,24 +827,24 @@ export const support = defineAgent({
   `{ entities, relations }`, then idempotently upserts them. Because the step is
   memoized and the upsert is an absolute set (never an increment), a crash +
   resume **never re-extracts or double-counts**. A cheaper `graph.extractionModel`
-  can be set for this step. Extraction is best-effort — a failure never fails a
+  can be set for this step. Extraction is best-effort: a failure never fails a
   run whose answer is already persisted.
 - **Bounded traversal on read.** A `memory:traverse` step tokenizes the input,
   matches seed entities, then walks the graph with a **bounded JS breadth-first
-  search** (`depth`, `maxSeeds`, `fanOut`, `maxNodes` — defaults 2 / 4 / 8 / 32),
+  search** (`depth`, `maxSeeds`, `fanOut`, `maxNodes`; defaults 2 / 4 / 8 / 32),
   rendering deterministic `- alice —[works_at]→ acme` triples that are injected
   like any other memory context. Reads are always bounded; **storage is not**.
-- **Storage grows unbounded — no eviction or TTL (yet).** Every run appends new
+- **Storage grows unbounded, with no eviction or TTL (yet).** Every run appends new
   entities/edges (deduped by normalized name / triple, weight last-write-wins),
   and nothing prunes stale ones. Traversal stays fast because it is bounded by
   the knobs above, but the tables keep growing over an owner's lifetime; a
   weight/age-based prune is a planned follow-up. Note too that normalization is
   light (trim / collapse whitespace / lowercase), so distinct senses of the same
-  string (e.g. two people named "alex") **merge into one node** — keep names
+  string (e.g. two people named "alex") **merge into one node**, so keep names
   specific if that matters.
 
 > **Why JS-BFS, not `WITH RECURSIVE`.** The loop runs inside a Workflow with no
-> DB handle — it reaches SQLite only by dispatching a registered function whose
+> DB handle; it reaches SQLite only by dispatching a registered function whose
 > typed `ctx.db` exposes indexed reads, not raw SQL. Traversal is therefore one
 > dispatch doing bounded, indexed local reads (replay-stable: no `Date.now()` or
 > randomness), which keeps the whole graph on one owner-stable shard.
@@ -854,7 +854,7 @@ export const support = defineAgent({
 Where semantic and graph memory recall by _relevance_, episodic memory recalls
 by _recency_: it summarizes each completed run into one line and, on the next
 run, injects the owner's most recent episodes as a short timeline. Set
-`kind: "episodic"` — no `source` action, no infrastructure:
+`kind: "episodic"`; no `source` action and no infrastructure:
 
 ```ts
 export const support = defineAgent({
@@ -870,7 +870,7 @@ export const support = defineAgent({
 - **Auto-summarized on write.** After a run answers, a memoized `memory:episode`
   step runs one LLM call (a cheaper `episodic.extractionModel` can be set) to
   condense the exchange into a one-sentence episode, then idempotently records
-  it — a crash + resume never double-records the same run.
+  it, so a crash + resume never double-records the same run.
 - **Recency recall on read.** A `memory:recall` step returns the owner's most
   recent `recall` episodes (default 5, max 20) rendered oldest → newest as
   `- <summary>` lines, injected like any other memory context.
@@ -879,7 +879,7 @@ export const support = defineAgent({
 
 ## Testing
 
-`@lunora/testing` ships `agentHarness` — an in-memory double over the same
+`@lunora/testing` ships `agentHarness`, an in-memory double over the same
 `AgentGenerate` turn seam the production loop runs on. You **script the model
 turns** (never a real model or network) and assert the persisted thread,
 dispatched functions, and run result:
@@ -905,8 +905,8 @@ runtime stubs to back the functions your tools dispatch to.
 
 ## See also
 
-- [@lunora/ai](/docs/packages/ai) — the model surface (`ctx.ai`) + `defineRag`
-- [@lunora/workflow](/docs/packages/workflow) — the durable-execution engine underneath
-- [`@lunora/agent/telemetry`](#telemetry-integrations) — ready-made `telemetry.integrations` (console, Sentry, Braintrust)
-- [@lunora/testing](/docs/packages/testing) — `agentHarness` and the wider test toolkit
-- [@lunora/mcp](/docs/packages/mcp) — expose an agent to external MCP clients as an `agent_<name>` tool (see [Expose an agent](/docs/packages/mcp#expose-an-agent))
+- [@lunora/ai](/docs/packages/ai): the model surface (`ctx.ai`) + `defineRag`
+- [@lunora/workflow](/docs/packages/workflow): the durable-execution engine underneath
+- [`@lunora/agent/telemetry`](#telemetry-integrations): ready-made `telemetry.integrations` (console, Sentry, Braintrust)
+- [@lunora/testing](/docs/packages/testing): `agentHarness` and the wider test toolkit
+- [@lunora/mcp](/docs/packages/mcp): expose an agent to external MCP clients as an `agent_<name>` tool (see [Expose an agent](/docs/packages/mcp#expose-an-agent))

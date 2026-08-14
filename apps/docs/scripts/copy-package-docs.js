@@ -153,7 +153,12 @@ async function sanitizeMdx(filePath) {
 
         if (fmEnd !== -1) {
             const frontmatter = content.substring(3, fmEnd);
-            const fixedFm = frontmatter.replaceAll(/^(\w[\w-]*):\s+(?!["'|>])(.+)$/gm, (match, key, value) => {
+            // `[ \t]+`, not `\s+`: `\s` matches the newline, so a key whose value
+            // is a block below it — `related:` and its list of links — captured
+            // the *next* line as its value, found a colon in it, and quoted the
+            // whole thing. That flattens the list into a string and the page then
+            // fails to parse its own frontmatter.
+            const fixedFm = frontmatter.replaceAll(/^(\w[\w-]*):[ \t]+(?!["'|>])(.+)$/gm, (match, key, value) => {
                 if (/[@:#{}[\],&*?|><!%`]/.test(value)) {
                     const escapedValue = value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
 

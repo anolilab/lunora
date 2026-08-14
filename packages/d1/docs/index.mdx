@@ -1,6 +1,12 @@
 ---
 title: "@lunora/d1"
 description: D1 Sessions API client + migration runner for global tables.
+related:
+    - to: /docs/packages/cli
+      note: "the `lunora migrate generate` command"
+    - to: /docs/packages/do
+      note: "shard-local storage (no migrations needed)"
+    - to: /docs/concepts/schema
 ---
 
 `@lunora/d1` is the D1-backed storage adapter for tables marked
@@ -18,21 +24,21 @@ const { results } = await session.all("SELECT * FROM users WHERE id = ?", userId
 
 ## `D1Client`
 
-The entry point. Construct it with the bare D1 binding — `new D1Client(env.DB)`.
+The entry point. Construct it with the bare D1 binding: `new D1Client(env.DB)`.
 The constructor takes the binding only; bookmarks are passed per session, not
 at construction.
 
-- `client.withSession(bookmark?)` — open a `D1Session` pinned to a bookmark for
+- `client.withSession(bookmark?)`: open a `D1Session` pinned to a bookmark for
   read-your-writes. With no bookmark it opens an explicit `"first-unconstrained"`
   session (lowest latency, served from any replica).
-- `client.prepare(sql)` — prepared statement on the bare binding (no bookmark
+- `client.prepare(sql)`: prepared statement on the bare binding (no bookmark
   pinning); statements are LRU-cached per client.
-- `client.drizzle` / `client.drizzleSession(bookmark?)` — drizzle-orm/d1 handles
+- `client.drizzle` / `client.drizzleSession(bookmark?)`: drizzle-orm/d1 handles
   for typed queries against generated `sqliteTable` schemas. `drizzle` runs on
   the bare binding (no Sessions API); `drizzleSession` opts into a bookmark.
-- `client.batch([...])` — atomic batch over the drizzle d1 driver, mirroring
+- `client.batch([...])`: atomic batch over the drizzle d1 driver, mirroring
   `db.batch([...])`.
-- `client.raw` — the underlying binding (advanced use).
+- `client.raw`: the underlying binding (advanced use).
 
 ## `D1Session`
 
@@ -78,7 +84,7 @@ const { applied, skipped } = await runner.run();
 version }`); `skipped` is the ones whose SQL hash was already recorded. The
 constructor accepts a `D1Client` or a bare D1 binding (it wraps the binding for
 you). It rejects duplicate versions and two migrations with identical SQL at
-construction time. Use `lunora migrate generate` to **produce** the SQL —
+construction time. Use `lunora migrate generate` to **produce** the SQL;
 `MigrationRunner` is what **applies** it at deploy time.
 
 ## `Migration`
@@ -98,7 +104,7 @@ second statement; split multi-statement DDL across separate `Migration` entries.
 ## Atomicity
 
 Each migration's body and its tracking-table INSERT run together in one
-`client.batch([...])`, which D1 executes as an implicit transaction — they
+`client.batch([...])`, which D1 executes as an implicit transaction, so they
 commit or roll back as a unit. A body that committed before a failed tracking
 write would otherwise re-apply on the next run, which matters for
 non-idempotent migrations.
@@ -110,11 +116,5 @@ shaped in D1. The runtime (which auto-provisions tables) and the CLI's
 `migrate generate` SQL emitter both derive their DDL from it, so a generated
 migration matches the table the runtime creates byte for byte. Exports
 `quoteIdentifier`, `sqlAffinityForKind`, `frameworkColumnDdl`, `columnRef`,
-`physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly
-— it exists so those two code paths stay in lockstep.
-
-## See also
-
-- [@lunora/cli](/docs/packages/cli) — the `lunora migrate generate` command
-- [@lunora/do](/docs/packages/do) — shard-local storage (no migrations needed)
-- [Concepts: schema](/docs/concepts/schema)
+`physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly;
+it exists so those two code paths stay in lockstep.

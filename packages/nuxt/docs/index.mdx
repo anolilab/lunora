@@ -1,6 +1,17 @@
 ---
 title: "@lunora/nuxt"
 description: "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers."
+related:
+    - to: /docs/packages/vue
+      note: "the reactive layer (Nuxt is Vue): `useQuery` / `useMutation` / `hydratePreloaded`"
+    - to: /docs/packages/astro
+      note: "the other framework module composing single-worker deploys via `withLunora`"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK; `@lunora/nuxt/server` re-exports its `/ssr` contract"
+    - to: /docs/packages/flags
+      note: "feature flags surfaced through `ctx.flags` / `useFlag`"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
 ---
 
 `@lunora/nuxt` runs Lunora and Nuxt as a **single Cloudflare Worker**. Instead
@@ -16,7 +27,7 @@ a same-origin client.
 pnpm add @lunora/nuxt
 ```
 
-`nuxt` (`^4.0.0`) is an optional peer dependency — the host app supplies the
+`nuxt` (`^4.0.0`) is an optional peer dependency; the host app supplies the
 Nuxt runtime. `h3` is also an optional peer (`^1.15.0`); see
 [Deploy notes](#deploy-notes) below.
 
@@ -40,8 +51,8 @@ export default defineNuxtConfig({
 Add a `worker.ts` wrapper at the project root and point `wrangler.jsonc`'s
 `main` at it, so the `ShardDO` Durable Object class is exported from the
 deployed worker. Nitro's `cloudflare_module` output exports only the SSR
-handler, so `main` must point at the wrapper — not the raw
-`.output/server/index.mjs` — or `wrangler deploy` fails on the missing DO:
+handler, so `main` must point at the wrapper, not the raw
+`.output/server/index.mjs`, or `wrangler deploy` fails on the missing DO:
 
 ```ts title="worker.ts"
 export { default } from "./.output/server/index.mjs";
@@ -52,7 +63,7 @@ export { ShardDO } from "./lunora/server";
 { "main": "worker.ts" }
 ```
 
-`lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its
+`lunora/server.ts` is your built Lunora app (`defineApp().build()`): its
 default export is the worker (a `fetch` entrypoint), and it re-exports
 `ShardDO`.
 
@@ -80,7 +91,7 @@ Configurable under the `lunora` key in `nuxt.config.ts`.
   `nuxt.options.alias`.
 - **`ShardDO`** rides to the deployed worker through your root `worker.ts`
   wrapper (`wrangler.jsonc`'s `main`), which re-exports Nitro's SSR handler and
-  `ShardDO` — Nitro's `cloudflare_module` output exports only the SSR handler.
+  `ShardDO`; Nitro's `cloudflare_module` output exports only the SSR handler.
 
 ## Server data-loading — `@lunora/nuxt/server`
 
@@ -103,13 +114,13 @@ const preloaded = await preloadQuery(client, api.posts.list, {});
 ```
 
 Hand the serializable `preloaded` value to a client component and seed it with
-[`@lunora/vue`](/docs/packages/vue)'s `hydratePreloaded` — Nuxt is Vue, so the
+[`@lunora/vue`](/docs/packages/vue)'s `hydratePreloaded`. Nuxt is Vue, so the
 Vue adapter's composables (`useQuery`, `useMutation`, `hydratePreloaded`) are
 the reactive layer here; `@lunora/nuxt` only owns the server-side composition.
 
 ## Feature flags
 
-`@lunora/nuxt` ships no flag composable of its own — since Nuxt _is_ Vue, read
+`@lunora/nuxt` ships no flag composable of its own. Since Nuxt _is_ Vue, read
 `ctx.flags` server-side (a Nitro route, a function, or a reactive loader) and
 pass the resolved value down, or call `useFlag` / `useFlags` from
 [`@lunora/vue`](/docs/packages/vue) directly in a component for live updates
@@ -133,24 +144,16 @@ const newHero = useFlag("homepage-hero", false);
 ## Deploy notes
 
 <Callout type="warn">
-    **Verify before deploy.** Single-worker composition rides on two Nitro behaviours that vary across versions — verify them on your pinned toolchain: (1)
-    **WebSocket upgrade pass-through** — the live feed needs Nitro to return your Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
+    **Verify before deploy.** Single-worker composition rides on two Nitro behaviours that vary across versions, so verify them on your pinned toolchain. (1)
+    **WebSocket upgrade pass-through**: the live feed needs Nitro to return your Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
     `webSocket`) untouched; RPC (plain JSON) works regardless, so if live subscriptions never connect while RPC does, Nitro is normalising the upgrade response.
-    (2) **The `worker.ts` wrapper** — `wrangler.jsonc`'s `main` must point at a root `worker.ts` that re-exports Nitro's SSR handler _and_ `ShardDO` (Nitro's
+    (2) **The `worker.ts` wrapper**: `wrangler.jsonc`'s `main` must point at a root `worker.ts` that re-exports Nitro's SSR handler _and_ `ShardDO` (Nitro's
     `cloudflare_module` output exports only the SSR handler); if `wrangler deploy` fails with "ShardDO class not exported", check that `main` points at the
     wrapper and that it re-exports `ShardDO`. The module warns when `worker.ts` is missing but can't verify wrangler's `main` points at it.
 </Callout>
 
 <Callout type="info">
-    **h3 version.** The peer range is `^1.15.0` (h3 v1 — what Nuxt 4 / Nitro 2 run at runtime). If you pin an explicit `h3` dependency yourself, pin it to
-    `^1.15.11` — npm's `h3@2.0.0` is a deprecated stub with no code, exports, or type declarations (the real v2 line is still prerelease-only). The peer will
+    **h3 version.** The peer range is `^1.15.0` (h3 v1, what Nuxt 4 / Nitro 2 run at runtime). If you pin an explicit `h3` dependency yourself, pin it to
+    `^1.15.11`; npm's `h3@2.0.0` is a deprecated stub with no code, exports, or type declarations (the real v2 line is still prerelease-only). The peer will
     re-admit v2 once a stable h3 v2 actually ships.
 </Callout>
-
-## See also
-
-- [@lunora/vue](/docs/packages/vue) — the reactive layer (Nuxt is Vue): `useQuery` / `useMutation` / `hydratePreloaded`
-- [@lunora/astro](/docs/packages/astro) — the other framework module composing single-worker deploys via `withLunora`
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK; `@lunora/nuxt/server` re-exports its `/ssr` contract
-- [@lunora/flags](/docs/packages/flags) — feature flags surfaced through `ctx.flags` / `useFlag`
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
