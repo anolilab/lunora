@@ -771,7 +771,6 @@ const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise
 const readOtlpBody = async (request: Request, signal: "logs" | "metrics" | "traces"): Promise<unknown> => {
     const contentType = request.headers.get("content-type") ?? "";
     const gzipped = (request.headers.get("content-encoding") ?? "").includes("gzip");
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this runs on workerd, not Node: `DecompressionStream` is a baseline Workers API, and the rule is checking the repo's Node engines range
     const stream = gzipped && request.body ? request.body.pipeThrough(new DecompressionStream("gzip")) : request.body;
     const bytes = await readAllCapped(stream);
 
