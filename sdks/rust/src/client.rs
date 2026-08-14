@@ -6,6 +6,9 @@ use std::fmt;
 
 use serde_json::{json, Map, Value};
 
+use crate::offline::{OfflineQueue, SettledHandler};
+use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
+pub use crate::submit::MutationSettled;
 use crate::wire::{decode_wire, encode_wire, WireError, WireValue};
 
 /// The single endpoint every query/mutation/action posts to.
@@ -224,13 +227,35 @@ pub fn build_shape_unsubscribe_frame(id: &str) -> Value {
     json!({ "id": id, "type": "shape_unsubscribe" })
 }
 
-struct Subscription {
-    function_path: String,
-    args: WireValue,
+pub(crate) struct Subscription {
+    pub(crate) function_path: String,
+    pub(crate) args: WireValue,
+    /// The stable wire key of `args`, computed once at subscribe time so a
+    /// write's optimistic targeting can compare without re-serialising every
+    /// subscription's args on every write.
+    pub(crate) args_key: String,
+    pub(crate) shard_key: Option<String>,
     on_data: DataHandler,
     on_error: ErrorHandler,
     cursor: Option<Value>,
     epoch: Option<Value>,
+    /// The displayed value and its optimistic overlays. See `crate::optimistic`.
+    pub(crate) state: OptimisticState,
+}
+
+impl Subscription {
+    /// Publishes `value` as the displayed value and tells the handler.
+    ///
+    /// Nothing is deferred, unlike the sibling ports: this client holds no lock
+    /// (see [`Client`]'s concurrency notes), so there is no critical section to
+    /// leave before invoking a handler.
+    pub(crate) fn publish(&mut self, value: WireValue) {
+        self.state.last_value = value;
+
+        if let Some(handler) = &self.on_data {
+            handler(&self.state.last_value);
+        }
+    }
 }
 
 struct ShapeSubscription {
@@ -283,13 +308,28 @@ pub struct Client {
     base_url: String,
     post: Option<HttpPoster>,
     pub auth_token: Option<String>,
-    send: Option<FrameSender>,
-    subscriptions: HashMap<String, Subscription>,
+    /// Identifies this client to the shard. It rides every write that carries an
+    /// idempotency key, because an anonymous caller has no server-minted user id
+    /// to namespace its de-duplication rows by.
+    pub client_id: String,
+    /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
+    /// not a bearer token. It is persisted alongside every queued write and
+    /// re-checked before that write replays, so a restart cannot push one user's
+    /// queued writes as another. `None` means signed out, which is itself an
+    /// identity a write can be stamped with.
+    pub identity: Option<String>,
+    /// The durable write queue backing [`Client::submit`].
+    pub offline_queue: OfflineQueue,
+    pub(crate) send: Option<FrameSender>,
+    pub(crate) subscriptions: HashMap<String, Subscription>,
     shapes: HashMap<String, ShapeSubscription>,
     pokes: HashMap<String, HashMap<String, Vec<Value>>>,
     poke_order: VecDeque<String>,
     next_id: usize,
     next_shape_id: usize,
+    pub(crate) was_ever_connected: bool,
+    pub(crate) closed: bool,
+    pub(crate) settled_listeners: Vec<SettledHandler>,
 }
 
 impl Client {
@@ -297,21 +337,43 @@ impl Client {
         Self {
             auth_token: None,
             base_url: base_url.into(),
+            client_id: "rust-client".to_string(),
+            closed: false,
+            identity: None,
             next_id: 0,
             next_shape_id: 0,
+            offline_queue: OfflineQueue::new(),
             poke_order: VecDeque::new(),
             pokes: HashMap::new(),
             post,
             send: None,
+            settled_listeners: Vec::new(),
             shapes: HashMap::new(),
             subscriptions: HashMap::new(),
+            was_ever_connected: false,
         }
     }
 
     /// Registers the sender used for subscription frames. Call once the socket
     /// is open.
+    ///
+    /// It also latches "has connected at least once", which is what the write
+    /// queue gates on: a write made before the FIRST connect fails fast by
+    /// default, so a misconfigured endpoint surfaces on the first write instead
+    /// of silently filling a queue that will never flush.
     pub fn attach_socket(&mut self, send: FrameSender) {
         self.send = Some(send);
+        self.was_ever_connected = true;
+    }
+
+    /// Forgets the sender, so subsequent writes queue rather than fail.
+    pub fn detach_socket(&mut self) {
+        self.send = None;
+    }
+
+    /// Whether a socket is currently attached.
+    pub fn online(&self) -> bool {
+        self.send.is_some()
     }
 
     pub fn query(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>) -> Result<WireValue, ClientError> {
@@ -339,6 +401,23 @@ impl Client {
     }
 
     fn rpc(&self, function_path: &str, args: &WireValue, shard_key: Option<&str>, mutation_id: Option<&str>) -> Result<WireValue, ClientError> {
+        Ok(self.rpc_full(function_path, args, shard_key, mutation_id, None)?.0)
+    }
+
+    /// One round-trip, returning `(result, commit_cursor)`.
+    ///
+    /// The cursor is what gates an optimistic overlay's removal, so it has to
+    /// survive the call rather than be discarded by [`parse_rpc_response`].
+    /// `client_id` overrides this session's, so a replayed write namespaces
+    /// server-side under the id that ISSUED it.
+    pub(crate) fn rpc_full(
+        &self,
+        function_path: &str,
+        args: &WireValue,
+        shard_key: Option<&str>,
+        mutation_id: Option<&str>,
+        client_id: Option<&str>,
+    ) -> Result<(WireValue, Option<i64>), ClientError> {
         let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
 
         let mut headers = HashMap::new();
@@ -351,17 +430,42 @@ impl Client {
 
         if let Some(id) = mutation_id {
             headers.insert("x-lunora-mutation-id".to_string(), id.to_string());
+            // Rides WITH the idempotency key, never alone. An anonymous caller
+            // has no server-minted user id, so the shard namespaces its
+            // de-duplication rows by this client id instead; without one every
+            // anonymous client shares a single key space and a colliding
+            // mutation id suppresses another client's write.
+            headers.insert("x-lunora-client-id".to_string(), client_id.unwrap_or(&self.client_id).to_string());
         }
 
         let body = build_rpc_body(function_path, args, shard_key)?;
         let payload = serde_json::to_vec(&body).map_err(|error| ClientError::Transport(error.to_string()))?;
         let (status, raw) = post(&self.join(RPC_PATH), &headers, &payload).map_err(ClientError::Transport)?;
         let parsed: Value = serde_json::from_slice(&raw).map_err(|error| ClientError::Transport(error.to_string()))?;
+        let result = parse_rpc_response(&parsed, status)?;
 
-        parse_rpc_response(&parsed, status)
+        Ok((result, parsed.get("commitCursor").and_then(Value::as_i64)))
     }
 
     pub fn subscribe(&mut self, function_path: &str, args: WireValue, on_data: DataHandler, on_error: ErrorHandler) -> String {
+        self.subscribe_on_shard(function_path, args, on_data, on_error, None)
+    }
+
+    /// [`Client::subscribe`], recording which shard the subscription belongs to.
+    ///
+    /// The shard key does NOT ride the subscribe frame: the protocol selects a
+    /// shard per SOCKET, via the `?shard=` parameter [`Client::ws_url`] builds.
+    /// It is recorded so a write's optimistic overlay targets the right
+    /// subscription — this client holds one socket, so it must already be the
+    /// shard that socket was opened against.
+    pub fn subscribe_on_shard(
+        &mut self,
+        function_path: &str,
+        args: WireValue,
+        on_data: DataHandler,
+        on_error: ErrorHandler,
+        shard_key: Option<&str>,
+    ) -> String {
         self.next_id += 1;
 
         let id = format!("sub_{}", self.next_id);
@@ -370,15 +474,24 @@ impl Client {
             send(&frame);
         }
 
+        // A key that cannot be built (a value outside the wire codec) leaves
+        // `args_key` empty, which simply means no optimistic write targets this
+        // subscription — never a wrong match, since a write's key is built the
+        // same way and an unencodable write cannot be sent either.
+        let args_key = crate::key::stable_wire_key(&args).unwrap_or_default();
+
         self.subscriptions.insert(
             id.clone(),
             Subscription {
                 args,
+                args_key,
                 cursor: None,
                 epoch: None,
                 function_path: function_path.to_string(),
                 on_data,
                 on_error,
+                shard_key: shard_key.map(str::to_string),
+                state: OptimisticState::default(),
             },
         );
 
@@ -462,10 +575,19 @@ impl Client {
 
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
                     advance(entry, &frame);
+                    entry.state.server_base = value;
+                    let cursor = frame.get("cursor").and_then(Value::as_i64);
 
-                    if let Some(handler) = &entry.on_data {
-                        handler(&value);
-                    }
+                    entry.state.server_cursor = cursor;
+                    // Drop the overlays this frame has caught up with, then
+                    // RE-FOLD the rest onto the new authoritative base rather
+                    // than clobbering them: a still-queued write's predicted
+                    // value has to survive an unrelated delta on the same query.
+                    drop_confirmed_layers(&mut entry.state, cursor);
+
+                    let displayed = fold(&entry.state.server_base, &entry.state.layers);
+
+                    entry.publish(displayed);
                 }
             }
             "resume" | "settled" => {

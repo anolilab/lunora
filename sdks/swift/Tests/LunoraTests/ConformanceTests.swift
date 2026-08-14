@@ -8,7 +8,10 @@ import XCTest
 /// the Python, Go and Ruby ports are tested against.
 final class ConformanceTests: XCTestCase {
     /// Walks up from this source file to the repo's `protocol/fixtures`.
-    private func fixturesDirectory() throws -> URL {
+    ///
+    /// Not `private`: the optimistic-layer and offline-queue cases live in an
+    /// extension in their own file and share these helpers.
+    func fixturesDirectory() throws -> URL {
         var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<8 {
             let candidate = directory.appendingPathComponent("protocol/fixtures")
@@ -20,7 +23,7 @@ final class ConformanceTests: XCTestCase {
         throw XCTSkip("could not locate protocol/fixtures")
     }
 
-    private func fixture(_ name: String) throws -> [String: Any] {
+    func fixture(_ name: String) throws -> [String: Any] {
         let url = try fixturesDirectory().appendingPathComponent(name)
         let data = try Data(contentsOf: url)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -28,7 +31,7 @@ final class ConformanceTests: XCTestCase {
 
     /// Re-serialises so two structures compare as text with a canonical key
     /// order, independent of the order the fixture file happens to use.
-    private func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
+    func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
 
     // MARK: - Manifest coverage
 
@@ -67,6 +70,15 @@ final class ConformanceTests: XCTestCase {
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
+            case "optimistic_layer_rebases_onto_server_frame": try caseOptimisticLayerRebasesOntoServerFrame()
+            case "optimistic_layer_drops_on_commit_cursor": try caseOptimisticLayerDropsOnCommitCursor()
+            case "optimistic_layer_rolls_back_on_failure": try caseOptimisticLayerRollsBackOnFailure()
+            case "offline_queue_fifo_and_shard_drain": try caseOfflineQueueFifoAndShardDrain()
+            case "offline_queue_overflow_evicts_oldest": try caseOfflineQueueOverflowEvictsOldest()
+            case "offline_queue_precondition_drops_stale_write": try caseOfflineQueuePreconditionDropsStaleWrite()
+            case "offline_queue_hydrates_persisted_writes": try caseOfflineQueueHydratesPersistedWrites()
+            case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
+            case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }

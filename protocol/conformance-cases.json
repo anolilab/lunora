@@ -20,7 +20,12 @@
         "no dispatch arm fails. sdks/README.md records the mapping.",
         "",
         "This paragraph was once false: nothing read the file, and the coverage it",
-        "was created to hold could drift again unnoticed. It was, in two ports."
+        "was created to hold could drift again unnoticed. It was, in two ports.",
+        "",
+        "The last nine names cover the client-side write features (optimistic",
+        "layers, offline queue) rather than the wire. They assert against",
+        "fixtures/offline-optimistic.json, which carries the values and orderings",
+        "the seven ports must agree on."
     ],
     "required": [
         "wire_codec_round_trip",
@@ -39,6 +44,15 @@
         "server_frame_consumer",
         "shape_subscribe_frame",
         "poke_sequence_materialises_rows",
-        "poke_parts_do_not_apply_before_poke_end"
+        "poke_parts_do_not_apply_before_poke_end",
+        "optimistic_layer_rebases_onto_server_frame",
+        "optimistic_layer_drops_on_commit_cursor",
+        "optimistic_layer_rolls_back_on_failure",
+        "offline_queue_fifo_and_shard_drain",
+        "offline_queue_overflow_evicts_oldest",
+        "offline_queue_precondition_drops_stale_write",
+        "offline_queue_hydrates_persisted_writes",
+        "offline_queue_identity_gate_rejects_replay",
+        "offline_flush_replays_and_confirms_optimistic"
     ]
 }

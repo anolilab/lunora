@@ -14,6 +14,18 @@ use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
 use serde_json::{json, Value};
 
+// The optimistic-layer and offline-queue cases live in their own file, dispatched
+// from the manifest arm below like every other case. A subdirectory module, not a
+// second `tests/*.rs`, because cargo would compile that as its own test binary
+// with no `#[test]` in it — the manifest must stay the only entry point.
+mod offline_cases;
+
+use offline_cases::{
+    offline_flush_replays_and_confirms_optimistic, offline_queue_fifo_and_shard_drain, offline_queue_hydrates_persisted_writes,
+    offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write,
+    optimistic_layer_drops_on_commit_cursor, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+};
+
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
 fn fixtures_dir() -> PathBuf {
     let mut directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -86,6 +98,15 @@ fn conformance_manifest_is_covered() {
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            "optimistic_layer_rebases_onto_server_frame" => optimistic_layer_rebases_onto_server_frame(),
+            "optimistic_layer_drops_on_commit_cursor" => optimistic_layer_drops_on_commit_cursor(),
+            "optimistic_layer_rolls_back_on_failure" => optimistic_layer_rolls_back_on_failure(),
+            "offline_queue_fifo_and_shard_drain" => offline_queue_fifo_and_shard_drain(),
+            "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
+            "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
+            "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
+            "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
+            "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }

@@ -1,0 +1,697 @@
+import Foundation
+import XCTest
+
+@testable import Lunora
+
+/// The cursor-gated optimistic-layer engine and the durable offline write queue,
+/// against the shared golden scenarios in
+/// `protocol/fixtures/offline-optimistic.json`.
+///
+/// Every expectation is read from that file so this port and the other six assert
+/// the same values rather than each documenting its own behaviour.
+///
+/// These are `caseX` methods in an extension rather than `testX` methods for the
+/// same reason the wire cases are: XCTest has no after-all hook that can fail, so
+/// the manifest DRIVES the run and a required name with no dispatch arm fails.
+/// `ConformanceTests.testConformanceManifestIsCovered` is their only entry point.
+extension ConformanceTests {
+    // MARK: - Helpers
+
+    private func scenario(_ block: String, _ name: String) throws -> [String: Any] {
+        let document = try fixture("offline-optimistic.json")
+        let group = try XCTUnwrap(document[block] as? [String: Any])
+
+        return try XCTUnwrap(group[name] as? [String: Any])
+    }
+
+    private func ids(_ value: Any?) -> [String?] {
+        (value as? [Any] ?? []).map { $0 as? String }
+    }
+
+    private func count(_ value: Any?) -> Int {
+        (value as? NSNumber)?.intValue ?? -1
+    }
+
+    /// The one transform primitive the fixtures use: push onto a COPY of the list.
+    ///
+    /// A copy, not an in-place append: a transform is re-run on every rebase, so
+    /// one that mutated its input would compound its own effect on each frame.
+    private func appender(_ item: Any) -> LunoraOptimistic.Transform {
+        { current in
+            var next = current as? [Any] ?? []
+
+            next.append(item)
+
+            return next
+        }
+    }
+
+    /// Applies one server `data` frame the way `LunoraClient.dispatch` does.
+    private func applyFrame(_ state: LunoraOptimisticState, _ frame: [String: Any]) {
+        var deferred: LunoraOptimistic.Deferred = []
+
+        state.serverBase = frame["data"] ?? NSNull()
+        state.serverCursor = (frame["cursor"] as? NSNumber)?.intValue
+        LunoraOptimistic.dropConfirmedLayers(state, state.serverCursor)
+        LunoraOptimistic.notify(state, LunoraOptimistic.fold(state.serverBase, state.layers), &deferred)
+
+        for call in deferred { call() }
+    }
+
+    // MARK: - Optimistic layers
+
+    func caseOptimisticLayerRebasesOntoServerFrame() throws {
+        let testCase = try scenario("optimistic", "rebase")
+        var seen: [Any] = []
+        let state = LunoraOptimisticState(base: testCase["base"] ?? NSNull())
+
+        state.callbacks.append { seen.append($0) }
+
+        var deferred: LunoraOptimistic.Deferred = []
+
+        _ = LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
+
+        for call in deferred { call() }
+
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterApply"]),
+            "the predicted value is displayed as soon as the layer is applied"
+        )
+        XCTAssertEqual(seen.count, 1, "and the handler is told exactly once")
+
+        applyFrame(state, try XCTUnwrap(testCase["frame"] as? [String: Any]))
+
+        // The overlay survived the frame and was RE-FOLDED onto the new base,
+        // rather than being clobbered by it.
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterFrame"]),
+            "a pending layer rebases onto the new authoritative base"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterFrame"]), "and is still pending afterwards")
+
+        // A layer that DECLINES is skipped by the fold, not fatal to it: one
+        // optimistic update that cannot apply must not blank the query for every
+        // other layer. Built directly, because `applyLayer` refuses a transform
+        // that declines on first application — this is the other case, a layer
+        // that worked once and declines on a later rebase.
+        let skipped = try scenario("optimistic", "throwingLayerSkipped")
+        let second = LunoraOptimisticState(base: skipped["base"] ?? NSNull())
+        var secondDeferred: LunoraOptimistic.Deferred = []
+
+        second.layers.append(LunoraOptimisticLayer(transform: { _ in nil }))
+        _ = LunoraOptimistic.applyLayer(second, appender(skipped["appended"] ?? NSNull()), &secondDeferred)
+
+        XCTAssertEqual(second.layers.count, count(skipped["layers"]), "the declining layer is kept")
+        XCTAssertEqual(
+            canonical(LunoraOptimistic.fold(second.serverBase, second.layers)),
+            canonical(skipped["displayed"]),
+            "but skipped by the fold, so the good layer still applies"
+        )
+    }
+
+    func caseOptimisticLayerDropsOnCommitCursor() throws {
+        let testCase = try scenario("optimistic", "commitCursorDrop")
+        let commitCursor = count(testCase["commitCursor"])
+        let state = LunoraOptimisticState(base: testCase["base"] ?? NSNull())
+        var deferred: LunoraOptimistic.Deferred = []
+        let handle = try XCTUnwrap(
+            LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
+        )
+
+        handle.confirm(commitCursor, &deferred)
+        applyFrame(state, try XCTUnwrap(testCase["belowFrame"] as? [String: Any]))
+
+        // Below the commit cursor: the write is NOT in the server base yet, so
+        // dropping the overlay here would blink the value away and back.
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterBelowFrame"]),
+            "a frame below the commit cursor keeps the overlay"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterBelowFrame"]), "and the layer with it")
+
+        applyFrame(state, try XCTUnwrap(testCase["atFrame"] as? [String: Any]))
+
+        // The frame reached the commit cursor: the effect is in the base, so the
+        // overlay drops without the value ever double-counting it.
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterAtFrame"]),
+            "the confirming frame does not double-count the write"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterAtFrame"]), "and the layer is gone")
+
+        // CDC is off on this shard, so there is no cursor to gate on. The layer
+        // goes, but the display does not revert: the write DID commit.
+        let without = try scenario("optimistic", "confirmWithoutCursor")
+        let degraded = LunoraOptimisticState(base: without["base"] ?? NSNull())
+        var degradedDeferred: LunoraOptimistic.Deferred = []
+        let degradedHandle = try XCTUnwrap(
+            LunoraOptimistic.applyLayer(degraded, appender(without["appended"] ?? NSNull()), &degradedDeferred)
+        )
+
+        degradedHandle.confirm(nil, &degradedDeferred)
+
+        XCTAssertEqual(
+            canonical(degraded.lastValue),
+            canonical(without["displayedAfterConfirm"]),
+            "confirming with no cursor does not revert a committed write"
+        )
+        XCTAssertEqual(degraded.layers.count, count(without["layersAfterConfirm"]), "but does drop the layer")
+
+        // The confirming frame beat the RPC response — the common race. The overlay
+        // must drop on confirm rather than linger until the next frame.
+        let atFrame = try XCTUnwrap(testCase["atFrame"] as? [String: Any])
+        let raced = LunoraOptimisticState(base: atFrame["data"] ?? NSNull())
+        var racedDeferred: LunoraOptimistic.Deferred = []
+
+        raced.serverCursor = count(atFrame["cursor"])
+
+        let racedHandle = try XCTUnwrap(LunoraOptimistic.applyLayer(raced, appender("x"), &racedDeferred))
+
+        racedHandle.confirm(commitCursor, &racedDeferred)
+
+        XCTAssertTrue(raced.layers.isEmpty, "a cursor the frames already reached drops the layer now")
+        XCTAssertEqual(canonical(raced.lastValue), canonical(atFrame["data"]), "and the display reverts to the base")
+    }
+
+    func caseOptimisticLayerRollsBackOnFailure() throws {
+        let testCase = try scenario("optimistic", "rollback")
+        var seen: [Any] = []
+        let state = LunoraOptimisticState(base: testCase["base"] ?? NSNull())
+
+        state.callbacks.append { seen.append($0) }
+
+        var deferred: LunoraOptimistic.Deferred = []
+        let handle = try XCTUnwrap(
+            LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
+        )
+
+        handle.rollback(&deferred)
+
+        for call in deferred { call() }
+
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterRollback"]),
+            "a rolled-back write leaves the server value displayed"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterRollback"]), "and no layer")
+        XCTAssertEqual(canonical(seen.last), canonical(testCase["displayedAfterRollback"]), "the handler saw it")
+
+        // A constant layer is an absolute override: while pending it re-clamps and
+        // HIDES the concurrent server change rather than merging with it.
+        let mask = try scenario("optimistic", "constantMask")
+        let masked = LunoraOptimisticState(base: mask["base"] ?? NSNull())
+        let store = LunoraOptimisticLocalStore(
+            find: { _, _ in [masked] },
+            matching: { _ in [LunoraQueryEntry(args: [String: Any](), value: masked.lastValue)] }
+        )
+
+        store.setQuery("messages:list", args: [String: Any](), value: mask["value"] ?? NSNull())
+
+        for call in store.deferred { call() }
+
+        XCTAssertEqual(
+            canonical(masked.lastValue),
+            canonical(mask["displayedAfterApply"]),
+            "setQuery displays the predicted value"
+        )
+        XCTAssertEqual(
+            canonical(store.getQuery("messages:list", args: [String: Any]())),
+            canonical(mask["displayedAfterApply"]),
+            "and getQuery reads it back"
+        )
+
+        applyFrame(masked, try XCTUnwrap(mask["frame"] as? [String: Any]))
+
+        XCTAssertEqual(
+            canonical(masked.lastValue),
+            canonical(mask["displayedAfterFrame"]),
+            "the override masks a concurrent server change"
+        )
+
+        var rollbackDeferred: LunoraOptimistic.Deferred = []
+
+        LunoraOptimistic.rollbackAll(store.handles, &rollbackDeferred)
+
+        XCTAssertEqual(
+            canonical(masked.lastValue),
+            canonical(mask["displayedAfterRollback"]),
+            "and rolling back reveals it"
+        )
+    }
+
+    // MARK: - Offline queue
+
+    private func entry(_ id: String, shardKey: String? = nil) -> LunoraQueuedMutation {
+        LunoraQueuedMutation(id: id, functionPath: "messages:send", args: [String: Any](), shardKey: shardKey)
+    }
+
+    private func queuedIDs(_ queue: LunoraOfflineQueue) -> [String?] {
+        queue.snapshot().map { $0.id }
+    }
+
+    /// A fixture's `persisted` list, as durable records.
+    private func persistedRecords(_ testCase: [String: Any]) -> [[String: Any]] {
+        (testCase["persisted"] as? [[String: Any]] ?? []).map { spec in
+            [
+                "args": [String: Any](),
+                "functionPath": "messages:send",
+                "id": spec["id"] ?? "",
+                "shardKey": spec["shardKey"] ?? NSNull(),
+                "version": spec["version"] ?? NSNull(),
+            ]
+        }
+    }
+
+    func caseOfflineQueueFifoAndShardDrain() throws {
+        let fifo = try scenario("offlineQueue", "fifo")
+        var sizes: [Int] = []
+        let queue = LunoraOfflineQueue()
+
+        queue.onSizeChange = { sizes.append($0) }
+
+        for id in ids(fifo["enqueue"]) {
+            queue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        XCTAssertEqual(queue.size, count(fifo["sizeAfterEnqueue"]), "every write is queued")
+        XCTAssertEqual(
+            queue.drain { _ in true }.map { $0.id },
+            ids(fifo["drained"]).compactMap { $0 },
+            "writes drain in submission order"
+        )
+        XCTAssertEqual(sizes.last, count(fifo["sizeAfterDrain"]), "and the depth observer sees the queue empty")
+
+        let shard = try scenario("offlineQueue", "shardDrain")
+        let sharded = LunoraOfflineQueue()
+
+        for spec in shard["entries"] as? [[String: Any]] ?? [] {
+            sharded.enqueue(entry(try XCTUnwrap(spec["id"] as? String), shardKey: spec["shardKey"] as? String))
+        }
+
+        let target = shard["drainShardKey"] as? String
+
+        XCTAssertEqual(
+            sharded.drain { $0.shardKey == target }.map { $0.id },
+            ids(shard["drained"]).compactMap { $0 },
+            "one shard's writes drained"
+        )
+        XCTAssertEqual(queuedIDs(sharded), ids(shard["remaining"]), "and the rest stay queued in order")
+
+        let requeue = try scenario("offlineQueue", "requeue")
+        let store = MemoryPersistence()
+        let durable = LunoraOfflineQueue(persistence: store)
+
+        for id in ids(requeue["enqueue"]) {
+            durable.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        let wanted = ids(requeue["requeued"]).compactMap { $0 }
+
+        durable.requeue(durable.drain { _ in true }.filter { wanted.contains($0.id) })
+
+        XCTAssertEqual(
+            queuedIDs(durable),
+            ids(requeue["queuedAfterRequeue"]),
+            "requeued writes return to the front, in order"
+        )
+        // Durable storage still holds them — they were never un-persisted, so a
+        // re-append would duplicate the record.
+        XCTAssertEqual(
+            store.appended.count,
+            count(requeue["persistAppendCalls"]),
+            "and a requeue does not re-persist them"
+        )
+    }
+
+    func caseOfflineQueueOverflowEvictsOldest() throws {
+        let testCase = try scenario("offlineQueue", "overflow")
+        let store = MemoryPersistence()
+        let queue = LunoraOfflineQueue(maxItems: count(testCase["maxItems"]), persistence: store)
+        var evicted: [String] = []
+
+        for id in ids(testCase["enqueue"]) {
+            for discarded in queue.enqueue(entry(try XCTUnwrap(id))) {
+                XCTAssertEqual(discarded.code, lunoraOfflineQueueOverflow, "the eviction is coded")
+                evicted.append(discarded.entry.id)
+            }
+        }
+
+        XCTAssertEqual(queuedIDs(queue), ids(testCase["remaining"]), "the newest writes survive the cap")
+        XCTAssertEqual(evicted, ids(testCase["evicted"]).compactMap { $0 }, "the OLDEST write is the one dropped")
+        XCTAssertEqual(
+            store.removed,
+            ids(testCase["persistRemoveCalls"]).compactMap { $0 },
+            "an evicted write is un-persisted"
+        )
+
+        // Closing rejects every pending write so no caller waits on a dead client,
+        // but leaves durable storage INTACT: the next session restores them.
+        let clear = try scenario("offlineQueue", "clear")
+        let clearStore = MemoryPersistence()
+        let closing = LunoraOfflineQueue(persistence: clearStore)
+        let enqueued = ids(clear["enqueue"]).compactMap { $0 }
+
+        for id in enqueued {
+            closing.enqueue(entry(id))
+        }
+
+        let discarded = closing.clear()
+
+        XCTAssertEqual(discarded.map { $0.entry.id }, ids(clear["rejected"]).compactMap { $0 })
+        XCTAssertTrue(discarded.allSatisfy { $0.code == lunoraClientClosed }, "with the documented code")
+        XCTAssertEqual(clearStore.removed, [], "closing un-persists nothing")
+        XCTAssertEqual(clearStore.records.count, enqueued.count, "so a later session can restore them")
+    }
+
+    func caseOfflineQueuePreconditionDropsStaleWrite() throws {
+        let testCase = try scenario("offlineQueue", "precondition")
+        let queue = LunoraOfflineQueue()
+
+        for spec in testCase["entries"] as? [[String: Any]] ?? [] {
+            let verdict = spec["precondition"] as? Bool ?? true
+            let item = entry(try XCTUnwrap(spec["id"] as? String))
+
+            item.precondition = { verdict }
+            queue.enqueue(item)
+        }
+
+        let conflicted = queue.drainConflict()
+
+        XCTAssertEqual(
+            conflicted.map { $0.entry.id },
+            ids(testCase["conflicted"]).compactMap { $0 },
+            "only the write whose precondition failed is dropped"
+        )
+        XCTAssertTrue(conflicted.allSatisfy { $0.code == lunoraOfflinePreconditionFailed }, "with the documented code")
+        XCTAssertEqual(queuedIDs(queue), ids(testCase["remaining"]), "and the valid writes keep their FIFO order")
+    }
+
+    func caseOfflineQueueHydratesPersistedWrites() throws {
+        let testCase = try scenario("offlineQueue", "hydrate")
+        let store = MemoryPersistence(records: persistedRecords(testCase))
+        let queue = LunoraOfflineQueue(persistence: store, version: testCase["version"] as? String)
+
+        // Submitted during the boot window, BEFORE the durable load returns.
+        for id in ids(testCase["liveEnqueue"]) {
+            queue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        store.appended = []
+
+        let (shardKeys, evicted) = try queue.hydrate()
+
+        XCTAssertTrue(evicted.isEmpty, "nothing exceeded the default capacity")
+        // The durable store's order is authoritative: a prior-session write is
+        // always older, so replaying the boot-time write first would let
+        // last-writer-wins clobber newer data with stale.
+        XCTAssertEqual(
+            queuedIDs(queue),
+            ids(testCase["queuedAfterHydrate"]),
+            "restored writes land ahead of the boot-time write"
+        )
+        // A record stamped under another app version is dropped AND purged.
+        XCTAssertEqual(
+            store.removed,
+            ids(testCase["purged"]).compactMap { $0 },
+            "and a stale-version record is purged rather than replayed"
+        )
+        XCTAssertEqual(
+            Set(shardKeys.map { $0 ?? "" }),
+            Set(ids(testCase["shardKeys"]).map { $0 ?? "" }),
+            "the surviving writes' shard keys are reported"
+        )
+
+        let overflow = try scenario("offlineQueue", "hydrateOverflow")
+        let overflowStore = MemoryPersistence(records: persistedRecords(overflow))
+        let capped = LunoraOfflineQueue(
+            maxItems: count(overflow["maxItems"]),
+            persistence: overflowStore,
+            version: overflow["version"] as? String
+        )
+        let (cappedKeys, cappedEvicted) = try capped.hydrate()
+
+        XCTAssertEqual(
+            queuedIDs(capped),
+            ids(overflow["queuedAfterHydrate"]),
+            "hydration respects the capacity cap"
+        )
+        XCTAssertEqual(
+            cappedEvicted.map { $0.entry.id },
+            ids(overflow["evicted"]).compactMap { $0 },
+            "dropping the oldest restored write"
+        )
+        // Only the shards whose writes SURVIVED — a key gathered before eviction
+        // would send the caller to open a socket with nothing queued behind it.
+        XCTAssertEqual(cappedKeys.map { $0 ?? "" }, ids(overflow["shardKeys"]).map { $0 ?? "" })
+
+        // Version gating is OFF until a version is configured.
+        XCTAssertFalse(lunoraIsStaleVersion(nil, nil))
+        XCTAssertFalse(lunoraIsStaleVersion(nil, "v1"))
+        XCTAssertTrue(lunoraIsStaleVersion("v2", nil))
+        XCTAssertTrue(lunoraIsStaleVersion("v2", "v1"))
+        XCTAssertFalse(lunoraIsStaleVersion("v2", "v2"))
+
+        // Two anonymous clients that collided on an id would share one
+        // de-duplication namespace server-side, letting one suppress the other.
+        var minted = Set<String>()
+
+        for _ in 0..<2000 { minted.insert(lunoraRandomID()) }
+
+        XCTAssertEqual(minted.count, 2000, "minted ids must not collide")
+    }
+
+    func caseOfflineQueueIdentityGateRejectsReplay() throws {
+        let testCase = try scenario("offlineQueue", "identityGate")
+
+        for spec in testCase["cases"] as? [[String: Any]] ?? [] {
+            let stamped: LunoraIdentity
+
+            if let text = spec["stamped"] as? String {
+                stamped = text == "absent" ? .absent : .subject(text)
+            } else {
+                stamped = .signedOut
+            }
+
+            XCTAssertEqual(
+                lunoraIdentityAllowsReplay(stamped, spec["current"] as? String),
+                try XCTUnwrap(spec["replays"] as? Bool),
+                "identity gate: \(spec["name"] as? String ?? "?")"
+            )
+        }
+
+        var posts = 0
+        var codes: [String] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                posts += 1
+
+                return (200, Data("{\"result\":null}".utf8))
+            }
+        )
+
+        client.identity = "user-b"
+        client.onMutationSettled { event in
+            if let error = event.error as? LunoraAPIError { codes.append(error.code) }
+        }
+
+        let queued = entry("m1")
+
+        queued.identity = .subject("user-a")
+        client.offlineQueue.enqueue(queued)
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(report.rejected, ["m1"], "the mismatched write is rejected")
+        XCTAssertTrue(report.committed.isEmpty, "and nothing commits")
+        // Nothing reached the wire: a restart must not push the previous user's
+        // queued writes as the current one.
+        XCTAssertEqual(posts, 0, "the write never reaches the server")
+        XCTAssertEqual(codes, [try XCTUnwrap(testCase["code"] as? String)], "and it carries the documented code")
+    }
+
+    func caseOfflineFlushReplaysAndConfirmsOptimistic() throws {
+        let testCase = try scenario("offlineQueue", "flushReplay")
+        let responses = testCase["responses"] as? [[String: Any]] ?? []
+        var seenHeaders: [String?] = []
+        let store = MemoryPersistence()
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, headers, _ in
+                let mutationID = headers["x-lunora-mutation-id"]
+
+                seenHeaders.append(mutationID)
+
+                guard let spec = responses.first(where: { $0["id"] as? String == mutationID }) else {
+                    throw LunoraAPIError(code: "INTERNAL", message: "no response for \(mutationID ?? "?")")
+                }
+
+                switch spec["outcome"] as? String {
+                case "transport-error":
+                    throw LunoraSubscriptionError(code: nil, message: "connection reset")
+                case "coded-error":
+                    let code = spec["code"] as? String ?? "INTERNAL"
+
+                    return (200, Data("{\"error\":{\"code\":\"\(code)\",\"message\":\"gone\"}}".utf8))
+                default:
+                    let cursor = (spec["commitCursor"] as? NSNumber)?.intValue ?? 0
+
+                    return (200, Data("{\"commitCursor\":\(cursor),\"result\":{\"ok\":true}}".utf8))
+                }
+            }
+        )
+
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
+
+        for id in ids(testCase["queued"]) {
+            let item = entry(try XCTUnwrap(id))
+
+            item.clientID = "client-1"
+            client.offlineQueue.enqueue(item)
+        }
+
+        let report = client.flushOfflineQueue()
+
+        // Replayed in FIFO order, each under its own idempotency key so a write the
+        // server already committed is de-duplicated rather than re-applied.
+        XCTAssertEqual(seenHeaders, ids(testCase["mutationIdHeaders"]), "replayed in order")
+        XCTAssertEqual(report.committed, ids(testCase["committed"]).compactMap { $0 })
+        // A coded verdict is terminal: replaying it would only re-trigger the same
+        // failure. A transport failure is not, so that write stays queued.
+        XCTAssertEqual(report.rejected, ids(testCase["rejected"]).compactMap { $0 })
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(testCase["queuedAfterFlush"]))
+        XCTAssertEqual(report.requeued, ids(testCase["queuedAfterFlush"]).compactMap { $0 })
+        XCTAssertEqual(store.removed, ids(testCase["persistRemoveCalls"]).compactMap { $0 })
+
+        try submitQueuesWhileOffline(commitCursor: count(testCase["confirmedCommitCursor"]))
+        try submitBeforeFirstConnectFailsFast()
+        try submitRollsBackARejectedWrite()
+    }
+
+    /// A write made with the socket down is queued, keeps its overlay, and replays
+    /// on the next flush.
+    private func submitQueuesWhileOffline(commitCursor: Int) throws {
+        var posts = 0
+        var seen: [Any] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in
+                posts += 1
+
+                return (200, Data("{\"commitCursor\":\(commitCursor),\"result\":{\"ok\":true}}".utf8))
+            }
+        )
+        let args: [String: Any] = ["channel": "general"]
+
+        client.attachSocket { _ in }
+        client.subscribe("messages:list", args: args, onData: { seen.append($0) })
+        // Prime the subscription with a server value, then drop the socket.
+        _ = try client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+        client.detachSocket()
+
+        let outcome = try client.submit(
+            LunoraSubmitOptions(functionPath: "messages:list", args: args, optimistic: appender("c"))
+        )
+
+        XCTAssertEqual(outcome.status, .queued, "a write with the socket down is queued")
+        XCTAssertEqual(canonical(seen.last), canonical(["a", "c"]), "and its overlay is displayed")
+        XCTAssertEqual(posts, 0, "nothing reaches the wire while the socket is down")
+        XCTAssertEqual(client.pendingMutationCount, 1, "and the queue depth reflects it")
+
+        client.attachSocket { _ in }
+        client.flushOfflineQueue()
+
+        XCTAssertEqual(posts, 1, "the flush replays it")
+        XCTAssertEqual(client.pendingMutationCount, 0, "and drains the queue")
+        // Still displayed: the overlay is confirmed at the commit cursor and drops
+        // only once a frame reaches it.
+        XCTAssertEqual(canonical(seen.last), canonical(["a", "c"]), "the overlay survives the reply")
+
+        _ = try client.handleFrame(
+            "{\"cursor\":\(commitCursor),\"data\":[\"a\",\"c\"],\"id\":\"sub_1\",\"type\":\"data\"}"
+        )
+
+        XCTAssertEqual(
+            canonical(seen.last),
+            canonical(["a", "c"]),
+            "and the confirming frame does not double-count it"
+        )
+    }
+
+    /// Never connected and the opt-in is off, so a misconfigured endpoint surfaces
+    /// on the first write rather than silently filling a queue that never flushes.
+    private func submitBeforeFirstConnectFailsFast() throws {
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in throw LunoraSubscriptionError(code: nil, message: "no route to host") }
+        )
+
+        XCTAssertThrowsError(
+            try client.submit(LunoraSubmitOptions(functionPath: "messages:send")),
+            "the first write must fail before any connect"
+        )
+        XCTAssertEqual(client.pendingMutationCount, 0, "and nothing is queued")
+
+        client.offlineQueue = LunoraOfflineQueue(queueBeforeFirstConnect: true)
+
+        let outcome = try client.submit(LunoraSubmitOptions(functionPath: "messages:send"))
+
+        XCTAssertEqual(outcome.status, .queued, "the opt-in queues it instead")
+        XCTAssertEqual(client.pendingMutationCount, 1, "and the queue holds it")
+    }
+
+    /// A rejected write takes its optimistic overlay down with it.
+    private func submitRollsBackARejectedWrite() throws {
+        var seen: [Any] = []
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, _ in (200, Data("{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"gone\"}}".utf8)) }
+        )
+
+        client.attachSocket { _ in }
+        client.subscribe("messages:list", args: [String: Any](), onData: { seen.append($0) })
+        _ = try client.handleFrame("{\"cursor\":1,\"data\":[\"a\"],\"id\":\"sub_1\",\"type\":\"data\"}")
+
+        XCTAssertThrowsError(
+            try client.submit(
+                LunoraSubmitOptions(functionPath: "messages:list", args: [String: Any](), optimistic: appender("c"))
+            ),
+            "the server's verdict reaches the caller"
+        )
+        XCTAssertEqual(canonical(seen.last), canonical(["a"]), "and the overlay is gone")
+    }
+}
+
+/// A persistence adapter that records every call.
+final class MemoryPersistence: LunoraPersistenceAdapter {
+    var records: [[String: Any]]
+    var appended: [[String: Any]] = []
+    var removed: [String] = []
+    var cleared = 0
+
+    init(records: [[String: Any]] = []) {
+        self.records = records
+    }
+
+    func append(_ record: [String: Any]) throws {
+        appended.append(record)
+        records.append(record)
+    }
+
+    func load() throws -> [[String: Any]] { records }
+
+    func remove(_ mutationID: String) throws {
+        removed.append(mutationID)
+        records.removeAll { $0["id"] as? String == mutationID }
+    }
+
+    func clear() throws {
+        cleared += 1
+        records = []
+    }
+}

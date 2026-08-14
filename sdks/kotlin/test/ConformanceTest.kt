@@ -20,14 +20,15 @@ private var checks = 0
  */
 private val covered = linkedSetOf<String>()
 
-private fun check(condition: Boolean, message: String) {
+/** Internal, not file-private, so the sibling case file shares one counter. */
+internal fun check(condition: Boolean, message: String) {
     checks++
 
     if (!condition) throw AssertionError(message)
 }
 
 /** Records that the running case exercises the manifest case [name]. */
-private fun covers(name: String) {
+internal fun covers(name: String) {
     covered.add(name)
 }
 
@@ -54,7 +55,7 @@ private fun assertManifestCovered() {
     )
 }
 
-private fun fixturesDir(): File {
+internal fun fixturesDir(): File {
     var directory = File("").absoluteFile
 
     repeat(8) {
@@ -68,7 +69,7 @@ private fun fixturesDir(): File {
     error("could not locate protocol/fixtures")
 }
 
-private fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), name).readText()) as Map<*, *>
+internal fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), name).readText()) as Map<*, *>
 
 /** Canonical text form so two structures compare independent of key order. */
 private fun canonical(value: Any?): String = Key.stableStringify(value)
@@ -434,6 +435,10 @@ fun main() {
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     concurrentSubscribeAndHandleFrame()
+
+    // The optimistic-layer and offline-queue cases, in their own file so this one
+    // stays the wire-protocol suite it has always been.
+    runOptimisticOfflineCases()
 
     assertManifestCovered()
 

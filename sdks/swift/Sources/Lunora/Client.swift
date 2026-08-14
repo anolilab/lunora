@@ -89,16 +89,37 @@ public final class LunoraClient {
     private final class Subscription {
         let functionPath: String
         let args: Any?
+        /// The stable wire key of `args`, computed once at subscribe time so a
+        /// write's optimistic targeting can compare without re-serialising every
+        /// subscription's args on every write.
+        let argsKey: String
+        let shardKey: String?
         let onData: ((Any) -> Void)?
         let onError: ((LunoraSubscriptionError) -> Void)?
         var cursor: Any?
         var epoch: Any?
+        /// The displayed value and its optimistic overlays. See ``LunoraOptimistic``.
+        let state = LunoraOptimisticState()
 
-        init(functionPath: String, args: Any?, onData: ((Any) -> Void)?, onError: ((LunoraSubscriptionError) -> Void)?) {
+        init(
+            functionPath: String,
+            args: Any?,
+            shardKey: String?,
+            onData: ((Any) -> Void)?,
+            onError: ((LunoraSubscriptionError) -> Void)?
+        ) {
             self.functionPath = functionPath
             self.args = args
+            // A key that cannot be built (a value outside the wire codec) is the
+            // empty string, which simply means no optimistic write targets this
+            // subscription — never a wrong match, since a write's key is built the
+            // same way and an unencodable write cannot be sent either.
+            self.argsKey = (try? Wire.stableWireKey(args ?? [String: Any]())) ?? ""
+            self.shardKey = shardKey
             self.onData = onData
             self.onError = onError
+
+            if let onData { state.callbacks.append(onData) }
         }
     }
 
@@ -118,14 +139,86 @@ public final class LunoraClient {
         }
     }
 
+    private var storedClientID = "swift-client"
+    private var storedIdentity: String?
+    private var storedOfflineQueue = LunoraOfflineQueue()
+    private var wasEverConnected = false
+    private var closed = false
+    private var settledListeners: [(LunoraMutationSettled) -> Void] = []
+
+    /// Identifies this client to the shard. It rides every write that carries an
+    /// idempotency key, because an anonymous caller has no server-minted user id
+    /// to namespace its de-duplication rows by.
+    public var clientID: String {
+        get { withLock { storedClientID } }
+        set { withLock { storedClientID = newValue } }
+    }
+
+    /// An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id,
+    /// not a bearer token. It is persisted alongside every queued write and
+    /// re-checked before that write replays, so a restart cannot push one user's
+    /// queued writes as another. Nil means signed out, which is itself an identity
+    /// a write can be stamped with.
+    public var identity: String? {
+        get { withLock { storedIdentity } }
+        set { withLock { storedIdentity = newValue } }
+    }
+
+    /// The durable write queue backing ``submit(_:)``.
+    public var offlineQueue: LunoraOfflineQueue {
+        get { withLock { storedOfflineQueue } }
+        set { withLock { storedOfflineQueue = newValue } }
+    }
+
     public init(url: String, post: LunoraHTTPPoster? = nil, authToken: String? = nil) {
         self.baseURL = url
         self.post = post
         self.authToken = authToken
     }
 
-    /// Registers the sender used for subscription frames. Call once the socket is open.
-    public func attachSocket(_ sender: @escaping LunoraFrameSender) { withLock { send = sender } }
+    /// Registers the sender used for subscription frames. Call once the socket is
+    /// open.
+    ///
+    /// It also latches "has connected at least once", which is what the write
+    /// queue gates on: a write made before the FIRST connect fails fast by
+    /// default, so a misconfigured endpoint surfaces on the first write instead of
+    /// silently filling a queue that will never flush.
+    public func attachSocket(_ sender: @escaping LunoraFrameSender) {
+        withLock {
+            send = sender
+            wasEverConnected = true
+        }
+    }
+
+    /// Forgets the sender, so subsequent writes queue rather than fail.
+    public func detachSocket() { withLock { send = nil } }
+
+    /// Whether a socket is currently attached.
+    public var online: Bool { withLock { send != nil } }
+
+    /// How many writes are waiting for the socket.
+    public var pendingMutationCount: Int { withLock { storedOfflineQueue.size } }
+
+    /// Observes every queued write's terminal verdict.
+    ///
+    /// This is the ONLY report a write restored from durable storage produces —
+    /// its original caller did not survive the restart.
+    public func onMutationSettled(_ listener: @escaping (LunoraMutationSettled) -> Void) {
+        withLock { settledListeners.append(listener) }
+    }
+
+    /// Rejects every queued write so no caller waits on a dead client. Durable
+    /// storage is untouched: the next session restores those writes.
+    public func close() {
+        let queue = withLock { () -> LunoraOfflineQueue in
+            closed = true
+            send = nil
+
+            return storedOfflineQueue
+        }
+
+        reportDiscarded(withLock { queue.clear() })
+    }
 
     // MARK: - RPC
 
@@ -179,17 +272,51 @@ public final class LunoraClient {
     }
 
     private func rpc(_ functionPath: String, args: Any?, shardKey: String?, mutationID: String?) throws -> Any {
+        try rpcFull(functionPath, args: args, shardKey: shardKey, mutationID: mutationID).result
+    }
+
+    /// The CDC cursor a write committed at, echoed on a mutation's response.
+    ///
+    /// Nil when the call was a read, or when the shard has CDC off — the degraded
+    /// case the optimistic engine falls back to one-shot behaviour for.
+    public static func parseCommitCursor(_ body: [String: Any]) -> Int? {
+        (body["commitCursor"] as? NSNumber)?.intValue
+    }
+
+    /// One round-trip, keeping the echoed `commitCursor`.
+    ///
+    /// The cursor is what gates an optimistic overlay's removal, so it has to
+    /// survive the call rather than be discarded by ``parseRPCResponse(_:status:)``.
+    /// `issuingClientID` overrides this session's, so a replayed write namespaces
+    /// server-side under the id that ISSUED it.
+    func rpcFull(
+        _ functionPath: String,
+        args: Any?,
+        shardKey: String?,
+        mutationID: String?,
+        issuingClientID: String? = nil
+    ) throws -> (result: Any, commitCursor: Int?) {
         guard let post else { throw LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured") }
 
         var headers = ["content-type": "application/json"]
         if let authToken { headers["authorization"] = "Bearer \(authToken)" }
-        if let mutationID { headers["x-lunora-mutation-id"] = mutationID }
+
+        if let mutationID {
+            headers["x-lunora-mutation-id"] = mutationID
+            // Rides WITH the idempotency key, never alone. An anonymous caller has
+            // no server-minted user id, so the shard namespaces its de-duplication
+            // rows by this client id instead; without one every anonymous client
+            // shares a single key space and a colliding mutation id suppresses
+            // another client's write.
+            headers["x-lunora-client-id"] = issuingClientID ?? clientID
+        }
 
         let body = try LunoraClient.buildRPCBody(functionPath: functionPath, args: args, shardKey: shardKey)
         let payload = try JSONSerialization.data(withJSONObject: body)
         let (status, raw) = try post(join(lunoraRPCPath), headers, payload)
         let parsed = try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:]
-        return try LunoraClient.parseRPCResponse(parsed, status: status)
+
+        return (try LunoraClient.parseRPCResponse(parsed, status: status), LunoraClient.parseCommitCursor(parsed))
     }
 
     /// Projects a generated model into the dictionary tree ``Wire/encode(_:depth:)``
@@ -326,7 +453,13 @@ public final class LunoraClient {
         let (id, sender) = withLock { () -> (String, LunoraFrameSender?) in
             nextID += 1
             let id = "sub_\(nextID)"
-            subscriptions[id] = Subscription(functionPath: functionPath, args: args, onData: onData, onError: onError)
+            subscriptions[id] = Subscription(
+                functionPath: functionPath,
+                args: args,
+                shardKey: shardKey,
+                onData: onData,
+                onError: onError
+            )
 
             return (id, send)
         }
@@ -444,15 +577,30 @@ public final class LunoraClient {
         case "data", "delta":
             let payload = (frame["data"] is NSNull ? nil : frame["data"]) ?? frame["delta"]
             let value = try Wire.decode(payload)
-            let onData = withLock { () -> ((Any) -> Void)? in
-                guard let id, let entry = subscriptions[id] else { return nil }
+            let deferred = withLock { () -> LunoraOptimistic.Deferred in
+                guard let id, let entry = subscriptions[id] else { return [] }
 
                 advance(entry, frame)
 
-                return entry.onData
+                var queued: LunoraOptimistic.Deferred = []
+
+                entry.state.serverBase = value
+                entry.state.serverCursor = (frame["cursor"] as? NSNumber)?.intValue
+                // Drop the overlays this frame has caught up with, then RE-FOLD the
+                // rest onto the new authoritative base rather than clobbering them:
+                // a still-queued write's predicted value has to survive an
+                // unrelated delta on the same query.
+                LunoraOptimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor)
+                LunoraOptimistic.notify(
+                    entry.state,
+                    LunoraOptimistic.fold(entry.state.serverBase, entry.state.layers),
+                    &queued
+                )
+
+                return queued
             }
 
-            onData?(value)
+            LunoraClient.runDeferred(deferred)
 
             return kind
         case "resume", "settled":
@@ -590,6 +738,339 @@ public final class LunoraClient {
 
     private func percentEncode(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? value
+    }
+
+    // MARK: - Offline-capable writes
+
+    /// Writes, sending it now or queueing it until the socket is back.
+    ///
+    /// It returns as soon as the write is either committed or durably queued. A
+    /// queued write's optimistic overlay stays displayed until the replay's commit
+    /// cursor is reached by a server frame; a failed one rolls back.
+    @discardableResult
+    public func submit(_ options: LunoraSubmitOptions) throws -> LunoraMutationOutcome {
+        let writeID = options.mutationID ?? lunoraRandomID()
+        var deferred: LunoraOptimistic.Deferred = []
+
+        let (handles, queueIt, stamp, queue, issuingClientID) = try withLock {
+            () -> ([LunoraOptimisticHandle], Bool, String?, LunoraOfflineQueue, String) in
+            if closed {
+                throw LunoraAPIError(code: lunoraClientClosed, message: "client is closed")
+            }
+
+            let handles = applyOptimisticLocked(options, &deferred)
+
+            return (
+                handles,
+                send == nil && (wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect),
+                storedIdentity,
+                storedOfflineQueue,
+                storedClientID
+            )
+        }
+
+        LunoraClient.runDeferred(deferred)
+
+        if queueIt {
+            enqueueWrite(queue, options, writeID: writeID, clientID: issuingClientID, stamp: stamp, handles: handles)
+
+            return LunoraMutationOutcome(status: .queued, mutationID: writeID)
+        }
+
+        do {
+            let reply = try rpcFull(
+                options.functionPath,
+                args: options.args,
+                shardKey: options.shardKey,
+                mutationID: writeID
+            )
+
+            // Confirmed against the write's COMMITTED cursor, so the overlay drops
+            // when (or once) a frame at that cursor lands — never on this call's
+            // return, which races the socket broadcast.
+            settleLayers(confirm: handles, rollback: [], commitCursor: reply.commitCursor)
+
+            return LunoraMutationOutcome(
+                status: .committed,
+                mutationID: writeID,
+                value: reply.result,
+                commitCursor: reply.commitCursor
+            )
+        } catch {
+            settleLayers(confirm: [], rollback: handles, commitCursor: nil)
+
+            throw error
+        }
+    }
+
+    /// Restores writes persisted in a prior session; returns their shard keys.
+    ///
+    /// Open a socket for each returned key and flush it to replay them. A restored
+    /// write has no live caller, so its verdict arrives only through
+    /// ``onMutationSettled(_:)``.
+    public func hydrateOfflineQueue() throws -> [String?] {
+        let queue = offlineQueue
+        let (shardKeys, evicted) = try withLock { try queue.hydrate() }
+
+        reportDiscarded(evicted)
+
+        return shardKeys
+    }
+
+    /// Replays one shard's queued writes, in order, over HTTP. Call it when that
+    /// shard's socket comes back.
+    ///
+    /// Each write replays under its own idempotency key, so one the server already
+    /// committed is de-duplicated rather than applied twice. Per write: success
+    /// confirms its optimistic overlay against the ECHOED commit cursor; a coded
+    /// verdict is terminal; a transient failure — a raw transport error, or one of
+    /// ``lunoraTransientErrorCodes`` — stops the flush and re-queues that write and
+    /// every unreplayed one, in order, for the next attempt.
+    @discardableResult
+    public func flushOfflineQueue(shardKey: String? = nil) -> LunoraFlushReport {
+        var report = LunoraFlushReport()
+        let (queue, current) = withLock { (storedOfflineQueue, storedIdentity) }
+        let conflicted = withLock { queue.drainConflict() }
+
+        for discarded in conflicted {
+            withLock { queue.unpersist(discarded.entry.id) }
+            report.conflicted.append(discarded.entry.id)
+            report.rejected.append(discarded.entry.id)
+        }
+
+        reportDiscarded(conflicted)
+
+        let drained = withLock { queue.drain { $0.shardKey == shardKey } }
+
+        if drained.isEmpty { return report }
+
+        // Gated against ONE identity snapshot: a flush is a single authenticated
+        // burst, so every write in it necessarily runs under one identity.
+        var sendable: [LunoraQueuedMutation] = []
+
+        for entry in drained {
+            if lunoraIdentityAllowsReplay(entry.identity, current) {
+                sendable.append(entry)
+
+                continue
+            }
+
+            withLock { queue.unpersist(entry.id) }
+            report.rejected.append(entry.id)
+            reportDiscarded([
+                LunoraDiscarded(
+                    entry: entry,
+                    code: lunoraOfflineIdentityChanged,
+                    message: "offline mutation skipped: auth identity changed before replay"
+                )
+            ])
+        }
+
+        replay(queue, sendable, &report)
+
+        return report
+    }
+
+    private func replay(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+        for (index, entry) in sendable.enumerated() {
+            do {
+                let reply = try rpcFull(
+                    entry.functionPath,
+                    args: entry.args,
+                    shardKey: entry.shardKey,
+                    mutationID: entry.id,
+                    issuingClientID: entry.clientID
+                )
+
+                withLock { queue.unpersist(entry.id) }
+                // The overlay is confirmed BEFORE the caller is told, so the
+                // gapless drop is already in place when the confirming frame lands.
+                settleLayers(confirm: entry.handles, rollback: [], commitCursor: reply.commitCursor)
+                report.committed.append(entry.id)
+                emitSettled(
+                    LunoraMutationSettled(
+                        mutationID: entry.id,
+                        status: .committed,
+                        value: reply.result,
+                        error: nil,
+                        hadAwaiter: entry.liveAwaiter
+                    ),
+                    entry.onSettled
+                )
+            } catch {
+                if LunoraClient.isTransient(error) {
+                    // Nothing after this write may go out ahead of it: replaying
+                    // out of order is how a durable queue corrupts the data it was
+                    // protecting.
+                    let pending = Array(sendable[index...])
+
+                    withLock { queue.requeue(pending) }
+                    report.requeued.append(contentsOf: pending.map(\.id))
+
+                    return
+                }
+
+                withLock { queue.unpersist(entry.id) }
+                settleLayers(confirm: [], rollback: entry.handles, commitCursor: nil)
+                report.rejected.append(entry.id)
+                emitSettled(
+                    LunoraMutationSettled(
+                        mutationID: entry.id,
+                        status: .rejected,
+                        value: nil,
+                        error: error,
+                        hadAwaiter: entry.liveAwaiter
+                    ),
+                    entry.onSettled
+                )
+            }
+        }
+    }
+
+    /// Whether a failed replay may be retried rather than dropped.
+    ///
+    /// A raw error from the injected poster is the network, not the server: no
+    /// verdict was reached, so the write is still good.
+    public static func isTransient(_ error: Error) -> Bool {
+        guard let api = error as? LunoraAPIError else { return true }
+
+        return lunoraTransientErrorCodes.contains(api.code)
+    }
+
+    /// Registers both optimistic paths' layers. Runs with the lock held.
+    private func applyOptimisticLocked(
+        _ options: LunoraSubmitOptions,
+        _ deferred: inout LunoraOptimistic.Deferred
+    ) -> [LunoraOptimisticHandle] {
+        var handles: [LunoraOptimisticHandle] = []
+
+        if let transform = options.optimistic {
+            for entry in findSubscriptionsLocked(options.functionPath, options.args, options.shardKey) {
+                if let handle = LunoraOptimistic.applyLayer(entry.state, transform, &deferred) {
+                    handles.append(handle)
+                }
+            }
+        }
+
+        guard let update = options.optimisticUpdate else { return handles }
+
+        let store = LunoraOptimisticLocalStore(
+            find: { [weak self] path, args in
+                guard let self else { return [] }
+
+                return self.findSubscriptionsLocked(path, args, options.shardKey).map(\.state)
+            },
+            matching: { [weak self] path in
+                guard let self else { return [] }
+
+                return self.subscriptions.values
+                    .filter { $0.functionPath == path && $0.shardKey == options.shardKey }
+                    .map { LunoraQueryEntry(args: $0.args, value: $0.state.lastValue) }
+            }
+        )
+
+        update(store, options.args)
+        deferred.append(contentsOf: store.deferred)
+        handles.append(contentsOf: store.handles)
+
+        return handles
+    }
+
+    /// The live subscriptions registered under exactly this (path, args, shard).
+    ///
+    /// A linear scan, unlike `@lunora/client`'s keyed registry, and deliberately:
+    /// this client does not de-duplicate subscriptions, so several can share one
+    /// triple and all of them must receive the overlay. The scan is over a handful
+    /// of entries on the write path, never the frame path.
+    private func findSubscriptionsLocked(_ functionPath: String, _ args: Any?, _ shardKey: String?) -> [Subscription] {
+        let argsKey = (try? Wire.stableWireKey(args ?? [String: Any]())) ?? ""
+
+        return subscriptions.values.filter {
+            $0.functionPath == functionPath && $0.argsKey == argsKey && $0.shardKey == shardKey
+        }
+    }
+
+    private func enqueueWrite(
+        _ queue: LunoraOfflineQueue,
+        _ options: LunoraSubmitOptions,
+        writeID: String,
+        clientID: String,
+        stamp: String?,
+        handles: [LunoraOptimisticHandle]
+    ) {
+        let entry = LunoraQueuedMutation(
+            id: writeID,
+            functionPath: options.functionPath,
+            args: options.args,
+            shardKey: options.shardKey
+        )
+
+        entry.clientID = clientID
+        // Bound at enqueue time, so the write can only ever replay as whoever made it.
+        entry.identity = LunoraIdentity.stamp(stamp)
+        entry.liveAwaiter = true
+        entry.precondition = options.precondition
+        entry.handles = handles
+        entry.onSettled = options.onSettled
+
+        reportDiscarded(withLock { queue.enqueue(entry) })
+    }
+
+    /// Rolls back and reports every write the queue discarded without sending it.
+    ///
+    /// Every discard path funnels through here, so an eviction can never drop a
+    /// durable write in silence — which matters most for a hydrated record, whose
+    /// original caller did not survive the restart.
+    private func reportDiscarded(_ discarded: [LunoraDiscarded]) {
+        for item in discarded {
+            settleLayers(confirm: [], rollback: item.entry.handles, commitCursor: nil)
+            emitSettled(
+                LunoraMutationSettled(
+                    mutationID: item.entry.id,
+                    status: .rejected,
+                    value: nil,
+                    error: LunoraAPIError(code: item.code, message: item.message),
+                    hadAwaiter: item.entry.liveAwaiter
+                ),
+                item.entry.onSettled
+            )
+        }
+    }
+
+    /// Runs a write's confirms or rollbacks under the lock and delivers the
+    /// resulting notifications outside it.
+    private func settleLayers(
+        confirm: [LunoraOptimisticHandle],
+        rollback: [LunoraOptimisticHandle],
+        commitCursor: Int?
+    ) {
+        let deferred = withLock { () -> LunoraOptimistic.Deferred in
+            var queued: LunoraOptimistic.Deferred = []
+
+            LunoraOptimistic.confirmAll(confirm, commitCursor, &queued)
+            LunoraOptimistic.rollbackAll(rollback, &queued)
+
+            return queued
+        }
+
+        LunoraClient.runDeferred(deferred)
+    }
+
+    private func emitSettled(_ event: LunoraMutationSettled, _ onSettled: ((LunoraMutationSettled) -> Void)?) {
+        var listeners = withLock { settledListeners }
+
+        if let onSettled { listeners.insert(onSettled, at: 0) }
+
+        for listener in listeners {
+            listener(event)
+        }
+    }
+
+    /// Runs the notifications queued while the lock was held.
+    static func runDeferred(_ deferred: LunoraOptimistic.Deferred) {
+        for call in deferred {
+            call()
+        }
     }
 
     private func join(_ path: String) -> String {

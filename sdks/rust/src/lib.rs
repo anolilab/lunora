@@ -7,6 +7,9 @@
 
 pub mod client;
 pub mod key;
+pub mod offline;
+pub mod optimistic;
+pub mod submit;
 pub mod wire;
 
 pub use client::{
@@ -14,4 +17,12 @@ pub use client::{
     parse_rpc_response, ApiError, Client, ClientError, FrameSender, HttpPoster, SubscriptionError, Verb, RPC_PATH, WS_PATH,
 };
 pub use key::{stable_stringify, stable_wire_key};
+pub use offline::{
+    identity_allows_replay, is_stale_version, random_id, Discarded, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, DEFAULT_MAX_ITEMS, TRANSIENT_ERROR_CODES,
+};
+pub use optimistic::{
+    apply_layer, confirm_layer, constant, drop_confirmed_layers, fold, rollback_layer, shared, OptimisticLayer, OptimisticState, SharedTransform, Transform,
+};
+pub use submit::{is_transient, FlushReport, MutationOutcome, MutationSettled, MutationStatus, OptimisticQuery, SubmitOptions};
 pub use wire::{decode_wire, encode_wire, from_json, from_model_json, WireError, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};

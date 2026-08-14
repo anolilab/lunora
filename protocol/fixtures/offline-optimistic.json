@@ -1,0 +1,184 @@
+{
+    "$comment": [
+        "Golden scenarios for the two client-side write features every SDK now ships:",
+        "the cursor-gated optimistic-layer engine and the durable offline write queue.",
+        "",
+        "Unlike the other fixture files these are not wire frames — nothing here goes",
+        "on a socket. They are the NUMBERS AND ORDERINGS seven independently",
+        "hand-written ports must agree on: which value is displayed after a rebase,",
+        "which cursor drops an overlay, which queue entry an overflow evicts, and what",
+        "a flush leaves queued. The mechanics are hand-coded per language (a transform",
+        "is a closure, and closures are not data), but every assertion reads its",
+        "expectation from here, so a port that disagrees fails rather than documents a",
+        "second behaviour.",
+        "",
+        "`@lunora/client` is the reference implementation: packages/client/src/",
+        "optimistic-layers.ts and offline-queue.ts. Where an SDK deliberately diverges",
+        "from it, sdks/README.md says so and this file encodes the SDK behaviour.",
+        "",
+        "Every layer transform below is the same primitive so it ports without an",
+        "interpreter: `append` pushes `appended` onto a copy of the list it is handed,",
+        "and `constant` ignores its input and returns `value`."
+    ],
+    "optimistic": {
+        "rebase": {
+            "$comment": "A pending layer is re-folded onto each new authoritative base rather than clobbered by it. This is the whole point of layering: an offline write's predicted value survives an unrelated delta on the same query.",
+            "base": ["a"],
+            "appended": "c",
+            "displayedAfterApply": ["a", "c"],
+            "frame": { "cursor": 5, "data": ["a", "b"] },
+            "displayedAfterFrame": ["a", "b", "c"],
+            "layersAfterFrame": 1
+        },
+        "throwingLayerSkipped": {
+            "$comment": "A transform that raises is skipped by the fold, not fatal to it — one buggy optimistic write must not blank the query for every other layer. The mutation still reports its own failure.",
+            "base": ["a"],
+            "appended": "c",
+            "displayed": ["a", "c"],
+            "layers": 2
+        },
+        "commitCursorDrop": {
+            "$comment": "The overlay drops on the server-confirmed CDC cursor, never on RPC-response timing (which races the socket broadcast). A frame BELOW the commit cursor keeps the overlay; the frame that reaches it drops it, gaplessly — the confirming frame must not double-count.",
+            "base": ["a"],
+            "appended": "c",
+            "commitCursor": 9,
+            "belowFrame": { "cursor": 7, "data": ["a", "b"] },
+            "displayedAfterBelowFrame": ["a", "b", "c"],
+            "layersAfterBelowFrame": 1,
+            "atFrame": { "cursor": 9, "data": ["a", "b", "c"] },
+            "displayedAfterAtFrame": ["a", "b", "c"],
+            "layersAfterAtFrame": 0
+        },
+        "confirmWithoutCursor": {
+            "$comment": "A shard with CDC off echoes no commitCursor. The layer is removed but the display is NOT re-folded: confirm runs on SUCCESS, so re-folding would visibly revert a write that just committed until the authoritative frame lands.",
+            "base": ["a"],
+            "appended": "c",
+            "displayedAfterConfirm": ["a", "c"],
+            "layersAfterConfirm": 0
+        },
+        "rollback": {
+            "$comment": "Failure re-folds, so the bad value disappears immediately.",
+            "base": ["a"],
+            "appended": "c",
+            "displayedAfterRollback": ["a"],
+            "layersAfterRollback": 0
+        },
+        "constantMask": {
+            "$comment": "The multi-query local-store path registers a CONSTANT layer per setQuery. While pending it re-clamps to its predicted value on every frame — it masks a concurrent server change to that query rather than merging it, which is the intended absolute-override semantics.",
+            "base": ["a"],
+            "value": ["z"],
+            "displayedAfterApply": ["z"],
+            "frame": { "cursor": 3, "data": ["a", "b"] },
+            "displayedAfterFrame": ["z"],
+            "displayedAfterRollback": ["a", "b"]
+        }
+    },
+    "offlineQueue": {
+        "fifo": {
+            "$comment": "Writes replay in the order they were submitted.",
+            "enqueue": ["m1", "m2", "m3"],
+            "drained": ["m1", "m2", "m3"],
+            "sizeAfterEnqueue": 3,
+            "sizeAfterDrain": 0
+        },
+        "shardDrain": {
+            "$comment": "A predicate drain flushes one shard's writes when its socket reconnects while other shards are still down, and leaves the rest queued in order. A null shardKey and an empty one are the same shard.",
+            "entries": [
+                { "id": "m1", "shardKey": null },
+                { "id": "m2", "shardKey": "room-1" },
+                { "id": "m3", "shardKey": null },
+                { "id": "m4", "shardKey": "room-2" }
+            ],
+            "drainShardKey": null,
+            "drained": ["m1", "m3"],
+            "remaining": ["m2", "m4"]
+        },
+        "requeue": {
+            "$comment": "A flush that aborts on a transient transport failure returns its unreplayed writes to the FRONT of the queue, in order, without re-persisting them (durable storage still holds them).",
+            "enqueue": ["m1", "m2", "m3"],
+            "requeued": ["m2", "m3"],
+            "queuedAfterRequeue": ["m2", "m3"],
+            "persistAppendCalls": 3
+        },
+        "overflow": {
+            "$comment": "Bounded FIFO: past capacity the OLDEST entry is evicted, rejected with a coded error, un-persisted, and reported to the evict observer — a hydrated entry has no awaiter, so without the observer an eviction would drop a durable write in silence.",
+            "maxItems": 2,
+            "enqueue": ["m1", "m2", "m3"],
+            "evicted": ["m1"],
+            "remaining": ["m2", "m3"],
+            "code": "OFFLINE_QUEUE_OVERFLOW",
+            "persistRemoveCalls": ["m1"]
+        },
+        "clear": {
+            "$comment": "Closing the client rejects every pending write so an awaiting caller cannot hang forever. Durable storage is left INTACT on purpose — closing a tab must not discard writes the next session will restore.",
+            "enqueue": ["m1", "m2"],
+            "code": "CLIENT_CLOSED",
+            "rejected": ["m1", "m2"],
+            "persistRemoveCalls": []
+        },
+        "precondition": {
+            "$comment": "Checked just before replay: a write whose assumptions no longer hold (the row it edited was deleted while offline) is dropped instead of replayed. The valid writes keep their FIFO order.",
+            "entries": [
+                { "id": "m1", "precondition": true },
+                { "id": "m2", "precondition": false },
+                { "id": "m3", "precondition": true }
+            ],
+            "conflicted": ["m2"],
+            "remaining": ["m1", "m3"],
+            "code": "OFFLINE_PRECONDITION_FAILED"
+        },
+        "hydrate": {
+            "$comment": "Restored records are UNSHIFTED ahead of anything queued during the boot window: the durable store's order is authoritative (a prior-session write is always older), so replaying a same-session write first would let last-writer-wins clobber newer data with stale. A record stamped under a different app version is dropped AND purged rather than replayed against the current schema.",
+            "version": "v2",
+            "liveEnqueue": ["m1"],
+            "persisted": [
+                { "id": "p1", "version": "v2", "shardKey": null },
+                { "id": "p2", "version": "v1", "shardKey": "room-1" },
+                { "id": "p3", "version": "v2", "shardKey": "room-1" },
+                { "id": "p1", "version": "v2", "shardKey": null }
+            ],
+            "queuedAfterHydrate": ["p1", "p3", "m1"],
+            "purged": ["p2"],
+            "shardKeys": [null, "room-1"]
+        },
+        "hydrateOverflow": {
+            "$comment": "A durable store holding more than maxItems (the cap was lowered between sessions, or writes piled up across restarts) must not bypass it — hydrate evicts from the front exactly as enqueue does, and reports only the shard keys of the records that SURVIVED.",
+            "maxItems": 2,
+            "version": "v2",
+            "persisted": [
+                { "id": "p1", "version": "v2", "shardKey": "room-9" },
+                { "id": "p2", "version": "v2", "shardKey": "room-1" },
+                { "id": "p3", "version": "v2", "shardKey": "room-1" }
+            ],
+            "queuedAfterHydrate": ["p2", "p3"],
+            "evicted": ["p1"],
+            "shardKeys": ["room-1"]
+        },
+        "identityGate": {
+            "$comment": "A write stamped under one identity must never replay under another — a reload must not push the previous user's queued writes as the current one. `null` is the signed-out identity and is a real value, not 'unstamped': a write queued signed out replays signed out. A record with NO stamp (persisted before stamps existed) replays ambiently.",
+            "cases": [
+                { "name": "same-identity", "stamped": "user-a", "current": "user-a", "replays": true },
+                { "name": "changed-identity", "stamped": "user-a", "current": "user-b", "replays": false },
+                { "name": "signed-out-both", "stamped": null, "current": null, "replays": true },
+                { "name": "signed-out-then-in", "stamped": null, "current": "user-a", "replays": false },
+                { "name": "legacy-unstamped", "stamped": "absent", "current": "user-a", "replays": true }
+            ],
+            "code": "OFFLINE_IDENTITY_CHANGED"
+        },
+        "flushReplay": {
+            "$comment": "The end-to-end reconnect path. Writes replay sequentially under their own idempotency key so the server de-duplicates one it already committed. A CODED error is a server verdict — replaying it would re-trigger the same failure (a poison-message loop), so the write is dropped terminally. A CODELESS (transport) failure stops the flush and re-queues that write and every unreplayed one, in order, for the next reconnect. The successful write's optimistic overlay is confirmed against the ECHOED commitCursor.",
+            "queued": ["m1", "m2", "m3"],
+            "responses": [
+                { "id": "m1", "outcome": "ok", "commitCursor": 4 },
+                { "id": "m2", "outcome": "coded-error", "code": "NOT_FOUND" },
+                { "id": "m3", "outcome": "transport-error" }
+            ],
+            "committed": ["m1"],
+            "rejected": ["m2"],
+            "queuedAfterFlush": ["m3"],
+            "mutationIdHeaders": ["m1", "m2", "m3"],
+            "persistRemoveCalls": ["m1", "m2"],
+            "confirmedCommitCursor": 4
+        }
+    }
+}

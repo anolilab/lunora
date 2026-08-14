@@ -52,12 +52,17 @@ public final class ConformanceTest {
         pokePartsDoNotApplyBeforePokeEnd();
         concurrentSubscribeAndHandleFrame();
 
+        // The optimistic-layer and offline-queue cases, in their own file so this one
+        // stays the wire-protocol suite it has always been.
+        OptimisticOfflineTest.run();
+
         assertManifestCovered();
 
         System.out.println("OK — " + checks + " assertions");
     }
 
-    private static void check(boolean condition, String message) {
+    /** Package-private so the sibling case files in this suite share one counter. */
+    static void check(boolean condition, String message) {
         checks++;
 
         if (!condition) {
@@ -66,7 +71,7 @@ public final class ConformanceTest {
     }
 
     /** Records that the running case exercises the manifest case {@code name}. */
-    private static void covers(String name) {
+    static void covers(String name) {
         covered.add(name);
     }
 
@@ -102,7 +107,7 @@ public final class ConformanceTest {
                         + " (add a covers() call to the case that asserts it)");
     }
 
-    private static Path fixturesDir() {
+    static Path fixturesDir() {
         Path directory = Path.of("").toAbsolutePath();
 
         for (int depth = 0; depth < 8; depth++) {
@@ -125,7 +130,7 @@ public final class ConformanceTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> fixture(String name) throws IOException {
+    static Map<String, Object> fixture(String name) throws IOException {
         return (Map<String, Object>) Json.parse(Files.readString(fixturesDir().resolve(name)));
     }
 
