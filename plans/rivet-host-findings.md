@@ -283,9 +283,13 @@ that would let ratings move from `emulated`/`unsupported` to `native`.
    failed run, so every consumer that needs at-least-once rebuilds the same
    backoff-and-dead-letter ladder (this host included). A built-in retry
    policy on `schedule.after`/`at` would delete that code.
-6. **Streaming responses / SSE from `onRequest`** — already tracked upstream as
-   [rivet-dev/rivet#3529](https://github.com/rivet-dev/rivet/issues/3529). It
-   bounds anything Lunora wants to stream over the shard RPC edge.
+6. **Streaming responses / SSE from `onRequest`.** Raised upstream as
+   [rivet-dev/actors#3529](https://github.com/rivet-dev/actors/issues/3529)
+   (filed against the handler's old `onFetch` name) and **closed as not
+   planned** — the blocker named there is Rivet Guard, whose runner protocol
+   supports streaming but whose runner and gateway do not implement it. So this
+   is a known, declined limitation rather than pending work, and it bounds
+   anything Lunora wants to stream over the shard RPC edge.
 7. **A region-slug discovery API.** Region names are deployment-defined, which
    is why `shardPlacement` needs a caller-supplied `resolveRegion` and is rated
    `emulated`. An endpoint listing the deployment's regions would let a host map
