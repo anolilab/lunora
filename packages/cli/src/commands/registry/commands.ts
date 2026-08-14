@@ -3,8 +3,9 @@
  * resolve / reconcile / apply / catalog modules: `add`, `list`, `view`, and
  * `build`. Plus the small plan/report renderers they share.
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 
+import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
@@ -315,7 +316,17 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
             for (const file of manifest.files) {
                 options.logger.info(`--- ${file.to} (${file.merge}) ---`);
 
-                const content = readFileSync(join(directory, file.from), "utf8");
+                const sourcePath = join(directory, file.from);
+
+                // Refuse to read through a symlink: a hostile registry source could
+                // ship a symlink at a manifest-declared `file.from` path and have
+                // `view` print whatever host file the link targets, e.g.
+                // `~/.ssh/id_rsa`, straight to the terminal.
+                if (lstatSync(sourcePath).isSymbolicLink()) {
+                    throw new LunoraError("INTERNAL", `registry item "${name}": refusing to read "${file.from}" — it is a symlink, not a regular file`);
+                }
+
+                const content = readFileSync(sourcePath, "utf8");
 
                 for (const line of content.split("\n")) {
                     options.logger.info(line);
