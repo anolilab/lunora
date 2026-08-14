@@ -126,11 +126,18 @@ class WireBytes {
 /// An `Error`: name, message, own enumerable props, optional cause. `stack` is
 /// deliberately absent — the peer is untrusted.
 class WireError {
-  const WireError({required this.name, required this.message, this.props = const {}, this.cause});
+  /// [cause] defaults to [WireUndefined] rather than null, because the wire
+  /// distinguishes "no cause" (the 5-element form) from "a cause that IS null"
+  /// (a 6th element holding null), and Dart has only one null to spend. Defaulting
+  /// to null collapsed the two and broke `encodeWire(decodeWire(x)) == x` for the
+  /// second.
+  const WireError({required this.name, required this.message, this.props = const {}, this.cause = WireUndefined.instance});
 
   final String name;
   final String message;
   final Map<String, Object?> props;
+
+  /// The error this one wraps, or [WireUndefined] when it carries none.
   final Object? cause;
 
   @override
@@ -277,10 +284,11 @@ Object? _encodeError(WireError error, int depth) {
   final encoded = <Object?>[wireTag, 'error', error.name, error.message, props];
 
   // `cause` rides a positional slot; absent when unset, keeping the 5-element
-  // form.
+  // form. A cause that IS null still gets the slot — the two are different
+  // errors, and only [WireUndefined] means "there was none".
   final cause = error.cause;
 
-  if (cause != null && cause is! WireUndefined) {
+  if (cause is! WireUndefined) {
     encoded.add(encodeWire(cause, depth + 1));
   }
 
@@ -432,7 +440,7 @@ Object? _decodeError(List<Object?> value, int depth) {
     name: value[2] is String ? value[2] as String : '',
     message: value[3] is String ? value[3] as String : '',
     props: props,
-    cause: value.length > 5 ? decodeWire(value[5], depth + 1) : null,
+    cause: value.length > 5 ? decodeWire(value[5], depth + 1) : WireUndefined.instance,
   );
 }
 

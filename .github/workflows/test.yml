@@ -520,12 +520,14 @@
             # (or by SHA-256 for the two that ship as a downloaded artifact), so
             # a new release cannot change the rule set under a green PR.
             #
-            # Six of the eight. Two legs have nothing to install here, for
-            # opposite reasons. Dart's linter and formatter ARE the SDK, which the
-            # setup step above already pins to an exact version. swift-format
-            # ships no binary on any release and has no versioned package, so the
-            # swift leg uses the toolchain's own copy, prints the version it ran,
-            # and asserts it against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` —
+            # Six install steps for eight legs — a count of STEPS, not of pinned
+            # tools; `sdks/README.md` counts the latter and gets seven. Two legs
+            # have nothing to install here, for opposite reasons. Dart's linter
+            # and formatter ARE the SDK, which the setup step above already pins
+            # to an exact version. swift-format ships no binary on any release
+            # and has no versioned package, so the swift leg uses the toolchain's
+            # own copy, prints the version it ran, and asserts it against
+            # SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` —
             # a runner image whose Swift moves fails that leg by name instead of
             # quietly linting against a rule set nobody chose.
             - "name": "Install ruff"

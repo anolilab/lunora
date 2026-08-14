@@ -179,7 +179,14 @@ Request:
 ```json
 {
     "calls": [
-        { "functionPath": "messages:send", "args": <encodeWire(args)>, "id": 0, "mutationId": "<key?>", "shardKey": "<key?>" }
+        {
+            "functionPath": "messages:send",
+            "args": <encodeWire(args)>,
+            "id": 0,
+            "mutationId": "<key?>",
+            "clientId": "<id?>",
+            "shardKey": "<key?>"
+        }
     ]
 }
 ```
@@ -188,7 +195,17 @@ Request:
 the array index. `args` MUST be an object (absent → `{}`) — a string, number or
 array is rejected at the boundary. `mutationId` is per ENTRY, never a header on
 the outer request: a batch is one transport hop, but its entries are dispatched
-as independent single calls, so each carries its own idempotency key. Reserved
+as independent single calls, so each carries its own idempotency key.
+
+`clientId` is per entry for the same reason, and a client replaying a durable
+write MUST send it. The shard namespaces an idempotency row by the caller's
+verified user id; an ANONYMOUS caller has none and falls back to this, and with
+neither there is no namespace and the row cannot be read back — so the write
+re-runs on every retry, which is precisely what the rules below rely on not
+happening. Send the id that ISSUED the write, not the one the current session
+minted, or a replay after a restart lands in a different namespace and applies
+twice. The single-call endpoint carries the same value in the
+`x-lunora-client-id` header. Reserved
 `__lunora_relation__:` / `__lunora_admin__` paths cannot be batched. A batch is
 capped at **500** entries; a longer flush chunks, and the chunks must be sent
 sequentially to preserve order.

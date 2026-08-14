@@ -38,7 +38,7 @@
  * values a plain JSON projection could not represent).
  */
 
-import type { ModelNullPaths, SchemaPath, SdkMethod, SdkNamespace } from "../spec";
+import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -153,7 +153,7 @@ const verbConstant = (verb: string): string => `Verb::${toPascalCase(verb)}`;
 const rustPaths = (paths: ReadonlyArray<SchemaPath>): string =>
     paths.length === 0 ? "&[]" : `&[${paths.map((path) => `&["${path.map((segment) => stringLiteral(segment)).join('", "')}"][..]`).join(", ")}]`;
 
-const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderCall = (method: SdkMethod): string => {
     // A function whose args no model can express (a `v.bigint()`/`v.bytes()` schema, or
     // a shape this backend could not name) still TAKES arguments — wire-shaped ones.
     // Dropping the parameter made those functions uncallable with arguments, which is
@@ -165,8 +165,8 @@ const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelN
     });
     const payload = argsChoice(method, {
         none: "&WireValue::Object(Vec::new())",
-        typed: (type) =>
-            `&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(nullPaths[type]?.optional ?? [])})`,
+        typed: () =>
+            `&from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(method.argsNullPaths.optional)})`,
         untyped: "args",
     });
     const call = `self.client.call(${verbConstant(method.verb)}, "${stringLiteral(method.functionPath)}", ${payload}, shard_key)`;
@@ -196,12 +196,12 @@ const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelN
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderSubscribe = (method: SdkMethod): string => {
     const argument = argsChoice(method, { none: "", typed: (type) => `args: &${type}, `, untyped: "args: &WireValue, " });
     const payload = argsChoice(method, {
         none: "WireValue::Object(Vec::new())",
-        typed: (type) =>
-            `from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(nullPaths[type]?.optional ?? [])})`,
+        typed: () =>
+            `from_model_json(&serde_json::to_value(args).map_err(|error| ClientError::Transport(error.to_string()))?, ${rustPaths(method.argsNullPaths.optional)})`,
         untyped: "args.clone()",
     });
 
@@ -222,13 +222,11 @@ const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, M
     ].join("\n");
 };
 
-const renderNamespaceStruct = (namespace: SdkNamespace, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}Api`;
 
     const body = namespace.methods
-        .map((method) =>
-            method.verb === "query" ? `${renderCall(method, nullPaths)}\n\n${renderSubscribe(method, nullPaths)}` : renderCall(method, nullPaths),
-        )
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
@@ -243,7 +241,7 @@ const renderNamespaceStruct = (namespace: SdkNamespace, nullPaths: Readonly<Reco
     ].join("\n");
 };
 
-const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<string, string> => {
+const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
     const accessors = namespaces
         .map((namespace) =>
             [
@@ -264,7 +262,7 @@ const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<
         `\n`,
         `use crate::models::*;\n`,
         `\n`,
-        namespaces.map((namespace) => renderNamespaceStruct(namespace, modelNullPaths)).join("\n\n"),
+        namespaces.map((namespace) => renderNamespaceStruct(namespace)).join("\n\n"),
         `\n\n`,
         `/// Typed entry point: \`Api::new(&client).<namespace>().<function>(args)\`.\n`,
         `pub struct Api<'client> {\n`,

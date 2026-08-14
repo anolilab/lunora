@@ -61,8 +61,8 @@ pnpm run api:check                # public API vs api-snapshots/*.api.md (api:up
 pnpm run dist:check               # built dist/ is production-clean
 pnpm run test:templates           # templates/* scaffold, install, build + typecheck the auth-ui payload
 pnpm run e2e                      # Playwright suite in tests/e2e
-bash sdks/run-all.sh              # the 7 non-JS SDK conformance suites, in parallel
-bash sdks/lint-all.sh             # per-language lint + format for the same 7
+bash sdks/run-all.sh              # the 8 non-JS SDK conformance suites, in parallel
+bash sdks/lint-all.sh             # per-language lint + format for the same 8
 bash sdks/generated-check.sh      # generate each SDK into a scratch dir, then build + CALL it
 ```
 

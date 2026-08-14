@@ -18,7 +18,7 @@
 
 import renderModels from "./models";
 import type { OpenRpcDocument } from "./spec";
-import { assertGeneratable, modelNullPaths, parseSpec, undeclaredModels, unrepresentableFunctions, withDeclaredModels } from "./spec";
+import { assertGeneratable, parseSpec, undeclaredModels, unrepresentableFunctions, withDeclaredModels } from "./spec";
 import type { SdkTarget } from "./target";
 import { dartTarget } from "./targets/dart";
 import goTarget from "./targets/go";
@@ -93,7 +93,7 @@ const generateSdk = async (document: OpenRpcDocument, target: SdkTarget): Promis
     const namespaces = withDeclaredModels(parsed, models);
 
     return {
-        files: { ...modelFiles, ...target.render({ models, modelNullPaths: modelNullPaths(document), namespaces }) },
+        files: { ...modelFiles, ...target.render({ models, namespaces }) },
         undeclared: undeclaredModels(parsed, models),
         unrepresentable: unrepresentableFunctions(document),
     };

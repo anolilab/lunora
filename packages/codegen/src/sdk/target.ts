@@ -48,22 +48,10 @@
 
 import type { LanguageName } from "quicktype-core";
 
-import type { ModelNullPaths, OpenRpcDocument, SdkNamespace } from "./spec";
+import type { OpenRpcDocument, SdkNamespace } from "./spec";
 
 /** What a target renders from. */
 interface SdkRenderInput {
-    /**
-     * Where each rendered model's nulls mean "unset" and where they mean "null",
-     * keyed by model name — see {@link ModelNullPaths}.
-     *
-     * Supplied to every target because it is derived language-neutrally, and
-     * READ by the three whose rendered models flatten the distinction away
-     * (ruby, rust, swift). Python and Go get it from quicktype's own output, the
-     * JVM targets from the schema they emit from, and Dart from the `required`
-     * marker quicktype puts in its constructor — so those five ignore it.
-     */
-    modelNullPaths: Readonly<Record<string, ModelNullPaths>>;
-
     /**
      * The rendered model source, to be written as the target's model file.
      *
@@ -147,8 +135,8 @@ interface SdkTarget {
 
     /**
      * THIRD-PARTY packages a consuming project must still install, reported by
-     * the CLI. Empty for five of the seven — the transport is vendored and those
-     * five reach the wire with only their standard library.
+     * the CLI. Empty for six of the eight — the transport is vendored and those
+     * six reach the wire with only their standard library.
      *
      * A list, and not derivable from the transport, because a target's MODELS can
      * carry a dependency the transport does not: quicktype's Ruby backend emits

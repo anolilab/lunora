@@ -26,7 +26,7 @@
  * `requires` is a list and why it says so.
  */
 
-import type { ModelNullPaths, SchemaPath, SdkMethod, SdkNamespace } from "../spec";
+import type { SchemaPath, SdkMethod, SdkNamespace } from "../spec";
 import { allMethods, argsChoice, commentText, generatedHeaderLines, stringLiteral, toPascalCase, toSnakeCase } from "../spec";
 import type { SdkRenderInput, SdkTarget } from "../target";
 
@@ -126,17 +126,17 @@ const rubyPaths = (paths: ReadonlyArray<SchemaPath>): string =>
 // declares an optional field and a required nullable one identically
 // (`Types::X.optional`), so which nils may be dropped is knowable only from the
 // schema. See `ModelNullPaths`.
-const rubyPayload = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string =>
+const rubyPayload = (method: SdkMethod): string =>
     argsChoice(method, {
         none: "{}",
-        typed: (type) => `LunoraApi.wire_args(args, ${rubyPaths(nullPaths[type]?.optional ?? [])})`,
+        typed: () => `LunoraApi.wire_args(args, ${rubyPaths(method.argsNullPaths.optional)})`,
         untyped: "args",
     });
 
 /** One function as a method posting the RPC envelope. */
-const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderCall = (method: SdkMethod): string => {
     const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
-    const payload = rubyPayload(method, nullPaths);
+    const payload = rubyPayload(method);
     const call = `@client.${method.verb}("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`;
     // A typed result routes the decoded payload through the model's own
     // constructor; an untyped one is handed back as-is.
@@ -149,10 +149,10 @@ const renderCall = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelN
  * A query's live-subscription method. Only queries get one — the WS `subscribe`
  * frame names a query the server re-runs on every write to the tables it read.
  */
-const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderSubscribe = (method: SdkMethod): string => {
     const parameters =
         method.argsType === undefined && !method.takesArgs ? "on_data, on_error = nil, shard_key: nil" : "args, on_data, on_error = nil, shard_key: nil";
-    const payload = rubyPayload(method, nullPaths);
+    const payload = rubyPayload(method);
 
     return [
         `    # live ${commentText(method.summary)} — re-runs on every write to the tables it reads.`,
@@ -162,11 +162,9 @@ const renderSubscribe = (method: SdkMethod, nullPaths: Readonly<Record<string, M
     ].join("\n");
 };
 
-const renderNamespaceClass = (namespace: SdkNamespace, nullPaths: Readonly<Record<string, ModelNullPaths>>): string => {
+const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const body = namespace.methods
-        .map((method) =>
-            method.verb === "query" ? `${renderCall(method, nullPaths)}\n\n${renderSubscribe(method, nullPaths)}` : renderCall(method, nullPaths),
-        )
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
@@ -181,7 +179,7 @@ const renderNamespaceClass = (namespace: SdkNamespace, nullPaths: Readonly<Recor
     ].join("\n");
 };
 
-const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<string, string> => {
+const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");
 
@@ -194,7 +192,7 @@ const render = ({ modelNullPaths, models, namespaces }: SdkRenderInput): Record<
         // Only when something calls it: a deployment whose every function takes no
         // typed args would otherwise carry two unreferenced methods.
         allMethods(namespaces).some((method) => method.argsType !== undefined) ? WIRE_ARGS_HELPER : ``,
-        namespaces.map((namespace) => renderNamespaceClass(namespace, modelNullPaths)).join("\n\n"),
+        namespaces.map((namespace) => renderNamespaceClass(namespace)).join("\n\n"),
         `\n\n`,
         `  # Typed entry point: \`Api.new(client).<namespace>.<function>(args)\`.\n`,
         `  class Api\n`,

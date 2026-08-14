@@ -32,6 +32,7 @@ class PersistedMutation {
     required this.functionPath,
     required this.args,
     this.shardKey,
+    this.clientId,
     this.identity,
     this.version,
   });
@@ -43,6 +44,16 @@ class PersistedMutation {
   final String functionPath;
   final Object? args;
   final String? shardKey;
+
+  /// The client id that ISSUED this write, persisted so a replay lands in the
+  /// same server-side dedup namespace it was first sent under.
+  ///
+  /// Load-bearing for exactly-once on an anonymous call: the shard namespaces a
+  /// signed-out caller's idempotency row by this id, and with none it cannot
+  /// deduplicate at all — so every retry path re-applies the write. A replay
+  /// after a restart must therefore use the id from the RECORD, not the one this
+  /// session minted.
+  final String? clientId;
 
   /// Issuing identity fingerprint — null means "queued while signed out",
   /// which is a real value distinct from an absent stamp. Persisted so a
@@ -59,6 +70,7 @@ class PersistedMutation {
         'functionPath': functionPath,
         'args': args,
         if (shardKey != null) 'shardKey': shardKey,
+        if (clientId != null) 'clientId': clientId,
         if (identity != null) 'identity': identity,
         if (version != null) 'version': version,
       };
@@ -68,6 +80,7 @@ class PersistedMutation {
         functionPath: json['functionPath']! as String,
         args: json['args'],
         shardKey: json['shardKey'] as String?,
+        clientId: json['clientId'] as String?,
         identity: json['identity'] as String?,
         version: json['version'] as String?,
       );
@@ -81,6 +94,12 @@ class PersistedMutation {
 /// relational store is free to ignore them.
 abstract class LunoraPersistence {
   /// Append one mutation. Called on enqueue.
+  ///
+  /// Implementations must apply calls in the order they are made. The queue does
+  /// not await them — a write should not pay a storage round-trip before its
+  /// caller's Future resolves — so an adapter that reorders can let a [remove]
+  /// land before the [append] it cancels, leaving a record in storage that the
+  /// next session replays as a write this one already rejected.
   Future<void> append(PersistedMutation mutation);
 
   /// Load every persisted mutation in FIFO order. Called once at startup.
@@ -127,6 +146,7 @@ class QueuedMutation {
     required this.functionPath,
     required this.args,
     this.shardKey,
+    this.clientId,
     this.identity,
     this.completer,
     this.precondition,
@@ -138,6 +158,10 @@ class QueuedMutation {
   final String functionPath;
   final Object? args;
   final String? shardKey;
+
+  /// The client id that issued this write — see [PersistedMutation.clientId].
+  final String? clientId;
+
   final String? identity;
 
   /// The caller awaiting this write, or null for a record restored from durable
@@ -159,10 +183,20 @@ class QueuedMutation {
   /// is where the client unwinds the write's optimistic layers.
   final void Function(Object error)? onReject;
 
+  /// Set by the queue so a settled write reaches [OfflineQueue.onSettled].
+  ///
+  /// Not the same thing as [completer]: a RESTORED write has no completer, no
+  /// `onReject` and no awaiter at all, so without this every verdict on one — an
+  /// identity mismatch, a failed precondition, unencodable args, a server
+  /// rejection — was reached in total silence.
+  void Function(QueuedMutation entry, Object? error)? onSettled;
+
   /// True when a live caller is still awaiting this write.
   bool get hasAwaiter => completer != null;
 
   void resolve(Object? value) {
+    onSettled?.call(this, null);
+
     if (completer != null && !completer!.isCompleted) {
       completer!.complete(value);
     }
@@ -170,14 +204,22 @@ class QueuedMutation {
 
   void reject(Object error) {
     onReject?.call(error);
+    onSettled?.call(this, error);
 
     if (completer != null && !completer!.isCompleted) {
       completer!.completeError(error);
     }
   }
 
-  PersistedMutation toPersisted(String? version) =>
-      PersistedMutation(id: id, functionPath: functionPath, args: args, shardKey: shardKey, identity: identity, version: version);
+  PersistedMutation toPersisted(String? version) => PersistedMutation(
+        id: id,
+        functionPath: functionPath,
+        args: args,
+        shardKey: shardKey,
+        clientId: clientId,
+        identity: identity,
+        version: version,
+      );
 }
 
 /// A process-unique id, used as a mutation's idempotency key.
@@ -220,7 +262,7 @@ class OfflineQueue {
     this.persistence,
     this.version,
     this.onSizeChange,
-    this.onEvict,
+    this.onSettled,
     this.onPersistenceError,
   });
 
@@ -245,10 +287,14 @@ class OfflineQueue {
   /// indicator.
   final void Function(int size)? onSizeChange;
 
-  /// Notified when an entry is dropped on overflow. Worth handling: a restored
-  /// record has no awaiter, so without this an eviction discards a durable
-  /// write in silence.
-  final void Function(QueuedMutation entry, LunoraApiException error)? onEvict;
+  /// Notified whenever a queued write reaches a terminal verdict — replayed,
+  /// rejected by the server, evicted on overflow, discarded by a failed
+  /// precondition or an identity change, or abandoned by `close`. `error` is null
+  /// on success.
+  ///
+  /// Worth handling, and the only way to see half of them: a RESTORED write has
+  /// no awaiter, so its verdict reaches no Future at all.
+  final void Function(QueuedMutation entry, Object? error)? onSettled;
 
   /// Notified when a durable operation fails — a full disk, a revoked
   /// permission. A failed `append` means the write is queued in memory but NOT
@@ -259,11 +305,21 @@ class OfflineQueue {
 
   int get size => _items.length;
 
+  /// Whether a write issued while disconnected should be queued rather than
+  /// failing fast.
+  ///
+  /// The rule is the queue's, so the decision is too. Before the client's first
+  /// successful connect a failure is more likely a misconfiguration than a
+  /// network blip, and failing fast says so — unless [queueBeforeFirstConnect]
+  /// turns that off for an offline-first app.
+  bool acceptsWhileDisconnected({required bool everConnected}) => everConnected || queueBeforeFirstConnect;
+
   /// The queued writes, oldest first. A copy: mutating the queue is done
   /// through its own methods.
   List<QueuedMutation> get items => List<QueuedMutation>.unmodifiable(_items);
 
   void enqueue(QueuedMutation entry) {
+    entry.onSettled = onSettled;
     _items.add(entry);
     _evictOverflow();
 
@@ -338,7 +394,14 @@ class OfflineQueue {
       }
 
       restored.add(
-        QueuedMutation(id: record.id, functionPath: record.functionPath, args: record.args, shardKey: record.shardKey, identity: record.identity),
+        QueuedMutation(
+          id: record.id,
+          functionPath: record.functionPath,
+          args: record.args,
+          shardKey: record.shardKey,
+          clientId: record.clientId,
+          identity: record.identity,
+        )..onSettled = onSettled,
       );
     }
 
@@ -458,10 +521,9 @@ class OfflineQueue {
       const error = LunoraApiException(offlineQueueOverflow, 'offline queue overflow');
 
       unpersist(dropped.id);
+      // `reject` carries it to `onSettled`, which is where a restored entry —
+      // having no awaiter — is heard from at all.
       dropped.reject(error);
-      // Also surface it on the observer: a restored entry has no awaiter, so
-      // without this an eviction would discard a durable write in silence.
-      onEvict?.call(dropped, error);
     }
   }
 

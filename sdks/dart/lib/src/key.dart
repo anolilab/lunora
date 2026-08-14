@@ -164,6 +164,11 @@ String _trimTrailingZeros(String text) {
 /// Not `jsonEncode`: Dart escapes the same set, but this walks code units so the
 /// output is pinned by this function rather than by whatever `dart:convert`
 /// decides. `<`, `>`, `&`, U+2028 and U+2029 stay raw, matching JavaScript.
+///
+/// An UNPAIRED surrogate is escaped, matching well-formed `JSON.stringify` since
+/// ES2019. Dart is the only port where this is reachable — Swift, Rust and Go
+/// walk Unicode scalars, which cannot hold a lone surrogate — so the plain
+/// code-unit walk is equivalent to the reference everywhere except here.
 String jsonStringLiteral(String value) {
   final buffer = StringBuffer('"');
 
@@ -186,7 +191,7 @@ String jsonStringLiteral(String value) {
       case 0x0C:
         buffer.write(r'\f');
       default:
-        if (unit < 0x20) {
+        if (unit < 0x20 || _isUnpairedSurrogate(value, index)) {
           buffer.write('\\u${unit.toRadixString(16).padLeft(4, '0')}');
         } else {
           buffer.writeCharCode(unit);
@@ -197,4 +202,23 @@ String jsonStringLiteral(String value) {
   buffer.write('"');
 
   return buffer.toString();
+}
+
+/// Whether the code unit at [index] is a surrogate with no partner beside it.
+bool _isUnpairedSurrogate(String value, int index) {
+  final unit = value.codeUnitAt(index);
+
+  if (unit >= 0xD800 && unit <= 0xDBFF) {
+    final next = index + 1 < value.length ? value.codeUnitAt(index + 1) : 0;
+
+    return next < 0xDC00 || next > 0xDFFF;
+  }
+
+  if (unit >= 0xDC00 && unit <= 0xDFFF) {
+    final previous = index > 0 ? value.codeUnitAt(index - 1) : 0;
+
+    return previous < 0xD800 || previous > 0xDBFF;
+  }
+
+  return false;
 }

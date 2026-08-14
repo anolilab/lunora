@@ -750,6 +750,7 @@ type SdkFiles = Record<string, string>;
 
 ```ts
 interface SdkMethod {
+    argsNullPaths: ModelNullPaths;
     argsType: string | undefined;
     functionName: string;
     functionPath: string;

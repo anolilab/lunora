@@ -44,6 +44,40 @@ const document: OpenRpcDocument = {
     ],
 };
 
+/**
+ * A union argument. quicktype merges the branches into ONE class whose every
+ * property is nullable, so a model built from it emits BOTH — one of them null,
+ * which neither branch of the union accepts.
+ */
+const union: OpenRpcDocument = {
+    methods: [
+        {
+            name: "events:put",
+            params: [
+                {
+                    name: "args",
+                    schema: {
+                        additionalProperties: false,
+                        properties: {
+                            id: { type: "string" },
+                            payload: {
+                                anyOf: [
+                                    { additionalProperties: false, properties: { a: { type: "string" } }, required: ["a"], type: "object" },
+                                    { additionalProperties: false, properties: { b: { type: "number" } }, required: ["b"], type: "object" },
+                                ],
+                            },
+                        },
+                        required: ["id", "payload"],
+                        type: "object",
+                    },
+                },
+            ],
+            summary: "mutation: events:put",
+            "x-lunora-function-kind": "mutation",
+        },
+    ],
+};
+
 /** A document with no optional and no nullable argument at all. */
 const plain: OpenRpcDocument = {
     methods: [
@@ -77,6 +111,21 @@ describe("ruby nullable arguments", () => {
         const { files } = await generateSdk(plain, rubyTarget);
 
         expect(files["api.rb"]).toContain("wire_args(args, [])");
+    });
+});
+
+describe("union arguments", () => {
+    it("prunes the branch quicktype merged in but the caller did not pick", async () => {
+        expect.assertions(2);
+
+        // The regression guard. Reading each branch's own `required` in isolation
+        // would emit no paths at all, and the inactive branch's null would go on
+        // the wire — which is what the blanket prune used to stop.
+        const ruby = await generateSdk(union, rubyTarget);
+        const rust = await generateSdk(union, rustTarget);
+
+        expect(ruby.files["api.rb"]).toContain('wire_args(args, [["payload", "a"], ["payload", "b"]])');
+        expect(rust.files["src/api.rs"]).toContain('&[&["payload", "a"][..], &["payload", "b"][..]]');
     });
 });
 

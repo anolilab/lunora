@@ -168,6 +168,16 @@ site. A path is a run of keys from the model's root, with `*` for an array
 element or a record value, so a nested or in-array property is covered as exactly
 as a top-level one.
 
+What "optional" means is quicktype's answer, not the schema's read literally.
+It MERGES the branches of an `anyOf` into one class whose every property is
+nullable unless every branch requires it, so `v.union(v.object({a}),
+v.object({b}))` renders one class emitting both — one of them null. A walk that
+took each branch's own `required` at face value would emit no paths, and the
+inactive branch's null would reach a server that accepts neither shape. So the
+walk intersects across merged branches, and a `{type:"null"}` branch contributes
+no shape at all, which is what stops `.nullable()` on an object making its
+properties optional.
+
 Ruby and Rust take the OPTIONAL paths and prune only there. Swift takes the
 NULLABLE ones and restores, because `JSONEncoder` has already dropped every
 struct-property nil before the transport sees a tree — and at a required path an

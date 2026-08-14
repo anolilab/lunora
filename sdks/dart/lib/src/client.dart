@@ -11,13 +11,23 @@
 ///
 /// The sibling ports hold a lock over the subscription registry, the shape views
 /// and the id counters, because a socket read loop and application code run on
-/// different OS threads there. This one holds none, and needs none: Dart
-/// isolates share no mutable memory, so the socket read loop and the code that
-/// calls [subscribe] are the same isolate's event loop. Every method below is
-/// synchronous end to end — no `await` between reading [_nextId] and writing it —
-/// so there is no interleaving point for a second event to land in. Reaching
-/// this client from another isolate is not supported; give each isolate its own,
-/// as one would with any Dart object.
+/// different OS threads there. This one holds none, and needs none for THAT
+/// state: Dart isolates share no mutable memory, so the socket read loop and the
+/// code that calls [subscribe] are the same isolate's event loop, and every
+/// method touching the registry is synchronous end to end — no `await` between
+/// reading [_nextId] and writing it, so no interleaving point for a second event
+/// to land in.
+///
+/// The offline queue is a different matter, and the guards that look redundant
+/// are not. Replaying awaits the network, so a caller CAN run between two of its
+/// steps: [flushOfflineQueue] is single-flight via `_flushing` and coalesces a
+/// reconnect that arrives mid-flush into `_flushAgain`, and every place that
+/// touches shared state after an `await` re-checks `_closed` — because a flush
+/// has already DRAINED the queue, so `close()` cannot see those writes and they
+/// have to be settled where they are.
+///
+/// Reaching this client from another isolate is not supported; give each isolate
+/// its own, as one would with any Dart object.
 library;
 
 import 'dart:async';
@@ -27,53 +37,18 @@ import 'errors.dart';
 import 'key.dart';
 import 'offline_queue.dart';
 import 'optimistic.dart';
+import 'replay.dart';
+import 'transport.dart';
+import 'shapes.dart';
 import 'wire.dart';
-
-/// The single endpoint every query/mutation/action posts to.
-const String lunoraRpcPath = '/_lunora/rpc';
-
-/// The batched-RPC endpoint, used only to replay a queued flush of more than one
-/// write. See `protocol/README.md` §4.3.
-const String lunoraRpcBatchPath = '/_lunora/rpc-batch';
-
-/// The live-subscription endpoint.
-const String lunoraWsPath = '/_lunora/ws';
-
-/// Hard cap on entries in one batch, mirroring the worker's own. A Durable
-/// Object replays a batch sequentially on its single thread, so an unbounded one
-/// would pin a shard; a longer flush is chunked.
-const int lunoraMaxBatchEntries = 500;
 
 /// Which RPC method a call dispatches to. Generated code emits these cases
 /// rather than raw strings, so a typo in a target template is a compile error
 /// instead of a read silently sent over the write path.
 enum LunoraVerb { query, mutation, action }
 
-/// One HTTP response, as the injected poster reports it.
-class LunoraHttpResponse {
-  const LunoraHttpResponse(this.status, this.body);
-
-  final int status;
-  final String body;
-}
-
-/// Performs one POST. Injected — see the library comment.
-typedef LunoraHttpPoster = Future<LunoraHttpResponse> Function(String url, Map<String, String> headers, String body);
-
-/// Writes one JSON frame to an open socket. Injected for the same reason.
-typedef LunoraFrameSender = void Function(Map<String, Object?> frame);
-
-/// Cancels a subscription and tells the server to stop.
-typedef LunoraUnsubscribe = void Function();
-
 /// Receives a subscription's value on every push.
 typedef LunoraDataCallback = void Function(Object? value);
-
-/// Receives a shape view's full contents on every applied poke.
-typedef LunoraRowsCallback = void Function(List<Object?> rows);
-
-/// Receives a subscription-scoped error.
-typedef LunoraErrorCallback = void Function(LunoraSubscriptionError error);
 
 class _Subscription implements OptimisticTarget {
   _Subscription(this.functionPath, this.args, this.onData, this.onError) : argsKey = lunoraSubscriptionKey(functionPath, args);
@@ -118,52 +93,57 @@ class _Subscription implements OptimisticTarget {
   void deliver(Object? value) => onData?.call(value);
 }
 
-class _ShapeSubscription {
-  _ShapeSubscription(this.name, this.onRows, this.onError);
-
-  final String name;
-  final LunoraRowsCallback? onRows;
-  final LunoraErrorCallback? onError;
-  final Map<String, Object?> rows = <String, Object?>{};
-  final List<String> order = <String>[];
-  Object? checkpoint;
-  Object? epoch;
-}
-
 /// A Lunora deployment client.
 class LunoraClient {
-  LunoraClient({required String url, LunoraHttpPoster? post, this.authToken, this.authSubject, OfflineQueue? offlineQueue})
-      : _baseUrl = url,
-        _post = post,
-        _queue = offlineQueue ?? OfflineQueue();
+  LunoraClient({required String url, LunoraHttpPoster? post, String? authToken, String? authSubject, String? clientId, OfflineQueue? offlineQueue})
+      : transport = LunoraTransport(url: url, post: post, authToken: authToken, authSubject: authSubject, clientId: clientId),
+        _queue = offlineQueue ?? OfflineQueue() {
+    _replayer = OfflineReplayer(transport: transport, queue: _queue, isClosed: () => _closed, isConnected: () => _connected);
+  }
 
-  final String _baseUrl;
-  final LunoraHttpPoster? _post;
+  /// Where this deployment lives, who is calling, and how a request is made.
+  final LunoraTransport transport;
+
   final OfflineQueue _queue;
+
+  late final OfflineReplayer _replayer;
 
   /// The bearer token sent on every RPC. Rotate it at any time; the next call
   /// picks it up.
-  String? authToken;
+  String? get authToken => transport.authToken;
+
+  set authToken(String? value) => transport.authToken = value;
 
   /// A stable subject — a user id — identifying who the client is acting as.
-  ///
-  /// Supplying it is what makes a token REFRESH keep its queued writes: the
-  /// identity a queued write is stamped with is this subject when set, and a
-  /// digest of [authToken] otherwise — so refreshing a token without a subject
-  /// looks like a different user and discards the queue. Leave it null to fall
-  /// back to the token digest; a null token then means signed out.
-  String? authSubject;
+  /// See [LunoraTransport.authSubject].
+  String? get authSubject => transport.authSubject;
+
+  set authSubject(String? value) => transport.authSubject = value;
+
+  /// Identifies this client to the server's idempotency bookkeeping — see
+  /// [LunoraTransport.clientId].
+  String get clientId => transport.clientId;
+
+  /// Builds the `POST /_lunora/rpc` body — see [LunoraTransport.buildRpcBody].
+  static Map<String, Object?> buildRpcBody(String functionPath, Object? args, {String? shardKey}) =>
+      LunoraTransport.buildRpcBody(functionPath, args, shardKey: shardKey);
+
+  /// Decodes one RPC response — see [LunoraTransport.parseRpcResponse].
+  static Object? parseRpcResponse(Map<String, Object?> body, {int status = 200}) => LunoraTransport.parseRpcResponse(body, status: status);
+
+  /// The identity a queued write is stamped with — see
+  /// [LunoraTransport.identityFingerprint].
+  String? identityFingerprint() => transport.identityFingerprint();
+
+  /// The socket URL — see [LunoraTransport.wsUrl].
+  String wsUrl({String? shardKey, String? token}) => transport.wsUrl(shardKey: shardKey, token: token);
 
   LunoraFrameSender? _send;
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
-  final Map<String, _ShapeSubscription> _shapes = <String, _ShapeSubscription>{};
-  final Map<String, Map<String, List<Map<String, Object?>>>> _pokes = <String, Map<String, List<Map<String, Object?>>>>{};
+  final ShapeRegistry _shapeRegistry = ShapeRegistry();
   int _nextId = 0;
-  int _nextShapeId = 0;
   bool _connected = false;
   bool _wasEverConnected = false;
-  bool _flushing = false;
-  bool _flushAgain = false;
   bool _closed = false;
 
   /// Registers the sender used for subscription frames. Call once the socket is
@@ -222,11 +202,23 @@ class LunoraClient {
 
   /// Restore writes persisted in a prior session, returning how many came back.
   ///
-  /// Call it once at startup, before or after connecting: restored writes replay
-  /// on the next [setConnected] with true. A restored write has no awaiter — the
-  /// caller that issued it is gone — so its verdict surfaces through the queue's
-  /// observers rather than through a Future.
-  Future<int> hydrate() => _queue.hydrate();
+  /// Call it once at startup, before or after connecting — either way the
+  /// restored writes replay. Before, they go out on the first [setConnected];
+  /// after, this flushes them itself, because `setConnected(true)` early-returns
+  /// when already connected and would otherwise leave them queued until the
+  /// socket happened to drop and come back.
+  ///
+  /// A restored write has no awaiter — the caller that issued it is gone — so its
+  /// verdict surfaces through `OfflineQueue.onSettled` rather than a Future.
+  Future<int> hydrate() async {
+    final restored = await _queue.hydrate();
+
+    if (restored > 0 && _connected) {
+      unawaited(flushOfflineQueue());
+    }
+
+    return restored;
+  }
 
   /// Whether [close] has been called. A closed client accepts no further calls.
   bool get closed => _closed;
@@ -246,54 +238,12 @@ class LunoraClient {
     _connected = false;
     _send = null;
     _subscriptions.clear();
-    _shapes.clear();
-    _pokes.clear();
+    _shapeRegistry.clear();
     _queue.clear();
   }
 
   // ─── RPC ──────────────────────────────────────────────────────────────────
 
-  /// Builds the `POST /_lunora/rpc` body. `shardKey` is omitted when null, which
-  /// routes to the default shard.
-  static Map<String, Object?> buildRpcBody(String functionPath, Object? args, {String? shardKey}) {
-    final body = <String, Object?>{'args': encodeWire(args ?? const <String, Object?>{}), 'functionPath': functionPath};
-
-    if (shardKey != null) {
-      body['shardKey'] = shardKey;
-    }
-
-    return body;
-  }
-
-  /// Returns the decoded result, or throws [LunoraApiException].
-  ///
-  /// [status] is required for correctness, not diagnostics: `protocol/README.md`
-  /// §4.2 says a non-2xx whose body carries no `error` envelope surfaces as an
-  /// INTERNAL transport error. Without it a 502 with body `{"message":"…"}`
-  /// returns null and throws nothing — the caller believes its mutation
-  /// committed.
-  static Object? parseRpcResponse(Map<String, Object?> body, {int status = 200}) {
-    final envelope = body['error'];
-
-    if (envelope is Map<String, Object?>) {
-      final data = envelope['data'];
-
-      throw LunoraApiException(
-        envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
-        envelope['message'] is String ? envelope['message'] as String : 'request failed',
-        data == null ? null : decodeWire(data),
-      );
-    }
-
-    if (status < 200 || status > 299) {
-      throw LunoraApiException('INTERNAL', 'HTTP $status without an error envelope');
-    }
-
-    return decodeWire(body['result']);
-  }
-
-  /// A read. Never queued: a query has nothing to replay and a caller waiting on
-  /// stale data it cannot get is worse served than one told the request failed.
   Future<Object?> query(String functionPath, {Object? args, String? shardKey}) async => (await _rpc(functionPath, args: args, shardKey: shardKey)).result;
 
   /// A write.
@@ -326,18 +276,15 @@ class LunoraClient {
     LunoraOptimisticUpdate? optimisticUpdate,
     bool Function()? precondition,
   }) async {
+    _assertOpen();
+
     // One stable idempotency key per logical write, shared by the direct send
     // and any replay of it, so the server can deduplicate a write it already
     // committed rather than applying it twice.
-    _assertOpen();
-
     final id = mutationId ?? nextMutationId();
     final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
-    // Queue only once the client has been connected at least once, unless the
-    // queue was told otherwise: before the first connect a failure is more
-    // likely a misconfiguration than a network blip, and failing fast says so.
-    if (!_connected && (_wasEverConnected || _queue.queueBeforeFirstConnect)) {
+    if (!_connected && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 
@@ -364,47 +311,17 @@ class LunoraClient {
   /// replay for it would be a lie.
   Future<Object?> action(String functionPath, {Object? args, String? shardKey}) async => (await _rpc(functionPath, args: args, shardKey: shardKey)).result;
 
-  Map<String, String> _requestHeaders({String? mutationId}) {
-    final headers = <String, String>{'content-type': 'application/json'};
-    final token = authToken;
+  /// One RPC, refusing to start on a closed client.
+  Future<LunoraRpcOutcome> _rpc(String functionPath, {Object? args, String? shardKey, String? mutationId, String? issuedBy}) {
+    _assertOpen();
 
-    if (token != null) {
-      headers['authorization'] = 'Bearer $token';
-    }
-    // Per-entry in a batch, never on the outer request: a batch is one transport
-    // hop but its entries are dispatched as independent single calls.
-    if (mutationId != null) {
-      headers['x-lunora-mutation-id'] = mutationId;
-    }
-
-    return headers;
+    return transport.rpc(functionPath, args: args, shardKey: shardKey, mutationId: mutationId, issuedBy: issuedBy);
   }
 
   void _assertOpen() {
     if (_closed) {
       throw const LunoraApiException(clientClosed, 'this client is closed');
     }
-  }
-
-  Future<({Object? result, int? commitCursor})> _rpc(String functionPath, {Object? args, String? shardKey, String? mutationId}) async {
-    _assertOpen();
-
-    final post = _post;
-
-    if (post == null) {
-      throw const LunoraApiException('INTERNAL', 'no HTTP poster configured');
-    }
-
-    final response = await post(
-      _join(lunoraRpcPath),
-      _requestHeaders(mutationId: mutationId),
-      jsonEncode(buildRpcBody(functionPath, args, shardKey: shardKey)),
-    );
-    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
-    final cursor = body['commitCursor'];
-
-    return (result: parseRpcResponse(body, status: response.status), commitCursor: cursor is int ? cursor : null);
   }
 
   /// Projects a generated model into the tree [encodeWire] accepts, through the
@@ -465,26 +382,10 @@ class LunoraClient {
 
   static Map<String, Object?> buildUnsubscribeFrame(String id) => <String, Object?>{'id': id, 'type': 'unsubscribe'};
 
-  static Map<String, Object?> buildShapeSubscribeFrame(String id, String name, {Object? args, Object? sinceCheckpoint, Object? sinceEpoch}) {
-    final shape = <String, Object?>{'name': name};
+  static Map<String, Object?> buildShapeSubscribeFrame(String id, String name, {Object? args, Object? sinceCheckpoint, Object? sinceEpoch}) =>
+      ShapeRegistry.buildSubscribeFrame(id, name, args: args, sinceCheckpoint: sinceCheckpoint, sinceEpoch: sinceEpoch);
 
-    if (args != null) {
-      shape['args'] = encodeWire(args);
-    }
-
-    final frame = <String, Object?>{'id': id, 'shape': shape, 'type': 'shape_subscribe'};
-
-    if (sinceCheckpoint != null) {
-      frame['sinceCheckpoint'] = sinceCheckpoint;
-    }
-    if (sinceEpoch != null) {
-      frame['sinceEpoch'] = sinceEpoch;
-    }
-
-    return frame;
-  }
-
-  static Map<String, Object?> buildShapeUnsubscribeFrame(String id) => <String, Object?>{'id': id, 'type': 'shape_unsubscribe'};
+  static Map<String, Object?> buildShapeUnsubscribeFrame(String id) => ShapeRegistry.buildUnsubscribeFrame(id);
 
   // ─── Subscriptions ────────────────────────────────────────────────────────
 
@@ -525,21 +426,10 @@ class LunoraClient {
       });
 
   /// Opens a partially-replicated keyed view. `onRows` fires once per applied
-  /// poke with the view's full contents, in insertion order.
-  LunoraUnsubscribe subscribeShape(String name, {Object? args, LunoraRowsCallback? onRows, LunoraErrorCallback? onError}) {
-    _nextShapeId += 1;
-
-    final id = 'shape_$_nextShapeId';
-
-    _shapes[id] = _ShapeSubscription(name, onRows, onError);
-    _send?.call(buildShapeSubscribeFrame(id, name, args: args));
-
-    return () {
-      if (_shapes.remove(id) != null) {
-        _send?.call(buildShapeUnsubscribeFrame(id));
-      }
-    };
-  }
+  /// poke with the view's full contents, in insertion order. See
+  /// [ShapeRegistry], which owns the protocol.
+  LunoraUnsubscribe subscribeShape(String name, {Object? args, LunoraRowsCallback? onRows, LunoraErrorCallback? onError}) =>
+      _shapeRegistry.subscribe(name, sender: () => _send, args: args, onRows: onRows, onError: onError);
 
   /// Re-subscribes everything after a reconnect, carrying each subscription's
   /// resume cursor so the server can skip results that have not changed.
@@ -645,7 +535,7 @@ class LunoraClient {
 
         if (id != null) {
           _subscriptions[id]?.onError?.call(error);
-          _shapes[id]?.onError?.call(error);
+          _shapeRegistry.reportError(id, error);
         }
 
         return kind;
@@ -656,19 +546,15 @@ class LunoraClient {
 
         return kind;
       case 'pokeStart':
-        final pokeId = frame['pokeId'];
-
-        if (pokeId is String) {
-          _pokes[pokeId] = <String, List<Map<String, Object?>>>{};
-        }
+        _shapeRegistry.beginPoke(frame);
 
         return kind;
       case 'pokePart':
-        _bufferPokePart(frame);
+        _shapeRegistry.bufferPokePart(frame);
 
         return kind;
       case 'pokeEnd':
-        _applyPoke(frame);
+        _shapeRegistry.applyPoke(frame);
 
         return kind;
       default:
@@ -685,106 +571,12 @@ class LunoraClient {
     }
   }
 
-  /// Parts buffer until `pokeEnd`: a poke is an atomic batch, so applying them
-  /// as they arrive would expose a torn view, and a socket dropping mid-poke
-  /// would leave it permanently half-applied.
-  void _bufferPokePart(Map<String, Object?> frame) {
-    final pokeId = frame['pokeId'];
-    final shapeId = frame['shapeId'];
-
-    if (pokeId is! String || shapeId is! String) {
-      return;
-    }
-
-    // A part for an unknown poke is dropped: without its pokeStart there is no
-    // batch to join, and guessing applies a fragment.
-    final buffer = _pokes[pokeId];
-
-    if (buffer == null) {
-      return;
-    }
-
-    final patch = frame['rowsPatch'];
-
-    if (patch is! List) {
-      return;
-    }
-
-    buffer.putIfAbsent(shapeId, () => <Map<String, Object?>>[]).addAll(patch.whereType<Map<String, Object?>>());
-  }
-
-  void _applyPoke(Map<String, Object?> frame) {
-    final pokeId = frame['pokeId'];
-
-    if (pokeId is! String) {
-      return;
-    }
-
-    final buffer = _pokes.remove(pokeId);
-
-    if (buffer == null) {
-      return;
-    }
-
-    // The view is mutated first and every callback fires afterwards, with the
-    // row snapshot taken before delivery — so a callback that re-enters this
-    // client sees one consistent poke rather than a half-applied one.
-    final deliveries = <MapEntry<LunoraRowsCallback, List<Object?>>>[];
-
-    for (final shapeEntry in buffer.entries) {
-      final shape = _shapes[shapeEntry.key];
-
-      if (shape == null) {
-        continue;
-      }
-
-      for (final operation in shapeEntry.value) {
-        final key = operation['key'];
-
-        if (key is! String) {
-          continue;
-        }
-
-        if (operation['op'] == 'delete') {
-          if (shape.rows.remove(key) != null) {
-            shape.order.remove(key);
-          }
-          continue;
-        }
-
-        // A value-less upsert is membership-only; it must not blank an existing
-        // row.
-        final value = operation['value'];
-
-        if (value == null) {
-          continue;
-        }
-
-        if (!shape.rows.containsKey(key)) {
-          shape.order.add(key);
-        }
-
-        shape.rows[key] = decodeWire(value);
-      }
-
-      if (frame.containsKey('checkpoint')) {
-        shape.checkpoint = frame['checkpoint'];
-      }
-      if (frame.containsKey('epoch')) {
-        shape.epoch = frame['epoch'];
-      }
-
-      final onRows = shape.onRows;
-
-      if (onRows != null) {
-        deliveries.add(MapEntry(onRows, <Object?>[for (final key in shape.order) shape.rows[key]]));
-      }
-    }
-
-    for (final delivery in deliveries) {
-      delivery.key(delivery.value);
-    }
-  }
+  /// Replay every queued write, oldest first.
+  ///
+  /// Called for you on the transition to connected; public because a caller that
+  /// knows connectivity came back some other way may want to trigger it. See
+  /// [OfflineReplayer], which owns the ordering and classification rules.
+  Future<void> flushOfflineQueue() => _replayer.flush();
 
   // ─── Optimistic updates ───────────────────────────────────────────────────
 
@@ -794,20 +586,12 @@ class LunoraClient {
     final handles = <OptimisticLayerHandle>[];
 
     if (optimistic != null) {
-      // Every subscription on this exact query, not just one. The reference
-      // client de-duplicates subscriptions by key so there is only ever one to
-      // find; this transport gives each `subscribe` call its own id, matching
-      // its sibling ports, so a query two widgets are watching has two states
-      // and both must see the prediction.
-      final key = lunoraSubscriptionKey(functionPath, args);
+      // EVERY subscription on this exact query, not just one — see [_matching].
+      for (final entry in _matching(functionPath, args)) {
+        final handle = applyOptimisticLayer(entry, optimistic);
 
-      for (final entry in _subscriptions.values) {
-        if (entry.argsKey == key) {
-          final handle = applyOptimisticLayer(entry, optimistic);
-
-          if (handle != null) {
-            handles.add(handle);
-          }
+        if (handle != null) {
+          handles.add(handle);
         }
       }
     }
@@ -832,7 +616,13 @@ class LunoraClient {
     return handles;
   }
 
-  /// Every subscription watching `(functionPath, args)`, for the local store.
+  /// Every subscription watching `(functionPath, args)`.
+  ///
+  /// The single most subtle rule in this file — which queries a prediction
+  /// applies to — so it lives in one place. The reference client de-duplicates
+  /// subscriptions by key and therefore always finds at most one; this transport
+  /// gives each `subscribe` call its own id, matching its sibling ports, so a
+  /// query two widgets are watching has two states and both must see it.
   List<_Subscription> _matching(String functionPath, Object? args) {
     final key = lunoraSubscriptionKey(functionPath, args);
 
@@ -862,7 +652,10 @@ class LunoraClient {
         shardKey: shardKey,
         // Bound at enqueue so the write can only ever replay as whoever issued
         // it — see [flushOfflineQueue].
-        identity: identityFingerprint(),
+        identity: transport.identityFingerprint(),
+        // Stamped at enqueue and replayed under, so a write queued by this
+        // session keeps its dedup namespace across a restart.
+        clientId: transport.clientId,
         completer: completer,
         precondition: precondition,
         onCommit: (cursor) {
@@ -876,395 +669,6 @@ class LunoraClient {
 
     return completer.future;
   }
-
-  /// Replay every queued write, oldest first.
-  ///
-  /// Called for you on the transition to connected; public because a caller that
-  /// knows connectivity came back some other way may want to trigger it.
-  ///
-  /// A write issued DURING a flush goes straight out rather than behind the
-  /// queue, because the client is connected by then. That matches the reference
-  /// client, whose gate opens the moment its socket does; if a strict global
-  /// order matters, wait for this Future before writing again.
-  Future<void> flushOfflineQueue() async {
-    if (_flushing) {
-      // A reconnect arrived mid-flush. Remembered rather than dropped: the
-      // running flush may already have stopped on the very transport failure
-      // that caused the disconnect, and its re-queued writes would then sit
-      // untouched until some LATER reconnect happened to come along.
-      _flushAgain = true;
-
-      return;
-    }
-
-    _flushing = true;
-
-    try {
-      do {
-        _flushAgain = false;
-
-        await _flushOnce();
-        // Only while still connected, so a disconnect that lands mid-pass ends
-        // the loop instead of retrying into a socket that is down.
-      } while (_flushAgain && _connected);
-    } finally {
-      _flushing = false;
-    }
-  }
-
-  /// One drain-and-replay pass. See [flushOfflineQueue], which owns the
-  /// re-entrancy and the coalesced-reconnect loop around it.
-  Future<void> _flushOnce() async {
-    if (_closed) {
-      return;
-    }
-
-    // Weed out writes whose assumptions expired while offline before draining
-    // the rest. `drainConflict` rejects each one itself.
-    for (final stale in _queue.drainConflict()) {
-      _queue.unpersist(stale.id);
-    }
-
-    final drained = _queue.drain();
-
-    if (drained.isEmpty) {
-      return;
-    }
-
-    // ONE identity snapshot for the whole batch: a replay is a sequence of
-    // authenticated requests and there is no point between them where the
-    // token could change without this loop seeing it. A mismatch is rejected
-    // rather than silently dropped, so an awaiting caller gets a verdict.
-    final identity = identityFingerprint();
-    final sendable = <QueuedMutation>[];
-
-    for (final item in drained) {
-      if (item.identity == identity) {
-        sendable.add(item);
-      } else {
-        _queue.unpersist(item.id);
-        item.reject(const LunoraApiException(offlineIdentityChanged, 'offline mutation discarded: it was queued under a different identity'));
-      }
-    }
-
-    final encodable = _encodableOrSettleTerminal(sendable);
-
-    if (encodable.isEmpty) {
-      return;
-    }
-
-    // A lone write rides the single-call path, which is the proven one. Two or
-    // more coalesce into batch round trips — the flaky-reconnect win, where N
-    // queued writes cost a handful of hops instead of N.
-    if (encodable.length == 1) {
-      await _replaySequential(encodable);
-
-      return;
-    }
-
-    final toRequeue = <QueuedMutation>[];
-
-    for (var start = 0; start < encodable.length; start += lunoraMaxBatchEntries) {
-      final end = start + lunoraMaxBatchEntries > encodable.length ? encodable.length : start + lunoraMaxBatchEntries;
-      // Chunks replay sequentially, which is what preserves FIFO across a flush
-      // longer than one batch.
-      final outcome = await _replayBatched(encodable.sublist(start, end));
-
-      toRequeue.addAll(outcome.requeue);
-
-      if (outcome.stop) {
-        // A whole-chunk transport failure. Leave every write not yet sent queued,
-        // in order, rather than sending on into a connection that just failed.
-        toRequeue.addAll(encodable.sublist(end));
-
-        break;
-      }
-    }
-
-    if (toRequeue.isNotEmpty && !_closed) {
-      _queue.requeue(toRequeue);
-    }
-  }
-
-  /// Partition writes into the ones that can be encoded and settle the rest
-  /// terminally.
-  ///
-  /// A write whose args cannot be wire-encoded can NEVER replay: the codec
-  /// failure is deterministic, not transient. Rejecting it here is what stops it
-  /// re-queueing forever — a silent hang where the caller's Future never settles
-  /// and its optimistic layer never rolls back. Encoding is cheap and the flush
-  /// is the slow reconnect path, so it is done up front for both replay shapes.
-  List<QueuedMutation> _encodableOrSettleTerminal(List<QueuedMutation> items) {
-    final encodable = <QueuedMutation>[];
-
-    for (final item in items) {
-      try {
-        encodeWire(item.args ?? const <String, Object?>{});
-        encodable.add(item);
-      } on Object catch (error) {
-        _queue.unpersist(item.id);
-        item.reject(LunoraApiException('BAD_REQUEST', 'offline mutation cannot be encoded: $error'));
-      }
-    }
-
-    return encodable;
-  }
-
-  /// Replay writes one at a time. FIFO is preserved by the loop itself.
-  Future<void> _replaySequential(List<QueuedMutation> items) async {
-    for (var index = 0; index < items.length; index += 1) {
-      final item = items[index];
-
-      try {
-        final outcome = await _rpc(item.functionPath, args: item.args, shardKey: item.shardKey, mutationId: item.id);
-
-        _queue.unpersist(item.id);
-        item.onCommit?.call(outcome.commitCursor);
-        item.resolve(outcome.result);
-      } on LunoraApiException catch (error) {
-        // A coded error means the server answered and rejected the write.
-        // Terminal: replaying it would fail identically forever.
-        _queue.unpersist(item.id);
-        item.reject(error);
-      } on Object {
-        // Uncoded: a transport failure. Transient — put this write and every
-        // one after it back at the front, in order, and stop the flush.
-        //
-        // Unless the client was closed underneath us, in which case `close` has
-        // already rejected these callers and re-queuing would leave the queue
-        // holding entries nobody will ever settle.
-        if (!_closed) {
-          _queue.requeue(items.sublist(index));
-        }
-
-        return;
-      }
-    }
-  }
-
-  /// Replay one chunk over `POST /_lunora/rpc-batch`.
-  ///
-  /// The worker forwards the entries to their shard, which dispatches each
-  /// through its ordinary single-call path — so per-entry `mutationId`
-  /// idempotency and in-order application are inherited from the proven route
-  /// rather than re-implemented here.
-  ///
-  /// Returns the writes to re-queue, and whether the caller should STOP: a
-  /// whole-chunk transport failure leaves the later chunks unsent. Re-queuing is
-  /// the caller's, once and in order, so a write cannot land twice in the queue.
-  Future<({List<QueuedMutation> requeue, bool stop})> _replayBatched(List<QueuedMutation> items) async {
-    final post = _post;
-
-    if (post == null) {
-      return (requeue: items, stop: true);
-    }
-
-    final calls = <Object?>[
-      for (final (index, item) in items.indexed)
-        <String, Object?>{
-          'args': encodeWire(item.args ?? const <String, Object?>{}),
-          'functionPath': item.functionPath,
-          // The slot this entry's result comes back in.
-          'id': index,
-          // The same stable key the single-call replay sends, so the shard
-          // deduplicates a write it already committed.
-          'mutationId': item.id,
-          if (item.shardKey != null) 'shardKey': item.shardKey,
-        },
-    ];
-
-    final LunoraHttpResponse response;
-
-    try {
-      response = await post(_join(lunoraRpcBatchPath), _requestHeaders(), jsonEncode(<String, Object?>{'calls': calls}));
-    } on Object {
-      // Transport failure — nothing committed, so retry everything.
-      return (requeue: items, stop: true);
-    }
-
-    final Object? decoded;
-
-    try {
-      decoded = response.body.isEmpty ? null : jsonDecode(response.body);
-    } on FormatException {
-      // A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
-      return (requeue: items, stop: true);
-    }
-
-    final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
-    final results = body['results'];
-
-    if (results is List) {
-      return (requeue: _settleBatchSlots(items, results), stop: false);
-    }
-
-    // No per-slot results. A coded envelope is a verdict on the whole batch — a
-    // bad request, an authorization denial — and therefore terminal for every
-    // entry; anything else is transport, and transient.
-    final envelope = body['error'];
-
-    if (envelope is Map<String, Object?>) {
-      final error = LunoraApiException(
-        envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
-        envelope['message'] is String ? envelope['message'] as String : 'batch rejected',
-        envelope['data'] == null ? null : decodeWire(envelope['data']),
-      );
-
-      for (final item in items) {
-        _queue.unpersist(item.id);
-        item.reject(error);
-      }
-
-      return (requeue: <QueuedMutation>[], stop: false);
-    }
-
-    return (requeue: items, stop: true);
-  }
-
-  /// Demux a batch reply back onto the writes it replayed, in input order,
-  /// classifying each slot exactly as the single-call replay classifies a whole
-  /// response. Returns the writes to re-queue.
-  List<QueuedMutation> _settleBatchSlots(List<QueuedMutation> items, List<Object?> results) {
-    final bySlot = <int, Map<String, Object?>>{};
-
-    for (final entry in results) {
-      if (entry is! Map<String, Object?>) {
-        continue;
-      }
-
-      final id = entry['id'];
-      final slot = entry['body'];
-
-      if (id is int && slot is Map<String, Object?>) {
-        bySlot[id] = slot;
-      }
-    }
-
-    final requeue = <QueuedMutation>[];
-
-    for (final (index, item) in items.indexed) {
-      final slot = bySlot[index];
-
-      if (slot == null) {
-        // The server never returned this slot. It may or may not have committed,
-        // so retry it — the `mutationId` makes that safe.
-        requeue.add(item);
-
-        continue;
-      }
-
-      final envelope = slot['error'];
-
-      if (envelope is Map<String, Object?>) {
-        final code = envelope['code'] is String ? envelope['code'] as String : 'INTERNAL';
-
-        // A transient shard failure is the batch's counterpart of an uncoded
-        // throw on the single-call path: the server never reached a verdict, so
-        // the write goes back on the queue rather than being reported as failed.
-        if (transientBatchErrorCodes.contains(code)) {
-          requeue.add(item);
-        } else {
-          _queue.unpersist(item.id);
-          item.reject(
-            LunoraApiException(
-              code,
-              envelope['message'] is String ? envelope['message'] as String : 'request failed',
-              envelope['data'] == null ? null : decodeWire(envelope['data']),
-            ),
-          );
-        }
-
-        continue;
-      }
-
-      final cursor = slot['commitCursor'];
-
-      _queue.unpersist(item.id);
-      item.onCommit?.call(cursor is int ? cursor : null);
-      item.resolve(decodeWire(slot['result']));
-    }
-
-    return requeue;
-  }
-
-  /// The identity a queued write is stamped with, and gated on at replay.
-  ///
-  /// A digest rather than the token itself because the stamp is written to
-  /// durable storage: an app's queue file should not become somewhere a bearer
-  /// token sits at rest. The digest is the reference client's — FNV-1a and djb2
-  /// side by side, delimited by the token's length so two distinct tokens cannot
-  /// encode to one string through variable-width concatenation.
-  String? identityFingerprint() {
-    final subject = authSubject;
-
-    if (subject != null) {
-      // A distinct namespace from the digest format below, so a subject can
-      // never alias a token fingerprint.
-      return 'subj:$subject';
-    }
-
-    final token = authToken;
-
-    return token == null ? null : _hashToken(token);
-  }
-
-  static String _hashToken(String token) {
-    var fnv = 0x811c9dc5;
-    var djb2 = 5381;
-
-    for (var index = 0; index < token.length; index += 1) {
-      // Code UNITS, not runes: it keeps the digest stable across surrogate pairs
-      // and identical to the reference client's `charCodeAt` walk.
-      final code = token.codeUnitAt(index);
-
-      fnv = _mul32(fnv ^ code, 0x01000193);
-      djb2 = (_mul32(djb2, 33) + code) & 0xFFFFFFFF;
-    }
-
-    return '${token.length.toRadixString(36)}:${fnv.toRadixString(36)}:${djb2.toRadixString(36)}';
-  }
-
-  /// A 32-bit multiply that is exact on every Dart target.
-  ///
-  /// Not `(a * b) & 0xFFFFFFFF`: compiled to JavaScript a Dart `int` IS a
-  /// double, so a product above 2^53 silently loses low bits and the digest
-  /// would differ between Flutter web and everywhere else. Splitting the left
-  /// operand into 16-bit halves keeps both partial products under 2^48, which is
-  /// exact in a double — the same reason the reference client reaches for
-  /// `Math.imul`, which Dart has no counterpart to.
-  static int _mul32(int a, int b) {
-    final low = a & 0xFFFF;
-    final high = (a >> 16) & 0xFFFF;
-
-    return (low * b + (((high * b) & 0xFFFF) << 16)) & 0xFFFFFFFF;
-  }
-
-  // ─── URLs ─────────────────────────────────────────────────────────────────
-
-  /// The socket URL: the origin with its scheme swapped, plus the shard and
-  /// credential query parameters when present.
-  String wsUrl({String? shardKey, String? token}) {
-    var endpoint = _join(lunoraWsPath);
-
-    if (endpoint.startsWith('https://')) {
-      endpoint = 'wss://${endpoint.substring('https://'.length)}';
-    } else if (endpoint.startsWith('http://')) {
-      endpoint = 'ws://${endpoint.substring('http://'.length)}';
-    }
-
-    final params = <String>[
-      if (shardKey != null) 'shard=${Uri.encodeQueryComponent(shardKey)}',
-      if (token != null) 'token=${Uri.encodeQueryComponent(token)}',
-    ];
-
-    if (params.isEmpty) {
-      return endpoint;
-    }
-
-    return '$endpoint${endpoint.contains('?') ? '&' : '?'}${params.join('&')}';
-  }
-
-  String _join(String path) => '${_baseUrl.endsWith('/') ? _baseUrl.substring(0, _baseUrl.length - 1) : _baseUrl}$path';
 }
 
 /// The store handed to a mutation's [LunoraOptimisticUpdate].
@@ -1299,10 +703,7 @@ class _LocalStore implements OptimisticLocalStore {
   @override
   void setQuery(String functionPath, Object? value, {Object? args}) {
     for (final entry in _client._matching(functionPath, args)) {
-      // A CONSTANT layer, which masks rather than merges: while pending it
-      // re-clamps to the predicted value and hides concurrent server changes to
-      // this query, until the confirming frame drops it. That is the intended
-      // absolute-override semantics of a `setQuery`.
+      // A CONSTANT layer — see `optimistic.dart` for what that masks.
       final handle = applyOptimisticLayer(entry, (_) => value);
 
       if (handle != null) {

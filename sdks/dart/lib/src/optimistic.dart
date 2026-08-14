@@ -19,10 +19,13 @@
 /// re-derives from the new base on each delta — true rebasing), and the
 /// multi-query `optimisticUpdate` registers a CONSTANT-value layer per
 /// `setQuery`. They compose by fold order, and both get the same cursor-gated
-/// drop. A constant layer MASKS rather than merges: while pending it re-clamps
-/// to its predicted value and hides concurrent server changes to that query,
-/// until the confirming frame drops it. That is the intended absolute-override
-/// semantics.
+/// drop.
+///
+/// A constant layer MASKS rather than merges: while pending it re-clamps to its
+/// predicted value and hides concurrent server changes to that query, until the
+/// confirming frame drops it. That is the intended absolute-override semantics,
+/// and it is stated here once — [OptimisticLocalStore.setQuery] and the client's
+/// `_LocalStore` point back rather than restating it.
 library;
 
 /// Transforms the currently displayed value into the predicted one.
@@ -236,6 +239,8 @@ abstract class OptimisticLocalStore {
 
   /// Write an optimistic override for the subscribed query. A no-op when no
   /// subscription matches: you only patch queries something is watching.
+  ///
+  /// The override MASKS rather than merges — see the library comment.
   void setQuery(String functionPath, Object? value, {Object? args});
 }
 
