@@ -1208,6 +1208,7 @@ interface LunoraWorker {
     queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
     serverQuery: (request: Request, env: unknown, reference: unknown, args?: Record<string, unknown>, options?: {
+        context?: ExecutionContextLike;
         shardKey?: string;
         waitUntil?: (promise: Promise<unknown>) => void;
     }) => Promise<Response>;
@@ -1682,9 +1683,7 @@ type RestRegistryLike = Record<string, RestRegistryEntry>;
 ### `RestRoute` (type)
 
 ```ts
-type RestRoute = (request: Request, env: unknown, url?: URL, context?: {
-    waitUntil?: (promise: Promise<unknown>) => void;
-}) => Promise<Response>;
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: ExecutionContextLike) => Promise<Response>;
 ```
 
 ### `RestRouteDeps` (interface)

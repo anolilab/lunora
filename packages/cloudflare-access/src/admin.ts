@@ -1,5 +1,5 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
-import readNativeIdentity from "./native";
+import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, AccessJwtFallbackOptions } from "./types";
 import { assertJwtFallbackOptions, verifyRequest } from "./verify";
 
@@ -22,11 +22,24 @@ interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
  * instead of — the static admin bearer, so the Studio can sit behind Cloudflare
  * Access.
  *
- * It authenticates the same two ways `createAccessResolver` does, platform
- * identity first: `context.access` when the Access policy is attached to the
- * Worker (nothing to configure, nothing to verify), otherwise the request's
- * `Cf-Access-Jwt-Assertion` JWT against your team JWKS (`teamDomain` + `aud`,
- * required together, for hostname-scoped Access applications).
+ * It accepts exactly one proof, and **which one is your choice, not the
+ * platform's**:
+ *
+ * - Configure `teamDomain` + `aud` and the request's `Cf-Access-Jwt-Assertion`
+ * JWT is the only thing accepted. This is the stricter setup, and the point of
+ * the `aud`: it proves the caller came through the *specific* Access application
+ * you put in front of `/_lunora/admin`, not merely through some application in
+ * the same Cloudflare team.
+ * - Configure neither and the Worker's own Access identity (`context.access`) is
+ * accepted, for a deployment whose Access policy is attached to the Worker.
+ *
+ * Note this is the **opposite** precedence to `createAccessResolver`, which
+ * prefers the platform identity. That is deliberate. A policy attached to the
+ * Worker is typically broad — "anyone at the company", covering every route and
+ * preview URL — while a configured admin `aud` is deliberately narrow. Letting
+ * the broad one satisfy a gate you scoped with the narrow one would widen the
+ * admin plane to everyone the Worker policy admits, silently, the moment that
+ * policy was attached.
  *
  * It is **fail-closed**: no identity, a token that fails verification, or an
  * `isAdmin` that returns `false` all resolve to `false` (the bearer remains the
@@ -36,28 +49,29 @@ interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
  * every admin route.
  *
  * ```ts
- * // Access policy attached to the Worker.
- * options.adminGate = accessAdminGate({
- *     isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
- * });
- *
- * // Hostname-scoped Access application over /_lunora/admin.
+ * // A dedicated Access application over /_lunora/admin — the JWT is the only proof.
  * options.adminGate = accessAdminGate({
  *     teamDomain: env.CF_ACCESS_TEAM_DOMAIN,
  *     aud: env.CF_ACCESS_ADMIN_AUD,
  *     isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
  * });
+ *
+ * // Access policy attached to the Worker — `isAdmin` is the whole boundary, so
+ * // make it at least as strict as a dedicated admin application would have been.
+ * options.adminGate = accessAdminGate({
+ *     isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
+ * });
  * ```
  */
 const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request, context?: ExecutionContextLike) => Promise<boolean>) => {
-    // Validate the static config eagerly so a half-configured deployment (an unset
-    // teamDomain or aud) fails fast here at wiring time instead of denying every
-    // admin request with no signal. `undefined` means "no JWT fallback", a legal
-    // mode when the Worker itself is Access-protected.
+    // Validate the static config eagerly so a half-configured deployment fails
+    // fast here at wiring time instead of denying every admin request with no
+    // signal. `undefined` means "no JWT configured", which selects the platform
+    // identity below rather than adding a fallback to it.
     const jwtOptions = assertJwtFallbackOptions(options);
 
     return async (request: Request, context?: ExecutionContextLike): Promise<boolean> => {
-        const claims = (await readNativeIdentity(context)) ?? (jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions));
+        const claims = jwtOptions === undefined ? await readPlatformIdentity(context) : await verifyRequest(request, jwtOptions);
 
         return claims === undefined ? false : options.isAdmin(claims);
     };

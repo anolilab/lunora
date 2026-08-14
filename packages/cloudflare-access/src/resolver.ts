@@ -1,5 +1,5 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
-import readNativeIdentity from "./native";
+import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
 import { assertJwtFallbackOptions, verifyRequest } from "./verify";
 
@@ -23,17 +23,19 @@ const nonEmpty = (value: unknown): string | undefined => (typeof value === "stri
 
 /**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,
- * then Cloudflare's `user_uuid` (present on the platform-supplied identity, never
- * on the JWT), then `email`, then `common_name` for service tokens (whose `sub`
- * is empty). Returns `undefined` when none is present — the resolver treats that
- * as anonymous rather than minting an identity with no id.
+ * falling back to `email`, then `common_name` for service tokens (whose `sub` is
+ * empty). Returns `undefined` when none is present — the resolver treats that as
+ * anonymous rather than minting an identity with no id.
  *
- * `user_uuid` sits ahead of `email` because it is the stable id: an address can
- * be reassigned within an organization, which would silently hand the new holder
- * the old one's rows.
+ * Deliberately identical for both authentication paths, and deliberately does NOT
+ * consider `user_uuid` even though the platform-supplied identity carries one:
+ * `userId` is the ownership key RLS and `serverDefault` columns are stamped with,
+ * so a deployment that moves from a hostname-scoped Access application to a
+ * Worker-scoped policy must keep resolving each user to the same id. Preferring a
+ * field only one path emits would silently re-key every user on that switch,
+ * orphaning their existing rows behind RLS.
  */
-const deriveUserId = (claims: AccessClaims): string | undefined =>
-    nonEmpty(claims.sub) ?? nonEmpty(claims.user_uuid) ?? nonEmpty(claims.email) ?? nonEmpty(claims.common_name);
+const deriveUserId = (claims: AccessClaims): string | undefined => nonEmpty(claims.sub) ?? nonEmpty(claims.email) ?? nonEmpty(claims.common_name);
 
 /**
  * Build the resolved identity from verified claims. Promotes the common Access
@@ -99,17 +101,19 @@ const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOption
  * ```
  */
 export const createAccessResolver = (options?: CreateAccessResolverOptions): ResolveIdentityFunction => {
-    // Validate the static config eagerly so a half-configured deployment (an
-    // unset teamDomain or aud) fails fast here at wiring time instead of
-    // degrading to silent-anonymous — and thus RLS-denied — on every request with
-    // no signal. `undefined` means "no JWT fallback", a legal mode, not a miss.
+    // Validate the static config eagerly so a half-configured deployment (an unset
+    // CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD) fails fast here at wiring time
+    // instead of degrading to silent-anonymous — and thus RLS-denied — on every
+    // request with no signal. `undefined` means "no JWT fallback", which is a
+    // legal mode only when the caller named neither option.
     const jwtOptions = assertJwtFallbackOptions(options);
 
     return async (request: Request, _env?: unknown, context?: ExecutionContextLike): Promise<ResolvedAccessIdentity | null> => {
         // Platform identity wins when present: it is the stronger of the two
         // (authenticated by the edge, unforgeable, nothing to re-verify), and on a
-        // Worker-scoped Access deployment it is the only one that exists.
-        const claims = (await readNativeIdentity(context)) ?? (jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions));
+        // Worker-scoped Access deployment it is the only one that exists. Both
+        // paths fail closed to `undefined`.
+        const claims = (await readPlatformIdentity(context)) ?? (jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions));
 
         return claims === undefined ? ANONYMOUS : toIdentity(claims, options?.mapClaims);
     };

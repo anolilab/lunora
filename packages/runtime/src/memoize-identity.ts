@@ -183,7 +183,14 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
     return (request, env, context) => {
         const key = keyOf(request);
 
-        if (key === undefined) {
+        // A platform-supplied Cloudflare Access identity is not on the request, so
+        // NO request-derived key can separate two callers presenting it — the
+        // cross-request cache can never be correct for one. `credentialKey` happens
+        // to return `undefined` for a caller sending neither Cookie nor
+        // Authorization, but the moment Access is composed with a session cookie
+        // (the documented composition) that key stops covering what the resolver
+        // read. Fall back to the per-request memo, which is always safe.
+        if (key === undefined || context?.access !== undefined) {
             return perRequest(request, env, context);
         }
 

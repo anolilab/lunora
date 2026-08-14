@@ -59,9 +59,9 @@ export interface AccessIdentityLike {
     groups?: unknown;
     /** Display name from the identity provider, when it emits one. */
     name?: string;
-    /** Stable per-user id. Empty for service tokens. */
+    /** Stable per-user id, and what consumers key a user on. Empty for service tokens. */
     sub?: string;
-    /** Cloudflare's per-user UUID; the id fallback when the IdP emits no `sub`. */
+    /** Cloudflare's per-user UUID. Carried through, but deliberately not used as an id — only this path emits it, so keying on it would not match the JWT path. */
     user_uuid?: string;
 }
 

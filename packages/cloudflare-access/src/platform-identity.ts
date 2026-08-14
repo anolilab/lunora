@@ -51,7 +51,7 @@ const normalizeGroups = (groups: unknown): string[] | undefined =>
  * no header a caller could forge to manufacture one — `context.access` simply
  * does not exist unless Access authorized the call.
  */
-const readNativeIdentity = async (context: ExecutionContextLike | undefined): Promise<AccessClaims | undefined> => {
+const readPlatformIdentity = async (context: ExecutionContextLike | undefined): Promise<AccessClaims | undefined> => {
     const access: AccessContextLike | undefined = context?.access;
 
     if (access === undefined) {
@@ -83,4 +83,4 @@ const readNativeIdentity = async (context: ExecutionContextLike | undefined): Pr
     return names === undefined ? rest : { ...rest, groups: names };
 };
 
-export default readNativeIdentity;
+export default readPlatformIdentity;

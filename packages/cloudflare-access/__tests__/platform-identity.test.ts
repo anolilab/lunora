@@ -50,16 +50,23 @@ describe("createAccessResolver — platform identity (Worker-scoped Access)", ()
         expect(identity?.groups).toEqual(["eng", "ops"]);
     });
 
-    it("falls back to user_uuid, then email, when the IdP emits no sub", async () => {
-        expect.assertions(2);
+    it("derives userId identically to the JWT path, ignoring the platform-only user_uuid", async () => {
+        expect.assertions(3);
 
         const resolve = createAccessResolver();
 
-        const byUuid = await resolve(request(), undefined, contextWith({ email: "user@acme.test", sub: "", user_uuid: "uuid-9" }));
-        const byEmail = await resolve(request(), undefined, contextWith({ email: "user@acme.test" }));
+        // `userId` is the ownership key RLS and `serverDefault` stamp rows with, so
+        // a deployment switching from a hostname-scoped application to a
+        // Worker-scoped policy must keep resolving each user to the same id.
+        // Preferring `user_uuid` (which only this path emits) would re-key every
+        // user on that switch and orphan their rows behind RLS.
+        const bySub = await resolve(request(), undefined, contextWith({ email: "user@acme.test", sub: "user-1", user_uuid: "uuid-9" }));
+        const byEmail = await resolve(request(), undefined, contextWith({ email: "user@acme.test", sub: "", user_uuid: "uuid-9" }));
+        const byCommonName = await resolve(request(), undefined, contextWith({ common_name: "ci-bot", sub: "" }));
 
-        expect(byUuid?.userId).toBe("uuid-9");
+        expect(bySub?.userId).toBe("user-1");
         expect(byEmail?.userId).toBe("user@acme.test");
+        expect(byCommonName?.userId).toBe("ci-bot");
     });
 
     it("is anonymous when Access did not authenticate the request (no ctx.access)", async () => {
@@ -113,8 +120,27 @@ describe("createAccessResolver — platform identity (Worker-scoped Access)", ()
     it("throws at construction when only one half of the JWT config is supplied", () => {
         expect.assertions(2);
 
-        expect(() => createAccessResolver({ teamDomain: TEAM })).toThrow(/configured together/);
-        expect(() => createAccessResolver({ aud: AUD })).toThrow(/configured together/);
+        expect(() => createAccessResolver({ teamDomain: TEAM })).toThrow(/must both be set/);
+        expect(() => createAccessResolver({ aud: AUD })).toThrow(/must both be set/);
+    });
+
+    it("throws when the JWT options are named but their env values are unset", () => {
+        expect.assertions(2);
+
+        // The classic broken deployment: an app wired for a hostname-scoped Access
+        // application, deployed to an environment where neither secret was set.
+        // Reading the VALUES would make this a worker that boots happily and
+        // resolves every caller to anonymous — the presence of the keys is what
+        // says "this deployment intends to verify JWTs".
+        expect(() => createAccessResolver({ aud: undefined, teamDomain: undefined })).toThrow(/must both be set/);
+        // Naming neither is the legal platform-identity-only mode.
+        expect(() =>
+            createAccessResolver({
+                mapClaims: (claims) => {
+                    return { tenant: claims.email };
+                },
+            }),
+        ).not.toThrow();
     });
 });
 
@@ -136,5 +162,24 @@ describe("accessAdminGate — platform identity", () => {
 
         await expect(gate(request(), {})).resolves.toBe(false);
         expect(isAdmin).not.toHaveBeenCalled();
+    });
+
+    it("does NOT accept a Worker-scoped identity when a dedicated admin aud is configured", async () => {
+        expect.assertions(3);
+
+        // The inverse of the resolver's precedence, and deliberately so. A
+        // configured `aud` is the narrow boundary — a dedicated Access application
+        // over /_lunora/admin. A policy later attached to the Worker is typically
+        // broad ("anyone at the company"); letting it satisfy this gate would hand
+        // the whole admin plane to everyone that policy admits, silently.
+        const isAdmin = vi.fn<() => boolean>(() => true);
+        const gate = accessAdminGate({ aud: AUD, isAdmin, keySet: publicKey, teamDomain: TEAM });
+
+        await expect(gate(request(), contextWith({ groups: ["everyone"], sub: "broad-policy-user" }))).resolves.toBe(false);
+        expect(isAdmin).not.toHaveBeenCalled();
+
+        const token = await sign({ groups: ["lunora-admins"], sub: "admin-user" });
+
+        await expect(gate(request({ "cf-access-jwt-assertion": token }), contextWith({ sub: "broad-policy-user" }))).resolves.toBe(true);
     });
 });

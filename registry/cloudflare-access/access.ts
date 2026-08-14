@@ -21,21 +21,26 @@
  * CF_ACCESS_AUD in your Cloudflare dashboard (then `wrangler secret put
  * CF_ACCESS_AUD`), and pass them below.
  */
-import { env } from "cloudflare:workers";
-
 import { createAccessResolver } from "@lunora/cloudflare-access";
 
 /**
  * Build the identity resolver. Used by the Worker entry to authenticate every
  * request through Cloudflare Access.
  *
- * The JWT config is passed only when both env vars are set, so this file works
- * unchanged for a Worker-scoped Access policy (where neither exists and the
- * identity comes off the execution context). Supplying exactly one of the two
- * throws at startup rather than silently skipping verification.
+ * Pick ONE of the two forms below and delete the other. They are not
+ * interchangeable, and the difference is deliberate: naming the two options at
+ * all means "verify JWTs", so if you keep the second form in an environment
+ * where the secrets are unset, it throws at startup rather than quietly booting
+ * a worker that authenticates nobody.
  */
-const teamDomain = env.CF_ACCESS_TEAM_DOMAIN as string | undefined;
-const aud = env.CF_ACCESS_AUD as string | undefined;
 
-export const resolveIdentity =
-    teamDomain === undefined && aud === undefined ? createAccessResolver() : createAccessResolver({ aud: aud as string, teamDomain: teamDomain as string });
+// Access policy attached to the Worker — the identity arrives on the execution
+// context and there is nothing to configure or verify.
+export const resolveIdentity = createAccessResolver();
+
+// Hostname-scoped Access application — verify the Cf-Access-Jwt-Assertion JWT.
+// Uncomment, and add `import { env } from "cloudflare:workers";` above.
+// export const resolveIdentity = createAccessResolver({
+//     teamDomain: env.CF_ACCESS_TEAM_DOMAIN as string,
+//     aud: env.CF_ACCESS_AUD as string,
+// });

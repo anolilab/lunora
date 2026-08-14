@@ -1734,14 +1734,30 @@ const queueNameOf = (batch: unknown): string => {
  *
  * Recorded once, at the single `fetch` funnel in `handle`, and keyed on the
  * `Request` object — so an entry cannot outlive its request, cannot be read by a
- * different one, and needs no eviction policy. Same shape and lifetime as the
- * `accessAdminGrants` WeakSet below. A path with no context recorded (a direct
- * `serverQuery`, a partial host mount) simply reads `undefined`, which is what
- * the resolver contract already documents.
+ * different one, and needs no eviction policy.
+ *
+ * Unlike the per-worker `accessAdminGrants` WeakSet, this lives at **module**
+ * scope, because `resolveForwardContext` does. That is safe for the same reason
+ * the WeakSet is — the key is a `Request` identity, which no two isolated
+ * requests share — but it does mean two composed workers in one isolate write to
+ * the same map. The only way that matters is a re-entrant mount (an inner
+ * `lunoraHandler` invoked without a context, for a request an outer worker
+ * already recorded) overwriting the entry mid-flight; nothing re-resolves
+ * identity after dispatch today, so it cannot bite yet. A path that resolves
+ * identity for a `Request` this never saw — notably a caller that rebuilds the
+ * request object before calling `serverQuery` — reads `undefined`, which is why
+ * `serverQuery` also accepts the context explicitly.
  */
 const executionContextByRequest = new WeakMap<Request, ExecutionContextLike>();
 
-const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
+const resolveForwardContext = async (
+    request: Request,
+    env: unknown,
+    resolveIdentity: WorkerOptions["resolveIdentity"],
+    // Defaults to the in-flight context recorded by `handle`. Passed explicitly
+    // only by callers that did not reach here through the `fetch` funnel.
+    context: ExecutionContextLike | undefined = executionContextByRequest.get(request),
+): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
     const cookie = request.headers.get("cookie");
@@ -1796,7 +1812,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         return { claims: null, headers, identity: null, userId: null };
     }
 
-    const identity = await resolveIdentity(request, env, executionContextByRequest.get(request));
+    const identity = await resolveIdentity(request, env, context);
 
     if (!identity || typeof identity.userId !== "string" || identity.userId.length === 0) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -2226,6 +2242,11 @@ interface LunoraWorker {
      * `__lunoraRef` is the `"namespace:fn"` dispatched.
      * @param args The function arguments.
      * @param options Call options mirroring the RPC envelope.
+     * @param options.context The host's `ExecutionContext`. Required to reach an
+     * identity the platform supplies out-of-band rather than on the
+     * request — `context.access` under a Worker-scoped Cloudflare
+     * Access policy. Omit it there and the call resolves anonymous
+     * while the same user's `/_lunora/rpc` traffic is authenticated.
      * @param options.shardKey Routes to a specific shard (omitted → the worker's
      * `defaultShardKey`).
      * @param options.waitUntil The host's `waitUntil`, so dispatch telemetry
@@ -2236,7 +2257,7 @@ interface LunoraWorker {
         env: unknown,
         reference: unknown,
         args?: Record<string, unknown>,
-        options?: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void },
+        options?: { context?: ExecutionContextLike; shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void },
     ) => Promise<Response>;
 }
 
@@ -4250,6 +4271,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * raw shard {@link Response} (the same object `handleRpc` returns) so callers
      * and tests can compare it byte-for-byte against the HTTP path.
      *
+     * ONE THING THE CALLER MUST SUPPLY. An identity that the platform provides
+     * out-of-band rather than on the request — `context.access` under a
+     * Worker-scoped Cloudflare Access policy — is not reachable from `request`
+     * alone. The HTTP path picks it up from the `fetch` funnel; a direct
+     * `serverQuery` has no funnel, so pass `callOptions.context`. Omit it under
+     * such a policy and this call resolves ANONYMOUS while the same user's
+     * `/_lunora/rpc` traffic is authenticated — an SSR loader renders empty (or
+     * 403s) and then hydrates fine, which is a miserable thing to debug.
+     *
      * Fan-out is intentionally NOT reachable here: it is the cross-shard,
      * coordinator-gated, privileged path. An SSR loader that needs fan-out uses
      * the HTTP `/_lunora/rpc` envelope (with `authorizeFanOut`); this fast-path
@@ -4260,7 +4290,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         env: unknown,
         reference: unknown,
         args: Record<string, unknown> = {},
-        callOptions: { shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void } = {},
+        callOptions: { context?: ExecutionContextLike; shardKey?: string; waitUntil?: (promise: Promise<unknown>) => void } = {},
     ): Promise<Response> => {
         // Error mapping mirrors the top-level `fetch` catch (`toErrorResponse`)
         // EXACTLY: a thrown `LunoraError` (bad reference, a denied `authorizeShard`
@@ -4277,8 +4307,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             // Resolve identity off the SAME inbound request the HTTP path uses, so
             // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
-            // byte-identical to `handleRpc`'s.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+            // byte-identical to `handleRpc`'s. The context is passed explicitly
+            // because this path has no `fetch` funnel to have recorded it, and an
+            // SSR host may well hand us a rebuilt `Request` object.
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity, callOptions.context);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the

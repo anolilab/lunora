@@ -16,6 +16,7 @@
  * contract that the OpenAPI emitter also uses, so the published spec and the live
  * surface cannot drift.
  */
+import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestExposure } from "../../../shared/rest-surface";
 import { describeRestSurface } from "../../../shared/rest-surface";
 import { assertArgsObject } from "./assert-args-object";
@@ -53,10 +54,12 @@ type RestRateLimit = (request: Request, functionPath: string) => Promise<Respons
 /**
  * A built REST route. Takes the same `(request, env, url, context)` shape as the
  * runtime's internal route table so it can be spread straight into it; `url` is
- * unused here (the route re-parses it) and `context` is read only for its
- * `waitUntil`, which keeps dispatch telemetry alive past the response.
+ * unused here (the route re-parses it). The context is the real
+ * {@link ExecutionContextLike} rather than a `waitUntil`-only projection, because
+ * the cache decision reads `context.access` too — see the `applyRestCache` call
+ * below.
  */
-type RestRoute = (request: Request, env: unknown, url?: URL, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => Promise<Response>;
+type RestRoute = (request: Request, env: unknown, url?: URL, context?: ExecutionContextLike) => Promise<Response>;
 
 interface RestRouteDeps {
     /** The generated function registry — the source of which procedures are exposed. */

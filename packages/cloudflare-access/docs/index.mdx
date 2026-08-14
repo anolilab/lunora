@@ -50,7 +50,13 @@ export default defineApp<Env>()
 
 > `teamDomain` and `aud` are **all-or-nothing**, and construction throws when only one is present. `aud` is the only claim that scopes a token to _your_ Access application — a token minted for any other app in the same Cloudflare team shares the issuer and JWKS — so an unset `env.CF_ACCESS_AUD` must fail loudly rather than quietly disabling the check. Omitting both is the legal "Worker-scoped policy" mode above.
 
-Either way the resolver is **fail-closed → anonymous**: no identity, or a token that fails verification, resolves to `null`, the request proceeds unauthenticated, and RLS denies. `exp` is forwarded when present so live WebSocket subscriptions expire with the credential.
+Either way the resolver is **fail-closed → anonymous**: no identity, or a token that fails verification, resolves to `null`, the request proceeds unauthenticated, and RLS denies.
+
+> **Socket expiry differs between the two.** An Access JWT always carries `exp`, which is forwarded so a live WebSocket subscription is dropped when the credential lapses. The platform-supplied identity may not, and a socket opened without one stays authenticated for as long as it stays connected — past the Access session expiring, past the user leaving the policy. If you hold long-lived subscriptions under a Worker-scoped policy, mint a bound yourself:
+>
+> ```ts
+> createAccessResolver({ mapClaims: () => ({ exp: Math.floor(Date.now() / 1000) + 3600 }) });
+> ```
 
 Both paths produce the same claim shape, so nothing downstream — `ctx.auth`, `ctx.access`, `accessRoles()`, your RLS policies — branches on how the caller was authenticated. The one wire difference is group membership, which the platform may emit as `{ id, name }` objects; those are normalized to their names to match the JWT's `string[]`.
 
@@ -93,18 +99,20 @@ export default defineApp<Env>()
     .auth({ d1: (env) => env.DB, options: authOptions })
     .extend((env, derived) => ({
         resolveIdentity: composeResolvers(
-            createAccessResolver(),
+            createAccessResolver({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud: env.CF_ACCESS_AUD }),
             derived.resolveIdentity, // the better-auth resolver the .auth() call wired
         ),
     }))
     .build();
 ```
 
+> Composition is for the **hostname-scoped** shape, which is why the example configures the JWT fallback. An Access policy attached to the Worker authenticates _every_ request that reaches your code — there is no "everyone else" left to fall through to the app session, so the second resolver would be unreachable. Use one or the other, not a Worker-scoped policy in front of an app that also signs users in itself.
+
 > The codegen integration (below) wires this composition for you when it detects an Access configuration, so you rarely write it by hand.
 
 ## Claims on `ctx.auth`
 
-`userId` is derived from `sub` (SSO), then Cloudflare's `user_uuid`, then `email`, then `common_name` (service tokens, whose `sub` is empty). The verified claims (`email`, `groups`, `commonName`, and the full raw set under `access`) are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
+`userId` is derived from `sub` (SSO) or `common_name` (service tokens), identically on both paths — so a deployment that moves from a hostname-scoped application to a Worker-scoped policy keeps resolving each user to the same id rather than re-keying them and orphaning their rows behind RLS. The verified claims (`email`, `groups`, `commonName`, and the full raw set under `access`) are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
 
 ```ts
 definePolicy({
@@ -173,7 +181,7 @@ Either way, an anonymous request gets the anonymous facade (`authenticated: fals
 
 ## Gating the Studio behind Access
 
-`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate`, an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It authenticates the caller the same two ways the resolver does and applies your `isAdmin(claims)` predicate, so an Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no identity, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
+`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate`, an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It applies your `isAdmin(claims)` predicate, so an Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no identity, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
 
 Wire it on the generated app builder via `.extend((env) => …)`:
 
@@ -183,7 +191,6 @@ import { accessAdminGate } from "@lunora/cloudflare-access/admin";
 export default defineApp()
     .extend((env) => ({
         adminGate: accessAdminGate({
-            // Omit teamDomain/aud when the Access policy is attached to the Worker.
             teamDomain: env.CF_ACCESS_TEAM_DOMAIN,
             aud: env.CF_ACCESS_ADMIN_AUD, // a dedicated Access app over /_lunora/admin
             isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
@@ -191,6 +198,8 @@ export default defineApp()
     }))
     .build();
 ```
+
+> **The admin gate accepts one proof, and the precedence is the reverse of the resolver's.** Configure `teamDomain` + `aud` and the JWT is the _only_ thing accepted; omit both and the Worker's Access identity is. That is deliberate. A policy attached to the Worker is typically broad — "anyone at the company", covering every route and preview URL — while an admin `aud` is deliberately narrow, and its whole purpose is proving the caller came through _that_ application. If the broad identity could satisfy the gate, attaching a Worker-scoped policy would silently widen the admin plane to everyone it admits. Under a Worker-scoped policy, `isAdmin` is the entire boundary, so write it at least as strictly as the dedicated application's policy would have been.
 
 ## API
 
@@ -202,4 +211,4 @@ export default defineApp()
 - `accessContext()` _(`@lunora/cloudflare-access/context`)_: the explicit per-procedure middleware form of the same `ctx.access` facade.
 - `accessFacade(identity, userId)` _(`@lunora/cloudflare-access/context`)_: the pure factory both forms build on; returns the anonymous facade when no identity is present.
 - `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_: middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
-- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_: a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity. `isAdmin` is required; the JWT config is optional on the same all-or-nothing rule.
+- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_: a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity. `isAdmin` is required; supplying the JWT config makes the JWT the only accepted proof, omitting it accepts the Worker's Access identity.

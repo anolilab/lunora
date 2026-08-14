@@ -33,7 +33,7 @@ export interface AccessClaims extends JWTPayload {
     name?: string;
     /** Token kind, e.g. `"app"`. */
     type?: string;
-    /** Cloudflare's per-user UUID. Populated on the platform-supplied identity, not on the JWT. */
+    /** Cloudflare's per-user UUID. Populated on the platform-supplied identity, not on the JWT — so `userId` is deliberately never derived from it. */
     user_uuid?: string;
 }
 
