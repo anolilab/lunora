@@ -167,6 +167,55 @@ A non-2xx response whose JSON body has no `error` envelope is surfaced as an
 
 Golden cases: [`fixtures/rpc.json`](./fixtures/rpc.json) → `responseOk`, `responseError`.
 
+### 4.3 Batched RPC (`POST /_lunora/rpc-batch`)
+
+**Optional.** A client that does not implement it is fully conformant — every
+call it carries can be made one at a time over §4.1. It exists for one case: a
+client replaying an offline queue on reconnect, where N queued writes would
+otherwise cost N round trips.
+
+Request:
+
+```json
+{
+    "calls": [
+        { "functionPath": "messages:send", "args": <encodeWire(args)>, "id": 0, "mutationId": "<key?>", "shardKey": "<key?>" }
+    ]
+}
+```
+
+`id` is the caller-assigned slot the result comes back in; absent, it defaults to
+the array index. `args` MUST be an object (absent → `{}`) — a string, number or
+array is rejected at the boundary. `mutationId` is per ENTRY, never a header on
+the outer request: a batch is one transport hop, but its entries are dispatched
+as independent single calls, so each carries its own idempotency key. Reserved
+`__lunora_relation__:` / `__lunora_admin__` paths cannot be batched. A batch is
+capped at **500** entries; a longer flush chunks, and the chunks must be sent
+sequentially to preserve order.
+
+Response:
+
+```json
+{ "results": [{ "id": 0, "body": { "result": <wire>, "commitCursor": <int?> } }] }
+```
+
+Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` — so
+a client classifies a slot the way it classifies a whole single-call response.
+Three rules a conforming client MUST follow, because each one is a durable write:
+
+- A slot whose `error.code` is `SHARD_UNAVAILABLE` or `SHARD_ERROR` is
+  **transient**: the server reached no verdict on that entry, so it is retried
+  rather than reported failed. Every other coded error is a verdict, and terminal.
+- A slot the server never returned is **retried** — it may or may not have
+  committed, and the entry's `mutationId` is what makes that safe.
+- A body with **no** `results` array is a whole-batch outcome: a coded `{ error }`
+  is a verdict on every entry and terminal, anything else (a non-JSON body, a
+  bare 5xx) is transient and retries the whole chunk.
+
+No golden fixtures, and no case in `conformance-cases.json`: the endpoint is
+optional, so requiring it would fail the seven SDKs that correctly do not
+implement it. `sdks/README.md` records which do.
+
 ## 5. WebSocket subscription protocol (`GET /_lunora/ws`)
 
 Frames are JSON text. A keepalive is the literal non-JSON string `lunora-ping`

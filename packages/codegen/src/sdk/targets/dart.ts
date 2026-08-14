@@ -190,6 +190,9 @@ const repairOptionals = (models: string): string =>
 /** quicktype indents a class member's body two levels, which both blocks below sit at. */
 const INDENT = " ".repeat(8);
 
+/** The class name, for the error {@link guardOptionalFields} raises when it cannot place its guards. */
+const CLASS_NAME = /^class (\w+) \{/u;
+
 /** The blocks {@link guardOptionalFields} reads, in the shape quicktype renders them. */
 const CLASS_BLOCK = /^class \w+ \{\n[\s\S]*?\n\}$/gmu;
 const CONSTRUCTOR_BLOCK = /^ {4}\w+\(\{\n([\s\S]*?)^ {4}\}\);$/mu;
@@ -223,10 +226,14 @@ const TO_JSON_ENTRY = /^ {8}"(?:[^\\"]|\\.)*": .*,$/gmu;
  * emits fields, constructor parameters and `toJson` entries in one alphabetical
  * order, and the wire key is not derivable from the field name anyway (`some-key`
  * is `someKey`, and an optional enum's entry reads `"kind": kindValues.reverse[kind]`,
- * which does not start with its field at all). A class whose two blocks do not
- * line up is left untouched rather than half-rewritten — and that failure is
- * loud, because `sdks/smoke/dart` asserts an unset optional never reaches the
- * wire.
+ * which does not start with its field at all).
+ *
+ * A class whose blocks do not line up and HAS optional fields THROWS, rather
+ * than passing through unguarded. That is the difference between a version bump
+ * of quicktype being a generation error that names the class, and its being a
+ * silent regression to sending `"limit": null` on every call — which one smoke
+ * assertion on one schema would be the only thing to catch. A class with no
+ * optional fields has nothing to place, so an unfamiliar shape there is free.
  */
 const guardOptionalFields = (models: string): string =>
     models.replaceAll(CLASS_BLOCK, (block: string) => {
@@ -247,8 +254,24 @@ const guardOptionalFields = (models: string): string =>
         });
         const entries = [...toJson.matchAll(TO_JSON_ENTRY)];
 
-        if (parameters.length === 0 || parameters.length !== entries.length) {
+        const optional = parameters.filter((parameter) => parameter.optional);
+
+        if (parameters.length === entries.length) {
+            // The ordinary path.
+        } else if (optional.length === 0) {
+            // Nothing to guard, so a shape this does not recognise costs nothing.
             return block;
+        } else {
+            // FAIL CLOSED. Returning the block unchanged here would silently send
+            // every unset optional as an explicit null — a call the server rejects
+            // — and the only thing standing between that and a release would be
+            // one smoke assertion on one schema. A generation error names the
+            // class and the version that moved instead.
+            throw new Error(
+                `dart models: cannot place the optional-field guards in ${CLASS_NAME.exec(block)?.[1] ?? "a generated class"} — ` +
+                    `${String(parameters.length)} constructor parameter(s) against ${String(entries.length)} toJson entr(ies). ` +
+                    `quicktype's Dart output has changed shape; \`guardOptionalFields\` in targets/dart.ts must be updated to match.`,
+            );
         }
 
         let guarded = toJson;

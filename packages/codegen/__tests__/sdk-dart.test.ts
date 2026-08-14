@@ -167,15 +167,32 @@ describe("guardOptionalFields", () => {
         expect(guarded).toContain('if (someKey != null) "some-key": someKey,');
     });
 
-    it("leaves a class alone when its two blocks do not line up", () => {
-        expect.assertions(1);
+    it("throws when it cannot place a guard it needs to place", () => {
+        expect.assertions(2);
 
-        // Half-rewriting output whose shape has moved would be worse than not
-        // touching it: the smoke asserts an unset optional never reaches the
-        // wire, so a no-op here fails loudly rather than silently.
-        const rendered = ["class Args {", "    Args({", "        this.a,", "    });", "", "    Map<String, dynamic> toJson() => {", "    };", "}"].join("\n");
+        // FAIL CLOSED. Passing this through would send every unset optional as an
+        // explicit null — a call the server rejects — with nothing but one smoke
+        // assertion on one schema between that and a release. A quicktype bump
+        // that moves the output's shape must be a generation error naming the
+        // class instead.
+        const moved = ["class Args {", "    Args({", "        this.limit,", "    });", "", "    Map<String, dynamic> toJson() => {", "    };", "}"].join("\n");
 
-        expect(guardOptionalFields(rendered)).toBe(rendered);
+        expect(() => guardOptionalFields(moved)).toThrow(/cannot place the optional-field guards in Args/u);
+
+        // …but a class with nothing to guard costs nothing, so an unfamiliar
+        // shape there is passed through rather than failing the generation.
+        const nothingToGuard = [
+            "class Args {",
+            "    Args({",
+            "        required this.id,",
+            "    });",
+            "",
+            "    Map<String, dynamic> toJson() => {",
+            "    };",
+            "}",
+        ].join("\n");
+
+        expect(guardOptionalFields(nothingToGuard)).toBe(nothingToGuard);
     });
 });
 

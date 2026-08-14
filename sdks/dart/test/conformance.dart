@@ -470,9 +470,15 @@ Future<void> caseCallsAfterCloseFailFast() async {
 // ─── Optimistic updates ──────────────────────────────────────────────────────
 
 /// A poster that records what it was asked to send and answers from a script.
+///
+/// Batch-aware, because a flush of more than one write goes to
+/// `/_lunora/rpc-batch` rather than `/_lunora/rpc`. By default it answers a batch
+/// by echoing a success slot per call, so a case that does not care about
+/// batching does not have to know about it.
 class _Poster {
   _Poster({this.commitCursor, this.result = '{"ok":true}'});
 
+  final List<String> urls = <String>[];
   final List<Map<String, Object?>> bodies = <Map<String, Object?>>[];
   final List<Map<String, String>> headers = <Map<String, String>>[];
 
@@ -485,12 +491,31 @@ class _Poster {
   /// Answer this many calls with a coded error envelope — a server rejection.
   int codedFailures = 0;
 
-  /// The function paths reached, in order.
-  List<String> get paths => <String>[for (final body in bodies) body['functionPath']! as String];
+  /// Answer the next batch with this body verbatim, instead of echoing success.
+  String? batchReply;
+
+  /// The function paths reached, in order, flattening a batch into its entries.
+  List<String> get paths => <String>[
+        for (final body in bodies)
+          if (body['functionPath'] is String)
+            body['functionPath']! as String
+          else
+            for (final call in (body['calls'] as List<Object?>? ?? const <Object?>[])) ((call! as Map<String, Object?>)['functionPath']! as String),
+      ];
+
+  /// The entries of the request at [index], for a batch.
+  List<Map<String, Object?>> callsAt(int index) => (bodies[index]['calls']! as List<Object?>).map((call) => call! as Map<String, Object?>).toList();
+
+  /// How many requests went to the batch endpoint.
+  int get batchRequests => urls.where((url) => url.endsWith(lunoraRpcBatchPath)).length;
 
   Future<LunoraHttpResponse> call(String url, Map<String, String> sent, String body) async {
+    urls.add(url);
     headers.add(sent);
-    bodies.add(jsonDecode(body) as Map<String, Object?>);
+
+    final decoded = jsonDecode(body) as Map<String, Object?>;
+
+    bodies.add(decoded);
 
     if (transportFailures > 0) {
       transportFailures -= 1;
@@ -506,8 +531,42 @@ class _Poster {
 
     final cursor = commitCursor == null ? '' : ',"commitCursor":$commitCursor';
 
-    return LunoraHttpResponse(200, '{"result":$result$cursor}');
+    if (decoded['calls'] is! List) {
+      return LunoraHttpResponse(200, '{"result":$result$cursor}');
+    }
+
+    final reply = batchReply;
+
+    if (reply != null) {
+      batchReply = null;
+
+      return LunoraHttpResponse(200, reply);
+    }
+
+    final slots = <String>[
+      for (var index = 0; index < (decoded['calls']! as List<Object?>).length; index += 1) '{"id":$index,"body":{"result":$result$cursor}}',
+    ];
+
+    return LunoraHttpResponse(200, '{"results":[${slots.join(',')}]}');
   }
+}
+
+/// Records how a write settles, with the handlers attached AT CREATION.
+///
+/// A batch settles several callers in one turn, and a Dart Future that fails
+/// before anything is listening becomes an unhandled async error — attaching the
+/// `await` afterwards is too late. So every queued write a case does not
+/// immediately await goes through this.
+class Settled {
+  Settled(Future<Object?> future) {
+    done = future.then((result) => value = result, onError: (Object failure) => error = failure);
+  }
+
+  late final Future<void> done;
+  Object? value;
+  Object? error;
+
+  String? get code => error is LunoraApiException ? (error! as LunoraApiException).code : null;
 }
 
 /// An uncoded failure, standing in for a dropped socket. Deliberately NOT a
@@ -712,8 +771,14 @@ Future<void> caseQueuedWritesReplayInOrderOnReconnect() async {
   await Future.wait(<Future<Object?>>[first, second]);
 
   equals(poster.paths.length, 2, 'both writes replayed');
-  equals(canonical(poster.bodies.first['args']), canonical(<String, Object?>{'n': 1}), 'the oldest write replays first');
-  equals(poster.headers.first['x-lunora-mutation-id'], 'm1', 'the replay carries the idempotency key the call minted');
+  // Two or more writes coalesce into ONE batch round trip.
+  equals(poster.batchRequests, 1, 'the flush cost one request, not one per write');
+
+  final calls = poster.callsAt(0);
+
+  equals(canonical(calls[0]['args']), canonical(<String, Object?>{'n': 1}), 'the oldest write is the first entry');
+  equals(calls[0]['mutationId'], 'm1', 'each entry carries the idempotency key its call minted');
+  equals(calls[1]['mutationId'], 'm2', 'and they keep their order');
   equals(client.pendingWrites, 0, 'the queue is empty afterwards');
 }
 
@@ -781,7 +846,7 @@ Future<void> caseTransportFailureRequeuesTheRestInOrder() async {
   await Future<void>.delayed(Duration.zero);
 
   equals(client.pendingWrites, 2, 'the failed write and everything after it stay queued');
-  equals(poster.paths.length, 1, 'the flush stopped at the failure rather than sending on');
+  equals(poster.batchRequests, 1, 'the flush stopped at the failure rather than sending on');
 
   // The socket comes back. Both writes must go out, still oldest first.
   client
@@ -790,7 +855,7 @@ Future<void> caseTransportFailureRequeuesTheRestInOrder() async {
 
   await Future.wait(<Future<Object?>>[first, second]);
 
-  equals(poster.headers[1]['x-lunora-mutation-id'], 'm1', 'the failed write is retried first, keeping FIFO');
+  equals(poster.callsAt(1)[0]['mutationId'], 'm1', 'the failed write is retried first, keeping FIFO');
   equals(client.pendingWrites, 0, 'the queue drains');
 }
 
@@ -956,6 +1021,97 @@ Future<void> caseReconnectDuringAFlushIsNotLost() async {
   equals(client.pendingWrites, 0, 'the write is not stranded');
 }
 
+/// A slot the server answered with a TRANSIENT shard failure never reached a
+/// verdict, so its write goes back on the queue — while a slot beside it that
+/// the server did decide is settled terminally. Getting this wrong permanently
+/// rejects a durable write over a shard that was briefly unreachable.
+Future<void> caseBatchSlotsAreClassifiedIndependently() async {
+  final poster = _Poster(result: 'null')
+    ..batchReply = '{"results":['
+        '{"id":0,"body":{"error":{"code":"SHARD_UNAVAILABLE","message":"try again"}}},'
+        '{"id":1,"body":{"error":{"code":"CONFLICT","message":"nope"}}},'
+        '{"id":2,"body":{"result":null,"commitCursor":4}}'
+        ']}';
+
+  final client = LunoraClient(url: 'https://app.example', post: poster.call)
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final transient = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 1}, mutationId: 'm1'));
+  final rejected = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 2}, mutationId: 'm2'));
+  final ok = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 3}, mutationId: 'm3'));
+
+  client.setConnected(true);
+
+  await ok.done;
+  await rejected.done;
+
+  equals(rejected.code, 'CONFLICT', 'the server verdict reaches that entry only');
+  equals(client.pendingWrites, 1, 'only the transient slot is re-queued');
+
+  // And it lands on the next flush, rather than being lost or reported failed.
+  client
+    ..setConnected(false)
+    ..setConnected(true);
+
+  await transient.done;
+
+  equals(client.pendingWrites, 0, 'the re-queued write settles on the next reconnect');
+  // A LONE write rides the single-call path, so its key is a header rather than
+  // a batch entry — which is the shape the second flush takes here.
+  equals(poster.headers[1]['x-lunora-mutation-id'], 'm1', 'under the key it was minted with');
+}
+
+/// A slot the server never returned may or may not have committed, so it is
+/// retried — safe, because the entry carries the same idempotency key.
+Future<void> caseBatchMissingSlotIsRetried() async {
+  final poster = _Poster(result: 'null')..batchReply = '{"results":[{"id":0,"body":{"result":null}}]}';
+  final client = LunoraClient(url: 'https://app.example', post: poster.call)
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final first = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 1}, mutationId: 'm1'));
+  final second = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 2}, mutationId: 'm2'));
+
+  client.setConnected(true);
+  await first.done;
+
+  equals(client.pendingWrites, 1, 'the unanswered slot goes back on the queue');
+
+  // It comes back on the next flush, under the key it was minted with.
+  client
+    ..setConnected(false)
+    ..setConnected(true);
+
+  await second.done;
+
+  equals(poster.headers[1]['x-lunora-mutation-id'], 'm2', 'the retry reuses the original idempotency key');
+}
+
+/// A whole-batch coded rejection is a verdict on every entry — the server
+/// decided, so re-queuing would retry a request it will reject identically.
+Future<void> caseWholeBatchRejectionIsTerminal() async {
+  final poster = _Poster(result: 'null')..batchReply = '{"error":{"code":"FORBIDDEN","message":"no"}}';
+  final client = LunoraClient(url: 'https://app.example', post: poster.call)
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  final first = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 1}));
+  final second = Settled(client.mutation('messages:send', args: <String, Object?>{'n': 2}));
+
+  client.setConnected(true);
+
+  await first.done;
+  await second.done;
+
+  equals(first.code, 'FORBIDDEN', 'the whole-batch verdict reaches the first caller');
+  equals(second.code, 'FORBIDDEN', 'and the second');
+  equals(client.pendingWrites, 0, 'nothing is left queued');
+}
+
 /// Closing must not leave a caller awaiting a write forever.
 Future<void> caseCloseRejectsPendingWrites() async {
   final client = LunoraClient(url: 'https://app.example', post: _Poster().call)
@@ -1019,6 +1175,9 @@ Future<void> main() async {
   await caseQueueOverflowDropsTheOldest();
   await caseTransportFailureRequeuesTheRestInOrder();
   await caseCodedErrorIsTerminal();
+  await caseBatchSlotsAreClassifiedIndependently();
+  await caseBatchMissingSlotIsRetried();
+  await caseWholeBatchRejectionIsTerminal();
   await casePreconditionFailureDiscardsBeforeReplay();
   await caseHydrateRestoresAheadOfThisSession();
   await caseIdentityChangeDiscardsQueuedWrites();
@@ -1039,7 +1198,7 @@ Future<void> main() async {
   }
 
   if (_failures.isEmpty) {
-    stdout.writeln('PASS  ${required.length} manifest cases + 23 dart-specific');
+    stdout.writeln('PASS  ${required.length} manifest cases + 26 dart-specific');
     return;
   }
 

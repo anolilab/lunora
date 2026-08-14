@@ -126,12 +126,45 @@ change that adds or removes a capability.
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Subscription as a Stream      | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Unset `v.optional()` omitted  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Required `v.nullable()` sent  | ✅     | ✅  | ❌   | ❌   | ❌    | ✅   | ✅     | ✅   |
 | Optimistic updates            | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
 | Offline mutation queue        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
 | Durable offline queue         | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅¹  |
+| Batched offline replay        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 
 ¹ Through an injected adapter, like HTTP and the socket — see below.
+
+**The two argument rows are one problem with two halves, and no port can pass
+both by a rule applied at the transport.** An unset `v.optional()` must reach the
+wire as an ABSENT key, because the validator rejects an explicit null; a required
+`v.nullable()` set to null must reach it as a PRESENT key holding null, because
+the validator requires it. Both were measured against `@lunora/values`, not
+assumed: an absent key for the second raises `Expected string at nickname,
+received undefined`, and an explicit null for the first raises `Expected number
+at limit, received null`.
+
+Five ports get both right, by three different mechanisms, and all five draw the
+line where the required-versus-optional distinction still exists:
+
+| Port         | How                                                                                                     |
+| ------------ | ------------------------------------------------------------------------------------------------------- |
+| python       | quicktype's own `to_dict`: `if self.x is not None:` for optional, `result["x"] = …` for required        |
+| go           | quicktype's own struct tags: `omitempty` on optional fields only                                        |
+| java, kotlin | `jvm-models.ts` emits from the JSON Schema, which carries `required` outright                           |
+| dart         | `guardOptionalFields` puts `if (x != null)` on optional entries, keyed on quicktype's `required this.x` |
+
+Three do not, and the reason is the same in each: their rendered models carry NO
+required marker at all, so `wire_args`/`from_model_json`/`JSONEncoder` prune every
+null and take the nullable field with them. Ruby declares both
+`Types::X.optional`; Rust renders both a bare `Option<T>` with no serde
+attribute; Swift renders both `T?` and lets synthesized `Codable` omit a nil —
+`{"id":"r1"}` for a struct whose `nickname` was explicitly null, measured. Closing
+those means emitting their models from the schema the way `jvm-models.ts` does,
+which is a project per language rather than a patch, so the row is ❌ and honest
+instead of quietly wrong. A schema with a required `v.nullable()` argument cannot
+be called from those three today.
 
 **Subscription as a Stream, dart.** The one row where a target does something the
 others do not, and it is the reason the port exists: `client.watch(path, args)`
@@ -188,12 +221,25 @@ targets. That is the reference client's rule, kept verbatim rather than
 "improved", because a port that quietly widens it makes two SDKs disagree about
 what a prediction applies to.
 
-Deliberately NOT ported, and none of it is a gap a mobile client feels:
-cross-tab leader election and the `BroadcastChannel` mirror (there are no tabs),
-the IndexedDB read cache, the service-worker path, the `@lunora/db` unified
-outbox, and batched replay over `/_lunora/rpc-batch` — the last purely because
-sequential replay is the proven path and a batch is an optimisation this port
-has no measurement to justify yet.
+**Batched replay** is ported too, and it is the reason `protocol/README.md` grew
+a §4.3: the endpoint was in that document's transport table with no section
+describing it, so the envelope existed only in the TypeScript client. A flush of
+two or more writes now coalesces into `/_lunora/rpc-batch` round trips, chunked
+at the worker's own 500-entry cap and sent sequentially so FIFO survives a flush
+longer than one batch; a lone write still rides the single-call path, which is
+the proven one. The three rules that make it safe for a DURABLE write —
+`SHARD_UNAVAILABLE`/`SHARD_ERROR` slots are transient, an unanswered slot is
+retried under its original idempotency key, and a body with no `results` is a
+whole-batch outcome — are in §4.3 and asserted here.
+
+It is deliberately NOT in `conformance-cases.json`. The endpoint is optional, so
+requiring it would fail the seven ports that correctly do not implement it; the
+capability row above is where that difference belongs.
+
+Deliberately not ported, and none of it is a gap a mobile client feels: cross-tab
+leader election and the `BroadcastChannel` mirror (there are no tabs), the
+IndexedDB read cache, the service-worker path, and the `@lunora/db` unified
+outbox.
 
 **Typed models, dart.** Dart is the target where quicktype's default output was
 expected to fail the way the JVM backends do and did not. Its backend renames

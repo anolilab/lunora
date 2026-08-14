@@ -46,3 +46,13 @@ const String clientClosed = 'CLIENT_CLOSED';
 /// A queued write's issuing identity no longer matches the client's, so it was
 /// discarded rather than replayed as somebody else.
 const String offlineIdentityChanged = 'OFFLINE_IDENTITY_CHANGED';
+
+/// Per-slot codes a batch reply uses for a shard or transport failure rather
+/// than an application verdict — the server never decided anything about the
+/// write.
+///
+/// They are the batch's counterpart of an uncoded throw on the single-call path,
+/// and the distinction is load-bearing: a replay treats every OTHER coded error
+/// as terminal, so without this list a shard that was briefly unreachable would
+/// permanently reject a durable write the server never even saw.
+const Set<String> transientBatchErrorCodes = <String>{'SHARD_ERROR', 'SHARD_UNAVAILABLE'};

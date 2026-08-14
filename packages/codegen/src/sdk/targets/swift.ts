@@ -33,6 +33,22 @@
  * copied — a manifest naming a directory that is absent is a hard SwiftPM error,
  * so shipping it would make every generated package fail to load.
  *
+ * ## Known gap: a required `v.nullable()` argument
+ *
+ * `LunoraClient.wireValue` projects a model through `JSONEncoder`, and
+ * synthesized `Codable` OMITS a nil — which is right for an unset
+ * `v.optional()` (the validator rejects an explicit null) and wrong for a
+ * required `v.nullable()` (the validator requires the key present holding one).
+ * A struct whose `nickname` is explicitly null encodes to `{"id":"r1"}`,
+ * measured. Nothing in the rendered struct tells the two apart: both are `T?`
+ * with no required marker, and the generated `init` gives neither a default.
+ *
+ * So a schema with a required `v.nullable()` argument cannot be called from the
+ * Swift SDK. Closing it means emitting Swift models from the JSON Schema the way
+ * `jvm-models.ts` does — the schema is where `required` still exists.
+ * `sdks/README.md` carries the per-port table; python, go, dart and the two JVM
+ * targets get both halves right.
+ *
  * Unlike the other targets, this one does NOT pass `just-types` to quicktype:
  * without it the Swift backend omits `Codable`, and `Codable` is how a
  * generated model reaches the wire — `LunoraClient.wireValue` projects it

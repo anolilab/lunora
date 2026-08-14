@@ -32,8 +32,17 @@ import 'wire.dart';
 /// The single endpoint every query/mutation/action posts to.
 const String lunoraRpcPath = '/_lunora/rpc';
 
+/// The batched-RPC endpoint, used only to replay a queued flush of more than one
+/// write. See `protocol/README.md` §4.3.
+const String lunoraRpcBatchPath = '/_lunora/rpc-batch';
+
 /// The live-subscription endpoint.
 const String lunoraWsPath = '/_lunora/ws';
+
+/// Hard cap on entries in one batch, mirroring the worker's own. A Durable
+/// Object replays a batch sequentially on its single thread, so an unbounded one
+/// would pin a shard; a longer flush is chunked.
+const int lunoraMaxBatchEntries = 500;
 
 /// Which RPC method a call dispatches to. Generated code emits these cases
 /// rather than raw strings, so a typo in a target template is a compile error
@@ -355,6 +364,22 @@ class LunoraClient {
   /// replay for it would be a lie.
   Future<Object?> action(String functionPath, {Object? args, String? shardKey}) async => (await _rpc(functionPath, args: args, shardKey: shardKey)).result;
 
+  Map<String, String> _requestHeaders({String? mutationId}) {
+    final headers = <String, String>{'content-type': 'application/json'};
+    final token = authToken;
+
+    if (token != null) {
+      headers['authorization'] = 'Bearer $token';
+    }
+    // Per-entry in a batch, never on the outer request: a batch is one transport
+    // hop but its entries are dispatched as independent single calls.
+    if (mutationId != null) {
+      headers['x-lunora-mutation-id'] = mutationId;
+    }
+
+    return headers;
+  }
+
   void _assertOpen() {
     if (_closed) {
       throw const LunoraApiException(clientClosed, 'this client is closed');
@@ -370,17 +395,11 @@ class LunoraClient {
       throw const LunoraApiException('INTERNAL', 'no HTTP poster configured');
     }
 
-    final headers = <String, String>{'content-type': 'application/json'};
-    final token = authToken;
-
-    if (token != null) {
-      headers['authorization'] = 'Bearer $token';
-    }
-    if (mutationId != null) {
-      headers['x-lunora-mutation-id'] = mutationId;
-    }
-
-    final response = await post(_join(lunoraRpcPath), headers, jsonEncode(buildRpcBody(functionPath, args, shardKey: shardKey)));
+    final response = await post(
+      _join(lunoraRpcPath),
+      _requestHeaders(mutationId: mutationId),
+      jsonEncode(buildRpcBody(functionPath, args, shardKey: shardKey)),
+    );
     final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
     final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
     final cursor = body['commitCursor'];
@@ -928,8 +947,73 @@ class LunoraClient {
       }
     }
 
-    for (var index = 0; index < sendable.length; index += 1) {
-      final item = sendable[index];
+    final encodable = _encodableOrSettleTerminal(sendable);
+
+    if (encodable.isEmpty) {
+      return;
+    }
+
+    // A lone write rides the single-call path, which is the proven one. Two or
+    // more coalesce into batch round trips — the flaky-reconnect win, where N
+    // queued writes cost a handful of hops instead of N.
+    if (encodable.length == 1) {
+      await _replaySequential(encodable);
+
+      return;
+    }
+
+    final toRequeue = <QueuedMutation>[];
+
+    for (var start = 0; start < encodable.length; start += lunoraMaxBatchEntries) {
+      final end = start + lunoraMaxBatchEntries > encodable.length ? encodable.length : start + lunoraMaxBatchEntries;
+      // Chunks replay sequentially, which is what preserves FIFO across a flush
+      // longer than one batch.
+      final outcome = await _replayBatched(encodable.sublist(start, end));
+
+      toRequeue.addAll(outcome.requeue);
+
+      if (outcome.stop) {
+        // A whole-chunk transport failure. Leave every write not yet sent queued,
+        // in order, rather than sending on into a connection that just failed.
+        toRequeue.addAll(encodable.sublist(end));
+
+        break;
+      }
+    }
+
+    if (toRequeue.isNotEmpty && !_closed) {
+      _queue.requeue(toRequeue);
+    }
+  }
+
+  /// Partition writes into the ones that can be encoded and settle the rest
+  /// terminally.
+  ///
+  /// A write whose args cannot be wire-encoded can NEVER replay: the codec
+  /// failure is deterministic, not transient. Rejecting it here is what stops it
+  /// re-queueing forever — a silent hang where the caller's Future never settles
+  /// and its optimistic layer never rolls back. Encoding is cheap and the flush
+  /// is the slow reconnect path, so it is done up front for both replay shapes.
+  List<QueuedMutation> _encodableOrSettleTerminal(List<QueuedMutation> items) {
+    final encodable = <QueuedMutation>[];
+
+    for (final item in items) {
+      try {
+        encodeWire(item.args ?? const <String, Object?>{});
+        encodable.add(item);
+      } on Object catch (error) {
+        _queue.unpersist(item.id);
+        item.reject(LunoraApiException('BAD_REQUEST', 'offline mutation cannot be encoded: $error'));
+      }
+    }
+
+    return encodable;
+  }
+
+  /// Replay writes one at a time. FIFO is preserved by the loop itself.
+  Future<void> _replaySequential(List<QueuedMutation> items) async {
+    for (var index = 0; index < items.length; index += 1) {
+      final item = items[index];
 
       try {
         final outcome = await _rpc(item.functionPath, args: item.args, shardKey: item.shardKey, mutationId: item.id);
@@ -942,14 +1026,6 @@ class LunoraClient {
         // Terminal: replaying it would fail identically forever.
         _queue.unpersist(item.id);
         item.reject(error);
-      } on WireFormatException catch (error) {
-        // Also terminal, and the distinction is load-bearing. Args that cannot
-        // be wire-encoded fail deterministically, so classifying this as
-        // transient would re-queue the write forever — a silent hang where the
-        // caller's Future never settles and its optimistic layer never rolls
-        // back.
-        _queue.unpersist(item.id);
-        item.reject(LunoraApiException('BAD_REQUEST', 'offline mutation cannot be encoded: $error'));
       } on Object {
         // Uncoded: a transport failure. Transient — put this write and every
         // one after it back at the front, in order, and stop the flush.
@@ -958,12 +1034,157 @@ class LunoraClient {
         // already rejected these callers and re-queuing would leave the queue
         // holding entries nobody will ever settle.
         if (!_closed) {
-          _queue.requeue(sendable.sublist(index));
+          _queue.requeue(items.sublist(index));
         }
 
         return;
       }
     }
+  }
+
+  /// Replay one chunk over `POST /_lunora/rpc-batch`.
+  ///
+  /// The worker forwards the entries to their shard, which dispatches each
+  /// through its ordinary single-call path — so per-entry `mutationId`
+  /// idempotency and in-order application are inherited from the proven route
+  /// rather than re-implemented here.
+  ///
+  /// Returns the writes to re-queue, and whether the caller should STOP: a
+  /// whole-chunk transport failure leaves the later chunks unsent. Re-queuing is
+  /// the caller's, once and in order, so a write cannot land twice in the queue.
+  Future<({List<QueuedMutation> requeue, bool stop})> _replayBatched(List<QueuedMutation> items) async {
+    final post = _post;
+
+    if (post == null) {
+      return (requeue: items, stop: true);
+    }
+
+    final calls = <Object?>[
+      for (final (index, item) in items.indexed)
+        <String, Object?>{
+          'args': encodeWire(item.args ?? const <String, Object?>{}),
+          'functionPath': item.functionPath,
+          // The slot this entry's result comes back in.
+          'id': index,
+          // The same stable key the single-call replay sends, so the shard
+          // deduplicates a write it already committed.
+          'mutationId': item.id,
+          if (item.shardKey != null) 'shardKey': item.shardKey,
+        },
+    ];
+
+    final LunoraHttpResponse response;
+
+    try {
+      response = await post(_join(lunoraRpcBatchPath), _requestHeaders(), jsonEncode(<String, Object?>{'calls': calls}));
+    } on Object {
+      // Transport failure — nothing committed, so retry everything.
+      return (requeue: items, stop: true);
+    }
+
+    final Object? decoded;
+
+    try {
+      decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    } on FormatException {
+      // A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
+      return (requeue: items, stop: true);
+    }
+
+    final body = decoded is Map<String, Object?> ? decoded : const <String, Object?>{};
+    final results = body['results'];
+
+    if (results is List) {
+      return (requeue: _settleBatchSlots(items, results), stop: false);
+    }
+
+    // No per-slot results. A coded envelope is a verdict on the whole batch — a
+    // bad request, an authorization denial — and therefore terminal for every
+    // entry; anything else is transport, and transient.
+    final envelope = body['error'];
+
+    if (envelope is Map<String, Object?>) {
+      final error = LunoraApiException(
+        envelope['code'] is String ? envelope['code'] as String : 'INTERNAL',
+        envelope['message'] is String ? envelope['message'] as String : 'batch rejected',
+        envelope['data'] == null ? null : decodeWire(envelope['data']),
+      );
+
+      for (final item in items) {
+        _queue.unpersist(item.id);
+        item.reject(error);
+      }
+
+      return (requeue: <QueuedMutation>[], stop: false);
+    }
+
+    return (requeue: items, stop: true);
+  }
+
+  /// Demux a batch reply back onto the writes it replayed, in input order,
+  /// classifying each slot exactly as the single-call replay classifies a whole
+  /// response. Returns the writes to re-queue.
+  List<QueuedMutation> _settleBatchSlots(List<QueuedMutation> items, List<Object?> results) {
+    final bySlot = <int, Map<String, Object?>>{};
+
+    for (final entry in results) {
+      if (entry is! Map<String, Object?>) {
+        continue;
+      }
+
+      final id = entry['id'];
+      final slot = entry['body'];
+
+      if (id is int && slot is Map<String, Object?>) {
+        bySlot[id] = slot;
+      }
+    }
+
+    final requeue = <QueuedMutation>[];
+
+    for (final (index, item) in items.indexed) {
+      final slot = bySlot[index];
+
+      if (slot == null) {
+        // The server never returned this slot. It may or may not have committed,
+        // so retry it — the `mutationId` makes that safe.
+        requeue.add(item);
+
+        continue;
+      }
+
+      final envelope = slot['error'];
+
+      if (envelope is Map<String, Object?>) {
+        final code = envelope['code'] is String ? envelope['code'] as String : 'INTERNAL';
+
+        // A transient shard failure is the batch's counterpart of an uncoded
+        // throw on the single-call path: the server never reached a verdict, so
+        // the write goes back on the queue rather than being reported as failed.
+        if (transientBatchErrorCodes.contains(code)) {
+          requeue.add(item);
+        } else {
+          _queue.unpersist(item.id);
+          item.reject(
+            LunoraApiException(
+              code,
+              envelope['message'] is String ? envelope['message'] as String : 'request failed',
+              envelope['data'] == null ? null : decodeWire(envelope['data']),
+            ),
+          );
+        }
+
+        continue;
+      }
+
+      final cursor = slot['commitCursor'];
+
+      _queue.unpersist(item.id);
+      item.onCommit?.call(cursor is int ? cursor : null);
+      item.resolve(decodeWire(slot['result']));
+    }
+
+    return requeue;
   }
 
   /// The identity a queued write is stamped with, and gated on at replay.

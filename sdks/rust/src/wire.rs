@@ -386,9 +386,18 @@ fn is_bigint_literal(raw: &str) -> bool {
 /// emits `omitempty` and Python's `to_dict` omits the key; this makes Rust agree
 /// with both.
 ///
-/// The ceiling: a field the caller means to send AS null is dropped too. That is
-/// the same limitation the Python backend has, and nothing in the rendered model
-/// distinguishes the two cases.
+/// The ceiling, and it is a real gap rather than a shrug: a REQUIRED
+/// `v.nullable()` field the caller means to send AS null is dropped too, and the
+/// server rejects the absent key. Nothing in the rendered Rust model
+/// distinguishes the two cases — both are a bare `Option<T>` with no serde
+/// attribute and no required marker — so this cannot be told apart here.
+///
+/// Not, as this comment used to claim, a limitation Python shares. quicktype's
+/// Python backend writes `if self.x is not None:` for an optional field and
+/// `result["x"] = …` unconditionally for a required one, so it gets both right;
+/// Go does the same with `omitempty`, and the JVM and Dart targets get there by
+/// other means. `sdks/README.md` carries the per-port table. Closing it here
+/// means emitting Rust models from the schema, as `jvm-models.ts` does.
 pub fn from_model_json(value: &Value) -> WireValue {
     match value {
         Value::Array(items) => WireValue::Array(items.iter().map(from_model_json).collect()),

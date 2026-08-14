@@ -96,9 +96,15 @@ const memberName = (raw: string): string => {
  * that leaves an optional field unset. The Python backend omits the key itself;
  * this makes Ruby agree with it.
  *
- * The ceiling: a field the caller means to send AS null is dropped too. That is
- * the same limitation Python's `to_dict` has, and there is nothing in the
- * rendered model to tell the two apart.
+ * The ceiling, and it is a real gap rather than a shrug: a REQUIRED
+ * `v.nullable()` field the caller means to send AS null is dropped too, and the
+ * server rejects the absent key. There is nothing in the rendered model to tell
+ * the two apart — quicktype declares both `Types::X.optional`.
+ *
+ * Not, as this comment used to claim, a limitation Python's `to_dict` shares: it
+ * writes `if self.x is not None:` for an optional field and `result["x"] = …`
+ * unconditionally for a required one, so it gets both right. `sdks/README.md`
+ * carries the per-port table.
  */
 const WIRE_ARGS_HELPER = `  def self.wire_args(model)
     drop_nils(model.to_dynamic)
