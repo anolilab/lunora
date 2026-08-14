@@ -45,6 +45,20 @@ describe("@lunora/platform contracts", () => {
         expect(NODE_CAPABILITIES.features.vectorStore?.level).toBe("unsupported");
     });
 
+    // `identityProxy` rates whether the HOST hands the runtime a
+    // pre-authenticated identity out-of-band (Cloudflare Access attached to a
+    // Worker populates `ExecutionContextLike.access`), NOT whether an
+    // identity-aware proxy can be used at all. The header-stamping form of the
+    // same product needs no host support, so the rating deliberately does not
+    // gate the `ctx.access` facade — see `CAPABILITY_TO_FEATURE` in
+    // `@lunora/codegen`, which leaves `access` unmapped on purpose.
+    it("rates the out-of-band identity proxy per host, without gating the portable header path", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.identityProxy?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.identityProxy?.level).toBe("unsupported");
+    });
+
     it("exports the noop execution context", () => {
         expect.assertions(2);
 
