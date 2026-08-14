@@ -241,6 +241,13 @@ struct ShapeSubscription {
     on_error: ErrorHandler,
 }
 
+/// A row op decoded during `apply_poke`'s decode phase, ready to commit against
+/// a `ShapeSubscription` once the whole poke has decoded successfully.
+enum PokeOp {
+    Delete(String),
+    Upsert(String, WireValue),
+}
+
 /// A Lunora deployment client.
 ///
 /// # Concurrency
@@ -510,19 +517,40 @@ impl Client {
         }
     }
 
+    /// Applies a fully-buffered poke, in two phases so the batch really is
+    /// atomic rather than merely buffered:
+    ///
+    /// 1. **Decode** every row value across every shape in the poke, without
+    ///    touching any shape's state. `self.pokes` still owns the buffer at
+    ///    this point.
+    /// 2. **Commit** — only once every value decoded successfully — mutating
+    ///    `rows`/`order`/`checkpoint`/`epoch` per shape and firing `on_rows`,
+    ///    then removing the buffer from `self.pokes`.
+    ///
+    /// If any row anywhere in the batch fails to decode, phase 2 never runs:
+    /// no shape's state changes, `on_rows` does not fire, and the error
+    /// propagates to the caller of `handle_frame`. The buffer is deliberately
+    /// left in `self.pokes` rather than dropped — the failure is surfaced as an
+    /// error and the batch is not retried automatically, but a subsequent
+    /// `pokeStart` for the same id (or a fresh one) still has somewhere to land
+    /// rather than the state being permanently frozen.
     fn apply_poke(&mut self, frame: &Value) -> Result<(), ClientError> {
         let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) else {
             return Ok(());
         };
 
-        let Some(buffer) = self.pokes.remove(poke_id) else {
+        let Some(buffer) = self.pokes.get(poke_id) else {
             return Ok(());
         };
 
+        let mut decoded: Vec<(String, Vec<PokeOp>)> = Vec::with_capacity(buffer.len());
+
         for (shape_id, operations) in buffer {
-            let Some(shape) = self.shapes.get_mut(&shape_id) else {
+            if !self.shapes.contains_key(shape_id) {
                 continue;
-            };
+            }
+
+            let mut ops = Vec::with_capacity(operations.len());
 
             for operation in operations {
                 let Some(key) = operation.get("key").and_then(Value::as_str) else {
@@ -530,10 +558,7 @@ impl Client {
                 };
 
                 if operation.get("op").and_then(Value::as_str) == Some("delete") {
-                    if shape.rows.remove(key).is_some() {
-                        shape.order.retain(|candidate| candidate != key);
-                    }
-
+                    ops.push(PokeOp::Delete(key.to_string()));
                     continue;
                 }
 
@@ -544,11 +569,36 @@ impl Client {
                     Some(inner) => inner,
                 };
 
-                if !shape.rows.contains_key(key) {
-                    shape.order.push(key.to_string());
-                }
+                ops.push(PokeOp::Upsert(key.to_string(), decode_wire(value)?));
+            }
 
-                shape.rows.insert(key.to_string(), decode_wire(value)?);
+            decoded.push((shape_id.clone(), ops));
+        }
+
+        // Every row in the batch decoded successfully — commit. Only now is the
+        // buffer removed.
+        self.pokes.remove(poke_id);
+
+        for (shape_id, ops) in decoded {
+            let Some(shape) = self.shapes.get_mut(&shape_id) else {
+                continue;
+            };
+
+            for op in ops {
+                match op {
+                    PokeOp::Delete(key) => {
+                        if shape.rows.remove(&key).is_some() {
+                            shape.order.retain(|candidate| *candidate != key);
+                        }
+                    }
+                    PokeOp::Upsert(key, value) => {
+                        if !shape.rows.contains_key(&key) {
+                            shape.order.push(key.clone());
+                        }
+
+                        shape.rows.insert(key, value);
+                    }
+                }
             }
 
             if let Some(checkpoint) = frame.get("checkpoint") {
@@ -627,4 +677,212 @@ fn percent_encode(value: &str) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    fn poke_start(poke_id: &str) -> Value {
+        json!({ "type": "pokeStart", "pokeId": poke_id })
+    }
+
+    fn poke_part(poke_id: &str, shape_id: &str, rows_patch: Value) -> Value {
+        json!({ "type": "pokePart", "pokeId": poke_id, "shapeId": shape_id, "rowsPatch": rows_patch })
+    }
+
+    fn poke_end(poke_id: &str, checkpoint: &str, epoch: &str) -> Value {
+        json!({ "type": "pokeEnd", "pokeId": poke_id, "checkpoint": checkpoint, "epoch": epoch })
+    }
+
+    /// Not a valid `v.bigint()`: `decode_wire` rejects it (`WireError::InvalidBigInt`),
+    /// which is what stands in for "a bad row" throughout this module.
+    fn bad_bigint() -> Value {
+        json!(["$lunora.wire$", "bigint", "not-a-number"])
+    }
+
+    /// A poke batch where the SECOND row in a single shape fails to decode: the
+    /// first row must not have been committed either. This is the case that
+    /// reproduces the pre-fix defect — see the executor's report for what was
+    /// observed running this test against the code before the decode/commit
+    /// split.
+    #[test]
+    fn decode_failure_leaves_shape_unchanged_and_buffer_retryable() {
+        let mut client = Client::new("https://app.example", None);
+
+        let fired = Arc::new(Mutex::new(0usize));
+        let handle = Arc::clone(&fired);
+        let shape_id = client.subscribe_shape("roomMessages", None, Some(Box::new(move |_rows| *handle.lock().unwrap() += 1)), None);
+
+        // Baseline: one row committed successfully.
+        client.handle_frame(&poke_start("poke1").to_string()).expect("pokeStart");
+        client
+            .handle_frame(&poke_part("poke1", &shape_id, json!([{ "op": "insert", "key": "row1", "value": "first" }])).to_string())
+            .expect("pokePart");
+        client.handle_frame(&poke_end("poke1", "cp1", "epoch1").to_string()).expect("pokeEnd");
+
+        assert_eq!(*fired.lock().unwrap(), 1);
+
+        // A batch where the first operation decodes fine and the second, in the
+        // SAME shape, does not.
+        client.handle_frame(&poke_start("poke2").to_string()).expect("pokeStart");
+        client
+            .handle_frame(
+                &poke_part(
+                    "poke2",
+                    &shape_id,
+                    json!([
+                        { "op": "insert", "key": "row-a", "value": "second" },
+                        { "op": "insert", "key": "row-b", "value": bad_bigint() },
+                    ]),
+                )
+                .to_string(),
+            )
+            .expect("pokePart");
+
+        let result = client.handle_frame(&poke_end("poke2", "cp2", "epoch2").to_string());
+
+        assert!(result.is_err(), "a bad row must surface as an error");
+        assert_eq!(*fired.lock().unwrap(), 1, "on_rows must not fire for the failed batch");
+
+        let shape = client.shapes.get(&shape_id).expect("shape");
+
+        assert_eq!(
+            shape.order,
+            vec!["row1".to_string()],
+            "row-a must not have been committed even though it decoded fine"
+        );
+        assert_eq!(shape.rows.len(), 1);
+        assert_eq!(shape.rows.get("row1"), Some(&WireValue::String("first".to_string())));
+        assert_eq!(shape.checkpoint, Some(json!("cp1")), "checkpoint must not advance on a failed poke");
+        assert_eq!(shape.epoch, Some(json!("epoch1")), "epoch must not advance on a failed poke");
+
+        assert!(
+            client.pokes.contains_key("poke2"),
+            "the buffer must survive the failure so a corrected retry has data to apply"
+        );
+    }
+
+    /// A multi-shape poke where the failure is in the second shape: the first
+    /// shape must also be left unchanged. `self.pokes` is a `HashMap`, whose
+    /// iteration order is not fixed, so the scenario is run many times with a
+    /// fresh client each time — whichever shape a given run happens to decode
+    /// first, the invariant must still hold. A fix that only decodes-then-commits
+    /// within one shape (rather than across the whole poke before committing
+    /// anything) corrupts whichever shape it reaches before the failing one.
+    #[test]
+    fn cross_shape_failure_leaves_every_shape_unchanged() {
+        for attempt in 0..20 {
+            let mut client = Client::new("https://app.example", None);
+
+            let fired_a = Arc::new(Mutex::new(0usize));
+            let handle_a = Arc::clone(&fired_a);
+            let shape_a = client.subscribe_shape("roomA", None, Some(Box::new(move |_rows| *handle_a.lock().unwrap() += 1)), None);
+
+            let fired_b = Arc::new(Mutex::new(0usize));
+            let handle_b = Arc::clone(&fired_b);
+            let shape_b = client.subscribe_shape("roomB", None, Some(Box::new(move |_rows| *handle_b.lock().unwrap() += 1)), None);
+
+            // Baseline: both shapes get one committed row.
+            client.handle_frame(&poke_start("base").to_string()).expect("pokeStart");
+            client
+                .handle_frame(&poke_part("base", &shape_a, json!([{ "op": "insert", "key": "a1", "value": "a-first" }])).to_string())
+                .expect("pokePart a");
+            client
+                .handle_frame(&poke_part("base", &shape_b, json!([{ "op": "insert", "key": "b1", "value": "b-first" }])).to_string())
+                .expect("pokePart b");
+            client.handle_frame(&poke_end("base", "cp0", "epoch0").to_string()).expect("pokeEnd");
+
+            assert_eq!(*fired_a.lock().unwrap(), 1);
+            assert_eq!(*fired_b.lock().unwrap(), 1);
+
+            // shape_a's row is entirely valid; shape_b's second row fails to decode.
+            let poke_id = format!("poke-{attempt}");
+
+            client.handle_frame(&poke_start(&poke_id).to_string()).expect("pokeStart");
+            client
+                .handle_frame(&poke_part(&poke_id, &shape_a, json!([{ "op": "insert", "key": "a2", "value": "a-second" }])).to_string())
+                .expect("pokePart a");
+            client
+                .handle_frame(&poke_part(&poke_id, &shape_b, json!([{ "op": "insert", "key": "b2", "value": bad_bigint() }])).to_string())
+                .expect("pokePart b");
+
+            let result = client.handle_frame(&poke_end(&poke_id, "cp1", "epoch1").to_string());
+
+            assert!(result.is_err(), "attempt {attempt}: a bad row anywhere in the poke must surface as an error");
+            assert_eq!(
+                *fired_a.lock().unwrap(),
+                1,
+                "attempt {attempt}: shape_a's on_rows must not fire when shape_b fails to decode"
+            );
+            assert_eq!(
+                *fired_b.lock().unwrap(),
+                1,
+                "attempt {attempt}: shape_b's on_rows must not fire on its own failure"
+            );
+
+            let a = client.shapes.get(&shape_a).expect("shape_a");
+
+            assert_eq!(a.order, vec!["a1".to_string()], "attempt {attempt}: shape_a must not have committed a2");
+            assert_eq!(a.checkpoint, Some(json!("cp0")), "attempt {attempt}: shape_a's checkpoint must not advance");
+
+            let b = client.shapes.get(&shape_b).expect("shape_b");
+
+            assert_eq!(b.order, vec!["b1".to_string()], "attempt {attempt}: shape_b must not have committed b2");
+            assert_eq!(b.checkpoint, Some(json!("cp0")), "attempt {attempt}: shape_b's checkpoint must not advance");
+        }
+    }
+
+    /// The regression guard: a successful poke must apply exactly as before —
+    /// row order, checkpoint, epoch and `on_rows` all unchanged, and the buffer
+    /// removed from `self.pokes` once committed.
+    #[test]
+    fn successful_poke_applies_rows_checkpoint_epoch_and_fires_on_rows() {
+        let mut client = Client::new("https://app.example", None);
+
+        let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
+        let handle = Arc::clone(&delivered);
+        let shape_id = client.subscribe_shape(
+            "roomMessages",
+            None,
+            Some(Box::new(move |rows| handle.lock().unwrap().push(rows.to_vec()))),
+            None,
+        );
+
+        client.handle_frame(&poke_start("poke1").to_string()).expect("pokeStart");
+        client
+            .handle_frame(
+                &poke_part(
+                    "poke1",
+                    &shape_id,
+                    json!([
+                        { "op": "insert", "key": "row1", "value": "first" },
+                        { "op": "insert", "key": "row2", "value": "second" },
+                    ]),
+                )
+                .to_string(),
+            )
+            .expect("pokePart");
+        client.handle_frame(&poke_end("poke1", "cp1", "epoch1").to_string()).expect("pokeEnd");
+
+        let delivered = delivered.lock().unwrap();
+
+        assert_eq!(delivered.len(), 1, "on_rows fires exactly once for the applied poke");
+        assert_eq!(
+            delivered[0],
+            vec![WireValue::String("first".to_string()), WireValue::String("second".to_string())]
+        );
+
+        let shape = client.shapes.get(&shape_id).expect("shape");
+
+        assert_eq!(shape.order, vec!["row1".to_string(), "row2".to_string()]);
+        assert_eq!(shape.rows.get("row1"), Some(&WireValue::String("first".to_string())));
+        assert_eq!(shape.rows.get("row2"), Some(&WireValue::String("second".to_string())));
+        assert_eq!(shape.checkpoint, Some(json!("cp1")));
+        assert_eq!(shape.epoch, Some(json!("epoch1")));
+
+        assert!(!client.pokes.contains_key("poke1"), "a successfully applied poke's buffer is removed");
+    }
 }
