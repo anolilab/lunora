@@ -1,5 +1,6 @@
 "use client";
 
+// react-doctor-disable-next-line react-doctor/use-lazy-motion -- LazyMotion pays off only if nothing pulls the full bundle, and 13 files here import `motion/react`. The navbar's mega-menu also animates `layout` (navbar.tsx), which `domAnimation` does not include — that needs `domMax`, i.e. most of the library, so converting this one file saves nothing. Doing it properly is an app-wide migration, not a change that belongs beside a marketing section.
 import { motion, useReducedMotion } from "motion/react";
 import type { FC, KeyboardEvent } from "react";
 import { useId, useRef, useState } from "react";

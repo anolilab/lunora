@@ -3,7 +3,7 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check } from "lucide-react";
 import type { FC, SyntheticEvent } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Action } from "@/kit/action";
@@ -22,6 +22,9 @@ const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 type Status = "error" | "idle" | "sending" | "success";
 
 const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
+    const instance = useId();
+    const consentId = `privacy-consent-${instance}`;
+    const honeyId = `honey-${instance}`;
     const [email, setEmail] = useState("");
     const [consent, setConsent] = useState(false);
     const [status, setStatus] = useState<Status>("idle");
@@ -91,8 +94,8 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             <input name="form-name" type="hidden" value="lunora-waitlist" />
             <input name="source" type="hidden" value={source} />
             <p className="hidden">
-                <label htmlFor="honeyField">
-                    Don&apos;t fill this out if you&apos;re human: <input id="honeyField" name="honeyField" tabIndex={-1} />
+                <label htmlFor={honeyId}>
+                    Don&apos;t fill this out if you&apos;re human: <input id={honeyId} name="honeyField" tabIndex={-1} />
                 </label>
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -121,11 +124,11 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     <ArrowRight className="size-4" />
                 </button>
             </div>
-            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-ink-muted" htmlFor="privacy-consent">
+            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-ink-muted" htmlFor={consentId}>
                 <input
                     checked={consent}
                     className="mt-0.5 size-4 shrink-0 accent-accent-2"
-                    id="privacy-consent"
+                    id={consentId}
                     name="privacy"
                     onChange={(event) => {
                         setConsent(event.target.checked);

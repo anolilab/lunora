@@ -153,7 +153,9 @@ const BlogOverview: FC<{ posts: BlogPostSummary[] }> = ({ posts }) => {
 
             <section data-nav-theme="dark">
                 <Shell className="flex items-center justify-between gap-4 border-b border-hairline py-4">
-                    <Kicker size="micro">{String(posts.length)} Articles</Kicker>
+                    <Kicker size="micro">
+                        {String(posts.length)} {posts.length === 1 ? "Article" : "Articles"}
+                    </Kicker>
                     <a className="font-mono text-micro text-ink-muted uppercase transition-colors hover:text-accent" href="/blog/rss.xml">
                         RSS
                     </a>

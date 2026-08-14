@@ -54,8 +54,8 @@
 #nd-sidebar {
     background-color: var(--site-canvas);
     border-right: 1px solid var(--site-hairline);
-    top: var(--fd-header-height, 6rem);
-    height: calc(100dvh - var(--fd-header-height, 6rem));
+    top: var(--fd-header-height, var(--site-nav-height));
+    height: calc(100dvh - var(--fd-header-height, var(--site-nav-height)));
 }
 
 /* Sidebar section labels read as the same mono micro-label used everywhere

@@ -21,8 +21,9 @@ import { cn } from "@/lib/utils";
  * spilling out of a shorter field at one breakpoint. Centring removes the
  * pull, the spacer, and the class of bug where the two drift apart.
  *
- * The field is CSS gradients, not a canvas: it is a static backdrop on the one
- * view every visitor loads, so a renderer would be bytes spent on nothing.
+ * The field is a WebGL shader by default (`backdrop="blinds"`), with a CSS
+ * gradient available for pages that want the backdrop without the renderer.
+ * It reveals itself on its own first painted frame — see `gradient-blinds`.
  */
 
 // Field heights are a floor, not a fixture. They were fixed once, so the header

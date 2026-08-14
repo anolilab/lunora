@@ -89,7 +89,7 @@ const MiniChart: FC<{ accentColor: AccentColor; data: MonthlyDataPoint[] }> = ({
         const maxDownloads = Math.max(...data.map((d) => d.downloads), 1);
         const points = data.map((d, i) => {
             return {
-                x: (i / (data.length - 1)) * CHART_VIEW_WIDTH,
+                x: data.length > 1 ? (i / (data.length - 1)) * CHART_VIEW_WIDTH : CHART_VIEW_WIDTH / 2,
                 y: CHART_PAD_TOP + CHART_HEIGHT - (d.downloads / maxDownloads) * CHART_HEIGHT,
             };
         });

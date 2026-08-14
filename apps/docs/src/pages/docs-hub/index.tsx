@@ -62,8 +62,7 @@ const popular = [
         links: [
             { title: "Getting started", to: "/docs/getting-started" },
             { title: "Schema & tables", to: "/docs/concepts/schema" },
-            { title: "Queries", to: "/docs/concepts/queries" },
-            { title: "Mutations", to: "/docs/concepts/mutations" },
+            { title: "Queries & mutations", to: "/docs/concepts/queries-mutations" },
             { title: "Actions", to: "/docs/concepts/actions" },
             { title: "Sharding", to: "/docs/concepts/sharding" },
         ],

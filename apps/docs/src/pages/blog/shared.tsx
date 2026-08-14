@@ -5,12 +5,17 @@ import { Kicker } from "@/kit/layout";
 import { isFallbackImage } from "@/lib/seo";
 
 /** Format an ISO/date string into a `MMM D, YYYY` (uppercased) label + ISO datetime. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
 export const formatDate = (value?: string): { formatted: string; iso?: string } => {
     if (!value) {
         return { formatted: "" };
     }
 
-    const date = new Date(value);
+    // "2026-08-07" parses as UTC midnight, which formats as the 6th for any
+    // reader behind UTC. Appending a time makes it local, which is what a
+    // publication date means.
+    const date = new Date(DATE_ONLY.test(value) ? `${value}T00:00:00` : value);
 
     if (Number.isNaN(date.getTime())) {
         return { formatted: "" };

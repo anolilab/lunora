@@ -118,12 +118,12 @@ const relatedTo = (slugs: string[]): RelatedTopic[] => {
 
     const folder = slugs.slice(0, -1).join("/");
     const taken = new Set(linked.map((topic) => topic.url));
-    const siblings = pages
-        .filter(
-            (page) =>
-                page.slugs.join("/") !== here && page.slugs.length === slugs.length && page.slugs.slice(0, -1).join("/") === folder && !taken.has(page.url),
-        )
-        .map((page) => describe(page));
+    const siblings = pages.flatMap((page) => {
+        const sibling =
+            page.slugs.join("/") !== here && page.slugs.length === slugs.length && page.slugs.slice(0, -1).join("/") === folder && !taken.has(page.url);
+
+        return sibling ? [describe(page)] : [];
+    });
 
     return [...linked, ...siblings].slice(0, RELATED_LIMIT);
 };

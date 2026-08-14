@@ -189,7 +189,7 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
             <section className="relative bg-canvas py-16" data-nav-theme="dark">
                 <div className="mx-auto flex max-w-4xl flex-col gap-6 px-5">
                     <h2 className="text-2xl font-semibold tracking-tight text-ink">Frequently asked questions</h2>
-                    <dl className="flex flex-col divide-y divide-hairline]">
+                    <dl className="flex flex-col divide-y divide-hairline">
                         {data.faqs.map((faq) => (
                             <div className="flex flex-col gap-2 py-5 first:pt-0" key={faq.q}>
                                 <dt className="text-base font-semibold text-ink">

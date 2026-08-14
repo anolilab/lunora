@@ -185,7 +185,7 @@ const DepsRow: FC<{ item: Extract<FeedItem, { type: "deps" }> }> = ({ item }) =>
             {item.from === item.date ? formatDate(item.date) : `${formatDate(item.from)} – ${formatDate(item.date)}`}
         </span>
         <p className="text-sm text-ink-faint">
-            Dependency updates only, across <span className="text-ink-muted">{item.packages}</span> packages.
+            Dependency updates only, across <span className="text-ink-muted">{item.packages}</span> {item.packages === 1 ? "package" : "packages"}.
         </p>
     </div>
 );
