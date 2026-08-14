@@ -189,16 +189,6 @@ export default defineConfig({
                         description: "Error-type name quoted in a plan document, misread as a generic secret by kingfisher.generic.4",
                         regexes: ["^`LunoraAuthAdminError`$"],
                     },
-                    // `kingfisher.cypress.2` looks for a Cypress project id — a 6-char
-                    // alphanumeric assigned to `projectId`. Every hit in `apps/cloud` is
-                    // the Lunora row id of that name: a branded `Id<"projects">` read
-                    // from app state or a route param, or the field's own declaration in
-                    // a type. Scoped to the exact identifier the rule extracts, so a real
-                    // Cypress key assigned to the same field name elsewhere still trips.
-                    {
-                        description: "Lunora `projectId` row id misread as a Cypress project id by kingfisher.cypress.2",
-                        regexes: ["projectId"],
-                    },
                 ],
             },
         },
