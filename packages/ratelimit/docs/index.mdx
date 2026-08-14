@@ -11,21 +11,26 @@ runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit)
 carrying `retryAfter` in milliseconds.
 
 ```ts
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
-const limiter = new RateLimiter({
-    config: {
-        login: { kind: "fixed window", period: 60_000, rate: 5 },
-        send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
-    },
-});
+const config = {
+    login: { kind: "fixed window", period: 60_000, rate: 5 },
+    send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
+};
 
-export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
     // …
 });
 ```
+
+<Callout type="warn">
+    A `RateLimiter` built with no explicit `store` falls back to `createMemoryStore` — a per-Durable-Object-instance in-memory Map. That's correct for a limit
+    that only ever needs to hold within one DO instance, but it stops enforcing the configured rate the moment the instance is sharded, replicated
+    (`.global()`), or recreated after eviction. `dbRateLimit` above sidesteps the question by building the limiter per call, backed by a Lunora table via
+    `ctx.db` — see [Pluggable stores](#pluggable-stores). Construction without an explicit store now warns once so the choice is visible instead of silent.
+</Callout>
 
 Like [row-level security](/docs/concepts/rls) and [data masking](/docs/concepts/masking),
 it rides the `.use(...)` chain and is **opt-in per procedure** — a bare
@@ -78,14 +83,19 @@ consuming. `limiter.reset(name, { key })` clears accounting for a pair (e.g. on 
 successful login).
 
 ```ts
-const status = await limiter.limit("send", { key: userId });
+import { RateLimiter, createDbStore } from "@lunora/ratelimit";
 
-if (!status.ok) {
-    // status.retryAfter is milliseconds until the request would succeed.
-    // status.reason is "rate" or "deny".
-}
+export const login = mutation.mutation(async ({ ctx, args }) => {
+    const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
+    const status = await limiter.limit("login", { key: args.email });
 
-await limiter.reset("login", { key: userId }); // clear on success
+    if (!status.ok) {
+        // status.retryAfter is milliseconds until the request would succeed.
+        // status.reason is "rate" or "deny".
+    }
+
+    await limiter.reset("login", { key: args.email }); // clear on success
+});
 ```
 
 Per-call `RateLimitArgs`:
