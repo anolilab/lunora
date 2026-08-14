@@ -118,8 +118,24 @@ private fun overLongBigIntRejected() {
 private fun rejects(value: Any?): Boolean = try {
     Wire.decode(value)
     false
-} catch (error: WireFormatException) {
+} catch (error: RuntimeException) {
+    // Wire.decode's own bounds (bigint length, depth) throw its typed
+    // WireFormatException; a nested decoder (Base64 on a malformed bytes tag)
+    // throws its own unwrapped RuntimeException. Both are a rejection.
     true
+}
+
+private fun malformedBytesRejected() {
+    covers("malformed_bytes_rejected")
+
+    check(rejects(listOf(Wire.TAG, "bytes", "not@@base64!!")), "malformed base64 in a bytes tag must be rejected")
+
+    val decoded = Wire.decode(listOf(Wire.TAG, "bytes", "AQID"))
+
+    check(
+        decoded is WireValue.Bytes && decoded.data.contentEquals(byteArrayOf(1, 2, 3)),
+        "well-formed bytes must still decode",
+    )
 }
 
 private fun depthCapEnforced() {
@@ -403,6 +419,7 @@ fun main() {
     wireCodecRoundTrip()
     undefinedIsDistinctFromNull()
     overLongBigIntRejected()
+    malformedBytesRejected()
     depthCapEnforced()
     stableWireKeyFixtures()
     formatNumberMatchesEcmaScript()
