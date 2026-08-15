@@ -47,6 +47,25 @@ export interface PlatformCapabilities {
         globalTables?: Capability;
         /** BYO database via connection pooling (Hyperdrive / RDS Proxy). */
         hyperdrive?: Capability;
+
+        /**
+         * An identity-aware proxy in front of the app that authenticates the
+         * caller before the request reaches it, and hands the runtime a verified
+         * identity **out-of-band** — on the execution context rather than on the
+         * request (Cloudflare Access attached to a Worker; IAP; an ALB OIDC
+         * action).
+         *
+         * Rated separately from the header-stamping form of the same product
+         * because only this one needs a host primitive. An identity-aware proxy
+         * that merely adds a signed header is portable by construction: any host
+         * that receives an HTTP request can verify it, which is why
+         * `@lunora/cloudflare-access` still works on a target rated
+         * `unsupported` here (it falls back to the `Cf-Access-Jwt-Assertion`
+         * JWT). What is not portable is the identity arriving beside the
+         * request, which is why `ExecutionContextLike.access` is a projection a
+         * host either populates or does not.
+         */
+        identityProxy?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
         /** Local SQL execution inside a shard. */
@@ -148,6 +167,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
         hyperdrive: { level: "native", note: "Cloudflare Hyperdrive" },
+        identityProxy: {
+            level: "native",
+            note: "Cloudflare Access. A policy attached to the Worker covers its custom domains, routes, workers.dev and preview URLs at once, and the authenticated identity arrives on the execution context as ctx.access — no header to verify, and nothing a request can forge to manufacture one. A hostname-scoped Access application instead stamps the Cf-Access-Jwt-Assertion header, which needs no host support at all",
+        },
     },
 };
 
@@ -255,5 +278,9 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },
         secrets: { level: "unsupported", note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars)" },
         hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        identityProxy: {
+            level: "unsupported",
+            note: "Nothing sits in front of this host to authenticate callers, so it never populates the execution context's access identity. @lunora/cloudflare-access still works here through its Cf-Access-Jwt-Assertion fallback, which is a plain header check and needs no host support",
+        },
     },
 };
