@@ -1,4 +1,4 @@
-# Plan 335 — `apps/builder`: an AI app builder for Lunora (Convex Chef's shape, on Cloudflare Sandboxes + TanStack Start)
+# Plan 335 — `apps/builder`: an AI app builder for Lunora (Chef's shape, VibeSDK's plane, on TanStack Start)
 
 **Baseline:** `93f38c2` (2026-08-15)
 **Status:** TODO
@@ -15,25 +15,36 @@ gate (`lunora verify --format json`), an introspection/observability MCP surface
 skills — the exact thing Chef hand-writes as `chef-agent/prompts/convexGuidelines.ts`
 and must keep in sync forever).
 
-So the missing piece is **not the agent**. It is the **execution plane**: a
-sandbox that can run `pnpm install`, `lunora dev`, and `wrangler deploy` on
-behalf of a browser user, and serve a live preview URL. Chef solved that with
+So the missing piece is **not the agent**. It is the **execution plane**: a way
+to run `lunora codegen`, `pnpm install`, `lunora verify` and `wrangler deploy` on
+behalf of a browser user, and serve a live preview. Chef solved that with
 WebContainer (browser-only, and **commercially licensed** for for-profit
-production use). We should not inherit that constraint: Cloudflare
-**Sandboxes went GA in April 2026** with live preview URLs, snapshots,
-filesystem watching and PTY — a first-party, same-account answer that also lets
-the generated app be built and deployed by the _real_ `lunora` CLI rather than
-an in-browser emulation of it.
+production use). We should not inherit that constraint.
 
-**Recommendation: do not fork bolt.diy or Chef.** Take their proven _UX_ (chat +
-workbench + file tree + terminal + preview pane, streamed file writes, an
-error-fix loop) and rebuild it as a first-party Lunora app on TanStack Start.
-Forking buys a Remix/WebContainer codebase whose two most valuable subsystems —
-the runtime and the agent loop — are exactly the two we must replace.
+**Cloudflare has already built this exact product, in the open, MIT-licensed.**
+[VibeSDK](https://github.com/cloudflare/vibesdk) is a vibe-coding platform built
+entirely on the Cloudflare stack — an agent DO driving the loop, a workspace DO
+per project, **Dynamic Workers** serving previews, **DO Facets** giving each
+generated app its own SQLite, **Artifacts** holding git history, AI Gateway
+routing providers, and **Workers for Platforms** for deploy. It is the closest
+architectural fit that exists, and its preview tier is not a container: an app
+preview is a bundle-and-load, not a `pnpm install`.
+
+**Recommendation: fork nothing — including VibeSDK.** Every generated-app
+assumption in it (plain React+Vite worker, no codegen step, no user-defined
+Durable Object classes, bash disabled) is precisely where a Lunora app differs,
+so a fork would be a rewrite of its core with its shell retained. Adopt its
+_plane_ — and where MIT permits, adapt its code directly for the parts where a
+subtle mistake is a security bug rather than a bad UX (§D11).
+
+The consequence for this plan: the execution model is **two-tier** (Worker-Loader
+previews over a sandboxed toolchain, §D2), and the single most important
+unknown is whether a Lunora `ShardDO` survives as a DO facet with its hibernated
+WebSockets and alarms intact. That is Spike 0a, and a "no" cuts a workstream.
 
 Sizing: ~10 workstreams, of which **three are genuinely new engineering**
-(sandbox host, per-user deploy/ownership, builder UI). The rest is composition
-of shipped packages.
+(the execution plane, per-user deploy/ownership, the builder UI). The rest is
+composition of shipped packages.
 
 ## 1. Current state (audit)
 
@@ -83,10 +94,55 @@ of shipped packages.
 | [**cloudflare/sandbox-sdk**](https://github.com/cloudflare/sandbox-sdk)                                     | Cloudflare first-party, GA 2026-04                                                        | Cloudflare Containers       | **Not a base — the runtime.** `getSandbox()`, `exec()`, `readFile`/`writeFile`, `startProcess()`, `exposePort()` → preview URLs (incl. `*.trycloudflare.com` quick tunnels), sessions, snapshots, git clone, code interpreter, PTY. Configured via a container class + Dockerfile in `wrangler.jsonc`. Caveat: "APIs may change before v1.0"; first container build is 2–3 min.                                                                                                                                                                                                                                                   |
 | [**cloudflare/workers-for-platforms-example**](https://github.com/cloudflare/workers-for-platforms-example) | Cloudflare first-party                                                                    | Dispatch namespaces         | The reference for _hosting_ generated apps ourselves (Phase 3). Dispatch namespace + dynamic dispatch worker + untrusted-mode user workers + optional outbound worker (`.agents/skills/cloudflare/references/workers-for-platforms/README.md:1-60`).                                                                                                                                                                                                                                                                                                                                                                              |
 
-**Conclusion.** Fork nothing. Copy Chef's _decomposition_ (agent / UI / backend /
-template / eval harness) because it is correct and battle-tested, and Chef's
-tool taxonomy almost verbatim — but implement each part with a Lunora package
-that already exists.
+### 1.4 Second sweep — the wider field
+
+The first sweep was Convex-adjacent and missed the closest fit. Full field:
+
+| Project                                                                                 | Stars / license             | Runtime                         | Verdict as a base                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------- | --------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [**cloudflare/vibesdk**](https://github.com/cloudflare/vibesdk)                         | ~5.3k / 1.2k forks, **MIT** | Cloudflare, end to end          | **The closest fit in existence, and it changes D2.** Cloudflare's own vibe-coding platform: `ThinkAgent` DO drives the loop, `SpaceDO` holds a per-project workspace, **Dynamic Workers** (Worker Loader + `@cloudflare/worker-bundler`) serve previews, **DO Facets** give each generated app its own SQLite, **Cloudflare Artifacts** stores git history and restore points, AI Gateway routes providers with BYOK, deploy targets **Workers for Platforms**. Bash is disabled by design. |
+| [**neondatabase/appdotbuild-agent**](https://github.com/neondatabase/appdotbuild-agent) | Apache-2.0                  | Neon + Koyeb                    | **Reference for the validation loop, not a base.** Neon's stated thesis is that quality comes from _scaffolding plus extensive validation_ (it writes and runs e2e tests, lints, typechecks) rather than prompt cleverness — direct corroboration of D5. Wrong infra (Fastify/Drizzle/Postgres on Koyeb).                                                                                                                                                                                   |
+| [**All-Hands-AI/OpenHands**](https://github.com/All-Hands-AI/OpenHands)                 | ~70k, MIT                   | Docker sandbox, local or hosted | Wrong category — a general autonomous SWE agent over an existing repo, not a prompt-to-app product with a preview pane. Worth reading for sandbox-escape hardening; nothing to fork.                                                                                                                                                                                                                                                                                                        |
+| [**onlook-dev/onlook**](https://github.com/onlook-dev/onlook)                           | ~4.2k, Apache-2.0           | Local React project             | Adjacent, not overlapping — a _visual_ editor (click an element, edit it, write back to JSX). A plausible later feature for W5, not a base.                                                                                                                                                                                                                                                                                                                                                 |
+| [**srcbookdev/srcbook**](https://github.com/srcbookdev/srcbook)                         | ~3.4k, Apache-2.0           | Local Node                      | TypeScript notebook + app builder, runs on the user's machine. Same shape mismatch as Dyad.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| [**firecrawl/open-lovable**](https://github.com/firecrawl/open-lovable)                 | MIT                         | E2B sandboxes                   | Narrow scope — clone a website into a React app. Useful only as a reference for "scrape a design into a starting point", a possible W5 nicety.                                                                                                                                                                                                                                                                                                                                              |
+
+**What VibeSDK changes.** Its preview tier is **not** a container. `@cloudflare/worker-bundler`
+runs _inside workerd_ (esbuild-wasm; it explicitly does not run under plain
+Node) and bundles a worker **with real npm dependencies** plus a client bundle
+and static assets, which Worker Loader then instantiates as a Dynamic Worker.
+That sidesteps the container cold-start problem that §8 names as this plan's
+first STOP condition — an app preview becomes a bundle-and-load, not a
+`pnpm install`.
+
+**The catch, and it is Lunora-specific.** Two facts sit in tension:
+
+- Durable Objects "don't extend naturally to Dynamic Workers" — DO storage is
+  provisioned through the API and its namespace must point at a deployed
+  implementing class, which a dynamic worker is not. Cloudflare's answer is
+  **DO Facets**: a supervisor DO you deploy calls `this.ctx.facets.get()` to
+  instantiate a _dynamically loaded_ class with its own SQLite database, and
+  `facets.abort(name, reason)` restarts it — including with a different class,
+  which is how code updates land.
+- A Lunora app is **not** a plain worker. It needs `lunora codegen` (a ts-morph
+  program over `lunora/`, Node-only) before anything can be bundled, and its
+  `ShardDO` wants SQLite **plus hibernated WebSockets plus alarms**.
+
+Facets provide the SQLite half. Whether they carry the WebSocket-hibernation and
+alarm behaviour `ShardDO` depends on — and where `lunora codegen` runs, since it
+cannot run in workerd — are the two questions that decide the execution model.
+Both are now Phase-0 spike items (§7), and D2 is written as a two-tier model
+pending their answers.
+
+**Conclusion.** Still fork nothing, but for a sharper reason than before: the
+best base (VibeSDK) is architecturally right and MIT, yet every generated-app
+assumption in it — plain React+Vite worker, no codegen step, no user-defined DO
+classes, bash disabled — is exactly where Lunora differs. Take its _plane_
+(Worker Loader previews, Artifacts-backed history, Workers for Platforms deploy,
+AI-Gateway BYOK, signed branch-scoped preview tokens) as a design to follow and,
+where the licence permits, to adapt directly. Take Chef's _decomposition_ and
+tool taxonomy. Take app.build's _validation-first_ thesis. Build the agent from
+`@lunora/agent`, which none of them had.
 
 ## 2. Existing seams (do not reinvent)
 
@@ -153,21 +209,47 @@ Assertable statements that must hold at every phase:
 
 ## 4. Design decisions
 
-**D1 — Build fresh on Lunora + TanStack Start; do not fork bolt.diy/Chef.**
-_Rejected:_ fork Chef (Apache-2.0, so legally fine). The fork's two load-bearing
-subsystems are WebContainer and its own agent loop; we replace both, leaving a
-Remix-era UI shell we'd then have to port to TanStack Start anyway. We keep the
-_ideas_ (streamed artifact writes, workbench layout, tool taxonomy) and pay none
-of the licence or migration cost.
+**D1 — Build fresh on Lunora + TanStack Start; fork nothing.**
+_Rejected:_ fork Chef (Apache-2.0). Its two load-bearing subsystems are
+WebContainer and its own agent loop; we replace both, leaving a Remix-era UI
+shell we'd have to port to TanStack Start anyway.
+_Rejected:_ fork VibeSDK (MIT, and the closest architectural fit — see §1.4).
+Its generated-app model assumes a plain React+Vite worker with no codegen step
+and no user-defined DO classes; every one of those assumptions is where a Lunora
+app differs, so the fork would be a rewrite of its core with its shell retained.
+_Accepted instead:_ adapt VibeSDK's **plane** where the MIT licence permits
+(D11), and keep its architecture as the reference for ours.
 
-**D2 — Runtime = Cloudflare Sandboxes; not WebContainer, not E2B/Daytona.**
-_Rejected WebContainer:_ commercial licence for for-profit production, browser-only,
-and cannot run `wrangler deploy` for real. _Rejected E2B/Daytona:_ a second
-vendor, off-platform egress, and no story for previewing a Worker.
-Sandboxes are same-account, GA, give live preview URLs and snapshots, and — the
-decisive point — can run **the actual `lunora` CLI**, so the builder's inner loop
-and a developer's local inner loop are the same commands.
-_Accepted risk:_ the SDK is pre-1.0 and cold container builds take 2–3 min (see §8).
+**D2 — Two-tier execution: Worker-Loader previews over a sandboxed toolchain.**
+_Rejected WebContainer:_ commercial licence for for-profit production,
+browser-only, cannot run `wrangler deploy` for real. _Rejected E2B/Daytona:_ a
+second vendor, off-platform egress, no story for previewing a Worker.
+_Rejected "containers for everything" (this plan's own first draft):_ VibeSDK
+demonstrates that a preview does not need one, and a 2–3 min cold build per
+session would have been the product's defining flaw.
+
+The two tiers, and why they split where they do:
+
+| Tier          | Job                                                                         | Mechanism                                                                                                               | Why not the other tier                                                                                              |
+| ------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| **Preview**   | Serve the app under edit, sub-second, on every keystroke-scale change       | Worker Loader + `@cloudflare/worker-bundler` (real npm deps, client bundle, static assets); `ShardDO` as a **DO facet** | A container round-trip per edit is the wrong latency budget for the inner loop                                      |
+| **Toolchain** | `lunora codegen`, `pnpm install`, `lunora verify`, `lunora deploy`, git ops | Cloudflare Sandbox (containers), snapshot/restore between turns                                                         | `worker-bundler` runs in workerd via esbuild-wasm; `lunora codegen` is a Node ts-morph program and cannot run there |
+
+**This split is a hypothesis until Phase 0 answers three questions** (§7): does a
+`ShardDO` facet keep hibernated WebSockets and alarms; can `worker-bundler`
+bundle a Lunora worker once codegen output exists; and is Worker Loader (closed
+beta at time of writing) available to us. If the facet cannot carry Lunora's
+subscription machinery, the preview tier collapses back into the sandbox and the
+latency work moves to warm pools and snapshots — a worse product, but a known
+one.
+
+**D2a — `lunora codegen` needs a home that is neither tier.** It is Node-only and
+sits on the critical path of every turn. Options, to be decided in Phase 0:
+run it in the sandbox (simplest, one container round-trip per schema change);
+port the discovery pass to run in workerd (large, and ts-morph is not a
+plausible workerd dependency); or precompute for template-shaped edits and fall
+back to the sandbox when `lunora/schema.ts` actually changes (best latency,
+most machinery). Prefer the third only if Phase 0 shows the first is too slow.
 
 **D3 — The build agent is a `defineAgent` durable agent.**
 _Rejected:_ a `streamText` loop inside an action. An action is CPU/wall-clock
@@ -216,6 +298,24 @@ snapshots, shares live in `ShardDO` sharded by project id; the builder dogfoods
 `.shardBy()`, live queries and the offline outbox. Every builder session is also
 a load test of the framework.
 
+**D11 — Adapt VibeSDK's plane rather than re-deriving it.** It is MIT, so the
+patterns below may be studied and, with attribution and licence notice, adapted
+directly rather than reinvented: the Worker-Loader preview path, signed
+branch-scoped preview tokens, Artifacts-backed git history and restore points,
+the Workers-for-Platforms deploy path, and the AI-Gateway BYOK routing.
+_Rejected:_ deriving each from scratch — these are exactly the parts where a
+subtle mistake is a security bug (preview authorization, tenant isolation)
+rather than a bad UX. _Constraint:_ anything adapted lands as identifiable,
+attributed code in one place (likely W2/W6), not smeared through the app, so the
+provenance stays auditable. **Legal review of the licence-notice obligations
+before any adapted code lands** — this is a licence question, not an engineering
+preference, and it belongs to a human (§9.9).
+
+**D12 — Generated apps target the `standalone`/`tanstack-start-react` templates
+only, at first.** _Rejected:_ letting the model pick from all 12 templates. Each
+template is a distinct preview-and-bundle path to validate; two is a scope we
+can gate with evals, twelve is not. Widen once W8's eval suite is green.
+
 ## 5. Workstreams
 
 Sized S/M/L. W1–W4 are the critical path; W5 can proceed in parallel behind a
@@ -230,10 +330,13 @@ omitted (private), Tailwind + the `lunora-design` tokens from `marketing/`.
 Schema: `projects`, `chats`, `messages`, `snapshots`, `shares`, `usage` —
 `.shardBy(projectId)`; `users`/`orgs` `.global()` on D1.
 
-### W2 — `@lunora/sandbox` host package (L) — _the new engineering_
+### W2 — Execution plane (L) — _the new engineering_
 
-A thin, contract-shaped wrapper over `@cloudflare/sandbox` so the builder never
-touches the pre-1.0 SDK directly:
+Two components, split per D2. Both land behind one app-facing interface so the
+agent's tools do not know which tier served a call.
+
+**W2a — `@lunora/sandbox`: the toolchain tier.** A thin, contract-shaped wrapper
+over `@cloudflare/sandbox` so the builder never touches the pre-1.0 SDK directly:
 
 - `createSandbox(env, sessionId)` → `{ exec, spawn, readFile, writeFile, ls, rm, snapshot, restore, previewUrl }`.
 - Image: a Dockerfile with Node 24, pnpm 11, the `lunora` CLI and a warm pnpm
@@ -244,9 +347,20 @@ touches the pre-1.0 SDK directly:
 - Declared through `defineContainer` (`packages/container`) so it participates in
   the existing wrangler binding inference rather than bypassing it.
 
-**Why a package and not app code:** `@lunora/agent`'s `containerTool` will want
-this too, and the API-snapshot guard gives us a record of how a pre-1.0
-dependency moves under us.
+**W2b — the preview tier: Worker Loader + a `ShardDO` facet.** A supervisor DO
+per project (VibeSDK's `SpaceDO` role) that bundles the project via
+`@cloudflare/worker-bundler`, loads it as a Dynamic Worker, and instantiates the
+generated app's `ShardDO` as a facet with its own SQLite. Code updates use
+`facets.abort(name, reason)` + `get()` to restart the facet against the new
+class — the mechanism Cloudflare documents for exactly this. Preview access is
+gated by signed, branch-scoped tokens (D11).
+
+**Why packages and not app code:** `@lunora/agent`'s `containerTool` will want
+W2a too, and the API-snapshot guard gives us a record of how two pre-1.0/beta
+dependencies (`@cloudflare/sandbox`, Worker Loader) move under us.
+
+**W2b is the phase-gated one.** If Phase 0 fails its facet questions, W2b is cut
+and W2a absorbs preview duty (§8).
 
 ### W3 — The build agent (M)
 
@@ -337,29 +451,38 @@ condition (§8), not an implementation detail.**
 
 ## 7. Phasing & ordering
 
-| Phase | Work                                                                                                              | Gate                                                                                                                                           |
-| ----- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | Spike: `@cloudflare/sandbox` runs `lunora init` + `pnpm install` + `lunora dev` + `exposePort` on a real template | A recorded transcript: preview URL serves the template's welcome page; wall-clock from cold and warm start measured and written into this file |
-| 1     | W1 skeleton + W2 package (no agent)                                                                               | `pnpm --filter "@lunora/sandbox" test` green; `apps/builder` boots; a hardcoded script scaffolds and previews a project end-to-end             |
-| 2     | W3 agent + W4 skills, headless                                                                                    | `lunora eval` over 5 fixtures ≥ 0.8 threshold; every fixture's `verify` exits 0                                                                |
-| 3     | W5 workbench UI                                                                                                   | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates                                           |
-| 4     | W6 deploy (anonymous `--temporary`)                                                                               | E2E: prompt → deployed URL returns 200; eject-zip builds clean on a fresh runner (§3.2)                                                        |
-| 5     | W7 accounts + BYO-Cloudflare deploy                                                                               | Deploy lands in a _test user's_ account; quota exhaustion returns a typed error, not a hang                                                    |
-| 6     | W8 evals in CI, W9 share/export, W10 safety                                                                       | Eval job in `lint.yml`-adjacent workflow, failing below threshold; `dist:check` + `api:check` green including the new package's snapshot       |
+| Phase | Work                                                                                                                                                                                                                                                                                         | Gate                                                                                                                                                                                                                                                             |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0a    | **Spike A (preview tier).** Can a Lunora app run as a Dynamic Worker? Bundle `templates/standalone` with `@cloudflare/worker-bundler`; instantiate `ShardDO` as a DO facet; open a live query over a WebSocket; fire a scheduler alarm; then `facets.abort()` + `get()` with an edited class | Written answers to all four in this file: **(1)** does a facet keep hibernated WebSockets, **(2)** do alarms fire, **(3)** does the bundler handle a Lunora worker's dep graph, **(4)** is Worker Loader (closed beta) available to us. Any "no" on 1–2 cuts W2b |
+| 0b    | **Spike B (toolchain tier).** `@cloudflare/sandbox` runs `lunora init` + `pnpm install` + `lunora codegen` + `lunora verify` on a real template                                                                                                                                              | Recorded wall-clock, cold and warm, per command — written into this file. `codegen` latency specifically decides D2a                                                                                                                                             |
+| 1     | W1 skeleton + W2a (+ W2b if 0a passed), no agent                                                                                                                                                                                                                                             | `pnpm --filter "@lunora/sandbox" test` green; `apps/builder` boots; a hardcoded script scaffolds, previews and verifies a project end-to-end                                                                                                                     |
+| 2     | W3 agent + W4 skills, headless                                                                                                                                                                                                                                                               | `lunora eval` over 5 fixtures ≥ 0.8 threshold; every fixture's `verify` exits 0                                                                                                                                                                                  |
+| 3     | W5 workbench UI                                                                                                                                                                                                                                                                              | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates                                                                                                                                                             |
+| 4     | W6 deploy (anonymous `--temporary`)                                                                                                                                                                                                                                                          | E2E: prompt → deployed URL returns 200; eject-zip builds clean on a fresh runner (§3.2)                                                                                                                                                                          |
+| 5     | W7 accounts + BYO-Cloudflare deploy                                                                                                                                                                                                                                                          | Deploy lands in a _test user's_ account; quota exhaustion returns a typed error, not a hang                                                                                                                                                                      |
+| 6     | W8 evals in CI, W9 share/export, W10 safety                                                                                                                                                                                                                                                  | Eval job in `lint.yml`-adjacent workflow, failing below threshold; `dist:check` + `api:check` green including the new package's snapshot                                                                                                                         |
 
-Phases 0–2 are the ones that can invalidate the design. Do not start W5 before
-Phase 0 reports its numbers.
+Phases 0–2 are the ones that can invalidate the design. **0a and 0b are
+independent and should run in parallel** — 0a decides the architecture, 0b
+decides the latency budget. Do not start W5 before both report.
 
 ## 8. Risks & STOP conditions
 
-- **STOP if Phase 0's warm-start wall-clock exceeds ~15 s to a live preview.**
-  The whole product is an inner loop; a 2–3 minute cold build per session is
-  fatal. Mitigations to try _within_ Phase 0: a prebuilt image with the pnpm
-  store and template deps warmed, snapshot/restore instead of cold start, a
-  pre-warmed sandbox pool. If none gets there, re-scope to a browser-side
-  preview for the UI layer with the sandbox reserved for `verify`/`deploy` —
-  do not improvise a WebContainer dependency without revisiting D2 and its
-  licence consequences.
+- **STOP if Spike 0a shows a `ShardDO` facet cannot keep hibernated WebSockets
+  or alarms.** Lunora's reactive subscriptions and `@lunora/scheduler` both
+  depend on them; a facet that drops either cannot host a Lunora app, and W2b is
+  cut rather than worked around. Fallback: the sandbox serves previews (`lunora dev`
+    - `exposePort`), and the §8 latency STOP below becomes the binding constraint.
+- **STOP if Phase 0b's warm-start wall-clock exceeds ~15 s to a live preview,
+  _and_ W2b was cut.** The whole product is an inner loop; a 2–3 minute cold
+  build per session is fatal. Mitigations to try _within_ Phase 0b: a prebuilt
+  image with the pnpm store and template deps warmed, snapshot/restore instead
+  of cold start, a pre-warmed sandbox pool. If none gets there with W2b already
+  cut, the plan has no viable preview tier — re-scope, and do not improvise a
+  WebContainer dependency without revisiting D2 and its licence consequences.
+- **Risk: Worker Loader is in closed beta.** The preview tier depends on access
+  we may not have. Mitigate: 0a's question 4 is asked first and costs nothing;
+  if access is not forthcoming, W2b is deferred rather than blocking the plan.
 - **STOP if `exec` cannot be contained.** If the command allowlist cannot
   prevent a generated app from making arbitrary outbound requests from our
   account, the ownership model moves to BYO-only before any public launch.
@@ -407,3 +530,17 @@ Phase 0 reports its numbers.
 8. **Multi-file streaming protocol.** Reuse the agent's message stream verbatim,
    or add a bolt-style artifact envelope for the UI? Prefer the former unless W5
    proves it insufficient.
+9. **VibeSDK licence obligations (D11).** MIT permits adaptation with notice, but
+   _which_ files we adapt and how the notice is carried needs a human decision
+   before any adapted code lands. Blocking for W2b/W6, not for the rest.
+10. **Do we keep bash disabled, as VibeSDK does?** They ship explicit workspace
+    tools only. We have a sandbox that makes `exec` safe-ish and a CLI worth
+    running (`lunora verify`, `registry add`, `migrate`), so a narrow _command
+    allowlist_ rather than a full shell looks right — confirm against W10's
+    threat model rather than by preference.
+11. **Where does `lunora codegen` run (D2a)?** Sandbox round-trip, workerd port,
+    or precompute-with-fallback. Phase 0b's measured `codegen` latency decides it.
+12. **Do generated apps get Artifacts-backed git history** (VibeSDK's model) or
+    plain snapshots in `ShardDO` (this plan's W1 schema)? Artifacts gives real
+    commits and restore points and a cleaner GitHub export; snapshots are less
+    machinery. Decide before W9.
