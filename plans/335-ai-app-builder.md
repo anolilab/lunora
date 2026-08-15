@@ -48,9 +48,13 @@ behaviour, different alarm semantics. "Works in preview, breaks on deploy" is th
 one failure mode that destroys trust in a builder, and this plan will not design
 it in on purpose.
 
-Sizing: ~10 workstreams, of which **three are genuinely new engineering**
-(the sandbox host, per-user deploy/ownership, the builder UI). The rest is
-composition of shipped packages.
+Sizing: ~10 workstreams, of which **three are genuinely new engineering** (the
+sandbox host, per-user deploy/ownership, the builder UI). The rest is composition
+of shipped packages — and §5.0's audit shrank three workstreams outright, because
+the skill compiler (`skillFromMarkdown`), the token-quota primitive
+(`tokenBudget`) and container egress control are all already in the repo. The
+framework needs exactly **three package changes** to support the builder; every
+other line of it is app code.
 
 ## 1. Current state (audit)
 
@@ -382,17 +386,13 @@ install — it is the cheaper path, but the builder itself runs on TanStack Star
 both halves of the product, and every fidelity bug surfaces in our own app first.
 Widen beyond two once W8's eval suite is green.
 
-**D13 — `@lunora/sandbox` is a plain library, not a platform contract, and
-exposes no `ctx.*` surface.** _Rejected:_ adding a `SandboxHost` contract to
-`@lunora/platform` alongside `ShardHost`/`SocketHost`, and a `ctx.sandbox` facade
-for app code. Both were in the previous draft; both are premature. There is
-exactly one host, one consumer (this builder), and no second implementation —
-`CLAUDE.md` is explicit that abstraction layers wait for a second implementation,
-and it records two contracts that shipped wrong by being written ahead of their
-consumers. Add the contract the day `@lunora/platform-node` needs one.
-_Consequence:_ this plan adds no `ctx.*` surface and no provider binding, so §6
-is "not applicable" rather than a matrix — which is the honest answer, not a
-skipped step.
+**D13 — No `SandboxHost` platform contract.** _Rejected:_ adding a `SandboxHost`
+to `@lunora/platform` alongside `ShardHost`/`SocketHost`. There is exactly one
+host and no second implementation — `CLAUDE.md` is explicit that abstraction
+layers wait for a second implementation, and it records two contracts that
+shipped wrong by being written ahead of their consumers. Add the contract the day
+`@lunora/platform-node` needs one. This is about the **contract**; where the code
+lives is D22, and the two answers differ.
 
 **D14 — Command allowlist, not a full shell, and not "no exec".** _Rejected:_
 VibeSDK's posture (bash disabled entirely) — we have a CLI worth running
@@ -424,6 +424,41 @@ app would burn quota for thinking, which punishes exactly the behaviour we want.
 Tokens map to cost, turns bound a runaway loop, and `sleepAfter` handles the
 infrastructure side without touching the user's budget.
 
+**D22 — The sandbox extends `@lunora/container` as a `/sandbox` subpath; it is
+not a new `@lunora/sandbox` package.** ★ _Reverses the previous draft's W2._
+_Rejected:_ a standalone package. `@lunora/container` is already the Cloudflare
+Containers package, already ships the subpath pattern this needs (`/do`,
+`/bridge`, `/otel`), and already carries the two things a sandbox host would
+otherwise re-derive: **egress control** (`allowedHosts`, `enableInternet: false`,
+a deny-list, and the `ContainerProxy` entrypoint codegen re-exports —
+`packages/container/src/types.ts:102-140`), which is exactly W10's
+"outbound allowlist", and the wrangler binding/image normalization
+(`define-container.ts:1-70`). A second package would stand a parallel container
+mechanism beside a working one, which §2 exists to forbid. It is also already
+**Experimental** tier, so the surface churn is priced in.
+
+**D23 — `lunora verify --format json` must emit structured diagnostics; extend
+the CLI.** Today `VerifyCommandResult.errors` is `ReadonlyArray<string>`
+(`packages/cli/src/commands/verify/handler.ts:59-61`) — flat prose. The fix loop
+in D5 hands those errors to a model that must then produce an _anchored_
+find/replace edit (D15), and it cannot anchor reliably on a sentence. The
+location data already exists upstream: plan 058 wrapped codegen's throw-sites in
+`diagnosticAt` to carry `file:line`; `verify` flattens it away. _Rejected:_
+parsing verify's prose in the builder — that puts a scraper in the app and leaves
+every other consumer (editors, CI annotations, `lunora doctor`) without it.
+Extend `verify` to emit `{ file, line, column, code, message, severity }` and
+keep the prose renderer for `--format pretty`.
+
+**D24 — Everything else stays in `apps/builder`.** The audit in §5.0 found three
+package-shaped gaps (D22, D23, and the `exec` RPC folded into D22) and nothing
+else. The chat/project schema, the workbench UI, preview-token signing, the
+git-to-R2 history, share/fork/export and the quota wiring all have exactly one
+consumer and no second implementation in sight, so they are app logic — moving
+them into a package now would be the premature abstraction `CLAUDE.md` forbids.
+_Revisit_ per item when a second consumer appears; the sandbox-backed
+`view`/`write`/`edit` tools are the likeliest first promotion into
+`@lunora/agent`, and the plan deliberately does **not** pre-empt that.
+
 **D18 — Reuse the agent's message stream for the UI; no artifact envelope.**
 _Rejected:_ a bolt-style `<artifact>` wrapper around file writes. The agent
 already persists tool-call parts and streams them live via the
@@ -432,6 +467,43 @@ written" from the `write`/`edit` tool-call parts without a second protocol to
 version and keep in sync. Revisit only if W5 demonstrates a concrete gap.
 
 ## 5. Workstreams
+
+### 5.0 What we extend vs what stays in the app
+
+The rule: **if the builder needs something a package is missing, extend the
+package; if it needs something no package should own, keep it in the app.** The
+audit below applied that rule to every capability. Three package-shaped gaps came
+out of it — everything else is either already shipped (and the plan shrank
+accordingly) or genuinely app-local.
+
+**Package changes required — the complete list:**
+
+| #      | Package             | Change                                                                                                                         | Why it belongs there, not in the app                                                                                                                                                             |
+| ------ | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **E1** | `@lunora/container` | New `/sandbox` subpath: session lifecycle, `exec`, fs, `previewUrl`, snapshot/restore, over `@cloudflare/sandbox`              | It is a container; the package already owns containers, egress control and wrangler image/binding normalization. A second package would be a parallel mechanism (D22).                           |
+| **E2** | `@lunora/container` | First-class `exec` on the container handle                                                                                     | Closes a gap the repo already admits: `containerTool` routes exec as "a POST to `/exec`, since the container surface exposes no first-class exec RPC — the container app must serve that route". |
+| **E3** | `@lunora/cli`       | `verify --format json` emits structured diagnostics (`file`, `line`, `column`, `code`, `message`, `severity`) instead of prose | The fix loop needs anchorable locations (D23), and so do editors, CI annotations and `doctor`. A prose scraper in the app would serve one consumer and leave the rest unserved.                  |
+| **E4** | `@lunora/agent`     | `containerTool` switches to E2's exec; drop the POST-to-`/exec` path                                                           | Follows from E2 — leaving both is two mechanisms for one job.                                                                                                                                    |
+
+**Already shipped — no work, and the plan shrank because of it:**
+
+| Capability the builder needs          | Already there                                                                                                                                                                     | Effect on this plan                                     |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `SKILL.md` → `defineSkill` compiler   | `skillFromMarkdown(markdown, extras)` — frontmatter split, real YAML parse (`packages/agent/src/skill-markdown.ts:112,154`)                                                       | **W4 drops from S to XS** — read the files, call it     |
+| Token-based quotas                    | `tokenBudget` / `TokenBudget` in `@lunora/ratelimit` — check-before, record-in-arrears, explicitly built for model tokens and allowed to go negative (`src/token-budget.ts:1-45`) | **W7 loses its metering build** — wiring only           |
+| Outbound egress control for user code | `allowedHosts` / `enableInternet: false` / deny-list / `ContainerProxy` in `@lunora/container` (`src/types.ts:102-140`)                                                           | **W10 loses its "abuse allowlist" item** — configure it |
+| Machine-readable deploy result        | `lunora deploy --format json` already declared (`commands/deploy/index.ts:25`)                                                                                                    | W3's `deploy` tool parses it; nothing to add            |
+| Agent loop, HITL, compaction, memory  | `@lunora/agent`                                                                                                                                                                   | W3 is composition                                       |
+| Introspection + runtime feedback      | `@lunora/mcp` tools + observability tools                                                                                                                                         | W3 is composition                                       |
+| Eval harness                          | `lunora eval`, `evaluate`, `agentHarness`, `llmScorer`                                                                                                                            | W8 writes fixtures, not a harness                       |
+| Data browser for generated apps       | `@lunora/studio`, already embedded by the CLI/Vite                                                                                                                                | W5 embeds it instead of building a table viewer         |
+
+**Stays in `apps/builder` (D24):** the chat/project schema, the workbench UI,
+preview-token signing, git-history-to-R2, share/fork/export, quota wiring, and
+the sandbox-backed `view`/`write`/`edit` tool implementations. One consumer each,
+no second implementation in sight.
+
+### 5.1 The workstreams
 
 Sized S/M/L. W1–W4 are the critical path; W5 can proceed in parallel behind a
 fake agent; W7–W10 are post-MVP.
@@ -445,10 +517,10 @@ omitted (private), Tailwind + the `lunora-design` tokens from `marketing/`.
 Schema: `projects`, `chats`, `messages`, `snapshots`, `shares`, `usage` —
 `.shardBy(projectId)`; `users`/`orgs` `.global()` on D1.
 
-### W2 — `@lunora/sandbox` (L) — _the new engineering_
+### W2 — `@lunora/container/sandbox` + `exec` (L) — _the new engineering_ — **E1, E2, E4**
 
-One component, per D2. A thin wrapper over `@cloudflare/sandbox` so the builder
-never touches the pre-1.0 SDK directly:
+The package extension, per D22. A thin wrapper over `@cloudflare/sandbox` so
+nothing else touches the pre-1.0 SDK directly:
 
 - `createSandbox(env, sessionId)` → `{ exec, spawn, readFile, writeFile, ls, rm, snapshot, restore, previewUrl }`.
 - Image: a Dockerfile with Node 24, pnpm 11, the `lunora` CLI and a **warm pnpm
@@ -460,15 +532,19 @@ never touches the pre-1.0 SDK directly:
   builder worker so access is gated by a signed, project-scoped token.
 - Guards: path allowlist, command allowlist (`pnpm`, `node`, `lunora`,
   `wrangler`, `git` — see D14), output caps, per-session CPU/wall budget.
-- Declared through `defineContainer` (`packages/container`) so it participates in
-  the existing wrangler binding inference rather than bypassing it.
+- Egress: reuse the package's existing `enableInternet: false` + `allowedHosts`
+  rather than adding a second firewall (§5.0).
+- Declared through `defineContainer` so it participates in the existing wrangler
+  binding inference rather than bypassing it.
 
-**Why a package and not app code:** `@lunora/agent`'s `containerTool` will want
-it too, and the API-snapshot guard gives us a record of how a pre-1.0 dependency
-moves under us.
+**E2 lands in the same workstream:** promote `exec` to a first-class RPC on the
+container handle, then **E4** — retarget `@lunora/agent`'s `containerTool` at it
+and delete the POST-to-`/exec` path. Doing E2 without E4 would leave two
+mechanisms for one job.
 
-**Not a `ctx.*` surface** (D13) — it is a library the builder imports, not a
-capability exposed to user apps.
+**Surface guard:** `@lunora/container` is snapshotted, so E1/E2 move
+`api-snapshots/container.api.md` and need `pnpm run api:update` **after a fresh
+build**. That is the intended tripwire on a pre-1.0 dependency's drift.
 
 ### W3 — The build agent (M)
 
@@ -488,13 +564,15 @@ capability exposed to user apps.
 `needsApproval` defaults: `deploy` and `setSecret` gated; FS writes unattended
 inside the project root (the sandbox is the blast radius).
 
-### W4 — Skill compilation (S)
+### W4 — Skill selection (XS) — _was S; the compiler already exists_
 
-A build step that reads `packages/cli/skills/*/SKILL.md` → `defineSkill` modules,
-plus `@lunora/agent`'s existing `skill-markdown.ts`. Selection is per-turn:
-`lunora-functions` always; `lunora-setup-auth` when the plan mentions auth; etc.
-Gate: a test asserting every skill directory produces a skill and that the
-compiled instruction budget stays under a fixed token ceiling.
+`skillFromMarkdown` in `@lunora/agent` already does the whole compile —
+frontmatter split, real YAML parse, `SkillDefinition` out
+(`packages/agent/src/skill-markdown.ts:112,154`). So this workstream is **read
+the 14 `packages/cli/skills/*/SKILL.md` files and call it**, plus the per-turn
+selection policy: `lunora-functions` always; `lunora-setup-auth` when the plan
+mentions auth; etc. Gate: a test asserting every skill directory produces a skill
+and that the selected instruction budget stays under a fixed token ceiling.
 
 ### W5 — Workbench UI (L)
 
@@ -502,7 +580,9 @@ Chat pane + file tree + Monaco editor + terminal (PTY over WS) + preview iframe.
 Streamed file writes rendered as they arrive (bolt.diy's best idea). Diff view
 per turn; per-turn revert backed by snapshots. Uses `@lunora/react`'s
 `useQuery`/`useSubscription` against the agent's message stream — no bespoke
-transport.
+transport. **Embed `@lunora/studio`** for the generated app's data browser and
+logs rather than building a table viewer; the CLI and Vite plugin already embed
+it, so the pattern exists.
 
 ### W6 — Preview & deploy (M)
 
@@ -512,11 +592,15 @@ proxied through the builder worker so it can be auth-gated. Deploy = W3's
 prominently ("this expires in ~60 minutes — connect a Cloudflare account to
 keep it").
 
-### W7 — Accounts, quotas, metering (M)
+### W7 — Accounts, quotas, metering (S) — _was M; `tokenBudget` already exists_
 
-`@lunora/auth` (better-auth, D1) for sign-in; `@lunora/ratelimit` for per-user
-turn/token caps; AI Gateway metadata for spend attribution; `@lunora/payment`
-when a paid tier exists. Anonymous sessions get a hard token budget.
+`@lunora/auth` (better-auth, D1) for sign-in. Quotas are **wiring, not building**:
+`tokenBudget` in `@lunora/ratelimit` is already check-before/record-in-arrears and
+already built for model tokens (`src/token-budget.ts:1-45`), which is exactly
+D17's shape — call `check` before a turn, `record` after it _including when the
+turn threw_. AI Gateway metadata for spend attribution; `@lunora/payment` when a
+paid tier exists. Anonymous sessions get a hard token budget sized against Phase
+0's measured per-hour container cost.
 
 ### W8 — Evals ("test kitchen") (M)
 
@@ -531,57 +615,79 @@ net for every prompt/skill change.
 Public read-only share links; fork-to-own-project; download zip; push to GitHub.
 Export must satisfy §3.2.
 
-### W10 — Safety & observability (M)
+### W10 — Safety & observability (S) — _was M; egress control already exists_
 
 `@lunora/observability` traces per turn; `@lunora/fingerprint` grouping on build
 failures so the top-10 failure modes are visible; prompt-injection posture
-(generated apps run in untrusted sandboxes with egress control); an abuse
-allowlist on outbound network from sandboxes.
+(generated apps run in untrusted sandboxes). The "abuse allowlist on outbound
+network" item is **already shipped** — `@lunora/container` carries
+`enableInternet: false`, `allowedHosts` globs, a deny-list and the
+`ContainerProxy` interception entrypoint (`src/types.ts:102-140`), so this is
+configuration plus a test that the deny path actually denies, not a firewall to
+write. Also owns the written threat model D14 and D21 defer to.
 
 ## 6. Platform parity
 
-**Not applicable — and that is a decision (D13), not an omission.**
+**Applicable — one row.** An earlier revision of this plan said "not applicable",
+which was correct for the design it described (a standalone `@lunora/sandbox`
+library with no `ctx.*` surface). D22 changed that: extending `@lunora/container`
+with a first-class `exec` (**E2**) extends `ctx.containers`, which _is_ a rated
+surface. The parity rule binds the change that adds the capability, and that is
+now this plan.
 
-The builder adds no `ctx.*` surface, no provider binding, and no deploy/runtime
-capability to the framework. `@lunora/sandbox` is a library `apps/builder`
-imports; user apps never see it, codegen never emits it, and
-`PlatformCapabilities` gains no row. Everything the builder consumes
-(`ctx.agents`, `ctx.ai`, `ctx.db`, `ctx.storage`, `ctx.workflows`) is already
-rated in the matrix.
+| Feature                                                                                             | `cloudflare` | `node` (experimental) | Notes                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------- | ------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ctx.containers.<name>.exec()` (**E2**)                                                             | native       | emulated              | Cloudflare: a first-class RPC on the container handle, replacing the POST-to-`/exec` convention. Node: `child_process` against the local image is a faithful emulation, but no host implements it yet — rate `emulated` only once one does, else `unsupported`. |
+| `@lunora/container/sandbox` (**E1**)                                                                | native       | unsupported           | Not a `ctx.*` surface — a library import (D13, D24). Listed here so the matrix records why it has no row of its own rather than leaving a reader to wonder.                                                                                                     |
+| Everything else the builder uses (`ctx.agents`, `ctx.ai`, `ctx.db`, `ctx.storage`, `ctx.workflows`) | native       | already rated         | No new rows.                                                                                                                                                                                                                                                    |
 
-The `SandboxHost` contract and `ctx.sandbox` facade the previous draft proposed
-are explicitly deferred to the day a second host needs them; the reasoning is in
-D13. **If a later change does expose the sandbox as a `ctx.*` surface, this
-section stops being "not applicable" and the matrix rows land in that same
-change** — the rule in `CLAUDE.md` binds the person who adds the surface, and
-that person is not this plan.
+Per `CLAUDE.md` these rows land **in the same change as E2**, not afterwards. The
+`SandboxHost` contract stays deferred (D13) — a capability row and a host
+contract are different commitments, and only the first is owed today.
 
-_(Historical note for whoever reads the diff: an earlier revision carried three
-speculative matrix rows for a `ctx.sandbox` that nothing was going to call. That
-is exactly the failure mode the parity rule exists to prevent, inverted —
-a matrix entry written ahead of its consumer is as misleading as one missing
-behind it.)_
-
-Such a change would name the contract that carries it — presumably a
-`SandboxHost` alongside `ShardHost`/`SocketHost` in `@lunora/platform`, since
-`exec` reaches past every existing contract into a provider API. That contract is
-deferred, not designed, until a second host asks for it.
+_(Note for whoever reads the diff: this section has now been wrong in both
+directions across revisions — three speculative rows for a `ctx.sandbox` nothing
+would call, then a blanket "not applicable" that a later decision invalidated. A
+matrix entry written ahead of its consumer misleads exactly as much as one
+missing behind it, and the second mistake is the one the rule is actually aimed
+at.)_
 
 ## 7. Phasing & ordering
 
-| Phase | Work                                                                                                                                                                                                 | Gate                                                                                                                                                                                                                                                                                          |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | **Spike (latency budget).** A prebuilt image with a warm pnpm store runs `lunora init` → `pnpm install` → `lunora codegen` → `lunora dev` → `exposePort` → `lunora verify` on `tanstack-start-react` | Six numbers written into this file: image-build (once), **cold session start to a preview URL serving the welcome page**, snapshot-restore start, `codegen`, `verify`, and HMR edit-to-repaint. The cold-start number is the STOP gate in §8; the HMR number is the product's real inner loop |
-| 1     | W1 skeleton + W2, no agent                                                                                                                                                                           | `pnpm --filter "@lunora/sandbox" test` green; `apps/builder` boots; a hardcoded script scaffolds, previews and verifies a project end-to-end                                                                                                                                                  |
-| 2     | W3 agent + W4 skills, headless                                                                                                                                                                       | `lunora eval` over 5 fixtures ≥ 0.8 threshold; every fixture's `verify` exits 0                                                                                                                                                                                                               |
-| 3     | W5 workbench UI                                                                                                                                                                                      | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates                                                                                                                                                                                          |
-| 4     | W6 deploy (anonymous `--temporary`)                                                                                                                                                                  | E2E: prompt → deployed URL returns 200; eject-zip builds clean on a fresh runner (§3.2)                                                                                                                                                                                                       |
-| 5     | W7 accounts + BYO-Cloudflare deploy                                                                                                                                                                  | Deploy lands in a _test user's_ account; quota exhaustion returns a typed error, not a hang                                                                                                                                                                                                   |
-| 6     | W8 evals in CI, W9 share/export, W10 safety                                                                                                                                                          | Eval job in `lint.yml`-adjacent workflow, failing below threshold; `dist:check` + `api:check` green including the new package's snapshot                                                                                                                                                      |
+Eight phases. Each names the workstreams it lands, the **package changes** it
+carries (§5.0), and a gate that can fail. A phase is done when its gate is green
+and its package changes are snapshot-clean — not when the code is written.
 
-Phase 0 is the only one that can invalidate the design, and it now measures
-rather than decides — D2 settled the architecture, so Phase 0's job is to prove
-the accepted cost is affordable. Do not start W5 before it reports.
+| Phase | Work                                                                                                                                                                                                 | Package changes  | Gate                                                                                                                                                                                                                                                                                                   |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **0** | **Spike (latency budget).** A prebuilt image with a warm pnpm store runs `lunora init` → `pnpm install` → `lunora codegen` → `lunora dev` → `exposePort` → `lunora verify` on `tanstack-start-react` | none (throwaway) | Seven numbers written into this file: image build (once), **cold session start to a preview URL serving the welcome page**, snapshot-restore start, `codegen`, `verify`, HMR edit-to-repaint, and **container cost per session-hour**. Cold start gates §8; HMR is the real inner loop; cost sizes D17 |
+| **1** | W2 — the package extension, standalone                                                                                                                                                               | **E1, E2, E4**   | `pnpm --filter "@lunora/container" run test` + `lint:types` green; `containerTool` has no POST-to-`/exec` path left; `pnpm run api:update` run **after a fresh build** and `api:check` green; §6's matrix rows landed in this phase                                                                    |
+| **2** | W1 skeleton + wire the sandbox, no agent                                                                                                                                                             | none             | `apps/builder` boots; a hardcoded script scaffolds → installs → previews → verifies one project end to end, driven only by the W2 surface                                                                                                                                                              |
+| **3** | W3 agent + W4 skill selection, headless                                                                                                                                                              | **E3**           | `lunora eval` over 5 fixtures ≥ 0.8 threshold, every fixture's `verify` exiting 0; and the fix loop demonstrably consumes E3's structured diagnostics — a fixture seeded with a type error is repaired by an _anchored_ edit, not a whole-file rewrite                                                 |
+| **4** | W5 workbench UI                                                                                                                                                                                      | none             | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates; embedded Studio lists the generated app's tables                                                                                                                                                 |
+| **5** | W6 deploy, anonymous `--temporary`                                                                                                                                                                   | none             | E2E: prompt → deployed URL returns 200; **eject-zip builds clean on a fresh runner** (§3.2); the scaffold matches a direct `lunora init` run byte for byte (§3.1)                                                                                                                                      |
+| **6** | W7 accounts + BYO-Cloudflare deploy                                                                                                                                                                  | none             | Deploy lands in a _test user's_ account; `tokenBudget` exhaustion returns a typed error rather than hanging; a turn that **throws** still records its tokens                                                                                                                                           |
+| **7** | W8 evals in CI, W9 share/export, W10 safety                                                                                                                                                          | none             | Eval job wired into CI and failing below threshold; the egress deny path proven by test; `dist:check` + `api:check` + `lint:package-json` green                                                                                                                                                        |
+
+**Why the package extension goes first.** Phase 1 lands E1/E2/E4 **before** the
+app, inverting the previous draft, for three reasons: they are the only work with
+a public API surface and an `api:check` gate, so landing them together keeps the
+snapshot churn in one reviewable change; the app is a pure consumer of that
+surface, so building it first would mean designing the surface twice; and E4
+_deletes_ a path `@lunora/agent` ships today, which the repo wants reviewed on
+its own rather than buried inside an app PR.
+
+E3 lands in Phase 3 rather than Phase 1 because it is the fix loop's dependency,
+not the sandbox's — and Phase 3's gate is what proves it earned its keep.
+
+Phase 0 is the only phase that can invalidate the design, and it **measures
+rather than decides**: D2 settled the architecture, so Phase 0's job is to prove
+the accepted cost is affordable. Do not start Phase 4 before it reports.
+
+**Shippable earlier than the last phase.** Phases 1–3 are useful on their own —
+E1/E2/E4 improve `@lunora/container` for every consumer, and a headless builder
+that scaffolds and verifies is already a working `lunora init` accelerator. The
+first phase that produces a _product_ is 5.
 
 ## 8. Risks & STOP conditions
 
@@ -630,7 +736,9 @@ re-deriving all of them from nothing.
 | --- | -------------------------------------------- | ------------------------------------------------------------------------- | --------- |
 | 1   | Preview runtime                              | `lunora dev` in a Cloudflare Sandbox; one tier, no Worker Loader          | D2 ★      |
 | 2   | Where `lunora codegen` runs                  | In the sandbox, like everything else                                      | D2a       |
-| 3   | `SandboxHost` contract vs app-level          | App-level library, no `ctx.*` surface, no matrix row                      | D13, §6   |
+| 3   | `SandboxHost` platform contract?             | No — deferred until a second host needs one                               | D13       |
+| 3b  | Where the sandbox code lives                 | Extends `@lunora/container` as a `/sandbox` subpath, not a new package    | D22, §5.0 |
+| 3c  | What else gets extended vs stays app-local   | Three package changes (E1–E4); everything else app-local                  | D23, D24  |
 | 4   | Copy VibeSDK code under MIT?                 | No — study it, write our own; drops the blocking legal review             | D11       |
 | 5   | Default generated template                   | `tanstack-start-react`; `standalone` is the opt-in small path             | D12       |
 | 6   | Bash / `exec` posture                        | Command allowlist (`pnpm`, `node`, `lunora`, `wrangler`, `git`)           | D14       |
