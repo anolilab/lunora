@@ -8,11 +8,18 @@
  * (`input(stream).transform(opts).output(opts)` + `info(stream)`), not the full
  * hosted-images CRUD surface.
  *
- * TODO(workers-types): the 2026-06-16 optimization features — the `aspect-crop`
- * / `scale-up` fit modes and the `upscale` param — are modeled here by hand
- * because `@cloudflare/workers-types` (through 4.20260616.1) does not type them
- * yet. Re-check on the next `@cloudflare/workers-types` bump: once `ImageTransform`
- * carries `fit: "aspect-crop" | "scale-up"` and `upscale`, drop our hand-rolled
+ * TODO(workers-types): the `aspect-crop` / `scale-up` fit modes and the `upscale`
+ * param are modeled here by hand because the binding's `ImageTransform` still does
+ * not carry them. Re-verified against `@cloudflare/workers-types@5.20260811.1` (the
+ * version this repo pins): `ImageTransform.fit` is
+ * `"scale-down" | "contain" | "pad" | "squeeze" | "cover" | "crop"`, there is no
+ * `upscale` on the type, and `aspect-crop` appears nowhere in the package.
+ *
+ * Upstream has typed two of the three, but on the WRONG type for us: the `fetch()`
+ * `cf.image` options (`BasicImageTransformations`) do carry `scale-up` and
+ * `upscale?: "interpolate" | "generate"`. So it is the binding types that lag, not
+ * the feature — do not "fix" this by importing from the fetch-side type. Re-check on
+ * the next bump: once `ImageTransform` itself carries them, drop our hand-rolled
  * additions and lean on the upstream type.
  */
 
