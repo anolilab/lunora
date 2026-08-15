@@ -258,6 +258,7 @@ interface PlatformCapabilities {
         durableStreams?: Capability;
         globalTables?: Capability;
         hyperdrive?: Capability;
+        identityProxy?: Capability;
         keyValueStore?: Capability;
         localSql?: Capability;
         mail?: Capability;

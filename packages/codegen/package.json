@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.110",
+    "version": "1.0.0-alpha.111",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -76,7 +76,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.86",
+        "@lunora/do": "1.0.0-alpha.87",
         "@lunora/server": "1.0.0-alpha.74",
         "@lunora/shard-engine": "1.0.0-alpha.28",
         "@types/node": "catalog:types",

@@ -154,6 +154,15 @@ type PlatformFeatureKey = keyof PlatformCapabilities["features"];
  * Cloudflare-Access identity facade, Cloudflare Images, R2 SQL, payments,
  * x402) — never gated, always emitted, on every target.
  *
+ * `access` stays unmapped even though the matrix now rates `identityProxy`,
+ * and the distinction is the point: `identityProxy` records whether the *host*
+ * can hand the runtime a pre-authenticated identity out-of-band, while the
+ * `ctx.access` facade `access` gates works on any target, because
+ * `@lunora/cloudflare-access` falls back to verifying the
+ * `Cf-Access-Jwt-Assertion` header — a plain HTTP check needing no host
+ * support. Gating the facade on the rating would drop a surface that still
+ * functions.
+ *
  * `shardAlarms` is deliberately unmapped here, and not because it was
  * forgotten: `CapabilityKey` is derived from `CAPABILITY_ROWS`, which
  * enumerates app-imported `ctx.*` add-on modules, and there is no such usage
