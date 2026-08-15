@@ -41,18 +41,42 @@
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              # SECURITY TODO: this job holds NPM_TOKEN + a GitHub PAT, so a compromised
-              # dependency could exfiltrate them. `audit` only logs egress. A maintainer
-              # should switch to `egress-policy: block` with a verified allowlist once the
-              # full set of endpoints is confirmed from an audit run. Known-required hosts:
-              #   - registry.npmjs.org      (npm publish)
-              #   - github.com              (git push tags/commits)
-              #   - api.github.com          (GitHub releases / issue + PR comments)
-              #   - objects.githubusercontent.com (release asset/object downloads)
-              # Not switched to `block` here because the complete allowlist cannot be
-              # verified offline and an incomplete allowlist would break the release.
+              # This job holds NPM_TOKEN + a GitHub PAT, so a compromised dependency could
+              # exfiltrate them — hence `block`, not `audit` (which only logs egress).
+              #
+              # The allowlist is the UNION of every endpoint observed across three `audit`
+              # runs on `alpha`, read from each run's "Post Harden Runner" log from the
+              # moment monitoring engaged: 31829750564 (pnpm store cache HIT), 31599026299
+              # (cache MISS, so the cache-upload leg is covered too) and 31436396147.
+              # Nothing outside this list was contacted in any of the three.
+              #
+              # Do NOT edit this list from first principles — the pre-audit guess that stood
+              # here got two of its four entries wrong. It missed sigstore entirely (npm
+              # provenance is on via `id-token: write`, so publish calls fulcio + rekor), and
+              # it named objects.githubusercontent.com, which was never contacted; GitHub now
+              # serves release assets from release-assets.githubusercontent.com.
+              #
+              # The two wildcards cover parts that legitimately vary per run: the Actions
+              # cache host is region-stamped (run-actions-1-azure-eastus…) and the results
+              # blob account rotates (sa2/6/9/12/16/17/18 across just these three runs).
+              #
+              # Block mode is defense in depth, not a hard boundary — the community tier has
+              # known DNS-over-HTTPS bypasses (GHSA-46g3-37rh-v698). If a dependency or action
+              # later needs a new host, the release fails at that step: read the new host out
+              # of the audit log and add it. Setting `egress-policy: audit` unblocks immediately.
               "with":
-                  "egress-policy": "audit"
+                  "egress-policy": "block"
+                  "allowed-endpoints": >
+                      api.github.com:443
+                      fulcio.sigstore.dev:443
+                      github.com:443
+                      nodejs.org:443
+                      registry.npmjs.org:443
+                      rekor.sigstore.dev:443
+                      release-assets.githubusercontent.com:443
+                      *.actions.githubusercontent.com:443
+                      *.blob.core.windows.net:443
+                      *.githubapp.com:443
 
             # Persist credentials so multi-semantic-release can push tags/release commits.
             - "name": "Git checkout" # zizmor: ignore[artipacked]
