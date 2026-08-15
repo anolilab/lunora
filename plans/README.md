@@ -1646,6 +1646,18 @@ target becomes real, and `@lunora/platform-node` is still experimental with no
 itself, while 312 was the price its fix paid — since executed (see the DONE &
 REMOVED note above); its open follow-ups live in 314 and 315.
 
+## Wave 22 — AI app builder (baseline `93f38c2`, 2026-08-15)
+
+A new product surface rather than a package sweep: an AI app builder for Lunora,
+in the shape Convex proved with [Chef](https://github.com/get-convex/chef), built
+on the primitives this repo already ships. Prior art surveyed (bolt.diy, Chef,
+Dyad, Cloudflare's sandbox-sdk and workers-for-platforms example) is recorded in
+§1.3 of the plan, with the fork/no-fork verdict for each.
+
+| Plan | Title                                                                    | Category | Pkg                         | P   | Effort | Conf | Status                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---- | ------------------------------------------------------------------------ | -------- | --------------------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 335  | `apps/builder` — AI app builder on Cloudflare Sandboxes + TanStack Start | product  | apps/builder, new `sandbox` | P2  | L      | MED  | TODO — the agent layer is mostly composition of shipped packages (`@lunora/agent`, `@lunora/mcp`, `lunora verify/eval`, `packages/cli/skills`, `registry/`, `templates/tanstack-start-react`). The genuinely new engineering is the sandbox host, per-user deploy/ownership, and the workbench UI. Phase 0 is a spike whose measured warm-start number is a STOP condition. See [335-ai-app-builder.md](335-ai-app-builder.md) |
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
