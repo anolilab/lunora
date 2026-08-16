@@ -9,6 +9,24 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/client`
 
+### `ActionCallOptions` (interface)
+
+```ts
+interface ActionCallOptions {
+    shardKey?: string;
+}
+```
+
+### `ActionRunnerSinks` (interface)
+
+```ts
+interface ActionRunnerSinks<R> {
+    setError: (error: Error) => void;
+    setPending: (pending: boolean) => void;
+    setResult: (result: R) => void;
+}
+```
+
 ### `ArgsOf` (type)
 
 ```ts
@@ -1470,6 +1488,12 @@ const anyApi: Record<string, Record<string, unknown>>;
 
 ```ts
 const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
+```
+
+### `createActionRunner` (const)
+
+```ts
+const createActionRunner: <F extends FunctionReference>(client: ActionCapableClient<F>, function_: F, sinks: ActionRunnerSinks<ReturnOf<F>>) => ((args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>);
 ```
 
 ### `createAsyncStoragePersistence` (const)

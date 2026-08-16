@@ -4,6 +4,8 @@
 // package at runtime, not the server runtime. One shared implementation, so
 // the two cannot drift.
 export { anyApi } from "../../../shared/any-api";
+export type { ActionCallOptions, ActionRunnerSinks } from "./action-runner";
+export { createActionRunner } from "./action-runner";
 export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
 export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";

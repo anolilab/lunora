@@ -9,6 +9,19 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/react`
 
+### `ActionHook` (interface)
+
+```ts
+interface ActionHook<F extends FunctionReference> {
+    call: (args: ArgsOf<F>, options?: UseActionCallOptions) => Promise<ReturnOf<F>>;
+    data: ReturnOf<F> | undefined;
+    error: Error | null;
+    isError: boolean;
+    pending: boolean;
+    reset: () => void;
+}
+```
+
 ### `AdminAuthListResult` (interface)
 
 ```ts
@@ -391,6 +404,14 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `UploadResult` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
+
+### `UseActionCallOptions` (interface)
+
+```ts
+interface UseActionCallOptions {
+    shardKey?: string;
+}
+```
 
 ### `UseAgentApi` (interface)
 
@@ -881,6 +902,12 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
     shardKey?: string;
 }) => LunoraQueryOptions<F>;
+```
+
+### `useAction` (const)
+
+```ts
+const useAction: <F extends FunctionReference>(function_: F) => ActionHook<F>;
 ```
 
 ### `useAgent` (const)
