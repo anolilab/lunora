@@ -162,6 +162,29 @@ degrades off Cloudflare — inside a telemetry stack that is otherwise
 host-neutral by design. Separately `gateway.ts:184-189` documents that an
 authenticated gateway is simply unreachable on the Workers AI binding path.
 
+**G13 — hybrid fusion was computed and then discarded.** _(Found while
+implementing W5/W6; not in the original audit, and the most serious defect in
+this plan after §0.)_ `hybridRank` returned chunks in RRF order but left their
+raw `score` fields untouched, and `retrieve()` re-sorted by `score` immediately
+afterwards to apply importance weighting. Since BM25 is unbounded while cosine
+is `[0, 1]`, that promoted **every** lexical-only hit above **every** vector hit
+— so hybrid retrieval returned the union of both legs ranked by incomparable
+numbers, which is worse than either leg alone. The RRF implementation was
+correct; nothing consumed its output.
+
+Three adjacent defects surfaced with it: `minScore` was applied to a
+post-fusion score on a scale it is not documented against; the fused union was
+never trimmed to `topK`, so a caller asking for 5 chunks could receive up to 5
+per leg; and each leg fetched only `topK`, which defeats the lexical leg
+entirely, since its purpose is to surface a chunk the vector leg ranked _below_
+`topK`. All four are fixed and regression-tested.
+
+The lesson worth keeping: the audit in §1b credited "RRF fusion of a vector leg
+and a pluggable BM25 leg" as a shipped differentiator on the strength of the
+code existing. It existed and did nothing. **A feature is not shipped until
+something downstream is shown to consume its output** — which is what the
+retrieval scorers in W7 now make testable.
+
 ## 2. Existing seams (do not reinvent)
 
 - **`RagLexicalStore`** (`rag/types.ts:196`) — the seam for G1/G2 already exists.
@@ -247,29 +270,37 @@ visibility a Cloudflare feature inside a host-neutral telemetry stack.
 
 ## 5. Workstreams
 
-| ID  | Work                                                                                                                                                                                                                    | Size    | Gap        | Independent?   |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------- | -------------- |
-| W0  | ~~Unmeasurable-duration honesty~~ — **STOPPED; narrow version shipped.** Corrected the misdiagnosis at `span-buffer.ts:62-69` and documented the limitation. The I/O-detection half hit its own STOP condition — see §8 | **S**   | §0         | **done**       |
-| W1  | Raise the full-metadata `topK` ceiling 20 → 50 (`define-rag.ts:29`, `create-vectors.ts:56`); fix `docs/index.mdx:142`                                                                                                   | **S**   | G9         | yes            |
-| W2  | Dimension-ceiling validation at define/index time, naming the ceiling and the escapes (Matryoshka `dimensions` truncation, or a non-Vectorize store)                                                                    | **S**   | G8         | yes            |
-| W3  | Built-in chunkers: token-aware, sentence, markdown-heading                                                                                                                                                              | **S**   | G10        | yes            |
-| W4  | Query-embedding cache (content-hash keyed) + `embedMany` batching on the index path                                                                                                                                     | **S**   | G11        | yes            |
-| W5  | `rerank?` hook + `workersAiReranker()` / BYO adapters                                                                                                                                                                   | **S–M** | G4         | yes            |
-| W6  | `transformQuery?` hook with shipped HyDE and multi-query strategies; wire `conversationId` into follow-up rewriting                                                                                                     | **S–M** | G5         | yes            |
-| W7  | Retrieval scorers (recall@k, MRR, nDCG, context precision) + groundedness/faithfulness + a `RetrieveResult`-shaped eval fixture                                                                                         | **M**   | G6         | yes            |
-| W8  | **`sqliteLexicalStore()`** over `@lunora/search-core` + DO SQLite FTS — durable **and** metadata/filter-aware, so hybrid and RLS finally compose                                                                        | **M**   | G1, G2     | yes            |
-| W9  | **`RagVectorStore` seam** — extract the Vectorize adapter behind it, move caps onto the adapter (D4), keep the existing path byte-identical                                                                             | **M**   | G3         | blocks W10/W11 |
-| W10 | **pgvector adapter over `@lunora/hyperdrive`** — HNSW + `tsvector` hybrid in one query, no dimension ceiling                                                                                                            | **M–L** | G3, G8, C5 | after W9       |
-| W11 | DO-SQLite vector adapter (brute-force cosine; `sqlite-vec` if available) for small per-tenant indexes                                                                                                                   | **M**   | G3         | after W9       |
-| W12 | Move model cost/token accounting into `@lunora/observability` with a static price table; demote the AI Gateway to enrichment                                                                                            | **M**   | G12        | yes            |
-| W13 | `defineRagSource({ bucket })` ingestion over `@lunora/storage` + `@lunora/queue` + `@lunora/workflow`, reusing the content-hash short-circuit; PDF/HTML/Markdown extractors                                             | **L**   | G7         | after W9       |
+| ID  | Work                                                                                                      | Size | Gap        | Status                                                                                                                                                                                                          |
+| --- | --------------------------------------------------------------------------------------------------------- | ---- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W0  | Unmeasurable-duration honesty                                                                             | S    | §0         | **STOPPED; narrow version shipped.** Misdiagnosis at `span-buffer.ts` corrected, limitation documented. I/O detection hit its own STOP condition — see §8.                                                      |
+| W1  | Raise the full-metadata `topK` ceiling 20 → 50                                                            | S    | G9         | **DONE.** `define-rag.ts`, `create-vectors.ts`, docs. V1's 20 documented as a remote-reject risk.                                                                                                               |
+| W2  | Dimension-ceiling validation                                                                              | S    | G8         | **DONE.** `maxEmbeddingDimensions` (default 1536), checked once per bound context, names the model + both escapes.                                                                                              |
+| W3  | Structure-aware chunkers                                                                                  | S    | G10        | **DONE.** `sentenceChunker`, `markdownChunker` (heading trail, fence-aware), `tokenChunker` (injected `countTokens`).                                                                                           |
+| W4  | Index-path embed batching + query cache                                                                   | S    | G11        | **DONE.** One `embedMany` per document (best-effort, dedupes); `cacheEmbeddings` retains across calls, default 0.                                                                                               |
+| W5  | `rerank?` hook + adapters                                                                                 | S–M  | G4         | **DONE.** `scoreReranker` / `batchReranker`, injected scorers, per-call `{ rerank: false }`.                                                                                                                    |
+| W6  | `transformQuery?` hook                                                                                    | S–M  | G5         | **DONE.** Rewrite or multi-query expansion fused by RRF; receives `conversationId`; falls back on unusable output.                                                                                              |
+| W7  | Retrieval scorers                                                                                         | M    | G6         | **DONE.** `recallAtK` / `precisionAtK` / `mrrScorer` / `ndcgAtK` / `groundednessScorer`; `evaluate` producers may return run metadata.                                                                          |
+| —   | **Hybrid fusion discarded by the caller's re-sort** (found while doing W5/W6 — not in the original audit) | S    | **G13**    | **DONE.** `hybridRank` now writes the fused score back. Also: per-leg `minScore`, `topK` trim of the union, `candidates` pool widening. See §1c G13.                                                            |
+| W8  | Durable + filter-aware lexical store                                                                      | M    | G1, G2     | **PARTIALLY DONE.** Root cause fixed: `StoredRagChunk` now carries metadata and `bm25LexicalStore` evaluates the filter, so hybrid + RLS compose. **The durable SQL-backed adapter is still open** — see below. |
+| W9  | `RagVectorStore` seam                                                                                     | M    | G3         | TODO — blocks W10/W11.                                                                                                                                                                                          |
+| W10 | pgvector adapter over `@lunora/hyperdrive`                                                                | M–L  | G3, G8, C5 | TODO — after W9.                                                                                                                                                                                                |
+| W11 | DO-SQLite vector adapter                                                                                  | M    | G3         | TODO — after W9.                                                                                                                                                                                                |
+| W12 | Host-neutral cost/token accounting                                                                        | M    | G12        | TODO.                                                                                                                                                                                                           |
+| W13 | `defineRagSource({ bucket })` ingestion pipeline                                                          | L    | G7         | TODO — after W9.                                                                                                                                                                                                |
 
-**Suggested first cut: W0 + W1 + W2 + W8.** W1 and W2 are hours. W0 fixes a
-correctness defect in our own observability that the article's sharpest technical
-paragraph is about, and turns a shared platform limitation into a differentiator.
-W8 turns the hybrid-search claim from a fixture into a production feature, fixes
-the hybrid-vs-RLS conflict, adds no Cloudflare product, and needs no new
-abstraction — the `RagLexicalStore` seam already exists.
+**W8's remaining half.** The blocking defect is fixed — hybrid retrieval and
+metadata RLS no longer cancel each other out, and `matchesMetadataFilter` is
+exported so any store can evaluate the predicate. What is still missing is a
+**durable** adapter: `bm25LexicalStore` remains in-memory and per-isolate. That
+work belongs with W9–W11 rather than before them, because a SQL-backed lexical
+index and a SQL-backed vector index want the same injected executor seam, and
+building one without the other means designing that seam twice.
+
+**Remaining work, in order: W10/W11 → W8's durable adapter → W12 → W13.** W9
+has landed, so the adapters are unblocked. W11 is the one that flips
+`NODE_CAPABILITIES.vectorStore` off `unsupported`, and it settles the injected-
+executor shape that W8's durable lexical half also needs — so do it before W8's
+remainder, not after.
 
 ## 6. Platform parity
 

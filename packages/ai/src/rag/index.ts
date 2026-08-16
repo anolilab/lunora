@@ -37,3 +37,5 @@ export type {
     RetrieveResult,
     StoredRagChunk,
 } from "./types";
+export type { RagVectorStore, RagVectorStoreCapabilities } from "./vector-store";
+export { VECTORIZE_CAPABILITIES, vectorizeStore } from "./vector-store";

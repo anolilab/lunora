@@ -222,6 +222,45 @@ Set `maxEmbeddingDimensions: false` to disable the check when the index is not
 Vectorize-backed, or give it a number to enforce a different store's ceiling.
 The check runs once per bound context, not once per chunk.
 
+### Bring your own vector store
+
+`defineRag` used to hard-code Vectorize's limits — its `topK` ceilings, its
+10 KiB metadata budget, its 1536-dimension cap — which made every RAG index a
+Cloudflare index. A store now declares its own capabilities and `defineRag`
+reads them, so a backend without those constraints is not held to them:
+
+```ts
+import { defineRag } from "@lunora/ai/rag";
+import type { RagVectorStore } from "@lunora/ai/rag";
+
+const pgStore = (ctx: { sql: SqlClient }): RagVectorStore => ({
+    capabilities: {
+        maxDimensions: false, // pgvector has no 1536 ceiling
+        maxMetadataBytes: false, // nor a 10 KiB metadata budget
+        maxTopK: 1000,
+        maxTopKWithMetadata: 1000,
+    },
+    deleteByIds: (ids, namespace) => ctx.sql`delete from chunks where id = any(${ids}) ...`,
+    getByIds: (ids, namespace) => ctx.sql`select ... `,
+    query: (input) => ctx.sql`select ... order by embedding <=> ${vector} limit ${input.topK}`,
+    upsert: (input) => ctx.sql`insert into chunks ... on conflict (id) do update ...`,
+});
+
+export const docs = defineRag({ index: "docs", store: (ctx) => pgStore(ctx) });
+```
+
+`store` is called **once per bound context** with that context, so a store
+needing per-request state — a Hyperdrive connection off `ctx.sql`, a shard's own
+SQLite — builds itself from it.
+
+Omit `store` and the bound `ctx.vectors` is wrapped by `vectorizeStore`, which
+declares exactly the limits listed above. That is the default and its behaviour
+is unchanged.
+
+An explicit `maxEmbeddingDimensions` still wins over the store's own
+`maxDimensions`, so you can tighten a permissive backend; leave it unset and the
+store speaks for itself.
+
 ### Bring your own embeddings — no `env.AI` binding
 
 `embeddingModel` takes a Workers AI model **id** (a string, resolved through

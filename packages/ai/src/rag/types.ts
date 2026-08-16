@@ -1,6 +1,7 @@
 import type { Tool } from "ai";
 
 import type { EmbeddingModelInput, LunoraAi } from "../types";
+import type { RagVectorStore } from "./vector-store";
 
 /**
  * `(text) => vector` — the embedder shape `ctx.vectors` accepts on both its
@@ -420,6 +421,20 @@ export interface RagConfig {
      * ```
      */
     rlsFilter?: (auth: unknown) => Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
+
+    /**
+     * Back this RAG with a different vector store.
+     *
+     * Called once per bound context with that context, so a store needing
+     * per-request state (a Hyperdrive/pgvector connection from `ctx.sql`, a
+     * shard's own SQLite) can build itself from it. Defaults to wrapping
+     * `context.vectors` as a Vectorize-backed store.
+     *
+     * The store declares its own limits, and `defineRag` reads them instead of
+     * assuming Vectorize's — so a pgvector index is not held to a
+     * 1536-dimension ceiling or a 10 KiB metadata budget it does not have.
+     */
+    store?: (context: RagContext) => RagVectorStore;
 
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
