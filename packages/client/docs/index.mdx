@@ -136,6 +136,47 @@ rolled back atomically on failure). See
 [Offline-first](/docs/concepts/offline-first#the-reconciliation-model) for the
 full reconciliation model.
 
+## Actions
+
+`client.action(fn, args, { shardKey })` invokes an action over the same
+`POST /_lunora/rpc` transport as a query or mutation, and resolves with the
+server value (rejects on failure). It takes **no** optimistic options: an
+optimistic update patches the subscription cache on the assumption a write will
+land, and an action is not a write — it runs in the Worker, may call a third
+party, and has no declared effect on any query.
+
+```ts
+const result = await client.action(api.commands.run, { command: "lunora", args: ["verify"] });
+```
+
+`createActionRunner(client, fn, sinks)` is the sibling of
+`createMutationRunner`, and exists for the same reason: it is the half of an
+adapter's action primitive that isn't framework-specific. It ref-counts
+overlapping invocations into `sinks.setPending` (so the flag clears only once
+the last settles), normalizes a thrown non-`Error`, and routes success/failure
+to `setResult` / `setError` before re-throwing. Every adapter's action
+primitive — React's `useAction`, Vue's `useAction`, Solid's `createAction`,
+Svelte's `action` — is this runner plus that framework's reactive sinks.
+
+```ts
+import { createActionRunner } from "@lunora/client";
+
+const call = createActionRunner(client, api.commands.run, {
+    setError: (error) => {
+        /* your framework's error sink */
+    },
+    setPending: (pending) => {
+        /* your framework's pending sink */
+    },
+    setResult: (result) => {
+        /* your framework's value sink */
+    },
+});
+```
+
+You only reach for it when writing a custom adapter; app code uses the adapter
+primitive for its framework.
+
 ## Shape subscriptions
 
 `subscribeShape` is the [local-first sync engine](/docs/concepts/local-first)'s

@@ -59,6 +59,25 @@ For a multi-query optimistic update bound to every call, use
 `withOptimisticUpdate(update)`, which returns the same handle with the update
 applied by default.
 
+## `useAction(fn)`
+
+Returns `{ call, pending, data, error, isError, reset }`. `call` is the
+awaitable invocation and rejects on failure; `pending` is ref-counted across
+overlapping calls from this hook, so a sibling component calling the same action
+never affects it.
+
+```tsx
+const { call: runVerify, pending } = useAction(api.commands.run);
+await runVerify({ command: "lunora", args: ["verify"] });
+```
+
+Per-call options are `{ shardKey }` only — there is no `optimistic` /
+`optimisticUpdate` and no `withOptimisticUpdate`. An optimistic update patches
+the subscription cache on the assumption a write will land; an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query. Offering the option would imply a rollback guarantee
+nothing can honour.
+
 ## `useSubscription(fn, args)`
 
 Lower-level. Surfaces `{ data, error }` so you can render error states

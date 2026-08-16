@@ -53,13 +53,14 @@ createApp(App).use(createLunora(client)).mount("#app");
 | `LUNORA_INJECTION_KEY` | injection key | The `InjectionKey` the provider uses, for advanced manual `inject()`.                        |
 | `useQuery`             | composable    | Live query as a `ref`. Reactive args re-subscribe; `"skip"` short-circuits.                  |
 | `useMutation`          | composable    | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` refs.                  |
+| `useAction`            | composable    | Action handle: `{ data, error, pending, call, reset }` refs. No optimistic options.          |
 | `subscribeToQuery`     | function      | Low-level: subscribe with **fixed** args into a `ref` (the primitive behind hydration).      |
 | `hydratePreloaded`     | composable    | Seed a `ref` synchronously from an SSR `Preloaded` token, then attach the live subscription. |
 
 Re-exported types: `ArgsOf`, `LunoraClient`, `FunctionReference`,
 `MutationCallOptions`, `OptimisticLocalStore`, `OptimisticUpdate`, `Preloaded`,
 `ReturnOf`, `Unsubscribe`, `User`, `UseQueryOptions`, and the `MutationHandle`
-interface.
+and `ActionHandle` interfaces.
 
 ## Provider — `createLunora` / `provideLunora` / `useLunora`
 
@@ -185,6 +186,42 @@ await mutate(
 <Callout type="warn">
     The Vue adapter does **not** ship a bound `withOptimisticUpdate(...)` handle (React keeps one). Use `mutate(args, {optimisticUpdate})` per call instead.
 </Callout>
+
+## `useAction(fn)`
+
+Returns a reactive `ActionHandle` for an action reference — the same shape as
+`MutationHandle`, with `call` in place of `mutate`:
+
+```ts
+interface ActionHandle<F> {
+    data: Ref<ReturnOf<F> | undefined>; // latest resolved value
+    error: Ref<Error | undefined>; // latest error
+    pending: Ref<boolean>; // true while any call from this handle is in flight (ref-counted)
+    call: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+```vue
+<script setup lang="ts">
+import { useAction } from "@lunora/vue";
+
+import { api } from "./lunora/_generated/api";
+
+const { call, pending, error } = useAction(api.commands.run);
+</script>
+
+<template>
+    <button :disabled="pending" @click="call({ command: 'lunora', args: ['verify'] })">Verify</button>
+    <p v-if="error">{{ error.message }}</p>
+</template>
+```
+
+Per-call options are `{ shardKey }` only. Unlike `useMutation` there are no
+`optimistic` / `optimisticUpdate` options: an optimistic update patches the
+subscription cache on the assumption a write will land, and an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query.
 
 ## Reactive loaders — `hydratePreloaded`
 
