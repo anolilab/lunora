@@ -2,6 +2,7 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
 import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
+import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
@@ -504,10 +505,21 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
                     }
 
-                    const cost = embedCostOf(providerMetadata);
+                    // A provider-reported cost always wins. Falling back to an
+                    // estimate is what keeps spend visible without an AI
+                    // Gateway — but the two are never conflated: the source is
+                    // stamped alongside, so a dashboard can tell a measured
+                    // cost from a derived one.
+                    const reported = embedCostOf(providerMetadata);
+                    const cost =
+                        reported ??
+                        estimateModelCost(modelIdOf(resolvedModel), {
+                            inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
+                        });
 
                     if (cost !== undefined) {
                         span.setAttribute("gen_ai.usage.cost", cost);
+                        span.setAttribute("lunora.usage.cost.source", reported === undefined ? "estimated" : "provider");
                     }
                 }
 

@@ -41,6 +41,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `DEFAULT_MODEL_PRICES` (const)
+
+```ts
+const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>>;
+```
+
 ### `EmbeddingModel` (type)
 
 Re-exported from `ai` — signature tracked at its source.
@@ -64,6 +70,24 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `ModelInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ModelPrice` (interface)
+
+```ts
+interface ModelPrice {
+    input: number;
+    output?: number;
+}
+```
+
+### `ModelUsage` (interface)
+
+```ts
+interface ModelUsage {
+    inputTokens?: number;
+    outputTokens?: number;
+}
+```
 
 ### `ResolvedAiGateway` (interface)
 
@@ -93,6 +117,10 @@ Re-exported from `ai` — signature tracked at its source.
 
 Re-exported from `ai` — signature tracked at its source.
 
+### `estimateModelCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `generateObject` (function)
 
 Re-exported from `ai` — signature tracked at its source.
@@ -108,6 +136,10 @@ Re-exported from `ai` — signature tracked at its source.
 ### `jsonSchema` (function)
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
+
+### `lookupModelPrice` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `resolveAiGateway` (const)
 
