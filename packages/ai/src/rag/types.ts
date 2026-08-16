@@ -164,6 +164,17 @@ export interface RagTextStore {
 export interface StoredRagChunk {
     chunkIndex: number;
     id: string;
+
+    /**
+     * The caller `metadata` attached to this chunk's source at index time
+     * (internal `__rag*` keys excluded).
+     *
+     * Present so a {@link RagLexicalStore} can evaluate the same metadata
+     * filter the vector leg gets. Without it a lexical store has nothing to
+     * filter on and must fail closed on every filtered query — which made
+     * hybrid search and metadata-based RLS mutually exclusive.
+     */
+    metadata?: Record<string, unknown>;
     sourceId: string;
     text: string;
 }

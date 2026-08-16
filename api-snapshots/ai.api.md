@@ -327,6 +327,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `matchesMetadataFilter` (const)
+
+```ts
+const matchesMetadataFilter: (metadata: Record<string, unknown> | undefined, filter: Record<string, unknown> | undefined) => boolean;
+```
+
 ### `ragSyncTriggers` (const)
 
 ```ts
