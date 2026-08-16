@@ -482,6 +482,36 @@ incomparable value and a chunk indexed with no metadata at all. Guessing at an
 unknown operator risks admitting a row RLS meant to exclude, and the failure
 mode there is a cross-tenant leak, not a missing result.
 
+## Cost telemetry without an AI Gateway
+
+Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway
+put it in `providerMetadata`. Call the same model through `@ai-sdk/openai`
+directly, or run on a non-Cloudflare host, and spend visibility disappeared.
+
+`estimateModelCost` derives it from token usage and a price table instead, and
+`defineRag`'s embed span falls back to it automatically:
+
+```ts
+import { estimateModelCost } from "@lunora/ai";
+
+estimateModelCost("text-embedding-3-small", { inputTokens: 1_000_000 }); // → 0.02
+```
+
+**An estimate is never presented as a measurement.** A provider-reported cost
+always wins, and the span records which it got:
+
+| Attribute                  | Value                         |
+| -------------------------- | ----------------------------- |
+| `gen_ai.usage.cost`        | the cost in USD               |
+| `lunora.usage.cost.source` | `"provider"` or `"estimated"` |
+
+The shipped table is **indicative, not authoritative** — a hand-maintained
+snapshot, and providers change prices without warning. It is deliberately small,
+because a table trying to cover every model is a table that is wrong about most
+of them; anything it does not cover returns `undefined` rather than a guess, and
+an unpriced model yields no attribute rather than a `0` that would quietly sum
+into a total. Pass your own `prices` for anything you are invoicing against.
+
 ## Outside an action
 
 `ctx.ai` is only wired onto action contexts. In the worker entry, a Durable

@@ -38,16 +38,21 @@ vi.mock(import("ai"), async (importOriginal) => {
         embed: vi.fn<
             (options: { model: unknown; value: string }) => Promise<{
                 embedding: number[];
-                providerMetadata: { gateway: { cost: number } };
+                providerMetadata?: { gateway: { cost: number } };
                 usage: { tokens: number };
             }>
         >(async ({ value }) => {
             // `usage` + `providerMetadata` mirror the real AI SDK embed result so
             // the post-hoc span path (token usage / gateway cost) is exercised;
             // callers that only read `embedding` are unaffected.
+            //
+            // Text containing "nocost" omits `providerMetadata`, standing in for
+            // a direct-to-provider call with no AI Gateway in front.
+            const reportsCost = !value.toLowerCase().includes("nocost");
+
             return {
                 embedding: bagVector(value),
-                providerMetadata: { gateway: { cost: 0.0002 } },
+                ...(reportsCost ? { providerMetadata: { gateway: { cost: 0.0002 } } } : {}),
                 usage: { tokens: value.split(/\s+/u).filter(Boolean).length },
             };
         }) as unknown as typeof actual.embed,
@@ -1508,6 +1513,29 @@ describe("defineRag ctx.trace instrumentation", () => {
             // Post-hoc — only knowable after the embed call resolves.
             expect(span.attributes["gen_ai.usage.input_tokens"]).toBeGreaterThan(0);
             expect(span.attributes["gen_ai.usage.cost"]).toBe(0.0002);
+            // A provider-reported cost is labelled as such, never conflated
+            // with an estimate.
+            expect(span.attributes["lunora.usage.cost.source"]).toBe("provider");
+        }
+    });
+
+    it("estimates cost from the price table when no gateway reported one", async () => {
+        expect.hasAssertions();
+
+        const { vectors } = memoryVectors();
+        const ctx = tracingCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        // "nocost" suppresses the mock's providerMetadata, standing in for a
+        // direct-to-provider call with no AI Gateway in front.
+        await docs(ctx).index({ id: "doc-1", text: "nocost hello world" });
+
+        expect(ctx.spans.length).toBeGreaterThan(0);
+
+        for (const span of ctx.spans) {
+            // Spend stays visible off Cloudflare — but marked as derived.
+            expect(span.attributes["gen_ai.usage.cost"]).toBeGreaterThan(0);
+            expect(span.attributes["lunora.usage.cost.source"]).toBe("estimated");
         }
     });
 
