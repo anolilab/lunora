@@ -207,15 +207,54 @@ describe(hybridRank, () => {
         expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1", "doc#2"]);
     });
 
-    it("keeps the vector-leg chunk object for ids present in both lists", () => {
-        expect.assertions(1);
+    it("keeps the vector-leg chunk's payload for ids present in both lists", () => {
+        expect.assertions(2);
 
         const vectorChunk = chunk("doc#0", { metadata: { title: "rich" }, score: 0.9 });
         const lexicalChunk = chunk("doc#0", { metadata: undefined, score: 3.2 });
 
         const [winner] = hybridRank([vectorChunk], [lexicalChunk]);
 
-        expect(winner).toBe(vectorChunk);
+        // The richer vector-leg chunk survives — the lexical leg carries no
+        // stored metadata. Asserted on the payload, not by reference: the
+        // returned chunk is a copy carrying the fused score (see below).
+        expect(winner?.metadata).toStrictEqual({ title: "rich" });
+        expect(winner?.text).toBe(vectorChunk.text);
+    });
+
+    it("writes the fused score back so a caller re-sorting by score keeps the fusion", () => {
+        expect.assertions(3);
+
+        // The regression this guards: hybridRank used to return chunks still
+        // carrying their raw cosine / BM25 scores. `retrieve()` re-sorts by
+        // `score` to apply importance weighting, so the fusion was computed and
+        // then immediately discarded — and since BM25 is unbounded while cosine
+        // is [0, 1], every lexical-only hit was promoted above every vector hit.
+        const vectorChunk = chunk("doc#0", { score: 0.9 });
+        const lexicalOnly = chunk("doc#1", { score: 3.2 });
+
+        const fused = hybridRank([vectorChunk], [lexicalOnly]);
+
+        // Both appear once in each leg at rank 0, so both fuse to 1/60.
+        for (const entry of fused) {
+            expect(entry.score).toBeCloseTo(1 / 60, 10);
+        }
+
+        // Re-sorting by score, as retrieve() does, preserves the fused order.
+        expect(fused.toSorted((a, b) => b.score - a.score).map((entry) => entry.id)).toStrictEqual(fused.map((entry) => entry.id));
+    });
+
+    it("multiplies importance into the fused score", () => {
+        expect.assertions(1);
+
+        const heavy = chunk("doc#0", { importance: 1, score: 0.5 });
+        const light = chunk("doc#1", { importance: 0.1, score: 0.9 });
+
+        // `light` ranks first in the vector leg, so on rank alone it would win.
+        // Its 0.1 importance has to pull it under `heavy`.
+        const fused = hybridRank([light, heavy], []);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1"]);
     });
 
     it("breaks exact ties in favour of the better vector rank", () => {

@@ -234,6 +234,22 @@ export interface RagNamedFilter {
 }
 
 /**
+ * Re-score retrieved candidates against the query. Returns the chunks in their
+ * new order; may drop chunks. See {@link RagConfig.rerank}.
+ * @experimental
+ */
+export type RagReranker = (query: string, chunks: ReadonlyArray<RetrievedChunk>) => Promise<ReadonlyArray<RetrievedChunk>> | ReadonlyArray<RetrievedChunk>;
+
+/**
+ * Rewrite a query, or expand it into several. See {@link RagConfig.transformQuery}.
+ * @experimental
+ */
+export type RagQueryTransform = (
+    query: string,
+    info: { conversationId?: string; namespace?: string },
+) => Promise<ReadonlyArray<string> | string> | ReadonlyArray<string> | string;
+
+/**
  * `RagConfig` is part of the experimental `@lunora/ai` API and may change without a major version bump.
  * @experimental
  */
@@ -245,10 +261,28 @@ export interface RagConfig {
      * vectors across every tenant.
      */
     allowSharedNamespace?: boolean;
+
+    /**
+     * How many chunks each retrieval leg fetches **before** fusion and
+     * reranking trim the result to `topK`.
+     *
+     * Defaults to `topK * 4` whenever anything downstream reorders — a
+     * `lexicalStore`, a multi-query `transformQuery`, or a `rerank` — and to
+     * plain `topK` otherwise. Bounded by the store ceiling (50 in metadata
+     * mode, 100 with a `textStore`).
+     *
+     * This is the knob that decides how much recall the reordering has to work
+     * with. Fetching only `topK` per leg defeats the point of having two: the
+     * whole reason to run a lexical leg is to surface a chunk the vector leg
+     * ranked *below* `topK`, and it cannot do that if it was never asked for
+     * more than `topK`.
+     */
+    candidates?: number;
     /** Custom chunker; overrides the built-in fixed-window splitter. */
     chunk?: (text: string) => ReadonlyArray<string>;
     /** Overlap (chars) between adjacent chunks. Default 200. Must be < `chunkSize`. */
     chunkOverlap?: number;
+
     /** Target chunk size (chars). Default 1000. */
     chunkSize?: number;
 
@@ -282,6 +316,7 @@ export interface RagConfig {
      * name is not found here — catches spelling mistakes early.
      */
     filters?: Record<string, RagNamedFilter>;
+
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
 
@@ -294,6 +329,7 @@ export interface RagConfig {
      * one. See {@link RagLexicalStore}.
      */
     lexicalStore?: RagLexicalStore;
+
     /** Retrieval depth for the lexical leg of hybrid search. Defaults to the effective `topK`. */
     lexicalTopK?: number;
 
@@ -324,6 +360,24 @@ export interface RagConfig {
     requireNamespace?: boolean;
 
     /**
+     * Re-score the retrieved candidates against the query before they are
+     * trimmed to `topK`. **Injected, not bundled** — a reranker is a model call,
+     * and `@lunora/ai` takes no provider dependency to make one. Adapt yours
+     * with `scoreReranker`/`batchReranker`, or write the two-line hook yourself.
+     *
+     * This is the standard quality step that vector search alone cannot do:
+     * an embedding is computed without the query, so it cannot know which of
+     * two topically-similar passages actually answers *this* question. A
+     * cross-encoder sees both at once and orders them accordingly.
+     *
+     * Retrieval fetches {@link RagConfig.rerankCandidates} chunks, hands them
+     * here, and keeps the first `topK` of whatever comes back — so the hook may
+     * reorder and drop, but its output order is final. Runs after hybrid fusion
+     * and before `chunkContext` expansion.
+     */
+    rerank?: RagReranker;
+
+    /**
      * Row-level-security filter derived from the retrieval identity. Called once
      * per `retrieve()` with {@link RagContext.auth} (the bound ctx's `auth`); the
      * returned Vectorize metadata filter is merged over the caller's `filter`
@@ -344,8 +398,29 @@ export interface RagConfig {
 
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
+
     /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */
     topK?: number;
+
+    /**
+     * Rewrite or expand the query before it is embedded.
+     *
+     * The raw user query is often the worst possible search string: a
+     * conversational follow-up ("what about the other one?") carries its
+     * meaning in the preceding turns, and a short question shares few terms
+     * with the long passage that answers it.
+     *
+     * Return **one** string to rewrite, or **several** to run multi-query
+     * retrieval — each is embedded and searched independently and the rankings
+     * are fused with RRF, which recovers passages any single phrasing would
+     * miss. Returning the query unchanged is a no-op.
+     *
+     * **Injected, not bundled**, for the same reason as {@link RagConfig.rerank}:
+     * every useful strategy (HyDE, multi-query expansion, follow-up rewriting)
+     * needs a language model, and this package does not pick one for you. The
+     * lexical leg searches the first returned query.
+     */
+    transformQuery?: RagQueryTransform;
 }
 
 /**
@@ -437,7 +512,17 @@ export interface RetrieveOptions {
      * observability — logging query latency, hit counts, etc.
      */
     onRetrieve?: (info: { matches: number; query: string }) => void;
+
+    /**
+     * Set `false` to skip {@link RagConfig.rerank} for this call — the escape
+     * hatch for a latency-sensitive path (typeahead, an agent's inner loop)
+     * that cannot afford the extra model round-trip.
+     */
+    rerank?: false;
     topK?: number;
+
+    /** Set `false` to skip {@link RagConfig.transformQuery} for this call. */
+    transformQuery?: false;
 }
 
 /**

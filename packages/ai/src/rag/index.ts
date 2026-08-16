@@ -5,6 +5,8 @@ export { default as defineRag } from "./define-rag";
 export { contentHash, guessMimeTypeFromExtension } from "./helpers";
 export { default as hybridRank } from "./hybrid-rank";
 export { default as bm25LexicalStore } from "./lexical-store";
+export type { BatchRerankerOptions, ScoreRerankerOptions } from "./rerank";
+export { batchReranker, scoreReranker } from "./rerank";
 export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions } from "./sync";
 export { ragSyncTriggers } from "./sync";
 export type {
@@ -17,6 +19,8 @@ export type {
     RagEmbedder,
     RagLexicalStore,
     RagNamedFilter,
+    RagQueryTransform,
+    RagReranker,
     RagSource,
     RagTextStore,
     RagToolOptions,

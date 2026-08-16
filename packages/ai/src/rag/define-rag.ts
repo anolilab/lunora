@@ -50,6 +50,14 @@ const MAX_TOP_K = 100;
 const VECTORIZE_MAX_DIMENSIONS = 1536;
 
 /**
+ * Default candidate-pool multiplier when fusion or reranking is active:
+ * retrieve `topK * 4` per leg, reorder, keep `topK`. Reordering can only work
+ * with what retrieval already found, so a pool no deeper than `topK` gives it
+ * nothing to do.
+ */
+const CANDIDATE_POOL_FACTOR = 4;
+
+/**
  * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
  * metadata object, not the chunk text alone; a `textStore` moves the text out
  * and lifts the constraint entirely.
@@ -155,6 +163,9 @@ const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkI
 };
 
 const sha256Hex = async (text: string): Promise<string> => contentHash(new TextEncoder().encode(text));
+
+/** Keep only chunks scoring at or above `minScore`. */
+const aboveScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: number): RetrievedChunk[] => chunks.filter((chunk) => chunk.score >= minScore);
 
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
@@ -355,6 +366,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         );
     }
 
+    if (config.candidates !== undefined && (!Number.isInteger(config.candidates) || config.candidates < 1)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `candidates` must be a positive integer");
+    }
+
+    const reranker = config.rerank;
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
     const { textStore } = config;
     const topKCeiling = textStore ? MAX_TOP_K : MAX_TOP_K_FULL_METADATA;
@@ -463,6 +479,29 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // Session/thread grouping — absent unless a conversation id was set.
                 ...(conversationId === undefined ? {} : { "gen_ai.conversation.id": conversationId }),
             });
+        };
+
+        /**
+         * Resolve the queries a retrieval actually searches for: the caller's,
+         * or whatever {@link RagConfig.transformQuery} rewrote it into.
+         *
+         * Always returns at least one non-empty query — a transform that
+         * returns nothing usable (an empty array, blank strings, a rejected
+         * promise is the caller's problem) falls back to the original rather
+         * than searching for `""`, which matches everything and nothing.
+         */
+        const resolveQueries = async (query: string, options: RetrieveOptions | undefined, namespace: string | undefined): Promise<string[]> => {
+            if (!config.transformQuery || options?.transformQuery === false) {
+                return [query];
+            }
+
+            const conversationId = typeof context.conversationId === "string" && context.conversationId.length > 0 ? context.conversationId : undefined;
+            const transformed = await config.transformQuery(query, { conversationId, namespace });
+            const candidates = (typeof transformed === "string" ? [transformed] : [...transformed])
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+
+            return candidates.length > 0 ? candidates : [query];
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
@@ -814,35 +853,58 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             const effectiveFilter = rlsFilter ? { ...resolvedFilter, ...rlsFilter } : resolvedFilter;
             const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
 
-            // Vector query (primary, semantic leg)
-            const vectorResult = await context.vectors.query(config.index, {
-                embed: embedText,
-                filter: effectiveFilter,
-                input: query,
-                namespace: effectiveNamespace,
-                returnMetadata: textStore ? "indexed" : "all",
-                topK,
-            });
+            // Query transformation: rewrite the raw query, or expand it into
+            // several that are searched independently and fused. The FIRST
+            // query is the canonical one — it drives the lexical leg and is
+            // what `onRetrieve` reports.
+            const searchQueries = await resolveQueries(query, options, effectiveNamespace);
+            const primaryQuery = searchQueries[0] as string;
 
-            let chunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
+            // Anything that reorders downstream — a lexical leg, multi-query
+            // expansion, a reranker — can only work with what retrieval found,
+            // so each leg fetches a deeper pool than the caller's `topK` and the
+            // trim happens after. Fetching only `topK` per leg would defeat the
+            // lexical leg entirely: its job is to surface a chunk the vector leg
+            // ranked below `topK`.
+            const rerankActive = reranker !== undefined && options?.rerank !== false;
+            const widenPool = rerankActive || config.lexicalStore !== undefined || searchQueries.length > 1;
+            const candidateK = widenPool ? Math.min(config.candidates ?? topK * CANDIDATE_POOL_FACTOR, topKCeiling) : topK;
 
             const minScore = options?.minScore;
 
-            // Apply `minScore` to the vector leg here, before any hybrid
-            // fusion — its score is the cosine (importance-adjusted) scale the
-            // option is documented against. When a lexical (BM25) leg is also
-            // configured, this is the ONLY place `minScore` is applied: after
-            // fusion the chunk set mixes this cosine-scale score with the
-            // lexical leg's raw, unbounded BM25 score for lexical-only hits
-            // (scores that, per `hybridRank`'s own docs, "are not comparable
-            // across different search methods"), so filtering that mixed set
-            // against one cosine-scale threshold would arbitrarily keep/drop
-            // chunks depending on which leg happened to surface them. Non-
-            // hybrid retrieval is unaffected: it never reaches the fusion
-            // branch below, and filtering here selects the exact same set as
-            // filtering after the later re-sort would.
-            if (minScore !== undefined) {
-                chunks = chunks.filter((chunk) => chunk.score >= minScore);
+            const runVectorLeg = async (searchQuery: string): Promise<RetrievedChunk[]> => {
+                const vectorResult = await context.vectors.query(config.index, {
+                    embed: embedText,
+                    filter: effectiveFilter,
+                    input: searchQuery,
+                    namespace: effectiveNamespace,
+                    returnMetadata: textStore ? "indexed" : "all",
+                    topK: candidateK,
+                });
+
+                const legChunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
+
+                // `minScore` is applied HERE, per leg, and nowhere else: this is
+                // the only point where a chunk's score is still the cosine
+                // (importance-adjusted) scale the option is documented against.
+                // Every fusion below — multi-query or lexical — replaces `score`
+                // with an RRF score, and thresholding an RRF score against a
+                // cosine-scale number would keep or drop chunks essentially at
+                // random. Filtering each leg before fusion is also the stricter
+                // reading: a chunk too weak to pass on its own does not get in
+                // by being surfaced twice.
+                return minScore === undefined ? legChunks : aboveScore(legChunks, minScore);
+            };
+
+            // Multi-query expansion: each rewrite is its own ranking, fused by
+            // RRF. Sequential rather than concurrent on purpose — each leg
+            // embeds and queries, and a Worker's subrequest budget is the
+            // binding constraint on a fan-out the caller controls the width of.
+            let chunks = await runVectorLeg(primaryQuery);
+
+            for (const extraQuery of searchQueries.slice(1)) {
+                // eslint-disable-next-line no-await-in-loop -- bounded, caller-sized fan-out over a subrequest budget
+                chunks = [...hybridRank(chunks, await runVectorLeg(extraQuery))];
             }
 
             // Hybrid search: also rank via the lexical (BM25) leg and fuse the
@@ -850,10 +912,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // misses. Lexical-only hits carry no stored metadata/importance; a hit
             // shared with the vector leg keeps the (richer) vector chunk in RRF.
             if (config.lexicalStore) {
-                const lexicalMatches = await config.lexicalStore.search(query, {
+                const lexicalMatches = await config.lexicalStore.search(primaryQuery, {
                     filter: effectiveFilter,
                     namespace: effectiveNamespace,
-                    topK: config.lexicalTopK ?? topK,
+                    topK: config.lexicalTopK ?? candidateK,
                 });
 
                 const lexicalChunks: RetrievedChunk[] = lexicalMatches.map((match) => {
@@ -875,6 +937,19 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             // Importance weighting can reorder; re-rank on the adjusted score.
             chunks.sort((a, b) => b.score - a.score);
+
+            // Reranking sees the full candidate pool and returns the final
+            // order — so it runs after fusion, and its output is NOT re-sorted.
+            if (rerankActive) {
+                chunks = [...(await reranker(primaryQuery, chunks))];
+            }
+
+            // Trim to what the caller actually asked for. Each retrieval leg is
+            // bounded by `candidateK`, but fusion returns their UNION — so a
+            // hybrid or multi-query retrieval reaches here with more chunks than
+            // `topK`, and without this a caller asking for 5 gets the whole
+            // union, blowing out the prompt context that `topK` exists to bound.
+            chunks = chunks.slice(0, topK);
 
             chunks = [...(await expandChunks(chunks, options, effectiveNamespace))];
 
