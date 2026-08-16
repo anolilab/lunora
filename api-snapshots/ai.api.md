@@ -193,6 +193,18 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagSqlDialect` (type)
+
+```ts
+type RagSqlDialect = "postgres" | "sqlite";
+```
+
+### `RagSqlExec` (type)
+
+```ts
+type RagSqlExec = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>> | ReadonlyArray<Record<string, unknown>>;
+```
+
 ### `RagSyncActionReference` (interface)
 
 ```ts
@@ -302,6 +314,26 @@ interface ScoreRerankerOptions {
 }
 ```
 
+### `SqlLexicalStoreOptions` (interface)
+
+```ts
+interface SqlLexicalStoreOptions {
+    exec: RagSqlExec;
+    table?: string;
+}
+```
+
+### `SqliteVectorStoreOptions` (interface)
+
+```ts
+interface SqliteVectorStoreOptions {
+    exec: RagSqlExec;
+    maxDimensions?: number | false;
+    maxScan?: number;
+    table?: string;
+}
+```
+
 ### `StoredRagChunk` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -379,6 +411,18 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `sentenceChunker` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `sqlLexicalStore` (const)
+
+```ts
+const sqlLexicalStore: (options: SqlLexicalStoreOptions) => RagLexicalStore;
+```
+
+### `sqliteVectorStore` (const)
+
+```ts
+const sqliteVectorStore: (options: SqliteVectorStoreOptions) => RagVectorStore;
+```
 
 ### `tokenChunker` (const)
 

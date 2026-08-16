@@ -8,6 +8,11 @@ export { default as bm25LexicalStore } from "./lexical-store";
 export { default as matchesMetadataFilter } from "./metadata-filter";
 export type { BatchRerankerOptions, ScoreRerankerOptions } from "./rerank";
 export { batchReranker, scoreReranker } from "./rerank";
+export type { RagSqlDialect, RagSqlExec } from "./sql";
+export type { SqlLexicalStoreOptions } from "./sql-lexical-store";
+export { default as sqlLexicalStore } from "./sql-lexical-store";
+export type { SqliteVectorStoreOptions } from "./sqlite-vector-store";
+export { default as sqliteVectorStore } from "./sqlite-vector-store";
 export type { RagSyncActionReference, RagSyncArgs, RagSyncOptions } from "./sync";
 export { ragSyncTriggers } from "./sync";
 export type {

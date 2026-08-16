@@ -269,7 +269,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "createNodeR2Bucket (@lunora/platform-node) — an R2BucketLike over the local filesystem (fs/promises, head/list/range). One file per object with the metadata in a trailer, so the single rename that publishes the bytes publishes their checksum and content-type with them, and a get reads body and metadata through one handle rather than reopening the path. put streams into the staged file and .body streams the requested range; .arrayBuffer()/.text() still allocate the range they return. The body is single-use, as R2's is. Keys fold the way the host filesystem folds them, so `A` and `a` are one object on a case-insensitive volume where real R2 keeps two. No multipart uploads, no presigned URLs",
         },
         keyValueStore: { level: "emulated", note: "better-sqlite3 table behind the ShardKvStore API — not a dedicated KV product" },
-        vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
+        vectorStore: {
+            level: "emulated",
+            note: "`sqliteVectorStore` (@lunora/ai/rag) over this host's SQLite via the injected `RagSqlExec` seam — not a first-class vector product. Nearest-neighbour search is brute force (every vector in the namespace is read and scored in JS; there is no ANN index), so it is bounded by `maxScan` and suits many small per-tenant indexes rather than one large corpus. `ctx.vectors` itself is still unimplemented — this covers RAG indexes, not the binding",
+        },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         containers: { level: "unsupported", note: "No container orchestration implemented" },

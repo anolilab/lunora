@@ -261,6 +261,33 @@ An explicit `maxEmbeddingDimensions` still wins over the store's own
 `maxDimensions`, so you can tighten a permissive backend; leave it unset and the
 store speaks for itself.
 
+#### Shipped: a SQLite-backed store
+
+`sqliteVectorStore` runs a RAG index on any SQL engine reachable through an
+injected executor — a Durable Object's SQLite, D1, or `node:sqlite`. **No
+Vectorize, no extra Cloudflare product.**
+
+```ts
+import { defineRag, sqliteVectorStore } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    index: "docs",
+    store: (ctx) => sqliteVectorStore({ exec: (sql, params) => ctx.storage.sql.exec(sql, ...params).toArray() }),
+});
+```
+
+When the executor is a shard's own SQLite, the shard **is** the tenant
+boundary — so the account-global-namespace hazard that Vectorize forces you to
+guard against does not exist here, rather than being filtered away.
+
+**Search is brute force.** Every vector in the namespace is read and scored in
+JS; there is no ANN index, because SQLite has no vector type and `sqlite-vec` is
+not loadable inside workerd. That is linear in namespace size, so this suits
+**many small per-tenant indexes** — the shape most sharded apps already have —
+and not one large shared corpus. A namespace past `maxScan` (default 50,000)
+throws a named error rather than letting a Worker get killed on CPU with nothing
+explaining why.
+
 ### Bring your own embeddings — no `env.AI` binding
 
 `embeddingModel` takes a Workers AI model **id** (a string, resolved through
@@ -333,13 +360,28 @@ That widening is what makes the lexical leg useful at all: its job is to surface
 a chunk the vector leg ranked _below_ `topK`, which it cannot do if it was never
 asked for more than `topK`.
 
-`bm25LexicalStore()` is an **in-memory** Okapi BM25 reference adapter: it lives in
-the worker isolate, so it is not durable and not shared across isolates; use it
-for tests, local dev, and single-isolate workloads. In production plug a durable
-`RagLexicalStore` (`{ index, remove?, search }`) backed by a DO-SQLite inverted
-index, D1, or an external search service; the index/remove/hybrid-fusion plumbing
-is identical. Indexing mirrors chunks into the lexical store automatically, and
-removals fan out to it too.
+Two lexical stores ship:
+
+- **`bm25LexicalStore()`** — in-memory. It lives in the worker isolate, so it is
+  not durable and not shared across isolates: restart the isolate and the
+  keyword leg silently returns nothing until every source is re-indexed. Use it
+  for tests, local dev, and single-isolate workloads.
+- **`sqlLexicalStore({ exec })`** — a **durable** inverted index over the same
+  injected SQL executor `sqliteVectorStore` takes, so hybrid search survives a
+  deploy.
+
+```ts
+import { defineRag, sqlLexicalStore } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    index: "docs",
+    lexicalStore: sqlLexicalStore({ exec: (sql, params) => ctx.storage.sql.exec(sql, ...params).toArray() }),
+});
+```
+
+Both score through the same BM25 kernel, so swapping one for the other does not
+move the ranking — asserted directly in the test suite. Indexing mirrors chunks
+into the lexical store automatically, and removals fan out to it too.
 
 ### Reranking
 
