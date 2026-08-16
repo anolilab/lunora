@@ -1,0 +1,316 @@
+import type { EmbeddingModel } from "ai";
+import { describe, expect, it, vi } from "vitest";
+
+import defineRag from "../../src/rag/define-rag";
+import { batchReranker, scoreReranker } from "../../src/rag/rerank";
+import type { RagVectorQueryInput, RagVectors, RetrievedChunk } from "../../src/rag/types";
+
+/** Deterministic embedder — the ranking here is driven by the stub store, not by vectors. */
+vi.mock(import("ai"), async (importOriginal) => {
+    const actual = await importOriginal<typeof import("ai")>();
+
+    return {
+        ...actual,
+        embed: (async () => {
+            return { embedding: [0.1, 0.2, 0.3], usage: { tokens: 1 } };
+        }) as unknown as typeof actual.embed,
+    };
+});
+
+const model = { modelId: "stub-embed" } as unknown as EmbeddingModel;
+
+/**
+ * A store holding `count` chunks whose ids are `doc#0…doc#n`, returned in id
+ * order and truncated to the query's `topK`. Records every query so tests can
+ * assert the candidate pool depth.
+ */
+const stubStore = (count: number): { queries: RagVectorQueryInput[]; vectors: RagVectors } => {
+    const queries: RagVectorQueryInput[] = [];
+    const all = Array.from({ length: count }, (_, index) => {
+        return {
+            id: `doc#${String(index)}`,
+            metadata: { __ragChunk: index, __ragSource: "doc", __ragText: `chunk ${String(index)}` },
+            score: 1 - index / 100,
+        };
+    });
+
+    return {
+        queries,
+        vectors: {
+            deleteByIds: () => Promise.resolve(undefined),
+            getByIds: () => Promise.resolve([]),
+            query: (_index, input) => {
+                queries.push(input);
+
+                const matches = all.slice(0, input.topK ?? 5);
+
+                return Promise.resolve({ count: matches.length, matches });
+            },
+            upsert: () => Promise.resolve(undefined),
+        },
+    };
+};
+
+describe("rerank", () => {
+    it("reorders the candidate pool and trims to topK", async () => {
+        expect.assertions(2);
+
+        const { queries, vectors } = stubStore(20);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            // Reverse the pool: the worst vector hit becomes the best.
+            rerank: (_query, chunks) => chunks.toReversed(),
+        });
+
+        const result = await docs({ vectors }).retrieve("question", { topK: 3 });
+
+        // The pool was widened to topK * 4 so the reranker had something to work with.
+        expect(queries[0]?.topK).toBe(12);
+        expect(result.chunks.map((chunk) => chunk.id)).toStrictEqual(["doc#11", "doc#10", "doc#9"]);
+    });
+
+    it("honours an explicit `candidates` pool size", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(30);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            candidates: 25,
+            embeddingModel: model,
+            index: "docs",
+            rerank: (_query, chunks) => chunks,
+        });
+
+        await docs({ vectors }).retrieve("question", { topK: 2 });
+
+        expect(queries[0]?.topK).toBe(25);
+    });
+
+    it("clamps the candidate pool to the store ceiling", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(80);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            candidates: 400,
+            embeddingModel: model,
+            index: "docs",
+            rerank: (_query, chunks) => chunks,
+        });
+
+        await docs({ vectors }).retrieve("question", { topK: 5 });
+
+        expect(queries[0]?.topK).toBe(50);
+    });
+
+    it("can be skipped per call for a latency-sensitive path", async () => {
+        expect.assertions(2);
+
+        const rerank = vi.fn<(query: string, chunks: ReadonlyArray<RetrievedChunk>) => ReadonlyArray<RetrievedChunk>>((_query, chunks) => chunks.toReversed());
+        const { queries, vectors } = stubStore(20);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", rerank });
+
+        await docs({ vectors }).retrieve("question", { rerank: false, topK: 3 });
+
+        expect(rerank).not.toHaveBeenCalled();
+        // Without a reranker the pool is not widened either.
+        expect(queries[0]?.topK).toBe(3);
+    });
+
+    it("does not widen the pool when nothing reorders", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(20);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs" });
+
+        await docs({ vectors }).retrieve("question", { topK: 4 });
+
+        expect(queries[0]?.topK).toBe(4);
+    });
+
+    it("rejects a non-positive `candidates` at define time", () => {
+        expect.assertions(1);
+
+        expect(() => defineRag({ candidates: 0, index: "docs" })).toThrow(/`candidates` must be a positive integer/u);
+    });
+});
+
+describe("scoreReranker", () => {
+    it("orders by the injected scorer, descending", async () => {
+        expect.assertions(1);
+
+        const { vectors } = stubStore(8);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            // Score by trailing digit: "chunk 7" scores highest.
+            rerank: scoreReranker({ score: (_query, text) => Number(text.split(" ")[1]) }),
+        });
+
+        const result = await docs({ vectors }).retrieve("question", { topK: 3 });
+
+        expect(result.chunks.map((chunk) => chunk.text)).toStrictEqual(["chunk 7", "chunk 6", "chunk 5"]);
+    });
+
+    it("drops candidates under `minScore`", async () => {
+        expect.assertions(1);
+
+        const { vectors } = stubStore(8);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            rerank: scoreReranker({ minScore: 6, score: (_query, text) => Number(text.split(" ")[1]) }),
+        });
+
+        const result = await docs({ vectors }).retrieve("question", { topK: 5 });
+
+        expect(result.chunks.map((chunk) => chunk.text)).toStrictEqual(["chunk 7", "chunk 6"]);
+    });
+
+    it("replaces the retrieval score with the reranker's", async () => {
+        expect.assertions(1);
+
+        const rerank = scoreReranker({ score: () => 42 });
+        const reranked = await rerank("q", [{ chunkIndex: 0, id: "a#0", importance: 1, score: 0.9, sourceId: "a", text: "x" }]);
+
+        expect(reranked[0]?.score).toBe(42);
+    });
+
+    it("requires a scorer function", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- exercising the runtime guard for JS callers
+        expect(() => scoreReranker({})).toThrow(/`score` must be a function/u);
+    });
+});
+
+describe("batchReranker", () => {
+    it("scores the whole pool in one call", async () => {
+        expect.assertions(2);
+
+        const scoreAll = vi.fn<(query: string, texts: ReadonlyArray<string>) => ReadonlyArray<number>>((_query, texts) =>
+            texts.map((text) => Number(text.split(" ")[1])),
+        );
+        const { vectors } = stubStore(8);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", rerank: batchReranker({ scoreAll }) });
+
+        const result = await docs({ vectors }).retrieve("question", { topK: 2 });
+
+        expect(scoreAll).toHaveBeenCalledTimes(1);
+        expect(result.chunks.map((chunk) => chunk.text)).toStrictEqual(["chunk 7", "chunk 6"]);
+    });
+
+    it("refuses a score list that does not line up with the passages", async () => {
+        expect.assertions(1);
+
+        const rerank = batchReranker({ scoreAll: () => [1] });
+
+        await expect(
+            rerank("q", [
+                { chunkIndex: 0, id: "a#0", importance: 1, score: 1, sourceId: "a", text: "x" },
+                { chunkIndex: 1, id: "a#1", importance: 1, score: 1, sourceId: "a", text: "y" },
+            ]),
+        ).rejects.toThrow(/returned 1 scores for 2 passages/u);
+    });
+});
+
+describe("transformQuery", () => {
+    it("rewrites the query before embedding", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(10);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            transformQuery: (query) => `rewritten: ${query}`,
+        });
+
+        await docs({ vectors }).retrieve("what about the other one?");
+
+        expect(queries[0]?.input).toBe("rewritten: what about the other one?");
+    });
+
+    it("runs one retrieval per expanded query and fuses them", async () => {
+        expect.assertions(2);
+
+        const { queries, vectors } = stubStore(10);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            transformQuery: () => ["first phrasing", "second phrasing", "third phrasing"],
+        });
+
+        const result = await docs({ vectors }).retrieve("original", { topK: 2 });
+
+        expect(queries.map((entry) => entry.input)).toStrictEqual(["first phrasing", "second phrasing", "third phrasing"]);
+        expect(result.chunks).toHaveLength(2);
+    });
+
+    it("receives the conversation id so a follow-up can be rewritten in context", async () => {
+        expect.assertions(1);
+
+        const seen: (string | undefined)[] = [];
+        const { vectors } = stubStore(5);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            transformQuery: (query, info) => {
+                seen.push(info.conversationId);
+
+                return query;
+            },
+        });
+
+        await docs({ conversationId: "thread-7", vectors }).retrieve("and the other?");
+
+        expect(seen).toStrictEqual(["thread-7"]);
+    });
+
+    it("falls back to the original query when the transform returns nothing usable", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(5);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", transformQuery: () => ["", "   "] });
+
+        await docs({ vectors }).retrieve("the real question");
+
+        // An empty query matches everything and nothing — never search for it.
+        expect(queries[0]?.input).toBe("the real question");
+    });
+
+    it("can be skipped per call", async () => {
+        expect.assertions(1);
+
+        const { queries, vectors } = stubStore(5);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", transformQuery: () => "rewritten" });
+
+        await docs({ vectors }).retrieve("original", { transformQuery: false });
+
+        expect(queries[0]?.input).toBe("original");
+    });
+});
+
+describe("topK trimming", () => {
+    it("trims the fused union to topK instead of returning everything both legs found", async () => {
+        expect.assertions(1);
+
+        const { vectors } = stubStore(40);
+        const docs = defineRag({
+            allowSharedNamespace: true,
+            embeddingModel: model,
+            index: "docs",
+            transformQuery: () => ["one", "two"],
+        });
+
+        const result = await docs({ vectors }).retrieve("q", { topK: 3 });
+
+        expect(result.chunks).toHaveLength(3);
+    });
+});

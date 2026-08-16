@@ -267,6 +267,12 @@ export const docs = defineRag({
 });
 ```
 
+Both legs fetch a deeper candidate pool than `topK` (`topK × 4` by default,
+tunable with `candidates`) and the fused list is trimmed to `topK` afterwards.
+That widening is what makes the lexical leg useful at all: its job is to surface
+a chunk the vector leg ranked _below_ `topK`, which it cannot do if it was never
+asked for more than `topK`.
+
 `bm25LexicalStore()` is an **in-memory** Okapi BM25 reference adapter: it lives in
 the worker isolate, so it is not durable and not shared across isolates; use it
 for tests, local dev, and single-isolate workloads. In production plug a durable
@@ -274,6 +280,67 @@ for tests, local dev, and single-isolate workloads. In production plug a durable
 index, D1, or an external search service; the index/remove/hybrid-fusion plumbing
 is identical. Indexing mirrors chunks into the lexical store automatically, and
 removals fan out to it too.
+
+### Reranking
+
+Vector search embeds a passage without ever seeing the query, so it cannot tell
+which of two topically-similar chunks actually answers _this_ question. A
+cross-encoder sees both at once. `rerank` runs over the candidate pool after
+fusion and before the trim to `topK`, and its output order is final:
+
+```ts
+import { defineRag, scoreReranker } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    candidates: 40, // pool the reranker gets to work with (default: topK × 4)
+    index: "docs",
+    rerank: scoreReranker({
+        minScore: 0.2, // also *reject* weak matches, not just reorder
+        score: async (query, text) => {
+            const result = await ctx.ai.run("@cf/baai/bge-reranker-base", { contexts: [{ text }], query });
+            return result.response[0].score;
+        },
+    }),
+});
+```
+
+The scorer is **injected** — `@lunora/ai` takes no provider dependency to make a
+model call. `scoreReranker` calls it once per candidate with bounded
+concurrency; `batchReranker` hands the whole pool to a batch endpoint in one
+call (and refuses a score list that does not line up with the passages, rather
+than zipping scores onto the wrong ones). Pass `{ rerank: false }` on a single
+`retrieve()` to skip the round-trip on a latency-sensitive path.
+
+### Query transformation
+
+The raw user query is often the worst possible search string. A conversational
+follow-up ("what about the other one?") carries its meaning in the preceding
+turns, and a short question shares few terms with the long passage answering it.
+
+`transformQuery` rewrites it — or expands it into several, each searched
+independently and fused with RRF, recovering passages any single phrasing would
+miss:
+
+```ts
+export const docs = defineRag({
+    index: "docs",
+    // Return a string to rewrite, or an array for multi-query retrieval.
+    transformQuery: async (query, { conversationId }) => {
+        const { text } = await generateText({
+            model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            prompt: `Rewrite this search query to be self-contained: ${query}`,
+        });
+        return text;
+    },
+});
+```
+
+It receives `conversationId` from the bound context, so a follow-up can be
+rewritten against its thread. Also injected, for the same reason as `rerank`:
+every useful strategy (HyDE, multi-query expansion, follow-up rewriting) needs a
+language model, and this package does not pick one for you. Returning the query
+unchanged — or nothing usable — falls back to the original rather than searching
+for an empty string. Pass `{ transformQuery: false }` to skip it per call.
 
 ### RLS-filtered retrieval
 
