@@ -32,7 +32,13 @@ const DEFAULT_K = 60;
  * `id` — guaranteed by the chunk-id scheme `${sourceId}#${chunkIndex}`.
  * @experimental
  */
-const hybridRank = (vectorResults: ReadonlyArray<RetrievedChunk>, textResults: ReadonlyArray<RetrievedChunk>, k = DEFAULT_K): ReadonlyArray<RetrievedChunk> => {
+const hybridRank = (
+    vectorResults: ReadonlyArray<RetrievedChunk>,
+    textResults: ReadonlyArray<RetrievedChunk>,
+    // Explicitly annotated: a default sourced from a const (rather than an
+    // inline literal) needs one under `--isolatedDeclarations`.
+    k: number = DEFAULT_K,
+): ReadonlyArray<RetrievedChunk> => {
     const fused = new Map<string, { chunk: RetrievedChunk; score: number; vectorRank: number }>();
 
     for (const [rank, chunk] of vectorResults.entries()) {

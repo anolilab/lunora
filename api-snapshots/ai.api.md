@@ -127,6 +127,15 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 ## `@lunora/ai/rag`
 
+### `BatchRerankerOptions` (interface)
+
+```ts
+interface BatchRerankerOptions {
+    minScore?: number;
+    scoreAll: (query: string, texts: ReadonlyArray<string>) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+}
+```
+
 ### `ChunkerOptions` (interface)
 
 ```ts
@@ -169,6 +178,14 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `RagNamedFilter` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagQueryTransform` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagReranker` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -253,6 +270,15 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `ScoreRerankerOptions` (interface)
+
+```ts
+interface ScoreRerankerOptions {
+    minScore?: number;
+    score: (query: string, text: string) => Promise<number> | number;
+}
+```
+
 ### `StoredRagChunk` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -266,6 +292,10 @@ interface TokenChunkerOptions {
     overlapTokens?: number;
 }
 ```
+
+### `batchReranker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `bm25LexicalStore` (const)
 
@@ -306,6 +336,10 @@ const ragSyncTriggers: <Document extends Record<string, unknown> = Record<string
     afterUpdate: RagSyncHandler;
 };
 ```
+
+### `scoreReranker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `sentenceChunker` (const)
 
