@@ -274,6 +274,20 @@ export interface RagConfig {
     allowSharedNamespace?: boolean;
 
     /**
+     * Retain up to this many embeddings per bound context, keyed by text, so a
+     * repeated `retrieve()` of the same question does not re-embed it.
+     *
+     * Default 0 (retain nothing beyond one call). Indexing always batches its
+     * embeds regardless of this setting — the batch is request-scoped and does
+     * not consume the budget.
+     *
+     * Sized in entries, not bytes, but budget in bytes: one 1536-dimension
+     * embedding is ~12 KB, so 100 entries is over a megabyte held in the
+     * isolate. Keep it small.
+     */
+    cacheEmbeddings?: number;
+
+    /**
      * How many chunks each retrieval leg fetches **before** fusion and
      * reranking trim the result to `topK`.
      *

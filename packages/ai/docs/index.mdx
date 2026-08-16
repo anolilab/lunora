@@ -178,6 +178,27 @@ export const docs = defineRag({
 None of them can exceed `size`: an atom too large to fit falls back to a hard
 character split rather than emitting a chunk the store would reject.
 
+### Embedding batching and caching
+
+Indexing embeds a whole document in **one** `embedMany` call rather than one
+call per chunk: the per-chunk `embed` callbacks `ctx.vectors.upsert` invokes
+resolve from that batch. A 200-chunk document collapses from 200 round-trips to
+a handful. It is best-effort — a provider that rejects the batch falls back to
+per-chunk embeds rather than failing the index — and identical chunks dedupe to
+a single embed.
+
+Retrieval re-embeds the query on every call. Set `cacheEmbeddings` to retain
+embeddings across calls on a bound context:
+
+```ts
+export const docs = defineRag({ cacheEmbeddings: 32, index: "docs" });
+```
+
+Sized in entries but budget in bytes: one 1536-dimension embedding is ~12 KB, so
+100 entries is over a megabyte held in the isolate. Keep it small. The cache is
+scoped to the bound context, never module level, so it cannot outlive the
+request that built it.
+
 ### Embedding dimensions
 
 Vectorize stores at most **1536 dimensions** per vector, which rules out most
