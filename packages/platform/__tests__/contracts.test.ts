@@ -42,7 +42,7 @@ describe("@lunora/platform contracts", () => {
         // spot-check one rather than enumerate all 15. Not `objectStorage`: that
         // one grew an emulation (`createNodeR2Bucket`), and a spot-check has to
         // name a feature nothing is building towards.
-        expect(NODE_CAPABILITIES.features.vectorStore?.level).toBe("unsupported");
+        expect(NODE_CAPABILITIES.features.vectorStore?.level).toBe("emulated");
     });
 
     // `identityProxy` rates whether the HOST hands the runtime a

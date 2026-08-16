@@ -1,18 +1,6 @@
+import { bm25Idf, bm25TermScore, tokenize } from "./bm25";
 import matchesMetadataFilter from "./metadata-filter";
 import type { LexicalMatch, RagLexicalStore } from "./types";
-
-/**
- * Okapi BM25 term-saturation constant. 1.5 is the standard default — higher
- * values reward repeated terms more, lower values saturate sooner.
- */
-const BM25_K1 = 1.5;
-/** Okapi BM25 length-normalization constant (0 = off, 1 = full). 0.75 is the standard default. */
-const BM25_B = 0.75;
-
-/** Lowercase and split into `[a-z0-9]+` tokens — dependency-free, adequate for keyword recall. */
-const TOKEN_PATTERN = /[a-z0-9]+/g;
-
-const tokenize = (text: string): string[] => text.toLowerCase().match(TOKEN_PATTERN) ?? [];
 
 /** One indexed chunk in a namespace's BM25 state. */
 interface Bm25Document {
@@ -166,8 +154,7 @@ const bm25LexicalStore = (): RagLexicalStore => {
                 }
 
                 const documentFrequency = posting.size;
-                // BM25 "plus" IDF — always non-negative, so a common term never subtracts score.
-                const idf = Math.log(1 + (documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5));
+                const idf = bm25Idf(documentCount, documentFrequency);
 
                 for (const [id, frequency] of posting) {
                     const document = state.documents.get(id);
@@ -185,10 +172,7 @@ const bm25LexicalStore = (): RagLexicalStore => {
                         continue;
                     }
 
-                    const denominator = frequency + BM25_K1 * (1 - BM25_B + (BM25_B * document.length) / averageLength);
-                    const contribution = idf * ((frequency * (BM25_K1 + 1)) / denominator);
-
-                    scores.set(id, (scores.get(id) ?? 0) + contribution);
+                    scores.set(id, (scores.get(id) ?? 0) + bm25TermScore(idf, frequency, document.length, averageLength));
                 }
             }
 
