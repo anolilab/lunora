@@ -8,6 +8,8 @@ export { default as bm25LexicalStore } from "./lexical-store";
 export { default as matchesMetadataFilter } from "./metadata-filter";
 export type { BatchRerankerOptions, ScoreRerankerOptions } from "./rerank";
 export { batchReranker, scoreReranker } from "./rerank";
+export type { RagExtractor, RagObjectSource, RagSourceObject, RagSourceOptions, RagSourceSync, RagSyncReport } from "./source";
+export { default as defineRagSource } from "./source";
 export type { RagSqlDialect, RagSqlExec } from "./sql";
 export type { SqlLexicalStoreOptions } from "./sql-lexical-store";
 export { default as sqlLexicalStore } from "./sql-lexical-store";

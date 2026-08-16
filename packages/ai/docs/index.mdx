@@ -482,6 +482,52 @@ incomparable value and a chunk indexed with no metadata at all. Guessing at an
 unknown operator risks admitting a row RLS meant to exclude, and the failure
 mode there is a cross-tenant leak, not a missing result.
 
+### Bulk ingestion — `defineRagSource`
+
+`rag.index()` takes one document's text, which leaves the whole crawl — list the
+objects, fetch each, extract text, index it, notice the ones that were deleted —
+as something every app writes for itself. This is the one axis on which
+Cloudflare's managed AutoRAG pipeline is genuinely more convenient.
+
+```ts
+import { defineRagSource } from "@lunora/ai/rag";
+
+const ingest = defineRagSource(docs(ctx), { namespace: ctx.shardKey });
+
+const report = await ingest.sync({
+    list: async function* () {
+        for await (const object of bucket.list()) {
+            yield { key: object.key, contentType: object.httpMetadata?.contentType, metadata: { url: object.key } };
+        }
+    },
+    get: async (object) => (await bucket.get(object.key))?.text(),
+});
+// → { indexed: [...], unchanged: [...], skipped: [...], pruned: [...] }
+```
+
+The object source is **injected**, so this runs over an R2 bucket, S3, a
+filesystem, or a database table without `@lunora/ai` depending on any of them.
+`list` may be an async generator, so a bucket with a million keys pages through
+without materialising every key first.
+
+**Re-syncing is free.** `rag.index` short-circuits on a content hash, so an
+unchanged object costs one `get` and no embedding — which makes running this on
+a cron the normal way to use it.
+
+**Pruning keeps the index a mirror.** Objects that disappeared from the source
+are removed, because a document deleted upstream but left indexed keeps being
+retrieved and cited. The tracking set is per-isolate, so the _first_ pass after
+a restart prunes nothing rather than wiping an index it has no record of
+building — a stale entry is recoverable, a wrongly-pruned one costs a full
+re-embed. Set `prune: false` to disable.
+
+**Extractors are injected too**, keyed by content type with `"*"` as a fallback.
+Parsing PDF is a large dependency, and pulling one in for everybody to serve the
+users who need it is the wrong trade. Plain-text types (`text/plain`,
+`text/markdown`, `text/csv`, `application/json`) need no extractor; anything
+else without one is **skipped**, never indexed as raw bytes — a PDF's binary or
+an HTML file's markup embeds to something that matches nothing.
+
 ## Cost telemetry without an AI Gateway
 
 Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway

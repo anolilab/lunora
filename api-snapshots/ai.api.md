@@ -205,6 +205,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagExtractor` (type)
+
+```ts
+type RagExtractor = (raw: string, object: RagSourceObject) => Promise<string | undefined> | string | undefined;
+```
+
 ### `RagLexicalStore` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -212,6 +218,15 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `RagNamedFilter` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagObjectSource` (interface)
+
+```ts
+interface RagObjectSource {
+    get: (object: RagSourceObject) => Promise<string | undefined> | string | undefined;
+    list: () => AsyncIterable<RagSourceObject> | Iterable<RagSourceObject>;
+}
+```
 
 ### `RagQueryTransform` (type)
 
@@ -224,6 +239,40 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `RagSource` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagSourceObject` (interface)
+
+```ts
+interface RagSourceObject {
+    contentType?: string;
+    key: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### `RagSourceOptions` (interface)
+
+```ts
+interface RagSourceOptions {
+    concurrency?: number;
+    extractors?: Record<string, RagExtractor>;
+    namespace?: string;
+    onObject?: (info: {
+        chunks: number;
+        key: string;
+        status: "indexed" | "skipped" | "unchanged";
+    }) => void;
+    prune?: boolean;
+}
+```
+
+### `RagSourceSync` (interface)
+
+```ts
+interface RagSourceSync {
+    sync: (source: RagObjectSource) => Promise<RagSyncReport>;
+}
+```
 
 ### `RagSqlDialect` (type)
 
@@ -263,6 +312,17 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
     delayMs?: number;
     id?: (document: Document) => string;
     text: (document: Document) => string | undefined;
+}
+```
+
+### `RagSyncReport` (interface)
+
+```ts
+interface RagSyncReport {
+    indexed: string[];
+    pruned: string[];
+    skipped: string[];
+    unchanged: string[];
 }
 ```
 
@@ -403,6 +463,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 const defineRag: (config: RagConfig) => ((context: RagContext) => Rag);
 ```
+
+### `defineRagSource` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `fixedWindowChunks` (const)
 
