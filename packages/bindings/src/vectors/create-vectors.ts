@@ -46,14 +46,19 @@ const toVector = async <TInput>(input: UpsertInput<TInput>): Promise<VectorizeVe
 const MAX_TOP_K = 100;
 
 /**
- * Vectorize lowers the `topK` ceiling to 20 when a query also asks for the
+ * Vectorize lowers the `topK` ceiling to 50 when a query also asks for the
  * vector values (`returnValues: true`) or full metadata (`returnMetadata:
  * "all"`) — the larger 100 cap only applies to id/score-only queries. We
- * enforce the tighter bound locally so a `topK: 50, returnValues: true` call
+ * enforce the tighter bound locally so a `topK: 80, returnValues: true` call
  * fails with a clear error instead of being silently capped (or rejected)
  * remotely.
+ *
+ * **Legacy V1 indexes cap at 20** and reject a larger `topK` remotely. A
+ * binding handle does not expose its index version, so this cannot branch on
+ * it; V2's limit is the one enforced, because capping everyone at 20 to spare
+ * V1 users a remote error denied the other 30 results to every V2 index.
  */
-const MAX_TOP_K_WITH_VALUES = 20;
+const MAX_TOP_K_WITH_VALUES = 50;
 
 /** Vectorize hard ceiling on the `ids` array for batched id lookups. */
 const MAX_ID_BATCH = 1000;

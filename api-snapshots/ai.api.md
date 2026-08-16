@@ -127,6 +127,15 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 ## `@lunora/ai/rag`
 
+### `ChunkerOptions` (interface)
+
+```ts
+interface ChunkerOptions {
+    overlap?: number;
+    size?: number;
+}
+```
+
 ### `IndexInput` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -248,6 +257,16 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `TokenChunkerOptions` (interface)
+
+```ts
+interface TokenChunkerOptions {
+    countTokens: (text: string) => number;
+    maxTokens?: number;
+    overlapTokens?: number;
+}
+```
+
 ### `bm25LexicalStore` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -274,6 +293,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `markdownChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `ragSyncTriggers` (const)
 
 ```ts
@@ -283,3 +306,11 @@ const ragSyncTriggers: <Document extends Record<string, unknown> = Record<string
     afterUpdate: RagSyncHandler;
 };
 ```
+
+### `sentenceChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `tokenChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
