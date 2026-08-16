@@ -89,7 +89,8 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
             queryCalls.push(input);
 
             const topK = input.topK ?? 5;
-            const ceiling = input.returnMetadata === "all" ? 20 : 100;
+            // Mirrors Vectorize V2: 50 with full metadata, 100 otherwise.
+            const ceiling = input.returnMetadata === "all" ? 50 : 100;
 
             if (!Number.isInteger(topK) || topK < 1 || topK > ceiling) {
                 throw new RangeError(`topK must be an integer between 1 and ${String(ceiling)}`);
@@ -426,7 +427,7 @@ describe(defineRag, () => {
         expect(new Set(result.sources.map((source) => source.id)).size).toBe(result.sources.length);
     });
 
-    it("caps topK at 20 in metadata mode instead of tripping the Vectorize ceiling", async () => {
+    it("caps topK at 50 in metadata mode instead of tripping the Vectorize ceiling", async () => {
         expect.assertions(3);
 
         const { queryCalls, vectors } = memoryVectors();
@@ -435,9 +436,9 @@ describe(defineRag, () => {
 
         await docs(ctx).index({ id: "doc-1", text: "hello world" });
 
-        await expect(docs(ctx).retrieve("hello", { topK: 50 })).resolves.toBeDefined();
+        await expect(docs(ctx).retrieve("hello", { topK: 80 })).resolves.toBeDefined();
 
-        expect(queryCalls[0]?.topK).toBe(20);
+        expect(queryCalls[0]?.topK).toBe(50);
         expect(queryCalls[0]?.returnMetadata).toBe("all");
     });
 

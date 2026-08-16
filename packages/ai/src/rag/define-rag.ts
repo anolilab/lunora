@@ -25,10 +25,29 @@ const DEFAULT_CHUNK_SIZE = 1000;
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
 
-/** Vectorize `topK` ceiling when full metadata is requested (metadata mode). */
-const MAX_TOP_K_FULL_METADATA = 20;
+/**
+ * Vectorize `topK` ceiling when full metadata is requested (metadata mode).
+ *
+ * 50, matching Vectorize V2. **Legacy V1 indexes cap at 20** and will reject a
+ * larger `topK` remotely — the check cannot distinguish them, since the index
+ * version is not visible from a binding handle. That trade is deliberate: the
+ * old local cap of 20 denied the other 30 results to *everyone* to spare V1
+ * users a remote error.
+ */
+const MAX_TOP_K_FULL_METADATA = 50;
 /** Vectorize `topK` ceiling otherwise (text-store mode). */
 const MAX_TOP_K = 100;
+
+/**
+ * Vectorize's per-vector dimension ceiling at 32-bit precision — the default
+ * for {@link RagConfig.maxEmbeddingDimensions}.
+ *
+ * It rules out most current large embedding models (`text-embedding-3-large`
+ * and Gemini embedding at 3072, Qwen3-Embedding at 4096). Without this check
+ * such a model fails at Vectorize with nothing naming the cause, which is the
+ * same failure {@link assertMetadataFits} exists to replace for metadata.
+ */
+const VECTORIZE_MAX_DIMENSIONS = 1536;
 
 /**
  * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
@@ -323,6 +342,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `topK` must be a positive integer");
     }
 
+    const maxDimensions = config.maxEmbeddingDimensions ?? VECTORIZE_MAX_DIMENSIONS;
+
+    if (maxDimensions !== false && (!Number.isInteger(maxDimensions) || maxDimensions < 1)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `maxEmbeddingDimensions` must be a positive integer, or `false` to disable the check");
+    }
+
     if (config.embeddingModelVersion !== undefined && !MODEL_VERSION_PATTERN.test(config.embeddingModelVersion)) {
         throw new LunoraError(
             "BAD_REQUEST",
@@ -359,6 +384,38 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // embeds run untraced. Narrowed from `unknown` — see `RagContext.trace`.
         const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
 
+        // The dimension check runs on the FIRST embedding this bound context
+        // produces, then never again: a model's dimensionality is fixed, so
+        // re-measuring every chunk of a 500-chunk document is pure overhead.
+        let dimensionsChecked = maxDimensions === false;
+
+        /**
+         * Refuse an embedding wider than the store can hold, naming both
+         * escapes. Runs against the vector actually produced rather than a
+         * declared dimension count — the model id alone does not reveal it, and
+         * a provider's Matryoshka `dimensions` option changes it.
+         */
+        const assertDimensionsFit = (dimensions: number, embeddingModel: EmbeddingModel): void => {
+            if (dimensionsChecked) {
+                return;
+            }
+
+            dimensionsChecked = true;
+
+            if (maxDimensions === false || dimensions <= maxDimensions) {
+                return;
+            }
+
+            const named = modelIdOf(embeddingModel);
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/ai/rag: embedding model${named === undefined ? "" : ` "${named}"`} produces ${String(dimensions)}-dimension vectors, over the ${String(maxDimensions)}-dimension ceiling of index "${config.index}" — ` +
+                    "either truncate them with the provider's `dimensions` option (Matryoshka models such as text-embedding-3-large support this), " +
+                    "or set `maxEmbeddingDimensions: false` if this index is not Vectorize-backed",
+            );
+        };
+
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
             // Resolve once and bind to a local `const`, so the nested `run` closure
             // sees a non-nullable model without a cast.
@@ -370,6 +427,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // after the call resolves, so they are attached through the handle.
             const run = async (span?: EmbedSpan): Promise<ReadonlyArray<number>> => {
                 const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
+
+                assertDimensionsFit(embedding.length, resolvedModel);
 
                 if (span !== undefined) {
                     // `usage.tokens` is typed non-optional by the AI SDK; the

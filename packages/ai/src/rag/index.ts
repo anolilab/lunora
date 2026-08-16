@@ -1,4 +1,6 @@
 export { default as fixedWindowChunks } from "./chunk";
+export type { ChunkerOptions, TokenChunkerOptions } from "./chunkers";
+export { markdownChunker, sentenceChunker, tokenChunker } from "./chunkers";
 export { default as defineRag } from "./define-rag";
 export { contentHash, guessMimeTypeFromExtension } from "./helpers";
 export { default as hybridRank } from "./hybrid-rank";

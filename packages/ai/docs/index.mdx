@@ -125,11 +125,11 @@ What you get beyond the manual loop:
   on the trace waterfall. A hand-built context without `ctx.trace` embeds untraced.
 
 Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
-capped at 20, 10 KiB of metadata per vector). For long documents or deeper
+capped at 50, 10 KiB of metadata per vector). For long documents or deeper
 retrieval, supply a `textStore` (`{ put, getMany, remove? }`: a DO table, KV,
 …): text moves out of metadata and the `topK` ceiling lifts to 100. The default
-chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
-token/sentence/semantic strategies.
+chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for the
+sentence, Markdown, or token strategies below.
 
 The 10 KiB is Vectorize's, and it covers the **whole** metadata object: chunk
 text, Lunora's bookkeeping keys, and any `metadata` you attach. `defineRag`
@@ -139,8 +139,67 @@ cause. It also rejects an unworkable `chunkSize` up front, though that earlier
 check can only compare characters against a byte ceiling; multibyte text costs
 up to three bytes each, so the index-time measurement is the one that holds.
 
-The `topK` 20 is **Lunora's** cap, not Vectorize's: Vectorize allows 50 with
-full metadata. Ours is a legacy-V1 holdover.
+The `topK` 50 is Vectorize V2's own ceiling for full-metadata queries. **Legacy
+V1 indexes cap at 20** and will reject a larger `topK` remotely; a binding
+handle does not expose its index version, so the check cannot branch on it.
+
+### Chunking strategies
+
+`chunkSize`/`chunkOverlap` drive the built-in fixed character window. For real
+documents, pass `chunk` one of the structure-aware chunkers instead — a chunk
+that starts mid-clause embeds to a worse vector than the same prose split where
+the author ended a thought:
+
+```ts
+import { defineRag, markdownChunker, sentenceChunker, tokenChunker } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    chunk: markdownChunker({ overlap: 200, size: 1000 }),
+    index: "docs",
+});
+```
+
+- **`sentenceChunker({ size, overlap })`** — packs whole sentences into
+  `size`-bounded windows. The default choice for prose.
+- **`markdownChunker({ size, overlap })`** — splits at ATX headings (code fences
+  are tracked, so a `#` comment inside a fence never starts a section), then
+  packs each section's sentences. Every chunk is prefixed with its **heading
+  trail** (`# Guide > ## Auth > ### OAuth`), so a chunk from deep inside a long
+  document still carries what it is about — which is what makes it retrievable
+  by a query naming its section rather than its prose.
+- **`tokenChunker({ countTokens, maxTokens, overlapTokens })`** — bounds chunks
+  by a real token count, for when the embedding model's context window is the
+  binding constraint (anything longer is silently truncated, so the tail is
+  embedded as if it were never written). `countTokens` is **required and
+  injected**: `@lunora/ai` will not add a tokenizer dependency or pretend a
+  characters-per-token constant is a token count. Pass `js-tiktoken`,
+  `gpt-tokenizer`, or your provider's counter.
+
+None of them can exceed `size`: an atom too large to fit falls back to a hard
+character split rather than emitting a chunk the store would reject.
+
+### Embedding dimensions
+
+Vectorize stores at most **1536 dimensions** per vector, which rules out most
+current large embedding models (`text-embedding-3-large` and Gemini embedding at
+3072, Qwen3-Embedding at 4096). `defineRag` measures the first embedding each
+bound context produces and refuses a wider one, naming the ceiling and both
+escapes — rather than letting the upsert fail at Vectorize with nothing saying
+why:
+
+```ts
+import { openai } from "@ai-sdk/openai";
+
+export const docs = defineRag({
+    // Matryoshka truncation keeps a large model under the ceiling:
+    embeddingModel: openai.textEmbeddingModel("text-embedding-3-large", { dimensions: 1536 }),
+    index: "docs",
+});
+```
+
+Set `maxEmbeddingDimensions: false` to disable the check when the index is not
+Vectorize-backed, or give it a number to enforce a different store's ceiling.
+The check runs once per bound context, not once per chunk.
 
 ### Bring your own embeddings — no `env.AI` binding
 

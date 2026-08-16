@@ -298,6 +298,24 @@ export interface RagConfig {
     lexicalTopK?: number;
 
     /**
+     * Ceiling on the embedding model's dimensionality, checked once per bound
+     * context against the first embedding actually produced. Defaults to
+     * **1536** — Vectorize's per-vector limit at 32-bit precision.
+     *
+     * The default rules out most current large embedding models
+     * (`text-embedding-3-large` and Gemini embedding at 3072,
+     * Qwen3-Embedding at 4096). Without the check they fail at Vectorize with
+     * nothing naming the cause; with it they fail at the first embed, naming
+     * the ceiling and both escapes — truncate via the provider's Matryoshka
+     * `dimensions` option, or set this to `false` when the index is not
+     * Vectorize-backed.
+     *
+     * `false` disables the check entirely: the right setting for a
+     * {@link RagVectors} implementation with a different (or no) ceiling.
+     */
+    maxEmbeddingDimensions?: number | false;
+
+    /**
      * Enforce tenant isolation: throw (instead of the one-time dev warning)
      * when `index`/`retrieve`/`remove` run without a `namespace`. Recommended
      * for every multi-tenant app — Vectorize indexes are account-global, and
