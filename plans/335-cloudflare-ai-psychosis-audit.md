@@ -247,22 +247,22 @@ visibility a Cloudflare feature inside a host-neutral telemetry stack.
 
 ## 5. Workstreams
 
-| ID  | Work                                                                                                                                                                                                                 | Size    | Gap        | Independent?   |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------- | -------------- |
-| W0  | **Unmeasurable-duration honesty**: detect no-I/O zero-duration spans, omit the duration attribute, render "unmeasurable (no I/O)" in the Studio waterfall, and correct the wrong diagnosis at `span-buffer.ts:62-69` | **S–M** | §0         | yes            |
-| W1  | Raise the full-metadata `topK` ceiling 20 → 50 (`define-rag.ts:29`, `create-vectors.ts:56`); fix `docs/index.mdx:142`                                                                                                | **S**   | G9         | yes            |
-| W2  | Dimension-ceiling validation at define/index time, naming the ceiling and the escapes (Matryoshka `dimensions` truncation, or a non-Vectorize store)                                                                 | **S**   | G8         | yes            |
-| W3  | Built-in chunkers: token-aware, sentence, markdown-heading                                                                                                                                                           | **S**   | G10        | yes            |
-| W4  | Query-embedding cache (content-hash keyed) + `embedMany` batching on the index path                                                                                                                                  | **S**   | G11        | yes            |
-| W5  | `rerank?` hook + `workersAiReranker()` / BYO adapters                                                                                                                                                                | **S–M** | G4         | yes            |
-| W6  | `transformQuery?` hook with shipped HyDE and multi-query strategies; wire `conversationId` into follow-up rewriting                                                                                                  | **S–M** | G5         | yes            |
-| W7  | Retrieval scorers (recall@k, MRR, nDCG, context precision) + groundedness/faithfulness + a `RetrieveResult`-shaped eval fixture                                                                                      | **M**   | G6         | yes            |
-| W8  | **`sqliteLexicalStore()`** over `@lunora/search-core` + DO SQLite FTS — durable **and** metadata/filter-aware, so hybrid and RLS finally compose                                                                     | **M**   | G1, G2     | yes            |
-| W9  | **`RagVectorStore` seam** — extract the Vectorize adapter behind it, move caps onto the adapter (D4), keep the existing path byte-identical                                                                          | **M**   | G3         | blocks W10/W11 |
-| W10 | **pgvector adapter over `@lunora/hyperdrive`** — HNSW + `tsvector` hybrid in one query, no dimension ceiling                                                                                                         | **M–L** | G3, G8, C5 | after W9       |
-| W11 | DO-SQLite vector adapter (brute-force cosine; `sqlite-vec` if available) for small per-tenant indexes                                                                                                                | **M**   | G3         | after W9       |
-| W12 | Move model cost/token accounting into `@lunora/observability` with a static price table; demote the AI Gateway to enrichment                                                                                         | **M**   | G12        | yes            |
-| W13 | `defineRagSource({ bucket })` ingestion over `@lunora/storage` + `@lunora/queue` + `@lunora/workflow`, reusing the content-hash short-circuit; PDF/HTML/Markdown extractors                                          | **L**   | G7         | after W9       |
+| ID  | Work                                                                                                                                                                                                                    | Size    | Gap        | Independent?   |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | ---------- | -------------- |
+| W0  | ~~Unmeasurable-duration honesty~~ — **STOPPED; narrow version shipped.** Corrected the misdiagnosis at `span-buffer.ts:62-69` and documented the limitation. The I/O-detection half hit its own STOP condition — see §8 | **S**   | §0         | **done**       |
+| W1  | Raise the full-metadata `topK` ceiling 20 → 50 (`define-rag.ts:29`, `create-vectors.ts:56`); fix `docs/index.mdx:142`                                                                                                   | **S**   | G9         | yes            |
+| W2  | Dimension-ceiling validation at define/index time, naming the ceiling and the escapes (Matryoshka `dimensions` truncation, or a non-Vectorize store)                                                                    | **S**   | G8         | yes            |
+| W3  | Built-in chunkers: token-aware, sentence, markdown-heading                                                                                                                                                              | **S**   | G10        | yes            |
+| W4  | Query-embedding cache (content-hash keyed) + `embedMany` batching on the index path                                                                                                                                     | **S**   | G11        | yes            |
+| W5  | `rerank?` hook + `workersAiReranker()` / BYO adapters                                                                                                                                                                   | **S–M** | G4         | yes            |
+| W6  | `transformQuery?` hook with shipped HyDE and multi-query strategies; wire `conversationId` into follow-up rewriting                                                                                                     | **S–M** | G5         | yes            |
+| W7  | Retrieval scorers (recall@k, MRR, nDCG, context precision) + groundedness/faithfulness + a `RetrieveResult`-shaped eval fixture                                                                                         | **M**   | G6         | yes            |
+| W8  | **`sqliteLexicalStore()`** over `@lunora/search-core` + DO SQLite FTS — durable **and** metadata/filter-aware, so hybrid and RLS finally compose                                                                        | **M**   | G1, G2     | yes            |
+| W9  | **`RagVectorStore` seam** — extract the Vectorize adapter behind it, move caps onto the adapter (D4), keep the existing path byte-identical                                                                             | **M**   | G3         | blocks W10/W11 |
+| W10 | **pgvector adapter over `@lunora/hyperdrive`** — HNSW + `tsvector` hybrid in one query, no dimension ceiling                                                                                                            | **M–L** | G3, G8, C5 | after W9       |
+| W11 | DO-SQLite vector adapter (brute-force cosine; `sqlite-vec` if available) for small per-tenant indexes                                                                                                                   | **M**   | G3         | after W9       |
+| W12 | Move model cost/token accounting into `@lunora/observability` with a static price table; demote the AI Gateway to enrichment                                                                                            | **M**   | G12        | yes            |
+| W13 | `defineRagSource({ bucket })` ingestion over `@lunora/storage` + `@lunora/queue` + `@lunora/workflow`, reusing the content-hash short-circuit; PDF/HTML/Markdown extractors                                             | **L**   | G7         | after W9       |
 
 **Suggested first cut: W0 + W1 + W2 + W8.** W1 and W2 are hours. W0 fixes a
 correctness defect in our own observability that the article's sharpest technical
@@ -297,7 +297,7 @@ edit in the same change.
 
 | Phase | Work           | Gate                                                                                                                                                                                                                                                                                                      |
 | ----- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0     | W0             | A workerd-pool test (`@cloudflare/vitest-pool-workers`) asserts that a pure-CPU `ctx.trace` span emits **no** duration attribute and renders as unmeasurable, while an I/O-performing span emits a real one. Regression-guards the exact defect in §0.                                                    |
+| 0     | W0 (narrow)    | **Shipped.** No automated gate is possible — Miniflare does not reproduce the production clock, so a test asserting production behaviour fails locally against correct code. Verified by the probe in §9 Q1.                                                                                              |
 | 0     | W1, W2         | `topK: 50` metadata-mode retrieval returns 50 chunks against a seeded index; a 3072-dim `embeddingModel` throws a named error at define time. `pnpm --filter "@lunora/ai" run test` + `pnpm run api:check` green.                                                                                         |
 | 1     | W8             | A new `RagLexicalStore` conformance suite under `packages/platform/src/conformance` that both stores run, **including a filtered-search case the in-memory store is expected to fail closed on and the SQLite one is expected to answer.** Hybrid + metadata `rlsFilter` returns a non-empty lexical leg. |
 | 2     | W3, W4, W5, W6 | Golden-fixture retrieval-quality suite (W7's scorers): rerank and HyDE each measurably raise nDCG@10 on a committed corpus, **or the workstream is rejected rather than shipped on faith.**                                                                                                               |
@@ -308,11 +308,18 @@ edit in the same change.
 
 ## 8. Risks & STOP conditions
 
-- **STOP if W0's unmeasurable condition cannot be detected without threading I/O
-  state through every span site.** If the plumbing cost exceeds the fix, fall
-  back to the narrow version: correct the wrong comment at `span-buffer.ts:62-69`
-  and document the limitation in the observability docs. A documented limitation
-  still beats a confident wrong number.
+- ~~**STOP if W0's unmeasurable condition cannot be detected without threading
+  I/O state through every span site.**~~ **Triggered — narrow version shipped.**
+  Both halves of the escape clause were met: there is no I/O signal to read (§9
+  Q2), and no gate could prove a fix works, since Miniflare does not reproduce
+  the production behaviour (§9 Q1). Shipped instead: the corrected diagnosis at
+  `span-buffer.ts:62-69`, and a "Span durations on Workers" section in
+  `apps/docs/.../concepts/observability.mdx` stating that a `0 ms` span means
+  "no I/O happened here", not "this was fast" — and that the defect is invisible
+  under `wrangler dev`. A documented limitation still beats a confident wrong
+  number. **Re-open if** the runtime exposes a per-request I/O counter, or if
+  `@lunora/platform-node` (real monotonic clock) makes a differential test
+  possible.
 - **STOP if the SQLite FTS lexical leg cannot honour a metadata filter.** A
   lexical store that fails closed under RLS is what we already have
   (`lexical-store.ts:143`); W8's entire value is composing with RLS. If
@@ -337,14 +344,25 @@ edit in the same change.
 
 ## 9. Open questions (answer during execution)
 
-1. Does workerd's `performance.now()` advance independently of `Date.now()`, or
-   is it frozen by the same Spectre mitigation? If it advances, W0 becomes a
-   measurement fix rather than an honesty fix — a much better outcome. **Answer
-   this first; it determines W0's whole shape.**
-2. What is the cheapest reliable signal that a span performed I/O? A counter
-   incremented by the `ctx.db` / `ctx.fetch` / `ctx.vectors` telemetry wrappers
-   that already exist (`database-telemetry.ts`, `context-telemetry.ts`), or
-   something the runtime exposes directly?
+1. ~~Does workerd's `performance.now()` advance independently of `Date.now()`?~~
+   **Answered: no.** Probed under Miniflare (30M-iteration CPU spin, no I/O):
+   `Date.now()` and `performance.now()` reported the _same_ 60 ms delta, so
+   `performance.now()` is not an independent clock and cannot rescue the
+   measurement. W0 is an honesty fix, not a measurement fix.
+
+    The probe also turned up something worse, now documented: **Miniflare does
+    not apply the production mitigation**, so both clocks advance normally
+    locally. The defect is invisible in `wrangler dev` and appears only in
+    production — which also means the phase-0 gate as originally written cannot
+    be built, since locally a pure-CPU span reports a real duration and the test
+    would fail against correct code.
+
+2. ~~What is the cheapest reliable signal that a span performed I/O?~~
+   **Answered: there isn't one today.** No I/O counter exists — the telemetry
+   wrappers (`database-telemetry.ts`, `context-telemetry.ts`) count nothing a
+   span could read. Adding one means threading state through `shard-do.ts`
+   (~8.5k lines) and `create-worker.ts`, with no gate able to prove it works.
+   Together with Q1 this triggered W0's STOP condition.
 3. Does `@lunora/search-core`'s analyzer/scorer carry enough to evaluate a
    metadata predicate, or does W8 need a schema extension? (Gates W8 — see the
    STOP condition.)

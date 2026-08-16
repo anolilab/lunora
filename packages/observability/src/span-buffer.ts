@@ -61,11 +61,21 @@ export interface TraceSummary {
 
     /**
      * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
+     *
      * Start time alone is not enough to order them: spans are recorded on
-     * completion and `startTs` has millisecond resolution, so a parent and its
-     * child routinely tie. Breaking that tie by depth makes the sequence a valid
-     * pre-order traversal of the span tree, so indenting each row by its `depth`
-     * yields the nesting without a separate tree walk.
+     * completion, and a parent and its child routinely share a `startTs`.
+     * Breaking that tie by depth makes the sequence a valid pre-order traversal
+     * of the span tree, so indenting each row by its `depth` yields the nesting
+     * without a separate tree walk.
+     *
+     * **Why they tie is not millisecond resolution.** On the Workers runtime
+     * `Date.now()` is pinned to the time of the last I/O — a Spectre mitigation,
+     * not a bug — so it does not advance at all across pure computation. Every
+     * duration in this package is `Date.now() - startTs`, which means a span
+     * wrapping CPU-only work reports `0`, and a parent whose child performed no
+     * I/O shares its exact start and end. See `docs/concepts/observability`
+     * ("Span durations on Workers"); the practical consequence is that a `0 ms`
+     * span means "no I/O happened here", not "this was fast".
      */
     spans: TraceSpan[];
     startTs: number;
