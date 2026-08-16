@@ -1,9 +1,12 @@
 import type { EmbeddingModel } from "ai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import defineRag from "../../src/rag/define-rag";
 import { batchReranker, scoreReranker } from "../../src/rag/rerank";
 import type { RagVectorQueryInput, RagVectors, RetrievedChunk } from "../../src/rag/types";
+
+/** Counters for the two AI SDK embed entry points, reset per test. */
+const counters = { embed: 0, embedMany: 0 };
 
 /** Deterministic embedder — the ranking here is driven by the stub store, not by vectors. */
 vi.mock(import("ai"), async (importOriginal) => {
@@ -12,8 +15,15 @@ vi.mock(import("ai"), async (importOriginal) => {
     return {
         ...actual,
         embed: (async () => {
+            counters.embed += 1;
+
             return { embedding: [0.1, 0.2, 0.3], usage: { tokens: 1 } };
         }) as unknown as typeof actual.embed,
+        embedMany: (async ({ values }: { values: ReadonlyArray<string> }) => {
+            counters.embedMany += 1;
+
+            return { embeddings: values.map(() => [0.1, 0.2, 0.3]), usage: { tokens: values.length } };
+        }) as unknown as typeof actual.embedMany,
     };
 });
 
@@ -312,5 +322,105 @@ describe("topK trimming", () => {
         const result = await docs({ vectors }).retrieve("q", { topK: 3 });
 
         expect(result.chunks).toHaveLength(3);
+    });
+});
+
+describe("embedding batching and cache", () => {
+    beforeEach(() => {
+        counters.embed = 0;
+        counters.embedMany = 0;
+    });
+
+    /** A store that records how many times the caller's embedder was invoked. */
+    const countingStore = (): { embedCalls: () => number; vectors: RagVectors } => {
+        let calls = 0;
+
+        return {
+            embedCalls: () => calls,
+            vectors: {
+                deleteByIds: () => Promise.resolve(undefined),
+                getByIds: () => Promise.resolve([]),
+                query: async (_index, input) => {
+                    if (input.embed && input.input !== undefined) {
+                        calls += 1;
+                        await input.embed(input.input);
+                    }
+
+                    return { count: 0, matches: [] };
+                },
+                upsert: async (_index, input) => {
+                    if (input.embed) {
+                        calls += 1;
+                        await input.embed(input.input);
+                    }
+
+                    return undefined;
+                },
+            },
+        };
+    };
+
+    it("embeds a multi-chunk document in one batched call", async () => {
+        expect.assertions(2);
+
+        const { vectors } = countingStore();
+        const docs = defineRag({ allowSharedNamespace: true, chunkOverlap: 0, chunkSize: 10, embeddingModel: model, index: "docs" });
+
+        // Distinct chunk texts: identical ones dedupe to a single embed, which
+        // is correct but would not exercise the batch.
+        const text = ["alpha00000", "bravo11111", "charl22222", "delta33333", "echo444444"].join("");
+        const result = await docs({ vectors }).index({ id: "a", text });
+
+        expect(result.chunks).toBe(5);
+        // One embedMany for all five chunks; the per-chunk callbacks are hits.
+        expect(counters.embedMany).toBe(1);
+    });
+
+    it("does not batch a single-chunk document", async () => {
+        expect.assertions(1);
+
+        const { vectors } = countingStore();
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs" });
+
+        await docs({ vectors }).index({ id: "a", text: "short" });
+
+        expect(counters.embedMany).toBe(0);
+    });
+
+    it("retains query embeddings across calls when cacheEmbeddings is set", async () => {
+        expect.assertions(2);
+
+        const { vectors } = countingStore();
+        const docs = defineRag({ allowSharedNamespace: true, cacheEmbeddings: 8, embeddingModel: model, index: "docs" });
+        const rag = docs({ vectors });
+
+        await rag.retrieve("same question");
+        const afterFirst = counters.embed;
+
+        await rag.retrieve("same question");
+
+        expect(afterFirst).toBeGreaterThan(0);
+        expect(counters.embed).toBe(afterFirst);
+    });
+
+    it("re-embeds a repeated query when no cache is configured", async () => {
+        expect.assertions(1);
+
+        const { vectors } = countingStore();
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs" });
+        const rag = docs({ vectors });
+
+        await rag.retrieve("same question");
+        const afterFirst = counters.embed;
+
+        await rag.retrieve("same question");
+
+        expect(counters.embed).toBeGreaterThan(afterFirst);
+    });
+
+    it("rejects a negative cache size at define time", () => {
+        expect.assertions(1);
+
+        expect(() => defineRag({ cacheEmbeddings: -1, index: "docs" })).toThrow(/`cacheEmbeddings` must be a non-negative integer/u);
     });
 });

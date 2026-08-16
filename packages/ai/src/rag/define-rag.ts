@@ -1,6 +1,6 @@
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
-import { embed as aiEmbed, jsonSchema, tool } from "ai";
+import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
@@ -370,6 +370,16 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `candidates` must be a positive integer");
     }
 
+    if (config.cacheEmbeddings !== undefined && (!Number.isInteger(config.cacheEmbeddings) || config.cacheEmbeddings < 0)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `cacheEmbeddings` must be a non-negative integer");
+    }
+
+    /**
+     * Cross-call embedding retention. The index-path batch always seeds the
+     * cache regardless, so the floor is the number of chunks in flight; this
+     * bound governs what SURVIVES a call.
+     */
+    const cacheLimit = config.cacheEmbeddings ?? 0;
     const reranker = config.rerank;
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
     const { textStore } = config;
@@ -432,7 +442,48 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             );
         };
 
+        /**
+         * Embeddings resolved earlier in this bound context, keyed by text.
+         *
+         * Two jobs. Within `index()` it is pre-filled by one `embedMany` call so
+         * the per-chunk `embed` callbacks `ctx.vectors.upsert` invokes are cache
+         * hits rather than N separate round-trips. Across calls it is the
+         * opt-in query cache (`cacheEmbeddings`), which matters because
+         * `retrieve()` re-embeds the same question every time it is asked.
+         *
+         * Safe to share: an embedding is a pure function of (model, text), and a
+         * hit requires already holding the exact text, so nothing leaks that the
+         * caller did not supply. Scoped to the bound context — never module
+         * level — so it cannot outlive the request that built it.
+         */
+        const embedCache = new Map<string, ReadonlyArray<number>>();
+
+        /** Evict oldest-first once the cache passes its bound (insertion-ordered Map). */
+        const rememberEmbedding = (text: string, embedding: ReadonlyArray<number>): void => {
+            if (cacheLimit === 0) {
+                return;
+            }
+
+            embedCache.set(text, embedding);
+
+            while (embedCache.size > cacheLimit) {
+                const oldest = embedCache.keys().next();
+
+                if (oldest.done === true) {
+                    break;
+                }
+
+                embedCache.delete(oldest.value);
+            }
+        };
+
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
+            const cached = embedCache.get(text);
+
+            if (cached !== undefined) {
+                return cached;
+            }
+
             // Resolve once and bind to a local `const`, so the nested `run` closure
             // sees a non-nullable model without a cast.
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
@@ -462,6 +513,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         span.setAttribute("gen_ai.usage.cost", cost);
                     }
                 }
+
+                rememberEmbedding(text, embedding);
 
                 return embedding;
             };
@@ -502,6 +555,49 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 .filter((entry) => entry.length > 0);
 
             return candidates.length > 0 ? candidates : [query];
+        };
+
+        /**
+         * Embed `texts` in one batched call and seed {@link embedCache}, so the
+         * per-chunk `embed` callbacks that follow resolve without further I/O.
+         *
+         * Best-effort: a provider that rejects the batch (or an AI SDK build
+         * without `embedMany`) leaves the cache empty and every chunk falls back
+         * to its own single embed — the pre-existing path. A batching
+         * optimisation must never be the reason indexing fails.
+         */
+        const prefillEmbeddings = async (texts: ReadonlyArray<string>): Promise<void> => {
+            const pending = [...new Set(texts.filter((text) => !embedCache.has(text)))];
+
+            if (pending.length < 2) {
+                return;
+            }
+
+            model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
+
+            try {
+                const { embeddings } = await aiEmbedMany({ model, values: pending });
+
+                if (embeddings.length !== pending.length) {
+                    return;
+                }
+
+                const [first] = embeddings;
+
+                if (first !== undefined) {
+                    assertDimensionsFit(first.length, model);
+                }
+
+                for (const [position, text] of pending.entries()) {
+                    rememberEmbedding(text, embeddings[position] as ReadonlyArray<number>);
+                }
+            } catch (error) {
+                // A dimension breach is a real configuration error and must
+                // surface, not be swallowed as a failed optimisation.
+                if (isLunoraError(error)) {
+                    throw error;
+                }
+            }
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
@@ -604,6 +700,13 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     await config.lexicalStore.index(storedChunks, { namespace: effectiveNamespace });
                 }
             }
+
+            // One `embedMany` for the whole document instead of N single embeds:
+            // `ctx.vectors.upsert` invokes `embed` per chunk, and those calls now
+            // hit the pre-filled cache. A provider without a real batch endpoint
+            // still fans out internally, so this is never worse — and with one it
+            // collapses a 200-chunk document from 200 round-trips to a handful.
+            await prefillEmbeddings(pieces);
 
             await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
                 const id = ids[chunkIndex] as string;
