@@ -11,6 +11,7 @@
     },
     "scripts": {
         "build": "vite build",
+        "build:skills": "node scripts/build-skills.mjs",
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
@@ -20,9 +21,12 @@
         "test": "vitest run"
     },
     "dependencies": {
+        "@lunora/agent": "workspace:*",
+        "@lunora/ai": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
+        "@lunora/workflow": "workspace:*",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-start": "catalog:frontend",

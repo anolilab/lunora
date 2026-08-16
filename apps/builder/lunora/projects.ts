@@ -1,34 +1,12 @@
 import { LunoraError } from "lunorash/errors";
-import { createDbStore, rateLimit, RateLimiter } from "lunorash/ratelimit";
+import { rateLimit } from "lunorash/ratelimit";
 
-import type { MutationCtx } from "#lunora/_generated/server.js";
 import { mutation, query, v } from "#lunora/_generated/server.js";
+
+import { limiter, limitKey } from "./limits";
 
 /** Cap on a page of projects, so a dashboard query can't ask for the whole table. */
 const MAX_PAGE = 100;
-
-/**
- * Write limiter for the public project mutations.
- *
- * Typed against the generated `MutationCtx` so `rateLimit(limiter, …)` infers
- * the full procedure context — `ctx.auth` in the key callback and a typed
- * `ctx.db` in the downstream handler both depend on it.
- *
- * This is **abuse protection, not the product's quota**. Plan 335 §D17 meters
- * turns and tokens through `tokenBudget`, which is W7; this only stops an
- * unauthenticated caller minting projects in a loop, which is a public write
- * path the advisor rightly flags (`public_mutation_without_ratelimit`).
- */
-const limiter = (ctx: MutationCtx) =>
-    new RateLimiter({
-        config: {
-            write: { kind: "token bucket", period: 60_000, rate: 20 },
-        },
-        store: createDbStore({ db: ctx.db, table: "ratelimit_buckets" }),
-    });
-
-/** Anonymous callers share a bucket per session; signed-in ones get their own. */
-const limitKey = (ctx: { auth: { userId?: string | null } }) => ctx.auth.userId ?? "anon";
 
 /**
  * The dashboard list — most recently touched first.

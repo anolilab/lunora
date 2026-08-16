@@ -1184,6 +1184,12 @@ importers:
 
   apps/builder:
     dependencies:
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
@@ -1193,6 +1199,9 @@ importers:
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
+      '@lunora/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.2.8)

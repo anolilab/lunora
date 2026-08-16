@@ -167,6 +167,23 @@ export default defineConfig({
                         description: "Form field name misread as a generic secret by kingfisher.generic.5",
                         regexes: ["^confirmPassword$", "^currentPassword$", "^newPassword$"], // secret-scanner:allow
                     },
+                    // `apps/builder` threads a `projectId` through every signature,
+                    // type and validator — it is the shard key, so it appears in
+                    // dozens of TypeScript declarations. `kingfisher.cypress.2` hunts
+                    // Cypress project ids, which are also spelled `projectId`, and it
+                    // fires on the DECLARATION: from `projectId: string` it extracts
+                    // the secret `string`, and from `projectId: PROJECT_ID` it
+                    // extracts `PROJECT`. Those are type and constant names, not
+                    // values — the same "credential-shaped name, no value" class as
+                    // the two entries above.
+                    //
+                    // Scoped to those four exact extracted strings rather than to the
+                    // rule or the path, so a real Cypress id (a 32-char hex string)
+                    // assigned to `projectId` anywhere in the tree still fires.
+                    {
+                        description: "TypeScript type/parameter names after `projectId:` misread as a Cypress project id by kingfisher.cypress.2",
+                        regexes: ["^string$", "^PROJECT$", "^project$", "^argument$"],
+                    },
                 ],
             },
         },

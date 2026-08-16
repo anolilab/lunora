@@ -13,6 +13,15 @@
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Workers AI backs the build agent's model (see lunora/agents.ts). A Workers
+    // AI id keeps a first run possible with no provider key and no gateway;
+    // plan 335 §D9 routes other providers through AI Gateway with BYOK.
+    "ai": { "binding": "AI" },
+    // `defineAgent` compiles onto a Cloudflare Workflow. Workflows are NOT
+    // Durable Objects — they live here with no migration entry, and the class
+    // must be exported by the worker entry (the composed `virtual:lunora/worker`
+    // forwards it). `lunora dev` reconciles this from lunora/agents.ts.
+    "workflows": [{ "binding": "AGENT_BUILDER", "class_name": "BuilderAgentWorkflow", "name": "builder-agent" }],
     // `projects`, `users` and `shares` are `.global()` (see lunora/schema.ts), so
     // they live in D1 rather than in a shard. Create the database with
     // `wrangler d1 create lunora-builder` and paste the id here; `lunora dev`

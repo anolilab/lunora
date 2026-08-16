@@ -99,3 +99,236 @@ body {
     padding: 3rem;
     text-align: center;
 }
+
+/* ── Workbench ─────────────────────────────────────────────────────────────
+ * A four-pane grid: chat down the left, then tree / editor stacked over a
+ * terminal. Deliberately fixed rather than resizable — draggable splitters are
+ * state to persist and test for a layout nobody has complained about yet.
+ */
+.workbench {
+    display: grid;
+    grid-template-areas:
+        "chat tree editor"
+        "chat term term";
+    grid-template-columns: 22rem 16rem 1fr;
+    grid-template-rows: 1fr 14rem;
+    height: 100vh;
+    gap: 1px;
+    background: var(--line);
+}
+
+.pane {
+    background: var(--bg);
+    overflow: auto;
+    padding: 0.75rem;
+    min-width: 0;
+}
+
+.pane-chat {
+    grid-area: chat;
+    display: flex;
+    flex-direction: column;
+}
+.pane-tree {
+    grid-area: tree;
+}
+.pane-editor {
+    grid-area: editor;
+    display: flex;
+}
+.pane-terminal {
+    grid-area: term;
+    display: flex;
+    flex-direction: column;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.82rem;
+}
+
+.transcript {
+    list-style: none;
+    margin: 0 0 0.75rem;
+    padding: 0;
+    flex: 1;
+    overflow: auto;
+}
+
+.turn {
+    margin-bottom: 0.85rem;
+}
+
+.turn-role {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+}
+
+.turn-body {
+    margin: 0.15rem 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
+}
+
+.turn-tool .turn-body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+    color: var(--muted);
+}
+
+.composer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.composer textarea,
+.editor-body,
+.terminal-input input {
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    padding: 0.5rem;
+    resize: none;
+}
+
+.composer button,
+.editor-header button {
+    padding: 0.45rem 0.9rem;
+    border: 0;
+    border-radius: 0.4rem;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+}
+
+.composer button:disabled,
+.editor-header button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.file-tree {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.file-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.3rem 0.4rem;
+    border: 0;
+    border-radius: 0.3rem;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.file-row:hover {
+    background: var(--line);
+}
+
+.file-row-selected {
+    background: var(--line);
+    font-weight: 600;
+}
+
+.file-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.editor-body {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+
+.terminal {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.terminal-log {
+    list-style: none;
+    margin: 0 0 0.5rem;
+    padding: 0;
+    flex: 1;
+    overflow: auto;
+}
+
+.terminal-command {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.prompt {
+    color: var(--accent);
+}
+
+.terminal-output {
+    margin: 0.1rem 0 0.6rem 1rem;
+    white-space: pre-wrap;
+    color: var(--muted);
+}
+
+.terminal-output-failed {
+    color: light-dark(#b4232b, #ff8f8f);
+}
+
+/* The driver badge is not decoration: a user told a command ran must be able to
+ * see whether it ran anywhere real. `simulated` is the default until a container
+ * binding exists. */
+.badge {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 0.6rem;
+    font-size: 0.68rem;
+    color: var(--muted);
+}
+
+.badge-real {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.terminal-input {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.terminal-input input {
+    flex: 1;
+}

@@ -1,9 +1,25 @@
 import { useMutation, useQuery } from "@lunora/react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import type { ChangeEventHandler, FormEventHandler, JSX } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { api } from "#lunora/_generated/api.js";
+
+/** One row. Split out so the `Link` params object is built once per project rather than per list render. */
+const ProjectRow = ({ project }: { project: { _id: string; name: string; template: string } }): JSX.Element => {
+    const params = useMemo(() => {
+        return { projectId: project._id };
+    }, [project._id]);
+
+    return (
+        <li>
+            <Link className="project-name" params={params} to="/p/$projectId">
+                {project.name}
+            </Link>
+            <span className="muted">{project.template}</span>
+        </li>
+    );
+};
 
 /**
  * The project list, split out so the loading, empty and populated states are
@@ -21,10 +37,7 @@ const ProjectList = ({ projects }: { projects: ReadonlyArray<{ _id: string; name
     return (
         <ul className="projects">
             {projects.map((project) => (
-                <li key={project._id}>
-                    <span className="project-name">{project.name}</span>
-                    <span className="muted">{project.template}</span>
-                </li>
+                <ProjectRow key={project._id} project={project} />
             ))}
         </ul>
     );

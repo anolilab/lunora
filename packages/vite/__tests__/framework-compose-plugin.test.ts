@@ -253,6 +253,33 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain('export * from "./lunora/_generated/containers"');
         });
 
+        it("omits the agent re-export when the project declares no agent", () => {
+            expect.hasAssertions();
+
+            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).not.toContain("/agents");
+        });
+
+        it("re-exports the generated agent workflow classes when the project declares an agent", () => {
+            expect.hasAssertions();
+
+            // Same rule as containers: wrangler refuses a `workflows[].class_name`
+            // the worker does not export, and a class-A app has no hand-written
+            // entry to add it to — so without this an app that declares an agent
+            // deploys with nothing to run.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", false, false, false, true);
+
+            expect(code).toContain('export * from "./lunora/_generated/agents"');
+        });
+
+        it("re-exports containers and agents together when a project declares both", () => {
+            expect.hasAssertions();
+
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", true, false, false, true);
+
+            expect(code).toContain('export * from "./lunora/_generated/containers"');
+            expect(code).toContain('export * from "./lunora/_generated/agents"');
+        });
+
         it("imports the runtime from the granular `@lunora/runtime` by default", () => {
             expect.hasAssertions();
 

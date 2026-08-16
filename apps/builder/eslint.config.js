@@ -18,6 +18,9 @@ export default createConfig(
             "**/.next/**",
             "**/.source/**",
             "**/_generated/**",
+            // Emitted by scripts/build-skills.mjs from packages/cli/skills — the
+            // markdown inside is the corpus's, not ours to lint.
+            "**/skills.generated.ts",
             "**/__fixtures__/**",
             "**/fixtures/**",
             "**/test-results/**",
@@ -45,6 +48,10 @@ export default createConfig(
         rules: {
             // Web platform globals present in the workerd + browser deploy runtimes (and
             // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
+            // The plugin's default target range predates this repo's engines
+            // (`^22.15.0 || >=24.11.0`), so it flags ES2023 array methods that
+            // every runtime here has. Listing them beats lowering the bar.
+            "n/no-unsupported-features/es-syntax": ["error", { ignores: ["array-prototype-tosorted"] }],
             "n/no-unsupported-features/node-builtins": [
                 "error",
                 {
@@ -204,7 +211,7 @@ export default createConfig(
     //     the router's convention, not ours to rename.
     //   - `no-void`: marks intentional fire-and-forget in an event handler.
     {
-        files: ["src/routes/**/*.{ts,tsx}", "src/router.tsx"],
+        files: ["src/routes/**/*.{ts,tsx}", "src/router.tsx", "src/workbench/**/*.{ts,tsx}"],
         rules: {
             "@typescript-eslint/no-use-before-define": "off",
             "no-void": "off",

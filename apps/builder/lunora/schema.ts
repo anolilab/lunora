@@ -1,3 +1,4 @@
+import { agentExtension } from "@lunora/agent";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 import { ratelimit } from "./ratelimit/schema.js";
@@ -63,6 +64,30 @@ export default defineSchema({
     })
         .shardBy("projectId")
         .index("by_chat_created", ["chatId", "createdAt"]),
+
+    /**
+     * Every file in a project's working tree, and the source of truth for them.
+     *
+     * The tree lives here rather than only inside a sandbox container for three
+     * reasons: the workbench subscribes to it, so an agent write appears in the
+     * editor with no polling and no bespoke stream; a container is disposable
+     * and a project is not, so a session that outlives its sandbox loses
+     * nothing; and the eject path (§3.2) can zip a project without booting
+     * anything. The sandbox is a *projection* of this table — files are synced
+     * in before a command runs and read back after.
+     *
+     * `path` is project-relative and slash-separated, never absolute and never
+     * containing `..` — `assertSafePath` enforces that on every write, because
+     * this is the value an untrusted model chooses.
+     */
+    files: defineTable({
+        content: v.string(),
+        path: v.string(),
+        projectId: v.string(),
+        updatedAt: v.number(),
+    })
+        .shardBy("projectId")
+        .index("by_project_path", ["projectId", "path"], { unique: true }),
 
     /**
      * A restorable point in a project's life. `commit` is the git SHA inside the
@@ -140,4 +165,9 @@ export default defineSchema({
     })
         .global()
         .index("by_email", ["email"], { unique: true }),
-}).extend(ratelimit.extension);
+})
+    .extend(ratelimit.extension)
+    // Thread + message tables the durable agent loop persists through. They
+    // auto-prefix to `agent_threads` / `agent_messages`, so they cannot collide
+    // with the app tables above.
+    .extend(agentExtension);
