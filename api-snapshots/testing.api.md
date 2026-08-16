@@ -167,6 +167,15 @@ interface LunoraTestOptions {
 }
 ```
 
+### `ProducedOutput` (interface)
+
+```ts
+interface ProducedOutput {
+    metadata?: Record<string, unknown>;
+    output: string;
+}
+```
+
 ### `RecordEvaluationInput` (interface)
 
 ```ts
@@ -176,6 +185,15 @@ interface RecordEvaluationInput {
     name: string;
     score: number;
     span?: EvaluationSpanHandle;
+}
+```
+
+### `RetrievalScorerOptions` (interface)
+
+```ts
+interface RetrievalScorerOptions {
+    relevantKey?: string;
+    retrievedKey?: string;
 }
 ```
 
@@ -293,7 +311,7 @@ const containsScorer: (needle: string, options?: {
 ### `evaluate` (const)
 
 ```ts
-const evaluate: (cases: ReadonlyArray<EvalCase>, produce: (input: string) => Promise<string> | string, scorers: ReadonlyArray<Scorer>) => Promise<EvalResult>;
+const evaluate: (cases: ReadonlyArray<EvalCase>, produce: (input: string) => Promise<ProducedOutput | string> | ProducedOutput | string, scorers: ReadonlyArray<Scorer>) => Promise<EvalResult>;
 ```
 
 ### `evaluationAttributes` (const)
@@ -316,6 +334,16 @@ Re-exported from `@lunora/mail` — signature tracked at its source.
 
 ```ts
 const finalTurn: (text: string, extra?: Partial<AgentGenerateResult>) => AgentGenerateResult;
+```
+
+### `groundednessScorer` (const)
+
+```ts
+const groundednessScorer: (options: {
+    contextKey?: string;
+    judge: (prompt: string) => Promise<string>;
+    name?: string;
+}) => Scorer;
 ```
 
 ### `keywordScorer` (const)
@@ -342,6 +370,30 @@ const llmScorer: (options: {
 
 ```ts
 const lunoraTest: (schema: TestSchema, options?: LunoraTestOptions) => TestHarness;
+```
+
+### `mrrScorer` (const)
+
+```ts
+const mrrScorer: (options?: RetrievalScorerOptions) => Scorer;
+```
+
+### `ndcgAtK` (const)
+
+```ts
+const ndcgAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
+```
+
+### `precisionAtK` (const)
+
+```ts
+const precisionAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
+```
+
+### `recallAtK` (const)
+
+```ts
+const recallAtK: (k?: number, options?: RetrievalScorerOptions) => Scorer;
 ```
 
 ### `recordEvaluation` (const)
