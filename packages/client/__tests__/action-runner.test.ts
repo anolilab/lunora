@@ -31,6 +31,8 @@ const createSinks = () => {
 
 describe(createActionRunner, () => {
     it("forwards the reference, args and options to client.action", async () => {
+        expect.assertions(2);
+
         const action = vi.fn<(function_: unknown, args: unknown, options?: unknown) => Promise<unknown>>().mockResolvedValue({ code: 0 });
         const { sinks } = createSinks();
 
@@ -42,6 +44,8 @@ describe(createActionRunner, () => {
     });
 
     it("pushes pending true then false around a single call", async () => {
+        expect.assertions(2);
+
         const action = vi.fn<() => Promise<unknown>>().mockResolvedValue({ code: 0 });
         const { pendings, results, sinks } = createSinks();
 
@@ -52,6 +56,8 @@ describe(createActionRunner, () => {
     });
 
     it("ref-counts overlapping calls so pending clears only after the last settles", async () => {
+        expect.assertions(2);
+
         const resolvers: ((value: unknown) => void)[] = [];
         const action = vi.fn<() => Promise<unknown>>(
             () =>
@@ -81,6 +87,8 @@ describe(createActionRunner, () => {
     });
 
     it("normalizes a thrown non-Error, reports it, and re-throws", async () => {
+        expect.assertions(4);
+
         const action = vi.fn<() => Promise<unknown>>().mockRejectedValue("refused");
         const { errors, pendings, sinks } = createSinks();
 
@@ -95,6 +103,8 @@ describe(createActionRunner, () => {
     });
 
     it("re-throws the SAME error instance it reported to the sink", async () => {
+        expect.assertions(2);
+
         const thrown = new Error("command refused");
         const action = vi.fn<() => Promise<unknown>>().mockRejectedValue(thrown);
         const { errors, sinks } = createSinks();
