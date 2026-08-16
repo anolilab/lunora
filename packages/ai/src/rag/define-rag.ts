@@ -580,8 +580,18 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // orphaned text after a failed upsert — is harmless and converges
             // on the (idempotent) retry.
             if (pieces.length > 0) {
+                // `metadata` rides along so a filter-aware lexical store can
+                // evaluate the same predicate the vector leg gets — see
+                // `StoredRagChunk.metadata`. Undefined when the source carried
+                // none, so a store that ignores it is unaffected.
                 const storedChunks = pieces.map((text, chunkIndex) => {
-                    return { chunkIndex, id: ids[chunkIndex] as string, sourceId: input.id, text };
+                    return {
+                        chunkIndex,
+                        id: ids[chunkIndex] as string,
+                        sourceId: input.id,
+                        text,
+                        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+                    };
                 });
 
                 if (textStore) {

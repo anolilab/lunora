@@ -363,10 +363,22 @@ const { chunks } = await docs(ctx).retrieve(question, { topK: 5 });
 ```
 
 The filter applies to both the vector and lexical legs, and only to retrieval;
-indexing stays a trusted server path. The reference `bm25LexicalStore` holds no
-metadata, so it **fails closed** on a metadata filter it cannot evaluate (skips
-its leg and warns once); fold the RLS dimension into `namespace`, or plug a
-filter-aware lexical store, to keep a lexical leg under metadata-based RLS.
+indexing stays a trusted server path.
+
+Each chunk's source `metadata` is mirrored into the lexical store at index time
+(`StoredRagChunk.metadata`), so `bm25LexicalStore` evaluates the **same**
+predicate the vector leg is given — hybrid search and metadata-based RLS
+compose. A lexical hit the filter excludes never reaches fusion, which matters
+because the filter carries the tenant/RBAC scope: a lexical leg that ignored it
+would leak excluded chunk text no matter what the vector leg returned.
+
+`matchesMetadataFilter` is exported if you are writing your own store. It
+covers implicit equality, `$eq` / `$ne` / `$lt` / `$lte` / `$gt` / `$gte`,
+`$in` / `$nin`, and dot-notation paths into nested objects — and **fails
+closed** on anything it does not recognise, including a range predicate over an
+incomparable value and a chunk indexed with no metadata at all. Guessing at an
+unknown operator risks admitting a row RLS meant to exclude, and the failure
+mode there is a cross-tenant leak, not a missing result.
 
 ## Outside an action
 

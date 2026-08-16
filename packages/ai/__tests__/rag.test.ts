@@ -1379,47 +1379,69 @@ describe(bm25LexicalStore, () => {
         await expect(store.search("secret", { topK: 5 })).resolves.toStrictEqual([]);
     });
 
-    it("fails closed when handed a metadata filter it cannot evaluate", async () => {
+    it("evaluates a flat-equality metadata filter (the shape rlsFilter produces)", async () => {
         expect.assertions(2);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const store = bm25LexicalStore();
 
-        try {
-            const store = bm25LexicalStore();
+        await store.index(
+            [
+                { chunkIndex: 0, id: "a#0", metadata: { orgId: "org-1" }, sourceId: "a", text: "tenant one secret document" },
+                { chunkIndex: 0, id: "b#0", metadata: { orgId: "org-2" }, sourceId: "b", text: "tenant two secret document" },
+            ],
+            {},
+        );
 
-            await store.index([chunk("a#0", "public knowledge base entry")], {});
+        const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
 
-            // An operator-object filter is beyond a metadata-less store → no hits.
-            const matches = await store.search("public", { filter: { visibility: { $ne: "private" } }, topK: 5 });
-
-            expect(matches).toStrictEqual([]);
-            expect(warn).toHaveBeenCalledTimes(1);
-        } finally {
-            warn.mockRestore();
-        }
+        // The RLS-excluded tenant's chunk must never reach fusion.
+        expect(matches).toHaveLength(1);
+        expect(matches[0]?.text).toBe("tenant one secret document");
     });
 
-    it("fails closed on a FLAT-equality filter too (the shape rlsFilter produces) — RLS bypass regression", async () => {
+    it("evaluates operator-object clauses", async () => {
         expect.assertions(2);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const store = bm25LexicalStore();
 
-        try {
-            const store = bm25LexicalStore();
+        await store.index(
+            [
+                { chunkIndex: 0, id: "a#0", metadata: { visibility: "private" }, sourceId: "a", text: "private knowledge entry" },
+                { chunkIndex: 0, id: "b#0", metadata: { visibility: "public" }, sourceId: "b", text: "public knowledge entry" },
+            ],
+            {},
+        );
 
-            // "secret" is indexed WITHOUT a namespace/metadata split — a flat
-            // `{ orgId }` filter (exactly the shape `rlsFilter` produces) must not
-            // be exempted from the fail-closed guard, or the BM25 search runs over
-            // the whole namespace and leaks this chunk's text past the RLS filter.
-            await store.index([chunk("a#0", "tenant secret document")], {});
+        const matches = await store.search("knowledge", { filter: { visibility: { $ne: "private" } }, topK: 5 });
 
-            const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
+        expect(matches).toHaveLength(1);
+        expect(matches[0]?.text).toBe("public knowledge entry");
+    });
 
-            expect(matches).toStrictEqual([]);
-            expect(warn).toHaveBeenCalledTimes(1);
-        } finally {
-            warn.mockRestore();
-        }
+    it("excludes a chunk indexed without metadata when a filter is set", async () => {
+        expect.assertions(1);
+
+        const store = bm25LexicalStore();
+
+        // No metadata means nothing can satisfy the predicate — fail closed
+        // rather than admit an unscoped chunk into a scoped query.
+        await store.index([chunk("a#0", "unscoped secret document")], {});
+
+        const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
+
+        expect(matches).toStrictEqual([]);
+    });
+
+    it("still returns everything when no filter is set", async () => {
+        expect.assertions(1);
+
+        const store = bm25LexicalStore();
+
+        await store.index([{ chunkIndex: 0, id: "a#0", metadata: { orgId: "org-1" }, sourceId: "a", text: "findable secret" }], {});
+
+        const matches = await store.search("secret", { topK: 5 });
+
+        expect(matches).toHaveLength(1);
     });
 });
 
