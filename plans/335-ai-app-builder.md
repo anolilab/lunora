@@ -658,16 +658,18 @@ Eight phases. Each names the workstreams it lands, the **package changes** it
 carries (§5.0), and a gate that can fail. A phase is done when its gate is green
 and its package changes are snapshot-clean — not when the code is written.
 
-| Phase | Work                                                                                                                                                                                                 | Package changes  | Gate                                                                                                                                                                                                                                                                                                   |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **0** | **Spike (latency budget).** A prebuilt image with a warm pnpm store runs `lunora init` → `pnpm install` → `lunora codegen` → `lunora dev` → `exposePort` → `lunora verify` on `tanstack-start-react` | none (throwaway) | Seven numbers written into this file: image build (once), **cold session start to a preview URL serving the welcome page**, snapshot-restore start, `codegen`, `verify`, HMR edit-to-repaint, and **container cost per session-hour**. Cold start gates §8; HMR is the real inner loop; cost sizes D17 |
-| **1** | W2 — the package extension, standalone                                                                                                                                                               | **E1, E2, E4**   | `pnpm --filter "@lunora/container" run test` + `lint:types` green; `containerTool` has no POST-to-`/exec` path left; `pnpm run api:update` run **after a fresh build** and `api:check` green; §6's matrix rows landed in this phase                                                                    |
-| **2** | W1 skeleton + wire the sandbox, no agent                                                                                                                                                             | none             | `apps/builder` boots; a hardcoded script scaffolds → installs → previews → verifies one project end to end, driven only by the W2 surface                                                                                                                                                              |
-| **3** | W3 agent + W4 skill selection, headless                                                                                                                                                              | **E3**           | `lunora eval` over 5 fixtures ≥ 0.8 threshold, every fixture's `verify` exiting 0; and the fix loop demonstrably consumes E3's structured diagnostics — a fixture seeded with a type error is repaired by an _anchored_ edit, not a whole-file rewrite                                                 |
-| **4** | W5 workbench UI                                                                                                                                                                                      | none             | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates; embedded Studio lists the generated app's tables                                                                                                                                                 |
-| **5** | W6 deploy, anonymous `--temporary`                                                                                                                                                                   | none             | E2E: prompt → deployed URL returns 200; **eject-zip builds clean on a fresh runner** (§3.2); the scaffold matches a direct `lunora init` run byte for byte (§3.1)                                                                                                                                      |
-| **6** | W7 accounts + BYO-Cloudflare deploy                                                                                                                                                                  | none             | Deploy lands in a _test user's_ account; `tokenBudget` exhaustion returns a typed error rather than hanging; a turn that **throws** still records its tokens                                                                                                                                           |
-| **7** | W8 evals in CI, W9 share/export, W10 safety                                                                                                                                                          | none             | Eval job wired into CI and failing below threshold; the egress deny path proven by test; `dist:check` + `api:check` + `lint:package-json` green                                                                                                                                                        |
+| Phase | Work                                                                                                                                                                                                 | Package changes  | Gate                                                                                                                                                                                                                                                                                                             |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **0** | **Spike (latency budget).** A prebuilt image with a warm pnpm store runs `lunora init` → `pnpm install` → `lunora codegen` → `lunora dev` → `exposePort` → `lunora verify` on `tanstack-start-react` | none (throwaway) | Seven numbers written into this file: image build (once), **cold session start to a preview URL serving the welcome page**, snapshot-restore start, `codegen`, `verify`, HMR edit-to-repaint, and **container cost per session-hour**. Cold start gates §8; HMR is the real inner loop; cost sizes D17           |
+| **1** | W2 — the package extension, standalone                                                                                                                                                               | **E1, E2, E4**   | `pnpm --filter "@lunora/container" run test` + `lint:types` green; `containerTool` has no POST-to-`/exec` path left; `pnpm run api:update` run **after a fresh build** and `api:check` green — which required adding `container` to a snapshot tier, since it was in none; §6's matrix rows landed in this phase |
+|       | ↳ **E2 + E4 + §6 rows + the API gate: DONE (2026-08-15)** — see the execution note below. **E1: not started**, deliberately blocked on Phase 0.                                                      |                  |                                                                                                                                                                                                                                                                                                                  |
+| **2** | W1 skeleton + wire the sandbox, no agent                                                                                                                                                             | none             | `apps/builder` boots; a hardcoded script scaffolds → installs → previews → verifies one project end to end, driven only by the W2 surface                                                                                                                                                                        |
+|       | ↳ **W1 skeleton DONE (2026-08-16)** — `apps/builder` boots, schema + project CRUD landed. The sandbox half waits on E1. See the execution note below.                                                |                  |                                                                                                                                                                                                                                                                                                                  |
+| **3** | W3 agent + W4 skill selection, headless                                                                                                                                                              | **E3**           | `lunora eval` over 5 fixtures ≥ 0.8 threshold, every fixture's `verify` exiting 0; and the fix loop demonstrably consumes E3's structured diagnostics — a fixture seeded with a type error is repaired by an _anchored_ edit, not a whole-file rewrite                                                           |
+| **4** | W5 workbench UI                                                                                                                                                                                      | none             | Playwright suite in `tests/e2e`: prompt → files stream in → preview renders → edit → preview updates; embedded Studio lists the generated app's tables                                                                                                                                                           |
+| **5** | W6 deploy, anonymous `--temporary`                                                                                                                                                                   | none             | E2E: prompt → deployed URL returns 200; **eject-zip builds clean on a fresh runner** (§3.2); the scaffold matches a direct `lunora init` run byte for byte (§3.1)                                                                                                                                                |
+| **6** | W7 accounts + BYO-Cloudflare deploy                                                                                                                                                                  | none             | Deploy lands in a _test user's_ account; `tokenBudget` exhaustion returns a typed error rather than hanging; a turn that **throws** still records its tokens                                                                                                                                                     |
+| **7** | W8 evals in CI, W9 share/export, W10 safety                                                                                                                                                          | none             | Eval job wired into CI and failing below threshold; the egress deny path proven by test; `dist:check` + `api:check` + `lint:package-json` green                                                                                                                                                                  |
 
 **Why the package extension goes first.** Phase 1 lands E1/E2/E4 **before** the
 app, inverting the previous draft, for three reasons: they are the only work with
@@ -683,6 +685,213 @@ not the sandbox's — and Phase 3's gate is what proves it earned its keep.
 Phase 0 is the only phase that can invalidate the design, and it **measures
 rather than decides**: D2 settled the architecture, so Phase 0's job is to prove
 the accepted cost is affordable. Do not start Phase 4 before it reports.
+
+### Execution note — `useAction`, moved to its own branch (2026-08-16)
+
+The hook landed here first and was then **moved out**, because it is framework
+work with no dependency on the builder: it now lives on
+`feat/adapter-action-hooks`, off `alpha`, and this branch reverts its copy so the
+two do not diverge.
+
+What that branch carries, and why it grew past the one hook:
+
+- Actions were the one procedure kind with **no adapter surface at all**. The
+  audit found react, vue, solid and svelte each shipping a query and a mutation
+  primitive and nothing for actions, so every app reached for the raw client and
+  re-derived the same pending/error wrapper. Angular likewise had `mutate` and
+  no counterpart.
+- `@lunora/client` gains `createActionRunner`, the sibling of the existing
+  `createMutationRunner` the three reactive adapters already share. Separate
+  rather than reused: the two differ in the options they forward.
+- Five bindings in five idioms — `useAction` (react, vue), `createAction`
+  (solid, plus a `createActionForClient` seam), `action` (svelte, with
+  `mutation`'s explicit-client overload), `runAction` (angular, a plain promise,
+  because that adapter models writes as calls not handles).
+- All five are narrower than their mutation counterparts: **no optimistic
+  options**. An optimistic update patches the subscription cache assuming a write
+  will land; an action is not a write, so the option would imply a rollback
+  guarantee nothing can honour.
+
+**Consequence for this branch:** `apps/builder`'s terminal goes back to calling
+`client.action` through `useLunora()` until that branch merges. That is the
+honest state — the app should not import a hook that only exists on an unmerged
+branch.
+
+**A gate this branch had been failing, caught on the way.** Reverting the hook
+surfaced that `api:check` was red here and had been since the first-full-version
+commit: adding the `hasAgents` parameter to `@lunora/vite`'s
+`buildWorkerEntrySource` moved a **Core-tier** public signature, and that
+commit's verification ran the package's tests and lint but never `api:check`.
+The snapshot is updated in this commit. Two lessons, both already written
+elsewhere in this plan and both re-learned here: green `lint` + `test` is not
+the full gate set (`CLAUDE.md` says so explicitly), and a session that switches
+branches must rebuild before trusting anything that reads `dist/` — the same
+stale-`dist` trap that produced a phantom `identityProxy` row earlier.
+
+### Execution note — first full version (2026-08-16)
+
+W1, W3, W4 and W5 are in. The loop exists end to end: dashboard → workbench →
+agent → files → commands. W2's container half and everything downstream of a
+real preview are not, and the app says so rather than pretending.
+
+**The sandbox got a second driver, and that is what makes the rest real.**
+`SandboxDriver` has two implementations — `containerDriver` over the E2
+`ctx.containers.<name>.exec` contract, and `simulatedDriver` in-process. Two
+implementations is the bar `CLAUDE.md` sets for an interface, and the simulation
+is not a test mock: it is what the app runs on until E1 lands. The terminal
+stamps every line with the driver that answered, because a builder that quietly
+reports simulated success is worse than one with no terminal.
+
+**A real bug the parity test caught.** The simulated driver threw
+_synchronously_ while the container driver rejected, so
+`driver.exec(...).catch(…)` caught a refusal from one and sailed past the other.
+Both now reject, and a test asserts the two refuse identically — the simulation
+must not teach the agent habits the real driver refuses.
+
+**Files live in the database, not only in a container.** The `files` table is the
+source of truth: the workbench subscribes to it (so an agent write appears in the
+editor with no polling and no second protocol — §D18 taken literally), a session
+outlives its sandbox, and eject can zip a project without booting anything. The
+sandbox becomes a projection of it.
+
+**One framework gap closed on the way.** `@lunora/vite`'s compose plugin
+re-exported generated _container_ classes into the class-A worker entry but not
+_agent_ workflow classes — so an app declaring an agent deployed with nothing to
+run, which codegen warned about and no class-A app could fix. Same rule, same
+reason, one feature later; three tests added.
+
+**Two traps, both found by a gate rather than by review:**
+
+- The advisor's `public_mutation_without_ratelimit` **pattern-matches a literal
+  `rateLimit(...)` inside `.use(...)`**. Routing it through a tidy `limit("chat")`
+  helper made every guarded mutation read as unguarded. Reverted to the explicit
+  form: an abstraction that blinds a lint is worse than the duplication it
+  removes.
+- A middleware's context type **flows into the handler it guards**. One limiter
+  typed `MutationCtx` silently stripped `ctx.runQuery` and `ctx.containers` from
+  the action it protected; widening it to `{ db: unknown }` stripped `ctx.db` and
+  `ctx.log` instead. Fixed with one implementation and two typed aliases.
+
+**Deliberately not done:** `useAction` does not exist in `@lunora/react`
+(`useQuery` and `useMutation` do), so the terminal calls `client.action` through
+`useLunora()`. Worth closing in the adapter rather than re-deriving that wrapper
+in every app — but not by widening a Core-tier package's API mid-build.
+
+Verified: codegen clean of advisories, `tsc` clean for app and `_generated`,
+ESLint clean, `vite build` succeeds, **52/52** builder tests, `@lunora/vite`
+196/196, `lint:package-json` green.
+
+### Execution note — Phase 2, W1 skeleton (2026-08-16)
+
+`apps/builder` exists and boots. Package `@lunora/builder`, product name
+**Lander** (D20), composed exactly like `templates/tanstack-start-react` —
+`cloudflare()` → `tanstackStart()` → `react()` → `lunora({cloudflare:false})`
+into one worker via `virtual:lunora/worker`. Copying the template's composition
+rather than inventing one is what keeps "works in the builder" and "works in a
+generated app" the same statement (D12).
+
+**One schema decision differs from the plan's one-line sketch, deliberately.**
+§W1 listed `projects` and `shares` among the `.shardBy(projectId)` tables. Both
+are now `.global()`: a table cannot shard by the id it is itself keyed on, and
+both are read on paths that have _no project in hand_ — the dashboard list, and
+a share token resolved by a visitor who knows nothing else. Sharding either turns
+its only read into a cross-shard fan-out. `chats`, `messages`, `snapshots` and
+`usage` shard as planned. `__tests__/schema.test.ts` pins both lists **per
+table**, not merely "the file mentions `.shardBy` somewhere" — neither mistake is
+visible to a typecheck, and both are a migration to undo once data exists.
+
+**The framework caught three real things during the build**, each with a directed
+message, all fixed rather than suppressed: codegen refused a `.global()` schema
+without `@lunora/d1` installed; the advisor flagged both public mutations as
+unrate-limited (`public_mutation_without_ratelimit`), then as throwing bare
+`Error`s instead of catalog codes. The rate limit added is **abuse protection,
+not** D17's token quota — that is still W7.
+
+**Two traps worth recording**, both found by a gate rather than by review:
+
+- `eslint --fix` rewrote the SSR guard `typeof globalThis.window === "undefined"`
+  into `globalThis.window === undefined`, inverting it — TypeScript then
+  correctly reported the comparison as always-false. The fix is
+  `import.meta.env.SSR`, which Vite resolves per environment so the client bundle
+  never carries the server branch.
+- Annotating `getRouter`'s return type to satisfy
+  `explicit-module-boundary-types` widened it to the generic
+  `ReturnType<typeof createTanStackRouter>` — and TanStack's `Register` interface
+  keys route typing off exactly that, so every route's params and context
+  silently became `any`. The annotation is reverted with the reason in a comment;
+  type-safe routing depends on the inference.
+
+Verified: codegen clean (no advisor warnings), `tsc --noEmit` clean for both the
+app and `_generated`, ESLint clean, `vite build` succeeds, 10/10 tests,
+`lint:package-json` green.
+
+**Not started, and not faked:** a project row has no working tree, because that
+is W2/E1 and E1 is blocked on the Phase 0 spike. Nothing in the app pretends to
+scaffold, preview, verify or deploy.
+
+### Execution note — Phase 1, partial (2026-08-15)
+
+**Landed: E2, E4, and the §6 matrix rows.**
+
+- `ContainerHandle.exec(command, options?)` → `{ code, stdout, stderr }` on every
+  handle (`.get()`, `.any()`, `.pool()`, and through `.port()`), built once over
+  each handle's own `fetch` so it inherits the cold-start retry, port routing and
+  trace propagation rather than re-deriving them.
+- The wire contract is a typed POST to **`/__lunora/exec`**. The route moved off
+  the bare `/exec` the old convention used: `/exec` is a path an app could
+  plausibly own, and namespacing removes the collision. This **breaks** anyone who
+  implemented the undocumented `/exec` convention — acceptable on `alpha` per
+  `CLAUDE.md`, and recorded here because nothing else would tell them.
+- **The defect it fixes:** the old path did `return response.text()`, so a
+  container answering `404` (no exec route) or `500` (runner crashed) handed the
+  model an error page _as if it were command output_. Now a non-2xx, a non-JSON
+  body, or a missing numeric `code` throws a directed error — while a **non-zero
+  exit code returns normally**, because a command that ran and failed is data,
+  not an exception. Tests pin exactly that distinction.
+- `containerTool` renders `exit code: N` plus labelled `stdout`/`stderr`, so a
+  model can tell "ran, produced nothing" from "did not run".
+- **Security detail worth flagging:** `containerTool`'s default approval gate
+  matches the exec route _by path_, so moving the route required moving the gate
+  with it. Missing that would have silently un-gated command execution — a
+  `fetch` to `/__lunora/exec` would have run unattended. The constant is
+  duplicated in `@lunora/agent` (which does not depend on `@lunora/container`)
+  with a comment and a test pinning the two together.
+- §6's rows landed as a **`containersExec`** capability in
+  `PlatformCapabilities` — `native` on Cloudflare, `unsupported` on
+  `platform-node` — separate from `containers` because a host can reach a
+  container without being able to exec into one.
+
+Verified: `@lunora/container` 150/150, `@lunora/agent` 345/345,
+`@lunora/platform` 45/45; `tsc --noEmit` clean on all three; ESLint clean;
+`api:check` green.
+
+**The missing gate is now in place.** `@lunora/container` was **outside** the
+API-snapshot tiers, so the `api:check` this plan asserted over E1/E2's surface
+did not exist — the package's public API moved with nothing watching, and only
+`platform.api.md` changed. Fixed by adding `container` to **TIER_3**
+(`scripts/api-snapshot.js`), which generates `api-snapshots/container.api.md` and
+brings the covered count to 48. TIER_3 rather than a stable tier because the
+package is Experimental and TIER_3 is precisely the "snapshot as evidence, no
+SemVer promise" tier; `container` already appears in `ROADMAP.md`'s experimental
+bullet, so `check-roadmap-tiers` stays green with no roadmap edit. The gate was
+verified to actually fail: deleting one export from the barrel makes `api:check`
+report drift, and restoring it goes green.
+
+**Know what that gate does and does not catch.** TIER_3 skips the _signature_ of
+any export tagged `@experimental`, and this package tags heavily — so the guard
+pins **exports by name and kind** (a removed or renamed `exec`,
+`ContainerExecOptions` or `ContainerExecResult` fails it) but will **not** catch
+`exec`'s parameters or return type changing shape. That is the right trade for an
+experimental package, and it is written down here so the next reader does not
+repeat this plan's original mistake of assuming a gate is stronger than it is.
+
+**E1 (`/sandbox` subpath) is not started, and should not be yet.** It wraps
+`@cloudflare/sandbox` (reachable, `0.12.7`), but every behaviour that matters —
+session start latency, snapshot/restore, `exposePort` — is unverifiable without a
+live Cloudflare account, and Phase 0 exists precisely to measure those. Writing
+the wrapper first would ship unverifiable code against a pre-1.0 API and only
+then discover whether the design it assumes is affordable. E2 was independent of
+that, and is useful on its own.
 
 **Shippable earlier than the last phase.** Phases 1–3 are useful on their own —
 E1/E2/E4 improve `@lunora/container` for every consumer, and a headless builder

@@ -1,0 +1,26 @@
+// Strict typecheck of `lunora/_generated/**` only.
+//
+// Codegen emitted output that a consumer's own strict config
+// rejected — an unused `FunctionReference` import (TS6133), a self-referential
+// Drizzle FK TypeScript could not infer through (TS7022/TS7024), an `Id<…>`
+// referenced without an import (TS2304), and a `Storage | undefined` fallback
+// (TS2322). Consumers cannot `// @ts-nocheck` someone else's generated file
+// without losing type safety everywhere, so the emitter has to be clean.
+//
+// The app's own `tsconfig.json` relaxes `noUncheckedIndexedAccess` for ordinary
+// app-code ergonomics, which is exactly why the `Storage | undefined` case was
+// invisible here. This config keeps the repo-wide defaults (base is `strict` +
+// `noUnusedLocals` + `noUncheckedIndexedAccess`) and points them at `_generated`.
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["@cloudflare/workers-types", "node"],
+        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "noEmit": true,
+        "declaration": false
+    },
+    "include": ["lunora/_generated/**/*"],
+    "exclude": ["node_modules", "dist"]
+}

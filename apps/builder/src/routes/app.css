@@ -1,0 +1,101 @@
+/*
+ * Deliberately plain, and deliberately small.
+ *
+ * Plan 335 W1 is the skeleton; W5 builds the real workbench (chat, file tree,
+ * editor, terminal, preview) against the Lunora design tokens in `marketing/`.
+ * Styling this shell properly first would mean throwing it away then, so it
+ * carries only enough to be legible — and it uses `color-scheme` so it is not
+ * blinding in a dark terminal-adjacent workflow.
+ */
+:root {
+    color-scheme: light dark;
+
+    --bg: light-dark(#fdfdfd, #0e0e11);
+    --fg: light-dark(#16161a, #ececf1);
+    --muted: light-dark(#6a6a76, #9a9aa8);
+    --line: light-dark(#e4e4ea, #26262e);
+    --accent: light-dark(#3b3bd6, #8f8fff);
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family:
+        system-ui,
+        -apple-system,
+        "Segoe UI",
+        sans-serif;
+    line-height: 1.5;
+}
+
+.page {
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 3rem 1.5rem;
+}
+
+.page-header h1 {
+    margin: 0;
+    font-size: 2rem;
+    letter-spacing: -0.02em;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.new-project {
+    display: flex;
+    gap: 0.5rem;
+    margin: 2rem 0;
+}
+
+.new-project input {
+    flex: 1;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+}
+
+.new-project button {
+    padding: 0.6rem 1.1rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: var(--accent);
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+}
+
+.new-project button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.projects {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--line);
+}
+
+.projects li {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.project-name {
+    font-weight: 500;
+}
+
+.empty {
+    padding: 3rem;
+    text-align: center;
+}

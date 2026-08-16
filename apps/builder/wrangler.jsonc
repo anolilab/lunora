@@ -1,0 +1,27 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-builder",
+    // `virtual:lunora/worker` is resolved by the frameworkComposePlugin inside
+    // `lunora()` (see vite.config.ts): it emits a composed worker that routes
+    // `/_lunora/*` to Lunora and everything else to the TanStack Start SSR
+    // handler. There is no second worker.
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // `projects`, `users` and `shares` are `.global()` (see lunora/schema.ts), so
+    // they live in D1 rather than in a shard. Create the database with
+    // `wrangler d1 create lunora-builder` and paste the id here; `lunora dev`
+    // provisions a local one automatically.
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "lunora-builder",
+            "database_id": "<replace-with-d1-create-id>",
+        },
+    ],
+}

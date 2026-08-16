@@ -1,0 +1,222 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "chats": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_project_created": {
+                    "fields": ["projectId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:projectId"
+        },
+        "messages": {
+            "fields": {
+                "chatId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "content": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "role": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "tokens": {
+                    "kind": "number",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_chat_created": {
+                    "fields": ["chatId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:projectId"
+        },
+        "projects": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "ownerId": {
+                    "kind": "id",
+                    "optional": true
+                },
+                "deployedUrl": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "template": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "updatedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_updated": {
+                    "fields": ["updatedAt"],
+                    "unique": false
+                },
+                "by_owner_updated": {
+                    "fields": ["ownerId", "updatedAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "shares": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "expiresAt": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "projectId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "token": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_token": {
+                    "fields": ["token"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "snapshots": {
+            "fields": {
+                "bundleKey": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "commit": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "label": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_project_created": {
+                    "fields": ["projectId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:projectId"
+        },
+        "usage": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "inputTokens": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "model": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "outputTokens": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_project_created": {
+                    "fields": ["projectId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:projectId"
+        },
+        "users": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "email": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_email": {
+                    "fields": ["email"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        }
+    },
+    "version": 1
+}
