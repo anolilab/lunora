@@ -12,6 +12,8 @@ export type {
     ContainerAccessor,
     ContainerBindingSpec,
     ContainerEgressControls,
+    ContainerExecOptions,
+    ContainerExecResult,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,

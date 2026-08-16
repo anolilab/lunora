@@ -112,26 +112,28 @@ describe(containerTool, () => {
         expect((always.needsApproval as (input: { op: string }) => boolean)({ op: "fetch" })).toBe(true);
     });
 
-    it("gates a fetch whose path resolves to the privileged /exec route", () => {
+    it("gates a fetch whose path resolves to the privileged exec route", () => {
         const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
 
-        // A fetch to /exec reaches the same command path as an exec, so it must gate.
-        expect(needsApproval({ op: "fetch", path: "/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "//exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/./exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/foo/../exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/exec?x=1" })).toBe(true);
+        // A fetch to the exec route reaches the same command path as an exec, so it must gate.
+        expect(needsApproval({ op: "fetch", path: "/__lunora/exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "__lunora/exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "//__lunora//exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "/./__lunora/exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "/foo/../__lunora/exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "/__lunora/exec?x=1" })).toBe(true);
         // A GET fetch to any other route stays unattended.
         expect(needsApproval({ op: "fetch", path: "/health" })).toBe(false);
-        expect(needsApproval({ op: "fetch", path: "/execute" })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: "/__lunora/execute" })).toBe(false);
+        // The pre-E2 route is no longer privileged — nothing dispatches there now.
+        expect(needsApproval({ op: "fetch", path: "/exec" })).toBe(false);
     });
 
-    it("gates a fetch using a non-idempotent method, even off the /exec route", () => {
+    it("gates a fetch using a non-idempotent method, even off the exec route", () => {
         const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
 
         // A prompt-injected model could otherwise mutate container state
-        // through some OTHER privileged route just by avoiding `/exec`.
+        // through some OTHER privileged route just by avoiding the exec path.
         expect(needsApproval({ method: "POST", op: "fetch", path: "/health" })).toBe(true);
         expect(needsApproval({ method: "PUT", op: "fetch", path: "/config" })).toBe(true);
         expect(needsApproval({ method: "PATCH", op: "fetch", path: "/config" })).toBe(true);
@@ -212,25 +214,58 @@ describe("sandboxComponent().invoke", () => {
         expect(result).toBe("pong");
     });
 
-    it("routes a container exec as a POST to /exec", async () => {
-        const fetch = vi.fn<(path: string, init: Record<string, unknown>) => Promise<{ text: () => Promise<string> }>>(async () => {
-            return { text: async () => "done" };
+    it("delegates a container exec to ctx.containers.<name>.exec", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 0, stderr: "", stdout: "done" };
         });
         const containers = {
             sandbox: {
                 any: () => {
-                    return { fetch };
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
                 },
             },
         };
         const result = await invokeSandbox({ containers }, { args: ["-la"], command: "ls", kind: "container", name: "sandbox", op: "exec" });
 
-        expect(fetch).toHaveBeenCalledWith("/exec", {
-            body: JSON.stringify({ args: ["-la"], command: "ls" }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
+        // The wire format is @lunora/container's contract now, not this module's.
+        expect(exec).toHaveBeenCalledWith("ls", { args: ["-la"] });
+        expect(result).toBe("exit code: 0\n\nstdout:\ndone");
+    });
+
+    it("reports a failed command's exit code and stderr to the model", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 2, stderr: "no such file\n", stdout: "" };
         });
-        expect(result).toBe("done");
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // The regression this contract exists for: before E2 the tool read the raw
+        // response body back as output, so a failed command — or a container with
+        // no exec route — was indistinguishable from a successful one.
+        const result = await invokeSandbox({ containers }, { command: "cat", kind: "container", name: "sandbox", op: "exec" });
+
+        expect(result).toBe("exit code: 2\n\nstderr:\nno such file\n");
+    });
+
+    it("states the exit code even when a command produced no output", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 0, stderr: "", stdout: "" };
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // "ran, produced nothing" must be distinguishable from "did not run".
+        await expect(invokeSandbox({ containers }, { command: "true", kind: "container", name: "sandbox", op: "exec" })).resolves.toBe("exit code: 0");
     });
 
     it("errors when a container op names an unknown container", async () => {

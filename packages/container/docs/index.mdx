@@ -175,6 +175,66 @@ named instances you own.
     call for stateless work until then; for batch work, drive instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
 </Callout>
 
+## Running a command: `exec`
+
+`fetch` covers containers that serve an HTTP API. When the container is a
+_runner_ — a build box, a test sandbox, a job worker — what you want is a
+command and its exit code. `exec` is that contract:
+
+```ts
+const result = await ctx.containers.codeRunner.get(userId).exec("pnpm", {
+    args: ["install", "--frozen-lockfile"],
+    cwd: "/app",
+    env: { CI: "1" },
+    timeoutMs: 120_000,
+});
+
+if (result.code !== 0) {
+    throw new Error(`install failed:\n${result.stderr}`);
+}
+```
+
+It returns `{ code, stdout, stderr }`, and it is available on every handle —
+`.get()`, `.any()`, `.pool()` — and through `.port(n)`, inheriting the same
+cold-start retry and routing as `fetch`.
+
+**A non-zero exit code is not an error.** A command that ran and failed is a
+result, so you get a `code` to branch on. `exec` throws only when the command
+could not be _run_: the container answered non-2xx (usually "no exec route"),
+the body was not JSON, or it carried no numeric `code`. That distinction is the
+point of the contract — the convention it replaced read the response body back
+as output, so a container with no exec route handed you its 404 page as though
+the command had succeeded.
+
+<Callout type="warn">
+    On `.pool()`, each attempt re-picks an instance, exactly like a pooled `fetch` — so a pooled `exec` must be safe to run more than once. Use `.get(name)` for
+    anything that isn't idempotent.
+</Callout>
+
+### The container side of the contract
+
+There is no platform-level exec: a container is an HTTP server, so the runner
+inside it serves the route. Accept a POST at **`/__lunora/exec`** taking
+
+```jsonc
+{ "command": "pnpm", "args": ["install"], "cwd": "/app", "env": { "CI": "1" }, "timeoutMs": 120000 }
+```
+
+and answer `{ "code": 0, "stdout": "…", "stderr": "…" }` as JSON. `cwd`, `env`
+and `timeoutMs` are omitted from the body entirely when unset, so a runner never
+has to special-case an explicit `undefined`. Absent `stdout`/`stderr` in the
+reply default to `""`; an absent `code` is an error, because "the command ran"
+and "the command's result is unknown" must not look the same.
+
+Run the command directly — do not concatenate `args` into a shell string, which
+would make every argument an injection point.
+
+<Callout type="warn">
+    `exec` runs whatever it is given. When a model chooses the command — an `@lunora/agent` `containerTool`, say — gate it: that tool's default approval policy
+    already pauses for a human on `exec` **and** on any `fetch` that resolves to `/__lunora/exec`, since both reach the same command path. Restrict what can run
+    inside the container too, rather than relying on the caller.
+</Callout>
+
 ## Multi-port containers
 
 A container that listens on more than one port (an app port plus an admin port,
@@ -542,6 +602,36 @@ Splitting build/push from `lunora deploy` lets CI build the image in one job and
 deploy in another. `lunora deploy` itself runs a Docker preflight and stops with
 an actionable message when a Dockerfile-built container is declared but no engine
 is available.
+
+## Stability and how a surface would be removed
+
+The package is **Experimental**: it sits outside the Lunora 1.0 SemVer promise,
+and the [graduation bar](https://github.com/anolilab/lunora/blob/alpha/ROADMAP.md#experimental--stable-the-graduation-bar)
+is what moves it out. Its public surface is snapshotted in
+`api-snapshots/container.api.md` and gated by `pnpm run api:check`, so every
+addition, removal and **signature change** shows up as a reviewed diff — no
+export carries `@experimental` individually any more, which is what makes the
+signatures tracked rather than skipped.
+
+What that commits us to once the package graduates:
+
+- **Names are the contract.** The binding name (`CONTAINER_<NAME>`), the
+  generated class name (`<Name>Container`), the exec route (`/__lunora/exec`)
+  and the exec body keys (`command`, `args`, `cwd`, `env`, `timeoutMs` →
+  `code`, `stdout`, `stderr`) are the names we intend to keep. A container image
+  built against them keeps working.
+- **Removal is deprecate-then-remove.** A surface being withdrawn is first
+  marked deprecated in the snapshot and docs, and keeps working for a full minor
+  cycle with a runtime warning naming its replacement; only then is it removed,
+  in a major. Pre-1.0 (`alpha`/`next`/`beta`) the old path is deleted in the same
+  change as the new one, per the repo's branch policy — which is exactly what
+  happened when `exec` replaced the ad-hoc POST-to-`/exec` convention.
+- **Config keys outlive their implementation.** `defineContainer` options are
+  additive; one that stops being meaningful is accepted and ignored with a
+  warning rather than becoming a hard error mid-cycle.
+- **Errors are identified by code, not prose.** Every failure raises a
+  `LunoraError` with a stable code; message text may be reworded to be clearer
+  without that counting as a break, so match on the code.
 
 ## Known platform limitations
 

@@ -34,6 +34,16 @@ export interface PlatformCapabilities {
         browser?: Capability;
         /** Container execution (Cloudflare Containers / Fargate). */
         containers?: Capability;
+
+        /**
+         * Running a command inside a container and getting its exit code and
+         * output back — `ctx.containers.<name>.exec`. Rated separately from
+         * `containers` because it needs more than the ability to reach a
+         * container: the container image must serve the exec route, and the host
+         * must be able to carry a structured result back. A host may support
+         * `containers` and not this.
+         */
+        containersExec?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -162,6 +172,7 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
         containers: { level: "native", note: "Cloudflare Containers" },
+        containersExec: { level: "native", note: "ctx.containers.<name>.exec over the /__lunora/exec contract; the container image serves the route" },
         analytics: { level: "native", note: "Analytics Engine" },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
@@ -273,6 +284,10 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
         containers: { level: "unsupported", note: "No container orchestration implemented" },
+        containersExec: {
+            level: "unsupported",
+            note: "Follows `containers` — with no container orchestration there is nothing to exec into. A child_process-backed host could rate this `emulated`",
+        },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
         mail: { level: "unsupported", note: "@lunora/mail's queue-backed sends need a queues binding, which this target does not provide" },

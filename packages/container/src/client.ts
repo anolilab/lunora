@@ -15,7 +15,6 @@ import { applyJurisdiction } from "./jurisdiction";
 
 /**
  * Options for explicitly starting an instance (mirrors `@cloudflare/containers`).
- * @experimental
  */
 interface ContainerStartOptions {
     /** Override outbound internet access for this start. */
@@ -30,7 +29,6 @@ interface ContainerStartOptions {
 
 /**
  * A container instance's runtime state, as returned by `getState()`. Structural — the platform adds fields over time.
- * @experimental
  */
 interface ContainerInstanceState {
     [key: string]: unknown;
@@ -60,7 +58,6 @@ interface ContainerStubLike {
 
 /**
  * What the client needs from a Durable Object namespace binding.
- * @experimental
  */
 interface ContainerNamespaceLike {
     get: (id: unknown) => ContainerStubLike;
@@ -74,10 +71,68 @@ interface ContainerNamespaceLike {
 }
 
 /**
+ * Per-call options for {@link ContainerHandle.exec}.
+ */
+interface ContainerExecOptions {
+    /** Arguments passed to `command`, unshelled — the container must not concatenate them into a shell string. */
+    args?: ReadonlyArray<string>;
+    /** Working directory for the command, relative to the container's own root. */
+    cwd?: string;
+    /** Extra environment for this command only, merged over the container's env. */
+    env?: Readonly<Record<string, string>>;
+
+    /**
+     * Abort the call. Composed with {@link ContainerExecOptions.timeoutMs} when
+     * both are given — whichever fires first wins.
+     */
+    signal?: AbortSignal;
+
+    /**
+     * Give up after this many ms. Sent to the container as well, so a
+     * well-behaved runner can kill the process rather than leak it when the
+     * caller walks away.
+     */
+    timeoutMs?: number;
+}
+
+/**
+ * The outcome of a {@link ContainerHandle.exec} call.
+ *
+ * A non-zero `code` is **not** an error: a command that ran and failed is a
+ * result, and the caller decides what to do with it. Only a failure to *run*
+ * the command — transport, a non-2xx from the runner, an unparseable body —
+ * throws.
+ */
+interface ContainerExecResult {
+    /** Process exit code. Non-zero means the command ran and failed. */
+    code: number;
+    /** Everything the command wrote to stderr. */
+    stderr: string;
+    /** Everything the command wrote to stdout. */
+    stdout: string;
+}
+
+/**
  * A handle on one container instance (one Durable Object).
- * @experimental
  */
 interface ContainerHandle {
+    /**
+     * Run a command inside the container and return its exit code and output.
+     *
+     * A container is an HTTP server, so there is no platform-level exec to call:
+     * the command is POSTed to {@link CONTAINER_EXEC_PATH} and the container app
+     * serves that route. What this method adds over hand-rolling that fetch is
+     * the **contract** — a pinned path, a typed request and response, and the
+     * distinction between "the command failed" (a `code`) and "the command could
+     * not be run" (a throw). Before it existed every caller invented its own
+     * `/exec` convention and read the raw body back as if it were output, which
+     * silently turned a runner's 500 into a successful-looking result.
+     *
+     * The container side must accept `{ args, command, cwd, env, timeoutMs }`
+     * and answer `{ code, stdout, stderr }` as JSON.
+     */
+    exec: (command: string, options?: ContainerExecOptions) => Promise<ContainerExecResult>;
+
     /**
      * Send an HTTP (or WebSocket-upgrade) request to the container. A path
      * string (`"/transcode"`) is resolved against a synthetic origin; a full
@@ -102,7 +157,6 @@ interface ContainerHandle {
  * game, a job runner per id) often needs to tear down or inspect the instance
  * rather than wait for `sleepAfter`, so these wrap the container DO's
  * `start`/`stop`/`destroy`/`getState`.
- * @experimental
  */
 interface ContainerInstanceHandle extends ContainerHandle {
     /** Stop and discard the instance (its ephemeral disk is lost). */
@@ -140,7 +194,6 @@ interface ContainerInstanceHandle extends ContainerHandle {
  * Each maps to the corresponding `@cloudflare/containers` `Container` RPC, so
  * an app can tighten or relax a single instance's allowed/denied hosts after
  * start without redeploying.
- * @experimental
  */
 interface ContainerEgressControls {
     /** Add one hostname (or glob) to the allow-list. */
@@ -159,7 +212,6 @@ interface ContainerEgressControls {
 
 /**
  * The per-definition accessor exposed as `ctx.containers.<exportName>`.
- * @experimental
  */
 interface ContainerAccessor {
     /**
@@ -205,7 +257,6 @@ interface ContainerAccessor {
 
 /**
  * Tuning for a pooled, retrying container handle. See {@link ContainerAccessor.pool}.
- * @experimental
  */
 interface PoolOptions {
     /** Total attempts before giving up (each on a freshly-picked instance). Default 3. */
@@ -235,7 +286,6 @@ interface PoolOptions {
  * only on the platform's provisioning transients (no-instance / not-listening /
  * rate-limited — see {@link isColdStartTransient}), which is why it's safe by
  * default: those responses mean the request never reached the container.
- * @experimental
  */
 interface InstanceRetryOptions {
     /**
@@ -252,7 +302,6 @@ interface InstanceRetryOptions {
 
 /**
  * Wiring info for one definition, emitted by codegen into the generated DO.
- * @experimental
  */
 interface ContainerBindingSpec {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
@@ -400,6 +449,166 @@ const isColdStartTransient = async (response: Response): Promise<boolean> => {
     }
 };
 
+/** Error-message prefix for a handle whose accessor name is not in scope. */
+const DEFAULT_HANDLE_LABEL = "ctx.containers";
+
+/** Error-message prefix naming the accessor a handle came from. */
+const handleLabel = (spec: ContainerBindingSpec): string => `ctx.containers.${spec.exportName}`;
+
+/**
+ * The route {@link ContainerHandle.exec} POSTs to. Namespaced under
+ * `/__lunora/` so it cannot collide with an application route the container
+ * already serves — the previous ad-hoc convention was a bare `/exec`, which an
+ * app could plausibly own for its own purposes.
+ */
+const CONTAINER_EXEC_PATH = "/__lunora/exec";
+
+/** How much of a failed exec response body is quoted back in the thrown error. */
+const EXEC_ERROR_BODY_LIMIT = 512;
+
+/** Read a response body for an error message, tolerating an unreadable/streaming body. */
+const readErrorBody = async (response: Response): Promise<string> => {
+    try {
+        const body = await response.text();
+
+        return body.slice(0, EXEC_ERROR_BODY_LIMIT);
+    } catch {
+        return "<unreadable body>";
+    }
+};
+
+/**
+ * Narrow an unknown parsed body to {@link ContainerExecResult}. `stdout`/`stderr`
+ * default to `""` when absent — a command that wrote nothing to a stream is
+ * normal, and a runner is entitled to omit the empty string. `code` has no
+ * sensible default: a missing exit code means the runner did not report whether
+ * the command succeeded, which is exactly the ambiguity this contract exists to
+ * remove.
+ */
+const toExecResult = (parsed: unknown): ContainerExecResult | undefined => {
+    if (parsed === null || typeof parsed !== "object") {
+        return undefined;
+    }
+
+    const { code, stderr, stdout } = parsed as Record<string, unknown>;
+
+    if (typeof code !== "number") {
+        return undefined;
+    }
+
+    return {
+        code,
+        stderr: typeof stderr === "string" ? stderr : "",
+        stdout: typeof stdout === "string" ? stdout : "",
+    };
+};
+
+/** A resolved exec deadline: the signal to send, plus the timer teardown. */
+interface ExecDeadline {
+    /** Clear the deadline timer. Always call it, or a fast response leaves a pending timer behind. */
+    dispose: () => void;
+    /** The signal to hand `fetch`, or `undefined` when the call is unbounded. */
+    signal: AbortSignal | undefined;
+}
+
+/**
+ * Combine a caller's `signal` with a `timeoutMs` deadline.
+ *
+ * Deliberately an explicit `AbortController` + `setTimeout` rather than
+ * `AbortSignal.timeout(ms)`. The built-in is **weakly held**: nothing in the
+ * platform keeps the returned signal alive, so once the only strong reference
+ * goes out of scope the signal can be collected and the deadline **silently
+ * never fires** — a caller's `timeoutMs` becomes an unbounded call. That is not
+ * theoretical: written with `AbortSignal.timeout` this failed roughly three runs
+ * in eight, hanging until the test runner's own timeout. A controller captured
+ * by the timer callback is strongly reachable for exactly as long as the timer
+ * is pending, which is the lifetime we actually want.
+ *
+ * `dispose` is the other half: without it a call that answers in 5ms leaves a
+ * 120s timer pending.
+ */
+const execDeadline = (signal: AbortSignal | undefined, timeoutMs: number | undefined): ExecDeadline => {
+    if (timeoutMs === undefined) {
+        return { dispose: () => {}, signal };
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+        controller.abort(new LunoraError("INTERNAL", `ctx.containers: exec timed out after ${String(timeoutMs)}ms`));
+    }, timeoutMs);
+
+    return {
+        dispose: () => {
+            clearTimeout(timer);
+        },
+        signal: signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]),
+    };
+};
+
+/**
+ * Build {@link ContainerHandle.exec} over a handle's own `fetch`, so the exec
+ * contract inherits every behaviour that `fetch` already has — cold-start
+ * retry, `.port()` routing, pool re-picking, trace propagation. Defining it once
+ * here is what stops the two handle factories drifting apart.
+ */
+const execViaFetch =
+    (fetchFunction: ContainerHandle["fetch"], describe: () => string): ContainerHandle["exec"] =>
+    async (command, options = {}) => {
+        if (typeof command !== "string" || command.length === 0) {
+            throw new LunoraError("BAD_REQUEST", `${describe()}: exec requires a non-empty \`command\``);
+        }
+
+        const deadline = execDeadline(options.signal, options.timeoutMs);
+        let response: Response;
+
+        try {
+            response = await fetchFunction(CONTAINER_EXEC_PATH, {
+                body: JSON.stringify({
+                    args: options.args ?? [],
+                    command,
+                    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+                    ...(options.env === undefined ? {} : { env: options.env }),
+                    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+                ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
+            });
+        } finally {
+            deadline.dispose();
+        }
+
+        if (!response.ok) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${describe()}: exec failed — the container answered ${String(response.status)} for POST ${CONTAINER_EXEC_PATH}. ` +
+                    `Does it serve that route? Body: ${await readErrorBody(response)}`,
+            );
+        }
+
+        let parsed: unknown;
+
+        try {
+            parsed = await response.json();
+        } catch {
+            throw new LunoraError(
+                "INTERNAL",
+                `${describe()}: exec response was not JSON — expected {"code","stdout","stderr"} from POST ${CONTAINER_EXEC_PATH}`,
+            );
+        }
+
+        const result = toExecResult(parsed);
+
+        if (result === undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `${describe()}: exec response is missing a numeric \`code\` — expected {"code","stdout","stderr"} from POST ${CONTAINER_EXEC_PATH}`,
+            );
+        }
+
+        return result;
+    };
+
 /**
  * Wrap a per-attempt `send` with the cold-start retry: rebuild the request each
  * attempt and, on a provisioning transient (thrown {@link isColdStartError} or a
@@ -414,54 +623,66 @@ const coldStartRetryingHandle = (
     options: InstanceRetryOptions = {},
     port?: number,
     traceparent?: string,
+    label = DEFAULT_HANDLE_LABEL,
 ): ContainerHandle => {
     const attempts = Math.max(1, options.attempts ?? DEFAULT_COLD_START_ATTEMPTS);
     const baseBackoff = options.backoffMs ?? DEFAULT_COLD_START_BACKOFF_MS;
     const maxBackoff = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
 
-    return {
-        fetch: async (input, init) => {
-            // Only a string input can be re-issued safely; a pre-built Request
-            // may carry a body that can be consumed only once.
-            const totalAttempts = typeof input === "string" ? attempts : 1;
-            let lastError: unknown;
+    const fetchWithRetry: ContainerHandle["fetch"] = async (input, init) => {
+        // Only a string input can be re-issued safely; a pre-built Request
+        // may carry a body that can be consumed only once.
+        const totalAttempts = typeof input === "string" ? attempts : 1;
+        let lastError: unknown;
 
-            for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-                const isLastAttempt = attempt === totalAttempts - 1;
+        for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+            const isLastAttempt = attempt === totalAttempts - 1;
 
-                if (attempt > 0) {
-                    // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
-                    await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
-                }
-
-                try {
-                    // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                    const response = await send(toRequest(input, init, port, traceparent));
-
-                    // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
-                    if (isLastAttempt || !(await isColdStartTransient(response))) {
-                        return response;
-                    }
-                } catch (error: unknown) {
-                    lastError = error;
-
-                    // A non-transient throw (or the final attempt) propagates immediately.
-                    if (isLastAttempt || !isColdStartError(error)) {
-                        throw error;
-                    }
-                }
+            if (attempt > 0) {
+                // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
+                await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
             }
 
-            // Unreachable in practice (every iteration returns or throws), but
-            // keeps the control flow total for the type checker.
-            throw lastError instanceof Error ? lastError : new Error("ctx.containers: cold-start retry exhausted");
-        },
-        port: (targetPort) => coldStartRetryingHandle(send, options, targetPort, traceparent),
+            try {
+                // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
+                const response = await send(toRequest(input, init, port, traceparent));
+
+                // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
+                if (isLastAttempt || !(await isColdStartTransient(response))) {
+                    return response;
+                }
+            } catch (error: unknown) {
+                lastError = error;
+
+                // A non-transient throw (or the final attempt) propagates immediately.
+                if (isLastAttempt || !isColdStartError(error)) {
+                    throw error;
+                }
+            }
+        }
+
+        // Unreachable in practice (every iteration returns or throws), but
+        // keeps the control flow total for the type checker.
+        throw lastError instanceof Error ? lastError : new Error("ctx.containers: cold-start retry exhausted");
+    };
+
+    return {
+        // Built over this handle's own `fetch`, so exec inherits the cold-start
+        // retry and `.port()` routing rather than re-deriving them.
+        exec: execViaFetch(fetchWithRetry, () => label),
+        fetch: fetchWithRetry,
+        port: (targetPort) => coldStartRetryingHandle(send, options, targetPort, traceparent, label),
     };
 };
 
-const handleFor = (namespace: ContainerNamespaceLike, instanceName: string, options?: InstanceRetryOptions, traceparent?: string): ContainerHandle =>
-    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), options, undefined, traceparent);
+const handleFor = (
+    namespace: ContainerNamespaceLike,
+    instanceName: string,
+    options?: InstanceRetryOptions,
+    traceparent?: string,
+    label?: string,
+): ContainerHandle =>
+    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), options, undefined, traceparent, label);
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
@@ -504,7 +725,7 @@ const instanceHandleFor = (
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...coldStartRetryingHandle(async (request) => stub().fetch(request), options, undefined, traceparent),
+        ...coldStartRetryingHandle(async (request) => stub().fetch(request), options, undefined, traceparent, handleLabel(spec)),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
@@ -541,47 +762,53 @@ const poolHandleFor = (
     const maxBackoff = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
     const shouldRetry = options.retryOn ?? retryOnServerError;
 
-    return {
-        fetch: async (input, init) => {
-            // Only a string input can be re-issued safely; a pre-built Request
-            // may carry a body that's consumed on the first send, so re-building
-            // it on a retry throws "Body has already been used". Mirror
-            // `coldStartRetryingHandle` and send such inputs exactly once.
-            const totalAttempts = typeof input === "string" ? attempts : 1;
-            let lastError: unknown;
+    const fetchWithRetry: ContainerHandle["fetch"] = async (input, init) => {
+        // Only a string input can be re-issued safely; a pre-built Request
+        // may carry a body that's consumed on the first send, so re-building
+        // it on a retry throws "Body has already been used". Mirror
+        // `coldStartRetryingHandle` and send such inputs exactly once.
+        const totalAttempts = typeof input === "string" ? attempts : 1;
+        let lastError: unknown;
 
-            for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
-                if (attempt > 0) {
-                    // Clamp the doubling delay to the ceiling so a high `attempts`
-                    // value can't produce an unboundedly long sleep.
-                    // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
-                    await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
-                }
-
-                const request = toRequest(input, init, port, traceparent);
-
-                try {
-                    // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
-                    const response = await namespace.get(namespace.idFromName(randomPoolName(size))).fetch(request);
-
-                    if (attempt === totalAttempts - 1 || !shouldRetry(response)) {
-                        return response;
-                    }
-                } catch (error: unknown) {
-                    lastError = error;
-                }
+        for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+            if (attempt > 0) {
+                // Clamp the doubling delay to the ceiling so a high `attempts`
+                // value can't produce an unboundedly long sleep.
+                // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
+                await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
             }
 
-            // Exhausted attempts after a thrown error on the last try.
-            throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(totalAttempts)} attempts failed`);
-        },
+            const request = toRequest(input, init, port, traceparent);
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
+                const response = await namespace.get(namespace.idFromName(randomPoolName(size))).fetch(request);
+
+                if (attempt === totalAttempts - 1 || !shouldRetry(response)) {
+                    return response;
+                }
+            } catch (error: unknown) {
+                lastError = error;
+            }
+        }
+
+        // Exhausted attempts after a thrown error on the last try.
+        throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(totalAttempts)} attempts failed`);
+    };
+
+    return {
+        // A pooled exec re-picks an instance per attempt, exactly like a pooled
+        // fetch — so a command must be safe to run more than once. That is the
+        // same replayability contract `pool()` already documents for its body.
+        exec: execViaFetch(fetchWithRetry, () => `${handleLabel(spec)}.pool()`),
+        fetch: fetchWithRetry,
         port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, traceparent),
     };
 };
 
 const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, traceparent?: string): ContainerAccessor => {
     return {
-        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), options, traceparent),
+        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), options, traceparent, handleLabel(spec)),
         get: (name, options) => instanceHandleFor(namespace, spec, name, options, traceparent),
         pool: (options) => poolHandleFor(namespace, spec, options, undefined, traceparent),
     };
@@ -608,7 +835,6 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
  * `traceparent` (the inbound RPC's W3C trace context, forwarded by the runtime
  * and read off the request by the DO) is stamped onto every outbound container
  * `fetch`, so the container's own spans stitch under the Worker's trace.
- * @experimental
  */
 const createContainerContext = (
     env: Record<string, unknown>,
@@ -632,7 +858,6 @@ const createContainerContext = (
 
 /**
  * A test handler: receives the request plus the targeted instance name.
- * @experimental
  */
 type ContainerTestHandler = (request: Request, instance: { name: string }) => Promise<Response> | Response;
 
@@ -675,7 +900,6 @@ const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike
  *     transcoder: (request) => new Response("ok"),
  * });
  * ```
- * @experimental
  */
 const createContainerTestContext = (handlers: Record<string, ContainerTestHandler>): Record<string, ContainerAccessor> => {
     const containers: Record<string, ContainerAccessor> = {};
@@ -689,7 +913,7 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
             // `instance.name` is deterministic under test; the double doesn't
             // simulate the random-pick or retry/backoff the real pool/cold-start
             // path does (`attempts: 1` keeps a handler's own 5xx from looping).
-            any: () => handleFor(namespace, "pool-0", { attempts: 1 }),
+            any: () => handleFor(namespace, "pool-0", { attempts: 1 }, undefined, handleLabel(spec)),
             get: (name) => instanceHandleFor(namespace, spec, name, { attempts: 1 }),
             pool: () => handleFor(namespace, "pool-0", { attempts: 1 }),
         };
@@ -702,6 +926,8 @@ export type {
     ContainerAccessor,
     ContainerBindingSpec,
     ContainerEgressControls,
+    ContainerExecOptions,
+    ContainerExecResult,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,

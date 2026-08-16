@@ -21,7 +21,6 @@ const RPC_PATH = "/_lunora/rpc";
 
 /**
  * A `fetch` implementation — defaults to the runtime global.
- * @experimental
  */
 type FetchLike = (
     input: string,
@@ -30,7 +29,6 @@ type FetchLike = (
 
 /**
  * `ContainerBridgeOptions` is part of the experimental `@lunora/container` API and may change without a major version bump.
- * @experimental
  */
 interface ContainerBridgeOptions {
     /**
@@ -52,7 +50,6 @@ interface ContainerBridgeOptions {
 
 /**
  * Thrown when a Lunora function returns an error envelope. A `LunoraError` subclass carrying the wire `code`.
- * @experimental
  */
 class ContainerBridgeError extends LunoraError {
     public constructor(code: string, message: string) {
@@ -66,7 +63,6 @@ class ContainerBridgeError extends LunoraError {
  * imported) so the bridge stays dependency-free and its `.d.ts` is
  * self-contained; the `__lunoraPhantom` shape matches, so a real `api.x.y`
  * reference is assignable and its arg/return types are inferable.
- * @experimental
  */
 interface BridgeFunctionReference<Args = unknown, Result = unknown> {
     readonly __lunoraPhantom?: { args: Args; returns: Result };
@@ -81,7 +77,6 @@ type ResultOfReference<Reference> = Reference extends { __lunoraPhantom?: { retu
 
 /**
  * `ContainerBridge` is part of the experimental `@lunora/container` API and may change without a major version bump.
- * @experimental
  */
 interface ContainerBridge {
     /** Call an `action` by `namespace:fn` path. Alias of {@link ContainerBridge.call} for intent. */
@@ -157,7 +152,6 @@ const parseResponseBody = async (response: BridgeResponse, functionPath: string)
  * `query`/`mutation`/`action` are intent-revealing aliases of one `call` — the
  * wire is identical and the server dispatches by the function's registered
  * kind, so a query path called via `.mutation(...)` still runs as a query.
- * @experimental
  */
 const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge => {
     if (typeof options.baseUrl !== "string" || options.baseUrl.length === 0) {

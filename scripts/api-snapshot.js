@@ -54,9 +54,9 @@ const snapshotsDir = join(rootDir, "api-snapshots");
 /**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `agent`, `ai` and `platform-node` ARE covered, at TIER_3, and being covered is
- * NOT a stability promise — see {@link TIER_3}. The rest of the experimental
- * tier (`replica`, `x402`, `react-native`, `angular`, `browser`, `container`,
+ * `agent`, `ai`, `container` and `platform-node` ARE covered, at TIER_3, and
+ * being covered is NOT a stability promise — see {@link TIER_3}. The rest of the
+ * experimental tier (`replica`, `x402`, `react-native`, `angular`, `browser`,
  * `payment`) is not covered yet.
  *
  * `platform-node` was held out entirely while it was a plan-234 spike, on the
@@ -146,8 +146,16 @@ const TIER_2 = [
  * packages tag heavily. What the snapshot then tracks is the part that is NOT
  * tagged, plus every export appearing or disappearing — which is exactly the
  * settling signal.
+ *
+ * `container` was added when `ctx.containers` gained a first-class `exec`
+ * (plan 335). That change moved the package's public surface with nothing
+ * watching: the plan asserted `api:check` would gate it, and `api:check` had
+ * never heard of the package. `@lunora/agent` already consumes this surface —
+ * `containerTool` calls `ContainerHandle.exec` — so a second package tracks it
+ * the same way `platform-node` tracks `platform`, which is the case TIER_3
+ * exists for.
  */
-const TIER_3 = ["agent", "ai", "platform-node"];
+const TIER_3 = ["agent", "ai", "container", "platform-node"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
