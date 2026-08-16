@@ -246,6 +246,29 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagVectorStore` (interface)
+
+```ts
+interface RagVectorStore {
+    capabilities: RagVectorStoreCapabilities;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
+    query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
+    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+}
+```
+
+### `RagVectorStoreCapabilities` (interface)
+
+```ts
+interface RagVectorStoreCapabilities {
+    maxDimensions: number | false;
+    maxMetadataBytes: number | false;
+    maxTopK: number;
+    maxTopKWithMetadata: number;
+}
+```
+
 ### `RagVectorUpsertInput` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -291,6 +314,12 @@ interface TokenChunkerOptions {
     maxTokens?: number;
     overlapTokens?: number;
 }
+```
+
+### `VECTORIZE_CAPABILITIES` (const)
+
+```ts
+const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities;
 ```
 
 ### `batchReranker` (const)
@@ -352,5 +381,9 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `tokenChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `vectorizeStore` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

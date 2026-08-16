@@ -19,35 +19,13 @@ import type {
     RetrieveOptions,
     RetrieveResult,
 } from "./types";
+import type { RagVectorStore } from "./vector-store";
+import { VECTORIZE_CAPABILITIES, vectorizeStore } from "./vector-store";
 
 const DEFAULT_CHUNK_SIZE = 1000;
 
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
-
-/**
- * Vectorize `topK` ceiling when full metadata is requested (metadata mode).
- *
- * 50, matching Vectorize V2. **Legacy V1 indexes cap at 20** and will reject a
- * larger `topK` remotely — the check cannot distinguish them, since the index
- * version is not visible from a binding handle. That trade is deliberate: the
- * old local cap of 20 denied the other 30 results to *everyone* to spare V1
- * users a remote error.
- */
-const MAX_TOP_K_FULL_METADATA = 50;
-/** Vectorize `topK` ceiling otherwise (text-store mode). */
-const MAX_TOP_K = 100;
-
-/**
- * Vectorize's per-vector dimension ceiling at 32-bit precision — the default
- * for {@link RagConfig.maxEmbeddingDimensions}.
- *
- * It rules out most current large embedding models (`text-embedding-3-large`
- * and Gemini embedding at 3072, Qwen3-Embedding at 4096). Without this check
- * such a model fails at Vectorize with nothing naming the cause, which is the
- * same failure {@link assertMetadataFits} exists to replace for metadata.
- */
-const VECTORIZE_MAX_DIMENSIONS = 1536;
 
 /**
  * Default candidate-pool multiplier when fusion or reranking is active:
@@ -58,11 +36,13 @@ const VECTORIZE_MAX_DIMENSIONS = 1536;
 const CANDIDATE_POOL_FACTOR = 4;
 
 /**
- * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
- * metadata object, not the chunk text alone; a `textStore` moves the text out
- * and lifts the constraint entirely.
+ * Vectorize's per-vector metadata ceiling, in bytes — used only for the
+ * define-time `chunkSize` sanity check, which runs before any context (and so
+ * any store) exists. The check that actually holds reads the bound store's own
+ * `maxMetadataBytes`, and is skipped entirely when a custom `store` is
+ * configured, since its budget is unknown until then.
  */
-const VECTORIZE_METADATA_BYTES = 10 * 1024;
+const VECTORIZE_METADATA_BYTES = VECTORIZE_CAPABILITIES.maxMetadataBytes === false ? Number.POSITIVE_INFINITY : VECTORIZE_CAPABILITIES.maxMetadataBytes;
 
 /**
  * Room held back from {@link VECTORIZE_METADATA_BYTES} for everything in the
@@ -109,10 +89,14 @@ const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_
  * counts. Without this the upsert fails at the far side with nothing naming the
  * cause, which is the failure this whole check exists to replace.
  */
-const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string): void => {
+const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string, budget: number | false): void => {
+    if (budget === false) {
+        return;
+    }
+
     const bytes = new TextEncoder().encode(JSON.stringify(metadata)).length;
 
-    if (bytes <= VECTORIZE_METADATA_BYTES) {
+    if (bytes <= budget) {
         return;
     }
 
@@ -124,7 +108,7 @@ const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: numbe
 
     throw new LunoraError(
         "BAD_REQUEST",
-        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte per-vector ceiling — ${remedy}`,
+        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over the store's ${String(budget)}-byte per-vector ceiling — ${remedy}`,
     );
 };
 
@@ -340,7 +324,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     // never work.
     const chunkTextBudget = VECTORIZE_METADATA_BYTES - METADATA_OVERHEAD_RESERVE;
 
-    if (!config.chunk && !config.textStore && chunkSize > chunkTextBudget) {
+    if (!config.chunk && !config.textStore && !config.store && chunkSize > chunkTextBudget) {
         throw new LunoraError(
             "BAD_REQUEST",
             `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} leaves no room under Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit, which also carries this chunk's bookkeeping and any \`metadata\` you attach — keep it under ${String(chunkTextBudget)}, or supply \`textStore\` to move chunk text out of metadata entirely`,
@@ -353,9 +337,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `topK` must be a positive integer");
     }
 
-    const maxDimensions = config.maxEmbeddingDimensions ?? VECTORIZE_MAX_DIMENSIONS;
-
-    if (maxDimensions !== false && (!Number.isInteger(maxDimensions) || maxDimensions < 1)) {
+    if (
+        config.maxEmbeddingDimensions !== undefined &&
+        config.maxEmbeddingDimensions !== false &&
+        (!Number.isInteger(config.maxEmbeddingDimensions) || config.maxEmbeddingDimensions < 1)
+    ) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `maxEmbeddingDimensions` must be a positive integer, or `false` to disable the check");
     }
 
@@ -383,7 +369,6 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     const reranker = config.rerank;
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
     const { textStore } = config;
-    const topKCeiling = textStore ? MAX_TOP_K : MAX_TOP_K_FULL_METADATA;
 
     // The embedding-model version tag partitions the vector space by folding into
     // the *effective* namespace: `withModelTag` maps the caller's (tenant)
@@ -400,6 +385,18 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     };
 
     return (context: RagContext): Rag => {
+        // The store is what decides the limits from here on. Absent a custom
+        // one this wraps `ctx.vectors` and declares exactly the Vectorize
+        // constants the retrieval code used to hard-code, so the default path
+        // is unchanged.
+        const store: RagVectorStore = config.store ? config.store(context) : vectorizeStore(context.vectors, config.index);
+        const topKCeiling = textStore ? store.capabilities.maxTopK : store.capabilities.maxTopKWithMetadata;
+
+        // An explicit `maxEmbeddingDimensions` always wins; otherwise the store
+        // speaks for itself. That is what lets a pgvector store accept a
+        // 3072-dimension model without the caller opting out of a Vectorize
+        // ceiling it never had.
+        const maxDimensions = config.maxEmbeddingDimensions ?? store.capabilities.maxDimensions;
         // Resolved once per bound ctx, lazily — so a misconfigured model only
         // throws when a RAG method actually runs, and index/retrieve can never
         // drift onto different models within one request.
@@ -619,7 +616,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
         /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
         const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
-            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(namespace, sourceId, 0)], namespace);
+            const [head] = await store.getByIds([chunkVectorId(namespace, sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];
             const chunks = head?.metadata?.[COUNT_KEY];
 
@@ -636,7 +633,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return;
             }
 
-            await context.vectors.deleteByIds(config.index, ids, namespace);
+            await store.deleteByIds(ids, namespace);
             await textStore?.remove?.(ids, { namespace });
             await config.lexicalStore?.remove?.(ids, { namespace });
         };
@@ -735,10 +732,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     }
                 }
 
-                assertMetadataFits(metadata, chunkIndex, input.id);
+                assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
 
                 // Vector upsert
-                await context.vectors.upsert(config.index, {
+                await store.upsert({
                     embed: embedText,
                     id,
                     input: piece,
@@ -798,7 +795,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return texts;
             }
 
-            const records = await context.vectors.getByIds(config.index, ids, namespace);
+            const records = await store.getByIds(ids, namespace);
 
             for (const record of records) {
                 const text = record.metadata?.[TEXT_KEY];
@@ -924,7 +921,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const ids = chunks.map((chunk) => chunk.id);
-            const [texts, records] = await Promise.all([textsByIds(ids, namespace), context.vectors.getByIds(config.index, ids, namespace)]);
+            const [texts, records] = await Promise.all([textsByIds(ids, namespace), store.getByIds(ids, namespace)]);
             const fullMetadataById = new Map(records.map((record) => [record.id, record.metadata]));
 
             return chunks.flatMap((chunk) => {
@@ -986,7 +983,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             const minScore = options?.minScore;
 
             const runVectorLeg = async (searchQuery: string): Promise<RetrievedChunk[]> => {
-                const vectorResult = await context.vectors.query(config.index, {
+                const vectorResult = await store.query({
                     embed: embedText,
                     filter: effectiveFilter,
                     input: searchQuery,
