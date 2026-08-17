@@ -38,9 +38,11 @@ interface RagSourceObject {
 /**
  * Where documents come from. Two operations, both injected.
  *
- * `list` is an async iterable rather than an array so a bucket with a million
- * keys can be paged through without materialising every key first — the caller
- * decides how to page, this only consumes.
+ * `list` is an async iterable rather than an array so the caller decides how to
+ * page a large bucket rather than being forced to build one array up front.
+ * `sync` still collects the KEYS it yields — it needs the full current key set
+ * to work out what disappeared — but never more than one object's BODY at a
+ * time, which is where the memory actually is.
  */
 interface RagObjectSource {
     /** Fetch one object's raw text. Return `undefined` to skip it (unreadable, unsupported). */
@@ -76,23 +78,35 @@ interface RagSourceOptions {
 
     /** Called after each object is handled — for progress reporting. */
     onObject?: (info: { chunks: number; key: string; status: "indexed" | "skipped" | "unchanged" }) => void;
+}
 
+/** Per-pass options for {@link RagSourceSync.sync}. */
+interface RagSyncPassOptions {
     /**
-     * Delete indexed sources whose key no longer appears in `list()`.
-     * Default `true`.
+     * The keys this index is believed to already hold. Any of them missing from
+     * this pass's `list()` is deleted from the index.
      *
-     * This is what makes the index a mirror rather than an append-only pile: a
-     * document removed at the source but left in the index keeps being
+     * Pruning is what makes the index a mirror rather than an append-only pile:
+     * a document removed at the source but left in the index keeps being
      * retrieved and cited, which is worse than never having indexed it.
+     *
+     * It is the CALLER's set, and required, because nothing else can hold it
+     * honestly. A previous pass's keys remembered in the instance would be
+     * empty on the shape this helper is documented in — built per request, from
+     * a per-request `rag(ctx)` — so a prune that defaulted on would in practice
+     * never run and never say so. Persist the set (a table, a KV key, the
+     * bucket listing itself) and hand it in.
+     *
+     * Omitted ⇒ nothing is pruned, and `pruned` comes back empty.
      */
-    prune?: boolean;
+    knownKeys?: Iterable<string>;
 }
 
 /** What one {@link RagSourceSync.sync} pass did. */
 interface RagSyncReport {
     /** Keys indexed for the first time or re-indexed after a change. */
     indexed: string[];
-    /** Keys deleted from the index because they no longer exist at the source. */
+    /** Keys deleted from the index because they no longer exist at the source. Empty unless `knownKeys` was supplied. */
     pruned: string[];
     /** Keys skipped — no extractor, or the source returned nothing. */
     skipped: string[];
@@ -103,7 +117,7 @@ interface RagSyncReport {
 /** The bound ingestion surface. */
 interface RagSourceSync {
     /** Run one full pass over the source. */
-    sync: (source: RagObjectSource) => Promise<RagSyncReport>;
+    sync: (source: RagObjectSource, passOptions?: RagSyncPassOptions) => Promise<RagSyncReport>;
 }
 
 const DEFAULT_CONCURRENCY = 4;
@@ -111,13 +125,24 @@ const DEFAULT_CONCURRENCY = 4;
 /** Stable key ordering for a report — objects are processed concurrently, so arrival order is not meaningful. */
 const byKey = (left: string, right: string): number => left.localeCompare(right);
 
+/**
+ * The object's bare content type — the source's own, else guessed from the key's
+ * extension, with any `; charset=…` parameter dropped.
+ *
+ * One function because the extractor lookup and the plain-text check must agree
+ * about what an object IS: two copies of this expression that drift mean an
+ * object matches an extractor it is then not handed to, or the reverse.
+ */
+const contentTypeOf = (object: RagSourceObject): string =>
+    (object.contentType ?? guessMimeTypeFromExtension(object.key.slice(object.key.lastIndexOf(".")))).split(";")[0]?.trim() ?? "";
+
 /** Resolve the extractor for an object, or `undefined` when none applies. */
 const extractorFor = (object: RagSourceObject, extractors: Record<string, RagExtractor> | undefined): RagExtractor | undefined => {
     if (!extractors) {
         return undefined;
     }
 
-    const contentType = (object.contentType ?? guessMimeTypeFromExtension(object.key.slice(object.key.lastIndexOf(".")))).split(";")[0]?.trim() ?? "";
+    const contentType = contentTypeOf(object);
 
     if (Object.hasOwn(extractors, contentType)) {
         return extractors[contentType];
@@ -139,14 +164,19 @@ const PLAIN_TEXT_TYPES = new Set(["application/json", "text/csv", "text/markdown
  * ```ts
  * const ingest = defineRagSource(docs(ctx), { namespace: ctx.shardKey });
  *
- * const report = await ingest.sync({
- *     list: async function* () {
- *         for await (const object of bucket.list()) {
- *             yield { key: object.key, metadata: { url: object.key } };
- *         }
+ * const report = await ingest.sync(
+ *     {
+ *         list: async function* () {
+ *             for await (const object of bucket.list()) {
+ *                 yield { key: object.key, metadata: { url: object.key } };
+ *             }
+ *         },
+ *         get: async (object) => (await bucket.get(object.key))?.text(),
  *     },
- *     get: async (object) => (await bucket.get(object.key))?.text(),
- * });
+ *     // Pass what you already indexed to have deletions mirrored; omit it and
+ *     // nothing is pruned.
+ *     { knownKeys: await ctx.db.query("indexedDocs").collect().then((rows) => rows.map((row) => row.key)) },
+ * );
  * ```
  * @experimental
  */
@@ -157,17 +187,7 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `concurrency` must be a positive integer");
     }
 
-    /**
-     * Keys seen in the previous pass, so the next one knows what disappeared.
-     *
-     * In-memory and therefore per-isolate: a first pass after a restart has
-     * nothing to compare against and prunes nothing, rather than deleting an
-     * index it has no record of. That is the safe direction — a stale entry is
-     * recoverable, a wrongly-pruned one costs a full re-embed.
-     */
-    let previousKeys: ReadonlySet<string> | undefined;
-
-    const sync = async (source: RagObjectSource): Promise<RagSyncReport> => {
+    const sync = async (source: RagObjectSource, passOptions: RagSyncPassOptions = {}): Promise<RagSyncReport> => {
         const objects: RagSourceObject[] = [];
 
         for await (const object of source.list()) {
@@ -187,12 +207,11 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
             }
 
             const extractor = extractorFor(object, options.extractors);
-            const contentType = (object.contentType ?? guessMimeTypeFromExtension(object.key.slice(object.key.lastIndexOf(".")))).split(";")[0]?.trim() ?? "";
             let text: string | undefined;
 
             if (extractor) {
                 text = await extractor(raw, object);
-            } else if (PLAIN_TEXT_TYPES.has(contentType)) {
+            } else if (PLAIN_TEXT_TYPES.has(contentTypeOf(object))) {
                 text = raw;
             }
 
@@ -219,21 +238,19 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
             options.onObject?.({ chunks: result.chunks, key: object.key, status: result.unchanged ? "unchanged" : "indexed" });
         });
 
-        const currentKeys = new Set(objects.map((object) => object.key));
-
-        // Prune only against a set this instance actually observed. Deleting
-        // everything absent from the first pass would wipe an index built by a
-        // previous isolate.
-        if (options.prune !== false && previousKeys !== undefined) {
-            const gone = [...previousKeys].filter((key) => !currentKeys.has(key));
+        // Prune against the caller's set of already-indexed keys, and only
+        // against that: with no set supplied there is nothing to compare a
+        // listing to, and deleting everything absent from this pass would wipe
+        // an index this call has no record of.
+        if (passOptions.knownKeys !== undefined) {
+            const currentKeys = new Set(objects.map((object) => object.key));
+            const gone = [...passOptions.knownKeys].filter((key) => !currentKeys.has(key));
 
             await concurrentMap(gone, concurrency, async (key) => {
                 await rag.remove({ id: key, ...(options.namespace === undefined ? {} : { namespace: options.namespace }) });
                 report.pruned.push(key);
             });
         }
-
-        previousKeys = currentKeys;
 
         // Sorted so a report is comparable across runs — the objects were
         // processed concurrently, so arrival order is not meaningful.
@@ -248,5 +265,5 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
     return { sync };
 };
 
-export type { RagExtractor, RagObjectSource, RagSourceObject, RagSourceOptions, RagSourceSync, RagSyncReport };
-export default defineRagSource;
+export type { RagExtractor, RagObjectSource, RagSourceObject, RagSourceOptions, RagSourceSync, RagSyncPassOptions, RagSyncReport };
+export { defineRagSource };

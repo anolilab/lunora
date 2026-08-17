@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { RagObjectSource, RagSourceObject } from "../../src/rag/source";
-import defineRagSource from "../../src/rag/source";
+import { defineRagSource } from "../../src/rag/source";
 import type { IndexResult, Rag, RemoveInput } from "../../src/rag/types";
 
 /** A `Rag` double recording what it was asked to index and remove. */
@@ -84,42 +84,43 @@ describe("defineRagSource", () => {
         expect(second.indexed).toStrictEqual(["a.txt"]);
     });
 
-    it("prunes an object that disappeared from the source", async () => {
+    it("prunes a known key that disappeared from the source", async () => {
         expect.assertions(2);
 
         const { rag, removed } = fakeRag();
         const ingest = defineRagSource(rag);
 
-        await ingest.sync(source({ "a.txt": "alpha", "b.txt": "bravo" }));
-        const second = await ingest.sync(source({ "a.txt": "alpha" }));
+        const report = await ingest.sync(source({ "a.txt": "alpha" }), { knownKeys: ["a.txt", "b.txt"] });
 
         // A document deleted at the source but left indexed keeps being cited.
-        expect(second.pruned).toStrictEqual(["b.txt"]);
+        expect(report.pruned).toStrictEqual(["b.txt"]);
         expect(removed).toStrictEqual(["b.txt"]);
     });
 
-    it("prunes nothing on the first pass", async () => {
-        expect.assertions(2);
+    it("prunes nothing without knownKeys, however many passes it has run", async () => {
+        expect.assertions(3);
 
         const { rag, removed } = fakeRag();
-        const report = await defineRagSource(rag).sync(source({ "a.txt": "alpha" }));
+        const ingest = defineRagSource(rag);
 
-        // A fresh isolate has no record of what a previous one indexed, so
-        // pruning here would wipe an index it never built.
-        expect(report.pruned).toStrictEqual([]);
+        const first = await ingest.sync(source({ "a.txt": "alpha", "b.txt": "bravo" }));
+        const second = await ingest.sync(source({ "a.txt": "alpha" }));
+
+        // No hidden per-instance memory of the previous pass: prune is the
+        // caller's set or nothing, so the documented per-request shape cannot
+        // silently prune (or silently fail to).
+        expect(first.pruned).toStrictEqual([]);
+        expect(second.pruned).toStrictEqual([]);
         expect(removed).toStrictEqual([]);
     });
 
-    it("does not prune when prune is false", async () => {
+    it("prunes nothing when every known key is still listed", async () => {
         expect.assertions(1);
 
         const { rag } = fakeRag();
-        const ingest = defineRagSource(rag, { prune: false });
+        const report = await defineRagSource(rag).sync(source({ "a.txt": "alpha", "b.txt": "bravo" }), { knownKeys: ["a.txt"] });
 
-        await ingest.sync(source({ "a.txt": "alpha", "b.txt": "bravo" }));
-        const second = await ingest.sync(source({ "a.txt": "alpha" }));
-
-        expect(second.pruned).toStrictEqual([]);
+        expect(report.pruned).toStrictEqual([]);
     });
 
     it("skips a content type with no extractor rather than indexing raw bytes", async () => {
