@@ -43,33 +43,48 @@ describe("action handle", () => {
         expect(get(pending)).toBe(false);
     });
 
-    it("keeps pending true until the last of several overlapping calls settles", async () => {
-        const resolvers: ((value: unknown) => void)[] = [];
-        const actionFn = vi.fn<() => Promise<unknown>>(
-            () =>
-                new Promise((resolve) => {
-                    resolvers.push(resolve);
-                }),
-        );
+    // Ref-counted `pending` across overlapping calls lives entirely in
+    // `createCallRunner` and is pinned there; what only a Svelte test can prove
+    // is that the runner's writes reach store subscribers, which is what `$data`
+    // in a component compiles down to.
+    it("notifies store subscribers on data and pending", async () => {
+        const actionFn = vi.fn<() => Promise<unknown>>().mockResolvedValue({ code: 0 });
         const client = { action: actionFn } as unknown as LunoraClient;
 
-        const { call, pending } = action(client, fnRef);
+        const { call, data, pending } = action(client, fnRef);
 
-        const both = Promise.all([call(args), call(args)]);
+        const seenData: unknown[] = [];
+        const seenPending: boolean[] = [];
+        const stopData = data.subscribe((value) => seenData.push(value));
+        const stopPending = pending.subscribe((value) => seenPending.push(value));
 
-        expect(get(pending)).toBe(true);
+        await call(args);
 
-        // Settling only the first must NOT clear pending — that is the whole
-        // point of ref-counting, and getting it wrong hides a running call.
-        resolvers[0]?.({ code: 0 });
-        await Promise.resolve();
+        // Each store replays its current value on subscribe, so the first entry
+        // is the initial state and everything after it is a real notification.
+        expect(seenData).toStrictEqual([undefined, { code: 0 }]);
+        expect(seenPending).toStrictEqual([false, true, false]);
 
-        expect(get(pending)).toBe(true);
+        stopData();
+        stopPending();
+    });
 
-        resolvers[1]?.({ code: 0 });
-        await both;
+    it("keeps the previous data when a later call fails", async () => {
+        const actionFn = vi.fn<() => Promise<unknown>>().mockResolvedValueOnce({ code: 0 }).mockRejectedValueOnce(new Error("refused"));
+        const client = { action: actionFn } as unknown as LunoraClient;
 
-        expect(get(pending)).toBe(false);
+        const { call, data, error } = action(client, fnRef);
+
+        await call(args);
+
+        expect(get(data)).toStrictEqual({ code: 0 });
+
+        await expect(call(args)).rejects.toThrow("refused");
+
+        // The adapter-wide contract: a failure sets `error` and leaves the last
+        // successful `data` in place.
+        expect(get(error)?.message).toBe("refused");
+        expect(get(data)).toStrictEqual({ code: 0 });
     });
 
     it("records a normalized error, rejects, and clears pending", async () => {

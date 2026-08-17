@@ -1,5 +1,5 @@
 import type { FunctionReference } from "@lunora/client";
-import { createRoot } from "solid-js";
+import { createEffect, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
 
 import type { ActionClient } from "../src/create-action";
@@ -67,30 +67,78 @@ describe(createActionForClient, () => {
         });
     });
 
-    it("keeps pending true until the last of several overlapping calls settles", async () => {
+    // Ref-counted `pending` across overlapping calls lives entirely in
+    // `createCallRunner` and is pinned there; what only a Solid test can prove
+    // is that the runner's writes land in signals a component actually tracks.
+    it("notifies a tracked effect when data and pending change", async () => {
         await createRoot(async (dispose) => {
-            const resolvers: ((value: unknown) => void)[] = [];
             const client: ActionClient<typeof runRef> = {
-                action: () =>
-                    new Promise((resolve) => {
-                        resolvers.push(resolve);
-                    }),
+                action: () => Promise.resolve({ code: 0 }),
             };
 
             const handle = createActionForClient(client, runRef);
-            const both = Promise.all([handle.call({ command: "lunora" }), handle.call({ command: "pnpm" })]);
+            const seen: { data: unknown; pending: boolean }[] = [];
 
-            expect(handle.pending()).toBe(true);
+            createEffect(() => {
+                seen.push({ data: handle.data(), pending: handle.pending() });
+            });
 
-            resolvers[0]?.({ code: 0 });
+            // Let the initial effect run before the call, so what follows is the
+            // notification and not the first tracking pass.
+            await Promise.resolve();
+            await handle.call({ command: "lunora" });
             await Promise.resolve();
 
-            expect(handle.pending()).toBe(true);
+            expect(seen.at(-1)).toStrictEqual({ data: { code: 0 }, pending: false });
+            expect(seen.length).toBeGreaterThan(1);
 
-            resolvers[1]?.({ code: 0 });
-            await both;
+            dispose();
+        });
+    });
 
-            expect(handle.pending()).toBe(false);
+    it("stores a function-valued result instead of invoking it", async () => {
+        await createRoot(async (dispose) => {
+            const returned = (): string => "not called";
+            const client: ActionClient<typeof runRef> = {
+                action: () => Promise.resolve(returned),
+            };
+
+            // Solid's setter treats a bare function as an updater, so the sink
+            // wraps the result in a thunk. Without that, `data()` would hold
+            // whatever the server's function returned when Solid called it.
+            const handle = createActionForClient(client, runRef);
+
+            await handle.call({ command: "lunora" });
+
+            expect(handle.data()).toBe(returned);
+
+            dispose();
+        });
+    });
+
+    it("keeps the previous data when a later call fails", async () => {
+        await createRoot(async (dispose) => {
+            let calls = 0;
+            const client: ActionClient<typeof runRef> = {
+                action: () => {
+                    calls += 1;
+
+                    return calls === 1 ? Promise.resolve({ code: 0 }) : Promise.reject(new Error("refused"));
+                },
+            };
+
+            const handle = createActionForClient(client, runRef);
+
+            await handle.call({ command: "lunora" });
+
+            expect(handle.data()).toStrictEqual({ code: 0 });
+
+            await expect(handle.call({ command: "bash" })).rejects.toThrow("refused");
+
+            // The adapter-wide contract: a failure sets `error` and leaves the
+            // last successful `data` in place.
+            expect(handle.error()?.message).toBe("refused");
+            expect(handle.data()).toStrictEqual({ code: 0 });
 
             dispose();
         });

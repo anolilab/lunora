@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { describe, expect, it } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, nextTick, watch } from "vue";
 
 import { useAction } from "../src/use-action";
 import { createFakeClient } from "./fake-client";
@@ -45,40 +45,59 @@ describe(useAction, () => {
         scope.stop();
     });
 
-    it("keeps pending true until the last of several overlapping calls settles", async () => {
+    // Ref-counted `pending` across overlapping calls lives entirely in
+    // `createCallRunner` and is pinned there; what only a Vue test can prove is
+    // that the runner's writes actually land in reactive cells a template
+    // watches, rather than in plain variables that never notify.
+    it("notifies a watcher on data, error and pending", async () => {
         const fake = createFakeClient();
-        const resolvers: ((value: unknown) => void)[] = [];
-
-        // `mockImplementationOnce` twice rather than one promise-returning
-        // implementation: the spy is typed void-returning, so handing it an
-        // implementation that returns a promise trips `no-misused-promises`.
-        const first = new Promise((resolve) => {
-            resolvers.push(resolve);
-        });
-        const second = new Promise((resolve) => {
-            resolvers.push(resolve);
-        });
-
-        fake.actionSpy.mockReturnValueOnce(first).mockReturnValueOnce(second);
+        fake.actionSpy.mockResolvedValueOnce({ code: 0 }).mockRejectedValueOnce(new Error("refused"));
 
         const scope = effectScope();
         const handle = scope.run(() => fake.provide(() => useAction(runCommand)))!;
 
-        const both = Promise.all([handle.call({ command: "lunora" }), handle.call({ command: "pnpm" })]);
+        const seenData: unknown[] = [];
+        const seenError: (string | undefined)[] = [];
+        const seenPending: boolean[] = [];
 
-        expect(handle.pending.value).toBe(true);
+        scope.run(() => {
+            watch(handle.data, (next) => seenData.push(next));
+            watch(handle.error, (next) => seenError.push(next?.message));
+            watch(handle.pending, (next) => seenPending.push(next));
+        });
 
-        // Settling only the first must NOT clear pending — that is the whole
-        // point of ref-counting, and getting it wrong hides a running call.
-        resolvers[0]?.({ code: 0 });
-        await Promise.resolve();
+        await handle.call({ command: "lunora" });
+        await nextTick();
 
-        expect(handle.pending.value).toBe(true);
+        expect(seenData).toStrictEqual([{ code: 0 }]);
+        expect(seenPending).toStrictEqual([true, false]);
 
-        resolvers[1]?.({ code: 0 });
-        await both;
+        await expect(handle.call({ command: "bash" })).rejects.toThrow("refused");
 
-        expect(handle.pending.value).toBe(false);
+        await nextTick();
+
+        expect(seenError).toStrictEqual(["refused"]);
+
+        scope.stop();
+    });
+
+    it("keeps the previous data when a later call fails", async () => {
+        const fake = createFakeClient();
+        fake.actionSpy.mockResolvedValueOnce({ code: 0 }).mockRejectedValueOnce(new Error("refused"));
+
+        const scope = effectScope();
+        const handle = scope.run(() => fake.provide(() => useAction(runCommand)))!;
+
+        await handle.call({ command: "lunora" });
+
+        expect(handle.data.value).toStrictEqual({ code: 0 });
+
+        await expect(handle.call({ command: "bash" })).rejects.toThrow("refused");
+
+        // The adapter-wide contract: a failure sets `error` and leaves the last
+        // successful `data` in place, so a transient error does not blank the view.
+        expect(handle.error.value?.message).toBe("refused");
+        expect(handle.data.value).toStrictEqual({ code: 0 });
 
         scope.stop();
     });
