@@ -257,6 +257,19 @@ class QueuedMutation:
         )
 
 
+def same_shard(left: Optional[str], right: Optional[str]) -> bool:
+    """Whether two shard keys name the same shard.
+
+    An absent key and an empty one are the SAME shard — an empty string names no
+    shard, so both mean "the default one". Comparing them strictly leaves a write
+    submitted with ``""`` queued forever, because nothing ever flushes a shard
+    named ``""``, and makes its optimistic overlay miss the subscription it
+    targets.
+    """
+
+    return (left or "") == (right or "")
+
+
 def identity_allows_replay(stamped: Identity, current: Optional[str]) -> bool:
     """Whether a write stamped ``stamped`` may replay under ``current``.
 

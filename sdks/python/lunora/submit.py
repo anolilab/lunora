@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .errors import LunoraError
 from .offline import (
@@ -36,6 +36,7 @@ from .offline import (
     QueuedMutation,
     identity_allows_replay,
     random_id,
+    same_shard,
 )
 from .optimistic import (
     OptimisticLocalStore,
@@ -44,6 +45,13 @@ from .optimistic import (
     rollback_all,
 )
 from .wire import encode_wire, stable_wire_key
+
+if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
+    # Under TYPE_CHECKING alone: `client.py` imports this module at run time, so
+    # a real import here would be a cycle. What it buys is that the ~40 accesses
+    # below reach into a TYPED object — under `Any` a rename of `_send` or
+    # `_subs` was silent, because a checker sees `Any` and checks nothing.
+    from .client import LunoraClient
 
 #: Error codes a replay must NOT treat as the server's final word on a write.
 #: The shard was momentarily unreachable, so the same call under the same
@@ -182,7 +190,7 @@ def is_transient(error: BaseException) -> bool:
     return True
 
 
-async def submit_write(client: Any, options: SubmitOptions) -> MutationOutcome:
+async def submit_write(client: LunoraClient, options: SubmitOptions) -> MutationOutcome:
     """Write, sending it now or queueing it until the socket is back.
 
     ``precondition`` is re-evaluated just before a QUEUED write replays; a
@@ -250,7 +258,7 @@ async def submit_write(client: Any, options: SubmitOptions) -> MutationOutcome:
     return MutationOutcome("committed", write_id, value, commit_cursor)
 
 
-def hydrate_queue(client: Any) -> list:
+def hydrate_queue(client: LunoraClient) -> list:
     """Restore writes persisted in a prior session; returns their shard keys.
 
     Open a socket for each returned shard key (and then flush it) to replay them.
@@ -267,7 +275,7 @@ def hydrate_queue(client: Any) -> list:
     return restored
 
 
-async def flush_queue(client: Any, shard_key: Optional[str] = None) -> FlushReport:
+async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> FlushReport:
     """Replay one shard's queued writes, in order, over HTTP.
 
     Call it when that shard's socket comes back. Each write replays under its own
@@ -303,13 +311,11 @@ async def flush_queue(client: Any, shard_key: Optional[str] = None) -> FlushRepo
 
     report_discarded(client, conflicted)
 
-    # A null shard key and an empty one are the SAME shard, so a write submitted
-    # with `shard_key=""` drains on the default shard's flush instead of waiting
-    # for a socket that is never opened.
-    key = shard_key or ""
-
+    # `same_shard`, not `==`: a null shard key and an empty one are the SAME
+    # shard, so a write submitted with `shard_key=""` drains on the default
+    # shard's flush instead of waiting for a socket that is never opened.
     with client._lock:
-        drained = queue.drain(lambda item: (item.shard_key or "") == key)
+        drained = queue.drain(lambda item: same_shard(item.shard_key, shard_key))
 
     if not drained:
         return report
@@ -380,7 +386,7 @@ async def flush_queue(client: Any, shard_key: Optional[str] = None) -> FlushRepo
     return report
 
 
-def close_queue(client: Any) -> None:
+def close_queue(client: LunoraClient) -> None:
     """Reject every queued write so no caller waits on a dead client.
 
     Durable storage is untouched: the next session restores those writes.
@@ -410,12 +416,11 @@ def find_subscriptions(subs: Any, function_path: str, args: Any, shard_key: Opti
     """
 
     args_key = stable_wire_key(args if args is not None else {})
-    key = shard_key or ""
 
-    return [sub for sub in subs if sub.function_path == function_path and sub.args_key == args_key and (sub.shard_key or "") == key]
+    return [sub for sub in subs if sub.function_path == function_path and sub.args_key == args_key and same_shard(sub.shard_key, shard_key)]
 
 
-def _record_optimistic(client: Any, options: SubmitOptions) -> list:
+def _record_optimistic(client: LunoraClient, options: SubmitOptions) -> list:
     """Run the consumer's ``optimistic_update``, with the lock RELEASED.
 
     It returns the ``(subscription, value)`` overrides the callback asked for
@@ -431,10 +436,9 @@ def _record_optimistic(client: Any, options: SubmitOptions) -> list:
     with client._lock:
         subs = list(client._subs.values())
 
-    key = options.shard_key or ""
     store = OptimisticLocalStore(
         lambda path, query_args: find_subscriptions(subs, path, query_args, options.shard_key),
-        lambda path: [sub for sub in subs if sub.function_path == path and (sub.shard_key or "") == key],
+        lambda path: [sub for sub in subs if sub.function_path == path and same_shard(sub.shard_key, options.shard_key)],
     )
 
     try:
@@ -447,7 +451,7 @@ def _record_optimistic(client: Any, options: SubmitOptions) -> list:
     return store.writes
 
 
-def _install_layers(client: Any, options: SubmitOptions, overrides: list, deferred: list) -> tuple:
+def _install_layers(client: LunoraClient, options: SubmitOptions, overrides: list, deferred: list) -> tuple:
     """Install both optimistic APIs' layers. Runs with the lock held."""
 
     confirms: list = []
@@ -469,7 +473,7 @@ def _install_layers(client: Any, options: SubmitOptions, overrides: list, deferr
     return confirms, rollbacks
 
 
-def _build_entry(client: Any, options: SubmitOptions, write_id: str, confirms: list, rollbacks: list) -> QueuedMutation:
+def _build_entry(client: LunoraClient, options: SubmitOptions, write_id: str, confirms: list, rollbacks: list) -> QueuedMutation:
     return QueuedMutation(
         args=options.args,
         client_id=client.client_id,
@@ -487,7 +491,7 @@ def _build_entry(client: Any, options: SubmitOptions, write_id: str, confirms: l
     )
 
 
-def report_discarded(client: Any, discarded: list) -> None:
+def report_discarded(client: LunoraClient, discarded: list) -> None:
     """Settle every write the queue let go of without sending it.
 
     Runs with the lock RELEASED: a rejection rolls optimistic layers back, which
@@ -501,7 +505,7 @@ def report_discarded(client: Any, discarded: list) -> None:
         settle_rejected(client, item.entry, item.error())
 
 
-def settle_committed(client: Any, item: QueuedMutation, value: Any, commit_cursor: Optional[int]) -> None:
+def settle_committed(client: LunoraClient, item: QueuedMutation, value: Any, commit_cursor: Optional[int]) -> None:
     deferred: list = []
     # The overlay is confirmed BEFORE the caller is told, so the gapless drop is
     # already in place when the confirming frame lands.
@@ -512,7 +516,7 @@ def settle_committed(client: Any, item: QueuedMutation, value: Any, commit_curso
     emit_settled(client, item, "committed", value=value)
 
 
-def settle_rejected(client: Any, item: QueuedMutation, error: Exception) -> None:
+def settle_rejected(client: LunoraClient, item: QueuedMutation, error: Exception) -> None:
     deferred: list = []
     with client._lock:
         rollback_all(item.rollbacks, deferred)
@@ -521,7 +525,7 @@ def settle_rejected(client: Any, item: QueuedMutation, error: Exception) -> None
     emit_settled(client, item, "rejected", error=error)
 
 
-def emit_settled(client: Any, item: QueuedMutation, status: str, value: Any = None, error: Optional[Exception] = None) -> None:
+def emit_settled(client: LunoraClient, item: QueuedMutation, status: str, value: Any = None, error: Optional[Exception] = None) -> None:
     """Report one write's terminal verdict, to the client AND to its own handler.
 
     The client-level listeners are notified unconditionally, never only when the
