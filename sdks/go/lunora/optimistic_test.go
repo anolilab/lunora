@@ -57,7 +57,13 @@ func subscribedState(t *testing.T, base any) (*Client, *OptimisticState, *[]any)
 func deliverFrame(t *testing.T, client *Client, frame map[string]any) {
 	t.Helper()
 
-	payload := map[string]any{"id": "sub_1", "type": "data"}
+	deliverTypedFrame(t, client, "data", frame)
+}
+
+func deliverTypedFrame(t *testing.T, client *Client, kind string, frame map[string]any) {
+	t.Helper()
+
+	payload := map[string]any{"id": "sub_1", "type": kind}
 	for key, value := range frame {
 		payload[key] = value
 	}
@@ -215,6 +221,45 @@ func TestOptimisticLayerDropsOnCommitCursor(t *testing.T) {
 
 	// The frame reached the commit cursor: the effect is in the base, so the
 	// overlay drops without the value ever double-counting it.
+	if !reflect.DeepEqual(state.LastValue, scenario["displayedAfterAtFrame"]) {
+		t.Fatalf("at cursor: got %v, want %v", state.LastValue, scenario["displayedAfterAtFrame"])
+	}
+
+	if want := int(scenario["layersAfterAtFrame"].(float64)); len(state.Layers) != want {
+		t.Fatalf("layers at cursor: got %d, want %d", len(state.Layers), want)
+	}
+}
+
+// A byte-identical write produces a settled frame, never a data frame. The
+// overlay has to drop on it too, or the prediction stays on screen forever on a
+// query nothing else writes to.
+func TestOptimisticLayerDropsOnSettledFrame(t *testing.T) {
+	covers("optimistic_layer_drops_on_settled_frame")
+
+	scenario := fixtureScenario(t, "optimistic", "settledFrameDrop")
+	client, state, _ := subscribedState(t, scenario["base"])
+	commitCursor := int64(scenario["commitCursor"].(float64))
+
+	var deferred []func()
+
+	handle := ApplyOptimisticLayer(state, appender(scenario["appended"]), &deferred)
+	handle.Confirm(&commitCursor, &deferred)
+	runDeferred(deferred)
+
+	below, _ := scenario["belowFrame"].(map[string]any)
+	deliverTypedFrame(t, client, "settled", below)
+
+	if !reflect.DeepEqual(state.LastValue, scenario["displayedAfterBelowFrame"]) {
+		t.Fatalf("below cursor: got %v, want %v", state.LastValue, scenario["displayedAfterBelowFrame"])
+	}
+
+	if want := int(scenario["layersAfterBelowFrame"].(float64)); len(state.Layers) != want {
+		t.Fatalf("layers below cursor: got %d, want %d", len(state.Layers), want)
+	}
+
+	at, _ := scenario["atFrame"].(map[string]any)
+	deliverTypedFrame(t, client, "settled", at)
+
 	if !reflect.DeepEqual(state.LastValue, scenario["displayedAfterAtFrame"]) {
 		t.Fatalf("at cursor: got %v, want %v", state.LastValue, scenario["displayedAfterAtFrame"])
 	}

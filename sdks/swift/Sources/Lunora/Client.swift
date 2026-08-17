@@ -642,9 +642,34 @@ public final class LunoraClient {
 
             return kind
         case "resume", "settled":
-            withLock {
-                if let id, let entry = subscriptions[id] { advance(entry, frame) }
+            let deferred = withLock { () -> LunoraOptimistic.Deferred in
+                guard let id, let entry = subscriptions[id] else { return [] }
+
+                advance(entry, frame)
+
+                // A resume/settled frame advances the cursor without a value
+                // change — but a write whose result was byte-identical for this
+                // query still committed at or under this cursor, so its overlay is
+                // confirmed. Sweep here too, not just on data frames, or a
+                // no-visible-change write leaves its prediction on screen until
+                // some unrelated write happens to produce a data frame —
+                // indefinitely on a quiet query.
+                if let cursor = LunoraClient.intValue(frame["cursor"]) { entry.state.serverCursor = cursor }
+
+                guard LunoraOptimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor) else { return [] }
+
+                var queued: LunoraOptimistic.Deferred = []
+
+                LunoraOptimistic.notify(
+                    entry.state,
+                    LunoraOptimistic.fold(entry.state.serverBase, entry.state.layers),
+                    &queued
+                )
+
+                return queued
             }
+
+            LunoraClient.runDeferred(deferred)
 
             return kind
         case "error":

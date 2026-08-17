@@ -501,12 +501,12 @@ class Client(
                         advance(entry, frame)
                         entry.state.serverBase = value
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
-                        // without one must LEAVE the tracked cursor where it is:
-                        // nulling it strands every pending layer, because the
-                        // tracked cursor is what a later commit cursor is compared
-                        // against, so the write renders twice until some later
-                        // cursored frame happens to land.
-                        if (frame.containsKey("cursor")) entry.state.serverCursor = (frame["cursor"] as? Number)?.toLong()
+                        // that omits it — or sends an explicit null — must LEAVE
+                        // the tracked cursor where it is: nulling it strands every
+                        // pending layer, because the tracked cursor is what a later
+                        // commit cursor is compared against, so the write renders
+                        // twice until some later cursored frame happens to land.
+                        (frame["cursor"] as? Number)?.let { entry.state.serverCursor = it.toLong() }
                         // Drop the overlays this frame has caught up with, then
                         // RE-FOLD the rest onto the new authoritative base rather
                         // than clobbering them: a still-queued write's predicted
@@ -522,7 +522,34 @@ class Client(
 
                 for (call in deferred) call()
             }
-            "resume", "settled" -> synchronized(lock) { subscriptions[id]?.let { advance(it, frame) } }
+            "resume", "settled" -> {
+                val deferred = mutableListOf<() -> Unit>()
+
+                synchronized(lock) {
+                    subscriptions[id]?.let { entry ->
+                        advance(entry, frame)
+                        // A resume/settled frame advances the cursor without a
+                        // value change — but a write whose result was
+                        // byte-identical for this query still committed at or
+                        // under this cursor, so its overlay is confirmed. Sweep
+                        // here too, not just on data frames, or a
+                        // no-visible-change write leaves its prediction on screen
+                        // until some unrelated write happens to produce a data
+                        // frame — indefinitely on a quiet query.
+                        (frame["cursor"] as? Number)?.let { entry.state.serverCursor = it.toLong() }
+
+                        if (Optimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor)) {
+                            Optimistic.notifySubscription(
+                                entry.state,
+                                Optimistic.fold(entry.state.serverBase, entry.state.layers),
+                                deferred,
+                            )
+                        }
+                    }
+                }
+
+                for (call in deferred) call()
+            }
             "error" -> {
                 val envelope = frame["error"] as? Map<*, *> ?: emptyMap<String, Any?>()
                 val error = SubscriptionError(

@@ -72,6 +72,7 @@ final class ConformanceTests: XCTestCase {
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
             case "optimistic_layer_rebases_onto_server_frame": try caseOptimisticLayerRebasesOntoServerFrame()
             case "optimistic_layer_drops_on_commit_cursor": try caseOptimisticLayerDropsOnCommitCursor()
+            case "optimistic_layer_drops_on_settled_frame": try caseOptimisticLayerDropsOnSettledFrame()
             case "optimistic_layer_rolls_back_on_failure": try caseOptimisticLayerRollsBackOnFailure()
             case "offline_queue_fifo_replay_order": try caseOfflineQueueFifoReplayOrder()
             case "offline_queue_overflow_evicts_oldest": try caseOfflineQueueOverflowEvictsOldest()

@@ -92,6 +92,17 @@ fn frame(id: &str, spec: &Value) -> String {
     built.to_string()
 }
 
+/// A valueless frame — `resume`/`settled` carry a cursor and nothing else.
+fn cursor_frame(id: &str, kind: &str, spec: &Value) -> String {
+    let mut built = json!({ "id": id, "type": kind });
+
+    if let Some(cursor) = spec.get("cursor") {
+        built["cursor"] = cursor.clone();
+    }
+
+    built.to_string()
+}
+
 /// A client whose poster answers every write with `body`, subscribed to
 /// [`FUNCTION`], with the values delivered to that subscription recorded.
 ///
@@ -219,6 +230,27 @@ pub fn optimistic_layer_drops_on_commit_cursor() {
 
     confirm_without_a_cursor();
     confirm_after_the_frame_arrived(&case, commit_cursor);
+}
+
+/// A byte-identical write yields a `settled` frame, never a `data` frame. Sweeping
+/// only on data frames leaves the prediction on screen until some unrelated write
+/// happens to change this query — on a quiet one, forever.
+pub fn optimistic_layer_drops_on_settled_frame() {
+    let case = optimistic_case("settledFrameDrop");
+    let commit_cursor = case["commitCursor"].as_i64().expect("cursor");
+    let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["base"]);
+
+    submit_appending(&mut client, wire(&case["appended"])).expect("committed");
+
+    client.handle_frame(&cursor_frame(&id, "settled", &case["belowFrame"])).expect("below frame");
+
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterBelowFrame"]), "below the commit cursor");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterBelowFrame"]));
+
+    client.handle_frame(&cursor_frame(&id, "settled", &case["atFrame"])).expect("at frame");
+
+    assert_eq!(displayed(&seen), wire(&case["displayedAfterAtFrame"]), "at the commit cursor");
+    assert_eq!(layers(&client, &id), count(&case["layersAfterAtFrame"]));
 }
 
 /// CDC off on this shard: no cursor to gate on, so the layer goes but the display

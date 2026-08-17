@@ -4,7 +4,7 @@
         "the cursor-gated optimistic-layer engine and the durable offline write queue.",
         "",
         "Unlike the other fixture files these are not wire frames — nothing here goes",
-        "on a socket. They are the NUMBERS AND ORDERINGS seven independently",
+        "on a socket. They are the NUMBERS AND ORDERINGS eight independently",
         "hand-written ports must agree on: which value is displayed after a rebase,",
         "which cursor drops an overlay, which queue entry an overflow evicts, and what",
         "a flush leaves queued. The mechanics are hand-coded per language (a transform",
@@ -47,6 +47,18 @@
             "layersAfterBelowFrame": 1,
             "atFrame": { "cursor": 9, "data": ["a", "b", "c"] },
             "displayedAfterAtFrame": ["a", "b", "c"],
+            "layersAfterAtFrame": 0
+        },
+        "settledFrameDrop": {
+            "$comment": "A write whose query result comes out byte-identical produces a `settled` frame (or a `resume` after a reconnect), never a `data` frame: the value did not change, only the cursor. The overlay must still drop on it. Sweeping confirmed layers on data/delta frames ALONE leaves the prediction on screen until some unrelated write happens to change this query — on a quiet query, forever, and permanently across a reconnect, since the resume watermark has already advanced past the write so the server correctly re-sends nothing. Same cursor algebra as `commitCursorDrop`: a settled frame BELOW the commit cursor keeps the layer, the one that reaches it drops the layer and re-folds to the server base.",
+            "base": ["a"],
+            "appended": "c",
+            "commitCursor": 9,
+            "belowFrame": { "cursor": 7 },
+            "displayedAfterBelowFrame": ["a", "c"],
+            "layersAfterBelowFrame": 1,
+            "atFrame": { "cursor": 9 },
+            "displayedAfterAtFrame": ["a"],
             "layersAfterAtFrame": 0
         },
         "confirmWithoutCursor": {

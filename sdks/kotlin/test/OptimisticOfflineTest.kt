@@ -60,13 +60,13 @@ private class Live(val args: WireValue = WireValue.Obj(emptyList()), poster: ((S
     fun state(): Optimistic.State = client.subscriptions.getValue("sub_1").state
 
     /** Feeds one server data frame, exactly as a socket reader would. */
-    fun frame(spec: Map<*, *>) {
+    fun frame(spec: Map<*, *>, kind: String = "data") {
         val json = LinkedHashMap<String, Any?>()
 
         for ((key, value) in spec) json[key.toString()] = value
 
         json["id"] = "sub_1"
-        json["type"] = "data"
+        json["type"] = kind
 
         client.handleFrame(Json.write(json))
     }
@@ -132,6 +132,31 @@ private fun optimisticLayerRebasesOntoServerFrame() {
         Optimistic.fold(second.serverBase, second.layers) == wire(skipped["displayed"]),
         "but skipped by the fold, so the good layer still applies",
     )
+}
+
+/**
+ * A byte-identical write yields a `settled` frame, never a `data` frame. Sweeping
+ * confirmed layers only on data frames leaves the prediction on screen until some
+ * unrelated write happens to change this query — on a quiet one, forever.
+ */
+private fun optimisticLayerDropsOnSettledFrame() {
+    covers("optimistic_layer_drops_on_settled_frame")
+
+    val case = scenario("optimistic", "settledFrameDrop")
+    val commitCursor = count(case["commitCursor"])
+    val live = Live(poster = { _, _, _ -> HttpResponse(200, "{\"commitCursor\":$commitCursor,\"result\":null}") })
+
+    live.frame(mapOf("data" to case["base"]))
+    live.client.submit(live.write(appender(wire(case["appended"]))))
+    live.frame(case["belowFrame"] as Map<*, *>, kind = "settled")
+
+    check(live.displayed() == wire(case["displayedAfterBelowFrame"]), "a settled frame below the commit cursor keeps the overlay")
+    check(live.state().layers.size == count(case["layersAfterBelowFrame"]), "and the layer with it")
+
+    live.frame(case["atFrame"] as Map<*, *>, kind = "settled")
+
+    check(live.displayed() == wire(case["displayedAfterAtFrame"]), "a settled frame reaching the commit cursor drops the overlay")
+    check(live.state().layers.size == count(case["layersAfterAtFrame"]), "and the layer is gone")
 }
 
 private fun optimisticLayerDropsOnCommitCursor() {
@@ -884,6 +909,7 @@ private fun emptyShardKeyNeverReachesTheWire() {
 internal fun runOptimisticOfflineCases() {
     optimisticLayerRebasesOntoServerFrame()
     optimisticLayerDropsOnCommitCursor()
+    optimisticLayerDropsOnSettledFrame()
     optimisticLayerRollsBackOnFailure()
     optimisticCursorlessFramePreservesCursor()
     offlineQueueFifoReplayOrder()

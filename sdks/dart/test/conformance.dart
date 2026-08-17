@@ -62,6 +62,7 @@ Future<void> main() async {
   // are covered here.
   await run(caseGoldenOptimisticRebase);
   await run(caseGoldenOptimisticCommitCursorDrop);
+  await run(caseGoldenOptimisticSettledFrameDrop);
   await run(caseGoldenOptimisticRollback);
   await run(caseGoldenOptimisticCursorlessFrame);
   await run(caseGoldenOfflineQueueFifo);

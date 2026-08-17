@@ -65,10 +65,10 @@ def _live(base, cursor=None):
     return client, client._subs["sub_1"], seen
 
 
-def _frame(client, frame):
-    """Feed one ``data`` frame for ``sub_1`` to the client's real dispatcher."""
+def _frame(client, frame, kind="data"):
+    """Feed one frame for ``sub_1`` to the client's real dispatcher."""
 
-    return client.handle_frame({**frame, "id": "sub_1", "type": "data"})
+    return client.handle_frame({**frame, "id": "sub_1", "type": kind})
 
 
 class TestOptimisticRebase(unittest.TestCase):
@@ -138,6 +138,29 @@ class TestOptimisticCommitCursor(unittest.TestCase):
 
         # The frame reached the commit cursor: the effect is in the base, so the
         # overlay drops without the value ever double-counting it.
+        self.assertEqual(sub.last_value, case["displayedAfterAtFrame"])
+        self.assertEqual(len(sub.optimistic_layers), case["layersAfterAtFrame"])
+
+    def test_layer_drops_on_a_settled_frame_reaching_the_commit_cursor(self):
+        covers("optimistic_layer_drops_on_settled_frame")
+        case = FIXTURES["settledFrameDrop"]
+        client, sub, _seen = _live(case["base"])
+
+        deferred = []
+        handle = apply_optimistic_layer(sub, _appender(case["appended"]), deferred)
+        handle.confirm(case["commitCursor"], deferred)
+        _run(deferred)
+
+        _frame(client, case["belowFrame"], kind="settled")
+
+        self.assertEqual(sub.last_value, case["displayedAfterBelowFrame"])
+        self.assertEqual(len(sub.optimistic_layers), case["layersAfterBelowFrame"])
+
+        _frame(client, case["atFrame"], kind="settled")
+
+        # A byte-identical write yields a settled frame, never a data frame.
+        # Sweeping only on data frames leaves the prediction on screen until
+        # some unrelated write happens to change this query.
         self.assertEqual(sub.last_value, case["displayedAfterAtFrame"])
         self.assertEqual(len(sub.optimistic_layers), case["layersAfterAtFrame"])
 

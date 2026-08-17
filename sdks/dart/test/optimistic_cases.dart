@@ -108,6 +108,50 @@ void caseGoldenOptimisticCommitCursorDrop() {
   equals(target.layers.length, case_['layersAfterAtFrame'], 'and the layer is gone');
 }
 
+/// A byte-identical write yields a `settled` frame, never a `data` frame.
+///
+/// Driven through the real client, because that is where the sweep lives:
+/// dropping confirmed layers on data/delta frames ALONE leaves the prediction on
+/// screen until some unrelated write happens to change this query — on a quiet
+/// query, forever, and permanently across a reconnect, since the resume
+/// watermark has already advanced past the write.
+Future<void> caseGoldenOptimisticSettledFrameDrop() async {
+  covers('optimistic_layer_drops_on_settled_frame');
+
+  final case_ = _scenario('settledFrameDrop');
+  final gate = Completer<void>();
+  final seen = <Object?>[];
+
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    await gate.future;
+
+    return LunoraHttpResponse(200, '{"result":null,"commitCursor":${case_['commitCursor']}}');
+  }
+
+  final client = LunoraClient(url: 'https://app.example', post: post)
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  client.subscribe('counter:value', onData: seen.add);
+  pushData(client, 'sub_1', case_['base'], cursor: 1);
+
+  final write = client.mutation('counter:value', optimistic: _appender(case_['appended']));
+
+  gate.complete();
+  await write;
+
+  final below = case_['belowFrame']! as Map<String, Object?>;
+  final at = case_['atFrame']! as Map<String, Object?>;
+
+  pushCursorFrame(client, 'sub_1', 'settled', cursor: below['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterBelowFrame']), 'a settled frame short of the commit cursor keeps the overlay');
+
+  pushCursorFrame(client, 'sub_1', 'settled', cursor: at['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterAtFrame']), 'the settled frame reaching the commit cursor drops the overlay');
+}
+
 /// Failure re-folds, so the bad value disappears immediately.
 void caseGoldenOptimisticRollback() {
   covers('optimistic_layer_rolls_back_on_failure');

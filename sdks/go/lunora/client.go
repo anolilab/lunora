@@ -769,7 +769,28 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		return kind, nil
 	case "resume", "settled":
 		if entry != nil {
-			c.advance(entry, frame)
+			var deferred []func()
+
+			c.mu.Lock()
+			c.advanceLocked(entry, frame)
+
+			// A resume/settled frame advances the cursor without a value change —
+			// but a write whose result was byte-identical for this query still
+			// committed at or under this cursor, so its overlay is confirmed. Sweep
+			// here too, not just on data frames, or a no-visible-change write leaves
+			// its prediction on screen until some unrelated write happens to produce
+			// a data frame — indefinitely on a quiet query.
+			if cursor := asCursor(frame["cursor"]); cursor != nil {
+				entry.state.ServerCursor = cursor
+			}
+
+			if DropConfirmedLayers(&entry.state, entry.state.ServerCursor) {
+				NotifySubscription(&entry.state, FoldOptimistic(entry.state.ServerBase, entry.state.Layers), &deferred)
+			}
+
+			c.mu.Unlock()
+
+			runDeferred(deferred)
 		}
 
 		return kind, nil
@@ -950,16 +971,9 @@ func removeKey(keys []string, key string) []string {
 	return keys
 }
 
-func (c *Client) advance(entry *subscription, frame map[string]any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.advanceLocked(entry, frame)
-}
-
-// advanceLocked is advance for a caller that already holds the mutex — the data
-// path, which has to update the resume point and the optimistic state in one
-// critical section so a concurrent frame cannot interleave between them.
+// advanceLocked moves the resume point. The caller holds the mutex: every frame
+// path has to update the resume point and the optimistic state in one critical
+// section so a concurrent frame cannot interleave between them.
 func (c *Client) advanceLocked(entry *subscription, frame map[string]any) {
 	if cursor, ok := frame["cursor"]; ok {
 		entry.cursor = cursor

@@ -491,9 +491,7 @@ module Lunora
       case kind
       when "ack" then kind
       when "data", "delta" then deliver(entry, frame, kind, deferred)
-      when "resume", "settled"
-        advance(entry, frame)
-        kind
+      when "resume", "settled" then sweep(entry, frame, kind, deferred)
       when "error" then deliver_error(frame, kind, deferred)
       when "complete"
         @subscriptions.delete(frame["id"])
@@ -528,6 +526,24 @@ module Lunora
         # on the same query.
         Optimistic.drop_confirmed?(state, state.server_cursor)
         Optimistic.notify(state, Optimistic.fold(state.server_base, state.layers), deferred)
+      end
+
+      kind
+    end
+
+    # A resume/settled frame advances the cursor without a value change — but a
+    # write whose result was byte-identical for this query still committed at or
+    # under this cursor, so its overlay is confirmed. Sweep here too, not just on
+    # data frames, or a no-visible-change write leaves its prediction on screen
+    # until some unrelated write happens to produce a data frame — indefinitely
+    # on a quiet query. Only re-fold when something was actually dropped.
+    def sweep(entry, frame, kind, deferred)
+      if entry
+        advance(entry, frame)
+        state = entry[:state]
+        state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)
+
+        Optimistic.notify(state, Optimistic.fold(state.server_base, state.layers), deferred) if Optimistic.drop_confirmed?(state, state.server_cursor)
       end
 
       kind

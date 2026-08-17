@@ -49,8 +49,8 @@ module OptimisticFixtures
     [client, seen]
   end
 
-  def deliver(client, frame)
-    client.handle_frame(JSON.generate(frame.merge("id" => SUBSCRIPTION_ID, "type" => "data")))
+  def deliver(client, frame, kind: "data")
+    client.handle_frame(JSON.generate(frame.merge("id" => SUBSCRIPTION_ID, "type" => kind)))
   end
 
   # The subscription's tracked cursor and live layer count. Read through the
@@ -149,6 +149,26 @@ class TestOptimisticCommitCursor < Minitest::Test
 
     # The frame reached the commit cursor: the effect is in the base, so the
     # overlay drops without the value ever double-counting it.
+    assert_equal case_data["displayedAfterAtFrame"], seen.last
+    assert_equal case_data["layersAfterAtFrame"], tracked(client)[:state].layers.length
+  end
+
+  def test_layer_drops_on_a_settled_frame_reaching_the_commit_cursor
+    ConformanceManifest.covers("optimistic_layer_drops_on_settled_frame")
+    case_data = optimistic_case("settledFrameDrop")
+    client, seen = primed_client(case_data["base"], responses: { "commitCursor" => case_data["commitCursor"], "result" => nil })
+
+    client.submit(QUERY, {}, optimistic: appender(case_data["appended"]))
+    deliver(client, case_data["belowFrame"], kind: "settled")
+
+    assert_equal case_data["displayedAfterBelowFrame"], seen.last
+    assert_equal case_data["layersAfterBelowFrame"], tracked(client)[:state].layers.length
+
+    deliver(client, case_data["atFrame"], kind: "settled")
+
+    # A byte-identical write yields a settled frame, never a data frame. Sweeping
+    # only on data frames leaves the prediction on screen until some unrelated
+    # write happens to change this query.
     assert_equal case_data["displayedAfterAtFrame"], seen.last
     assert_equal case_data["layersAfterAtFrame"], tracked(client)[:state].layers.length
   end

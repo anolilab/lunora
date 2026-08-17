@@ -583,10 +583,10 @@ class LunoraClient:
             return self._handle_error(frame, deferred)
 
         if kind == "resume":
-            return self._advance(frame, "resume")
+            return self._advance(frame, "resume", deferred)
 
         if kind == "settled":
-            desc = self._advance(frame, "settled")
+            desc = self._advance(frame, "settled", deferred)
             if "lastMutationId" in frame:
                 desc["lastMutationId"] = frame["lastMutationId"]
             return desc
@@ -624,7 +624,11 @@ class LunoraClient:
         displayed = value
         if sub is not None:
             sub.server_base = value
-            if "cursor" in frame:
+            # Only an integer cursor advances the tracked one. A frame that omits
+            # it, or sends an explicit null, must LEAVE it where it was — the
+            # tracked cursor is what a write's commit cursor is compared against,
+            # so clearing it strands every pending layer.
+            if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:
                 sub.server_epoch = frame["epoch"]
@@ -659,14 +663,24 @@ class LunoraClient:
             deferred.extend(partial(cb, error) for cb in shape.error_callbacks)
         return {"kind": "error", "id": sub_id, "code": code, "message": message}
 
-    def _advance(self, frame: dict, kind: str) -> dict:
+    def _advance(self, frame: dict, kind: str, deferred: list) -> dict:
         sub = self._subs.get(frame.get("id"))
         if sub is not None:
             sub.acked = True
-            if "cursor" in frame:
+            if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:
                 sub.server_epoch = frame["epoch"]
+            # A resume/settled frame advances the cursor without a value change —
+            # but a write whose result was byte-identical for this query still
+            # committed at or under this cursor, so its overlay is confirmed.
+            # Sweep here too, not just on data frames, or a no-visible-change
+            # write leaves its prediction on screen until some unrelated write
+            # happens to produce a data frame — indefinitely on a quiet query.
+            if drop_confirmed_layers(sub, sub.server_cursor):
+                displayed = fold_optimistic(sub.server_base, sub.optimistic_layers)
+                sub.last_value = displayed
+                deferred.extend(partial(cb, displayed) for cb in sub.callbacks)
         desc = {"kind": kind, "id": frame.get("id")}
         if "cursor" in frame:
             desc["cursor"] = frame["cursor"]

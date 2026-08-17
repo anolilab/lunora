@@ -715,13 +715,36 @@ public final class Client {
                 runDeferred(deferred);
             }
             case "resume", "settled" -> {
+                List<Runnable> deferred = new ArrayList<>();
+
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
 
-                    if (entry != null) {
-                        advance(entry, frame);
+                    if (entry == null) {
+                        return kind;
+                    }
+
+                    advance(entry, frame);
+
+                    // A resume/settled frame advances the cursor without a value change — but a
+                    // write whose result was byte-identical for this query still committed at or
+                    // under this cursor, so its overlay is confirmed. Sweep here too, not just on
+                    // data frames, or a no-visible-change write leaves its prediction on screen
+                    // until some unrelated write happens to produce a data frame — indefinitely on
+                    // a quiet query.
+                    if (frame.get("cursor") instanceof Number number) {
+                        entry.state.serverCursor = number.longValue();
+                    }
+
+                    if (Optimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor)) {
+                        Optimistic.notifySubscription(
+                                entry.state,
+                                Optimistic.fold(entry.state.serverBase, entry.state.layers),
+                                deferred);
                     }
                 }
+
+                runDeferred(deferred);
             }
             case "error" -> {
                 Map<String, Object> envelope =

@@ -39,6 +39,7 @@ final class OptimisticOfflineTest {
     static void run() throws IOException {
         optimisticLayerRebasesOntoServerFrame();
         optimisticLayerDropsOnCommitCursor();
+        optimisticLayerDropsOnSettledFrame();
         optimisticLayerRollsBackOnFailure();
         optimisticCursorlessFramePreservesCursor();
         offlineQueueFifoReplayOrder();
@@ -293,10 +294,14 @@ final class OptimisticOfflineTest {
 
         /** Feeds one server {@code data} frame through the client's real handler. */
         void frame(Map<String, Object> frame) {
+            typedFrame("data", frame);
+        }
+
+        void typedFrame(String kind, Map<String, Object> frame) {
             Map<String, Object> out = new LinkedHashMap<>(frame);
 
             out.put("id", ID);
-            out.put("type", "data");
+            out.put("type", kind);
             client.handleFrame(Json.write(out));
         }
 
@@ -407,6 +412,40 @@ final class OptimisticOfflineTest {
         check(
                 second.displayed().equals(skipped.get("displayed")),
                 "but skipped by the fold, so the good layer still applies");
+    }
+
+    /**
+     * A byte-identical write yields a {@code settled} frame, never a {@code data} frame. Sweeping
+     * confirmed layers only on data frames leaves the prediction on screen until some unrelated
+     * write happens to change this query — on a quiet one, forever.
+     */
+    private static void optimisticLayerDropsOnSettledFrame() throws IOException {
+        covers("optimistic_layer_drops_on_settled_frame");
+
+        Map<String, Object> testCase = scenario("optimistic", "settledFrameDrop");
+        int commitCursor = count(testCase.get("commitCursor"));
+        Live live = new Live();
+
+        live.base(testCase.get("base"));
+        live.queue(
+                new SubmitOptions("messages:list", live.args)
+                        .optimistic(appender(testCase.get("appended"))));
+        live.flush(committedAt(commitCursor));
+        live.typedFrame("settled", map(testCase.get("belowFrame")));
+
+        check(
+                live.displayed().equals(testCase.get("displayedAfterBelowFrame")),
+                "a settled frame below the commit cursor keeps the overlay");
+        check(
+                live.layers() == count(testCase.get("layersAfterBelowFrame")),
+                "and the layer with it");
+
+        live.typedFrame("settled", map(testCase.get("atFrame")));
+
+        check(
+                live.displayed().equals(testCase.get("displayedAfterAtFrame")),
+                "a settled frame reaching the commit cursor drops the overlay");
+        check(live.layers() == count(testCase.get("layersAfterAtFrame")), "and the layer is gone");
     }
 
     private static void optimisticLayerDropsOnCommitCursor() throws IOException {

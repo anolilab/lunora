@@ -52,11 +52,11 @@ extension ConformanceTests {
     /// into the test, so a suite could stay green over a handler that forgot to
     /// drop confirmed layers or nulled the tracked cursor. `cursorlessFrame` is
     /// exactly that bug, and it is why the copy is gone.
-    private func deliver(_ client: LunoraClient, _ frame: [String: Any]) throws {
+    private func deliver(_ client: LunoraClient, _ frame: [String: Any], kind: String = "data") throws {
         var payload = frame
 
         payload["id"] = "sub_1"
-        payload["type"] = "data"
+        payload["type"] = kind
 
         let raw = try JSONSerialization.data(withJSONObject: payload)
 
@@ -131,6 +131,39 @@ extension ConformanceTests {
             canonical(skipped["displayed"]),
             "but skipped by the fold, so the good layer still applies"
         )
+    }
+
+    /// A byte-identical write yields a `settled` frame, never a `data` frame.
+    /// Sweeping confirmed layers only on data frames leaves the prediction on
+    /// screen until some unrelated write happens to change this query — on a
+    /// quiet one, forever.
+    func caseOptimisticLayerDropsOnSettledFrame() throws {
+        let testCase = try scenario("optimistic", "settledFrameDrop")
+        let commitCursor = count(testCase["commitCursor"])
+        let (client, state) = try subscribedClient(base: testCase["base"])
+        var deferred: LunoraOptimistic.Deferred = []
+        let handle = try XCTUnwrap(
+            LunoraOptimistic.applyLayer(state, appender(testCase["appended"] ?? NSNull()), &deferred)
+        )
+
+        handle.confirm(commitCursor, &deferred)
+        try deliver(client, try XCTUnwrap(testCase["belowFrame"] as? [String: Any]), kind: "settled")
+
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterBelowFrame"]),
+            "a settled frame below the commit cursor keeps the overlay"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterBelowFrame"]), "and the layer with it")
+
+        try deliver(client, try XCTUnwrap(testCase["atFrame"] as? [String: Any]), kind: "settled")
+
+        XCTAssertEqual(
+            canonical(state.lastValue),
+            canonical(testCase["displayedAfterAtFrame"]),
+            "a settled frame reaching the commit cursor drops the overlay"
+        )
+        XCTAssertEqual(state.layers.count, count(testCase["layersAfterAtFrame"]), "and the layer is gone")
     }
 
     func caseOptimisticLayerDropsOnCommitCursor() throws {
