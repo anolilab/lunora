@@ -50,10 +50,12 @@ const DATED_MODEL_ID = /^(.*)-\d{4}-\d{2}-\d{2}$/u;
  * else returns `undefined` rather than a guess.
  */
 const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
-    // Workers AI embedding models.
-    "@cf/baai/bge-base-en-v1.5": { input: 0.02 },
-    "@cf/baai/bge-large-en-v1.5": { input: 0.02 },
-    "@cf/baai/bge-m3": { input: 0.02 },
+    // Workers AI embedding models. Priced per model, not per family — the four
+    // BGE variants span an order of magnitude, and `bge-base-en-v1.5` (Lunora's
+    // documented default) is over three times `bge-small-en-v1.5`.
+    "@cf/baai/bge-base-en-v1.5": { input: 0.067 },
+    "@cf/baai/bge-large-en-v1.5": { input: 0.204 },
+    "@cf/baai/bge-m3": { input: 0.012 },
     "@cf/baai/bge-small-en-v1.5": { input: 0.02 },
 
     // OpenAI embedding models.
@@ -116,8 +118,11 @@ const estimateModelCost = (modelId: string | undefined, usage: ModelUsage, price
         return undefined;
     }
 
-    const inputTokens = Number.isFinite(usage.inputTokens) ? (usage.inputTokens as number) : 0;
-    const outputTokens = Number.isFinite(usage.outputTokens) ? (usage.outputTokens as number) : 0;
+    // Clamped at 0, not merely checked for finiteness: a provider that reports a
+    // negative token count would otherwise stamp a NEGATIVE `gen_ai.usage.cost`
+    // on the span, which subtracts from every total that span rolls into.
+    const inputTokens = Number.isFinite(usage.inputTokens) ? Math.max(0, usage.inputTokens as number) : 0;
+    const outputTokens = Number.isFinite(usage.outputTokens) ? Math.max(0, usage.outputTokens as number) : 0;
 
     if (inputTokens <= 0 && outputTokens <= 0) {
         return undefined;
