@@ -54,7 +54,7 @@ const AuthCard = (props: AuthCardProps): JSX.Element => (
 
 /** A labelled text input wired to a core {@link FieldState}. */
 interface FieldProps {
-    autocomplete?: string;
+    autoComplete?: string;
     field: FieldState;
     label: string;
     name: string;
@@ -77,7 +77,7 @@ const Field = (props: FieldProps): JSX.Element => {
             <input
                 aria-describedby={showError() ? errorId : undefined}
                 aria-invalid={showError() ? "true" : "false"}
-                autocomplete={props.autocomplete}
+                autocomplete={props.autoComplete}
                 class="lunora-auth-field__input"
                 id={id}
                 name={props.name}

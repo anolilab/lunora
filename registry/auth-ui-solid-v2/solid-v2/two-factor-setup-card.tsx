@@ -26,7 +26,7 @@ const TwoFactorSetupCard = (): JSX.Element => {
                             <FormBanner error={state.error} />
                             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.enable)}>
                                 <Field
-                                    autocomplete="current-password"
+                                    autoComplete="current-password"
                                     field={state.password}
                                     label={t.passwordLabel}
                                     name="password"
@@ -61,7 +61,7 @@ const TwoFactorSetupCard = (): JSX.Element => {
                         </Show>
                         <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.verify)}>
                             <Field
-                                autocomplete="one-time-code"
+                                autoComplete="one-time-code"
                                 field={state.code}
                                 label={t.codeLabel}
                                 name="code"
@@ -79,7 +79,7 @@ const TwoFactorSetupCard = (): JSX.Element => {
                 <FormBanner error={state.error} success={t.twoFactorEnabled} />
                 <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.disable)}>
                     <Field
-                        autocomplete="current-password"
+                        autoComplete="current-password"
                         field={state.password}
                         label={t.passwordLabel}
                         name="password"

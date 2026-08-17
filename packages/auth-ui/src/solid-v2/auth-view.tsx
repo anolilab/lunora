@@ -26,8 +26,8 @@ const UsernameSignInCard = (): JSX.Element => {
         <AuthCard title={t.signIn}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <FormField actions={actions} autocomplete="username" field="username" label={t.usernameLabel} state={state} />
-                <FormField actions={actions} autocomplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="username" field="username" label={t.usernameLabel} state={state} />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
             </form>
         </AuthCard>
@@ -48,8 +48,8 @@ const PhoneSignInCard = (): JSX.Element => {
         <AuthCard title={t.signIn}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <FormField actions={actions} autocomplete="tel" field="phoneNumber" label={t.phoneLabel} state={state} />
-                <FormField actions={actions} autocomplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="tel" field="phoneNumber" label={t.phoneLabel} state={state} />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
             </form>
         </AuthCard>

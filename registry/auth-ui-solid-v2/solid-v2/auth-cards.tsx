@@ -73,8 +73,8 @@ const SignInCard = (props: SignInCardProps = {}): JSX.Element => {
             <Show when={context.credentials}>
                 <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                     <FormBanner error={state.formError} />
-                    <FormField actions={actions} autocomplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                    <FormField actions={actions} autocomplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                    <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                    <FormField actions={actions} autoComplete="current-password" field="password" label={t.passwordLabel} state={state} type="password" />
                     <AuthLink href={props.forgotPasswordHref ?? "/forgot-password"}>{t.forgotPasswordLink}</AuthLink>
                     <SubmitButton pending={state.status === "submitting"}>{t.signIn}</SubmitButton>
                 </form>
@@ -119,9 +119,9 @@ const SignUpCard = (props: SignUpCardProps = {}): JSX.Element => {
             </Show>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} />
-                <FormField actions={actions} autocomplete="name" field="name" label={t.nameLabel} state={state} />
-                <FormField actions={actions} autocomplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <FormField actions={actions} autocomplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="name" field="name" label={t.nameLabel} state={state} />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
                 <PasswordStrength value={state.fields.password.value} />
                 <SubmitButton pending={state.status === "submitting"}>{t.signUp}</SubmitButton>
             </form>
@@ -142,7 +142,7 @@ const ForgotPasswordCard = (props: ForgotPasswordCardProps = {}): JSX.Element =>
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.forgotPassword}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <FormField actions={actions} autocomplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.forgotPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -162,8 +162,8 @@ const ResetPasswordCard = (props: ResetPasswordCardProps = {}): JSX.Element => {
         <AuthCard title={t.resetPassword}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <FormField actions={actions} autocomplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
-                <FormField actions={actions} autocomplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -184,10 +184,10 @@ const ResetPasswordOtpCard = (): JSX.Element => {
         <AuthCard description={t.resetPasswordOtpDescription} title={t.resetPassword}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <FormField actions={actions} autocomplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <FormField actions={actions} autocomplete="one-time-code" field="otp" label={t.codeLabel} state={state} />
-                <FormField actions={actions} autocomplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
-                <FormField actions={actions} autocomplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="one-time-code" field="otp" label={t.codeLabel} state={state} />
+                <FormField actions={actions} autoComplete="new-password" field="password" label={t.passwordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="new-password" field="confirmPassword" label={t.confirmPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.resetPassword}</SubmitButton>
             </form>
         </AuthCard>
@@ -211,7 +211,7 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <FormField actions={actions} autocomplete="email" field="email" label={t.emailLabel} state={state} type="email" />
+                <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
                 <SubmitButton pending={state.status === "submitting"}>{t.magicLink}</SubmitButton>
             </form>
         </AuthCard>
@@ -234,7 +234,7 @@ const EmailOtpCard = (): JSX.Element => {
                     <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.sendCode)}>
                         <FormBanner error={state.formError} success={state.successMessage} />
                         <Field
-                            autocomplete="email"
+                            autoComplete="email"
                             field={state.email}
                             label={t.emailLabel}
                             name="email"
@@ -260,7 +260,7 @@ const EmailOtpCard = (): JSX.Element => {
                 <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.verify)}>
                     <FormBanner error={state.formError} />
                     <Field
-                        autocomplete="one-time-code"
+                        autoComplete="one-time-code"
                         field={state.code}
                         label={t.codeLabel}
                         name="code"
@@ -313,7 +313,7 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
                 >
                     <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                         <FormBanner error={state.formError} />
-                        <FormField actions={actions} autocomplete="one-time-code" field="code" label={t.codeLabel} state={state} />
+                        <FormField actions={actions} autoComplete="one-time-code" field="code" label={t.codeLabel} state={state} />
                         <SubmitButton pending={state.status === "submitting"}>{t.twoFactor}</SubmitButton>
                     </form>
                 </AuthCard>
@@ -336,7 +336,7 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
             >
                 <form class="lunora-auth-form" novalidate onSubmit={onSubmit(backupActions.submit)}>
                     <FormBanner error={backupState.formError} />
-                    <FormField actions={backupActions} autocomplete="one-time-code" field="code" label={t.backupCodeLabel} state={backupState} />
+                    <FormField actions={backupActions} autoComplete="one-time-code" field="code" label={t.backupCodeLabel} state={backupState} />
                     <SubmitButton pending={backupState.status === "submitting"}>{t.twoFactor}</SubmitButton>
                 </form>
             </AuthCard>

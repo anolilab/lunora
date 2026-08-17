@@ -329,7 +329,7 @@ const BackupCodesCard = (): JSX.Element => {
         <AuthCard title={t.backupCodesRegenerate}>
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
-                <FormField actions={actions} autocomplete="current-password" field="password" label={t.currentPasswordLabel} state={state} type="password" />
+                <FormField actions={actions} autoComplete="current-password" field="password" label={t.currentPasswordLabel} state={state} type="password" />
                 <SubmitButton pending={state.status === "submitting"}>{t.backupCodesRegenerate}</SubmitButton>
             </form>
             <Show when={codes().length > 0}>

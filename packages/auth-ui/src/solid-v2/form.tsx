@@ -14,7 +14,7 @@ const onSubmit =
 /** A {@link Field} wired to a form controller's field: value, blur, and change. */
 interface FormFieldProps<TField extends string> {
     actions: Pick<FormActions<TField>, "blur" | "setField">;
-    autocomplete?: string;
+    autoComplete?: string;
     field: TField;
     label: string;
     /** HTML `name` attribute; defaults to the field key. */
@@ -25,7 +25,7 @@ interface FormFieldProps<TField extends string> {
 
 const FormField = <TField extends string>(props: FormFieldProps<TField>): JSX.Element => (
     <Field
-        autocomplete={props.autocomplete}
+        autoComplete={props.autoComplete}
         field={props.state.fields[props.field]}
         label={props.label}
         name={props.name ?? props.field}

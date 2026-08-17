@@ -39,8 +39,8 @@ split. The views differ only where Solid 2 changed:
 - Effects are split-phase: `createEffect(compute, apply)`.
 - `<Index>` is `<For keyed={false}>`.
 - A context object _is_ its provider: `<Ctx value={…}>`.
-- DOM attributes are lowercase (`novalidate`, `autocomplete`), and boolean-ish
-  ARIA attributes take `"true"` / `"false"` rather than a boolean.
+- DOM attributes are lowercase (`novalidate`), and boolean-ish ARIA attributes
+  take `"true"` / `"false"` rather than a boolean.
 
 `client.ts` builds the framework-neutral `better-auth/client` rather than
 `better-auth/solid`. The Solid variant exists for a reactive `useSession` these
