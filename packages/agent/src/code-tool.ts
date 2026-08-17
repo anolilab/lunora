@@ -197,10 +197,14 @@ const runToolScript = async (
         // correctly but nothing durable was actually keyed on them). Cloudflare
         // Workflows supports a step.do nested inside another step.do's callback
         // (the codeTool call's own enclosing step), so this nests cleanly.
-        // Falls back to a plain call when `context.step` is absent — a tool
-        // invoked directly outside the loop (e.g. a unit test).
+        // `context.step` is REQUIRED — there is no un-durable fallback, because
+        // one would silently drop replay safety exactly when the invariant broke.
+        //
+        // NOTE: the output therefore crosses a durable-step boundary and is
+        // SERIALIZED by the workflow host before it lands in `byId` — see the
+        // step-output contract on `codeTool` below.
         // eslint-disable-next-line no-await-in-loop -- steps are sequential by design: a later input can reference an earlier output
-        const output: unknown = await (context.step ? context.step.do(stepContext.idempotencyKey, runStep) : runStep());
+        const output: unknown = await context.step.do(stepContext.idempotencyKey, runStep);
 
         // `byId` keeps the FULL output for later `$from` refs; the RETURNED results
         // (persisted as the tool message and re-injected every turn) get each output
@@ -255,6 +259,16 @@ const CODE_TOOL_SCHEMA = jsonSchema<ToolScript>({
  * `codeTool` REJECTS at construction any tool carrying a `needsApproval` gate —
  * keep approval-gated tools as normal top-level tools. Gate the whole script via
  * `opts.needsApproval` instead.
+ *
+ * STEP-OUTPUT CONTRACT — **every step's output must be JSON-serializable.** Each
+ * step runs inside its own durable `step.do`, so the workflow host serializes
+ * the returned value before the next step (or the tool result) ever sees it. A
+ * `Date` comes back as an ISO string, a `Map`/`Set` as `{}`, `undefined` as
+ * `null` or a dropped key, and a `bigint` throws outright. That applies to the
+ * value a later step reads through `{ "$from": … }` just as much as to the
+ * returned `results` — the hand-off is durable state, not an in-memory one. A
+ * composed tool that wants to pass a rich value should return its JSON form
+ * (`date.toISOString()`, `[...map]`) and let the consuming step rebuild it.
  *
  * ```ts
  * import { codeTool, defineAgent, functionTool } from "@lunora/agent";

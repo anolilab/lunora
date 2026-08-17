@@ -1,7 +1,20 @@
+import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraTest } from "../src/index";
+
+/**
+ * The virtual-clock backoff each retry waits out, derived from the SAME
+ * constants `SchedulerDO` and the fake scheduler use — never hard-coded here, so
+ * a change to production's retry budget shows up as a failing assertion instead
+ * of a silently-wrong test. `RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)` for
+ * attempts 1..MAX_RETRY_ATTEMPTS; today `[30s, 60s, 120s, 240s, 480s]`.
+ */
+const RETRY_BACKOFFS_MS = Array.from({ length: MAX_RETRY_ATTEMPTS }, (_, index) => RETRY_BASE_DELAY_MS * 2 ** index);
+
+/** Total virtual clock a job must be advanced through before a terminal failure is observable. */
+const TOTAL_RETRY_BACKOFF_MS = RETRY_BACKOFFS_MS.reduce((sum, ms) => sum + ms, 0);
 
 const { internalAction, internalMutation, mutation, query } = initLunora.dataModel().create();
 
@@ -425,10 +438,10 @@ describe("fake scheduler", () => {
         await expect(t.scheduler.runPending()).resolves.toBe(1);
         await expect(t.query(readLog, {})).resolves.toHaveLength(0);
 
-        // Exhaust the remaining retry budget (5 total retries, exponential
-        // backoff from a 30s base — packages/scheduler/src/scheduler-do.ts:89-90)
-        // so the job reaches its terminal (6th) attempt.
-        for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000]) {
+        // Exhaust the remaining retry budget (MAX_RETRY_ATTEMPTS retries,
+        // exponential backoff from RETRY_BASE_DELAY_MS) so the job reaches its
+        // terminal attempt.
+        for (const delay of RETRY_BACKOFFS_MS) {
             // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
             await t.scheduler.advance(delay, { throwOnError: false });
         }
@@ -512,14 +525,14 @@ describe("fake scheduler", () => {
 
         // Both failing jobs share the same schedule (enqueued together, same
         // default backoff), so they exhaust their retry budget in the same sweep.
-        for (const delay of [30_000, 60_000, 120_000, 240_000]) {
+        for (const delay of RETRY_BACKOFFS_MS.slice(0, -1)) {
             // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
             await t.scheduler.advance(delay, { throwOnError: false });
         }
 
-        // Attempt 6: both exceed the 5-retry budget in this sweep — surfaced
+        // Final attempt: both exceed the retry budget in this sweep — surfaced
         // together as an AggregateError.
-        await expect(t.scheduler.advance(480_000)).rejects.toBeInstanceOf(AggregateError);
+        await expect(t.scheduler.advance(RETRY_BACKOFFS_MS.at(-1) ?? 0)).rejects.toBeInstanceOf(AggregateError);
 
         // The surviving job persisted.
         const log = await t.query(readLog, {});
@@ -569,7 +582,7 @@ describe("fake scheduler", () => {
         await expect(t.scheduler.runPending({ throwOnError: false })).resolves.toBe(2);
         expect(t.scheduler.failures()).toHaveLength(0);
 
-        for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000]) {
+        for (const delay of RETRY_BACKOFFS_MS) {
             // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
             await t.scheduler.advance(delay, { throwOnError: false });
         }
@@ -593,17 +606,20 @@ describe("fake scheduler", () => {
             await expect(t.scheduler.runPending()).resolves.toBe(1);
             expect(t.scheduler.failures()).toHaveLength(0);
 
-            // Attempt 2 (after the first 30s backoff): fails again, retried 60s out.
-            await expect(t.scheduler.advance(30_000)).resolves.toBe(1);
+            // Attempt 2 (after the first base backoff): fails again, retried at double.
+            await expect(t.scheduler.advance(RETRY_BASE_DELAY_MS)).resolves.toBe(1);
 
-            // Attempt 3 (after the doubled 60s backoff): succeeds.
-            await expect(t.scheduler.advance(60_000)).resolves.toBe(1);
+            // Attempt 3 (after the doubled backoff): succeeds.
+            await expect(t.scheduler.advance(RETRY_BASE_DELAY_MS * 2)).resolves.toBe(1);
 
             await expect(t.query(readLog, {})).resolves.toMatchObject([{ message: "succeeded:flaky-1" }]);
             expect(t.scheduler.failures()).toHaveLength(0);
         });
 
         it("a job that fails every time is retried MAX_RETRY_ATTEMPTS times before landing in recordedFailures", async () => {
+            // 7 fixed assertions + one per non-final retry (MAX_RETRY_ATTEMPTS - 1).
+            // A change to the retry budget breaks this count loudly rather than
+            // quietly asserting fewer things.
             expect.assertions(11);
 
             const t = start();
@@ -611,29 +627,62 @@ describe("fake scheduler", () => {
             await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "always" }));
 
             // Attempt 1 (the original dispatch): fails. attempts=1 is within the
-            // default 5-retry budget, so it is silently retried rather than surfaced.
+            // retry budget, so it is silently retried rather than surfaced.
             await expect(t.scheduler.runPending()).resolves.toBe(1);
             expect(t.scheduler.failures()).toHaveLength(0);
 
-            // Backoff is honoured: advancing short of the 30s cutoff does not fire the retry.
-            await expect(t.scheduler.advance(29_999)).resolves.toBe(0);
+            // Backoff is honoured: advancing short of the first cutoff does not fire the retry.
+            await expect(t.scheduler.advance(RETRY_BASE_DELAY_MS - 1)).resolves.toBe(0);
 
-            // Attempts 2-5 (retries 1-4): each still within budget. Delays double
-            // every time — 60s, 120s, 240s, 480s — matching exponential backoff
-            // from a 30s base (packages/scheduler/src/scheduler-do.ts:89-90).
-            await expect(t.scheduler.advance(1)).resolves.toBe(1); // attempt 2 (attempts=2)
-            await expect(t.scheduler.advance(60_000)).resolves.toBe(1); // attempt 3 (attempts=3)
-            await expect(t.scheduler.advance(120_000)).resolves.toBe(1); // attempt 4 (attempts=4)
-            await expect(t.scheduler.advance(240_000)).resolves.toBe(1); // attempt 5 (attempts=5, still <= maxAttempts)
+            // Every retry but the last: still within budget. Each waits out a
+            // delay double the one before it. The clock already sits 1ms short of
+            // the first cutoff, so that one costs a single millisecond here.
+            for (const [index, delay] of RETRY_BACKOFFS_MS.slice(0, -1).entries()) {
+                // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+                await expect(t.scheduler.advance(index === 0 ? 1 : delay)).resolves.toBe(1);
+            }
 
             expect(t.scheduler.failures()).toHaveLength(0);
 
-            // Attempt 6 (retry 5): attempts=6 exceeds the 5-retry budget — terminal,
+            // The final retry pushes `attempts` past MAX_RETRY_ATTEMPTS — terminal,
             // matching SchedulerDO's dead-letter park.
-            await expect(t.scheduler.advance(480_000)).rejects.toThrow("boom:always");
+            await expect(t.scheduler.advance(RETRY_BACKOFFS_MS.at(-1) ?? 0)).rejects.toThrow("boom:always");
 
             expect(t.scheduler.failures()).toHaveLength(1);
             expect(t.scheduler.list()).toHaveLength(0);
+        });
+
+        it("pins the virtual clock a terminal failure costs: the whole backoff schedule, not one tick", async () => {
+            expect.assertions(5);
+
+            const t = start();
+
+            // The contract, stated as a number: observing `failures()` needs the
+            // ENTIRE backoff schedule advanced. Change MAX_RETRY_ATTEMPTS or
+            // RETRY_BASE_DELAY_MS in @lunora/scheduler and this assertion moves
+            // with it — so the cost is never changed silently.
+            expect(RETRY_BACKOFFS_MS).toStrictEqual([30_000, 60_000, 120_000, 240_000, 480_000]);
+            expect(TOTAL_RETRY_BACKOFF_MS).toBe(930_000);
+
+            await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:appendOrThrow", { fail: true, message: "budgeted" }));
+
+            // A single small advance after the first dispatch is NOT enough — the
+            // regression this pins: `advance(1000)` used to surface the failure.
+            await t.scheduler.runPending({ throwOnError: false });
+            await t.scheduler.advance(1000, { throwOnError: false });
+
+            expect(t.scheduler.failures()).toStrictEqual([]);
+
+            // Walk the whole schedule: the fake scheduler re-evaluates one retry
+            // per sweep, so each backoff needs its own advance — one advance of
+            // the total would fire only the first retry.
+            for (const delay of RETRY_BACKOFFS_MS) {
+                // eslint-disable-next-line no-await-in-loop -- sequential virtual-clock advances; each depends on the last
+                await t.scheduler.advance(delay, { throwOnError: false });
+            }
+
+            expect(t.scheduler.failures()).toHaveLength(1);
+            expect(t.scheduler.list()).toStrictEqual([]);
         });
 
         it("honours the backoff cutoff — a retried job does not re-run until the virtual clock passes it", async () => {
@@ -643,11 +692,11 @@ describe("fake scheduler", () => {
 
             await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:flakyThenSucceed", { failTimes: 1, key: "backoff-cutoff" }));
 
-            // Attempt 1: fails, retried 30s out (the default base delay).
+            // Attempt 1: fails, retried RETRY_BASE_DELAY_MS out.
             await expect(t.scheduler.runPending()).resolves.toBe(1);
 
             // Short of the cutoff: the retry does not fire.
-            await expect(t.scheduler.advance(29_999)).resolves.toBe(0);
+            await expect(t.scheduler.advance(RETRY_BASE_DELAY_MS - 1)).resolves.toBe(0);
             await expect(t.query(readLog, {})).resolves.toHaveLength(0);
 
             // At the cutoff: the retry fires and succeeds.

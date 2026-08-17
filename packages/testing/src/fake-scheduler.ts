@@ -1,3 +1,4 @@
+import { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS } from "@lunora/scheduler";
 import type { ScheduledJob, Scheduler } from "@lunora/server";
 
 /** A pending job entry in the fake scheduler queue. */
@@ -12,9 +13,9 @@ interface FakeScheduledJob extends ScheduledJob {
  * dead-letter park (`recordRetry()`, `packages/scheduler/src/scheduler-do.ts:875-909`):
  * a job that fails while it still has retries left is silently re-enqueued
  * with backoff and is NOT recorded here. Only once a job's `attempts` exceeds
- * the retry budget (default 5 — see {@link DEFAULT_RETRY_POLICY}, matching
- * production) does it land here — being a test harness, the fake scheduler
- * never swallows a terminal failure, so tests can still assert on it.
+ * `@lunora/scheduler`'s `MAX_RETRY_ATTEMPTS` does it land here — being a test
+ * harness, the fake scheduler never swallows a terminal failure, so tests can
+ * still assert on it.
  */
 interface ScheduledJobFailure {
     /** The args the job was dispatched with. */
@@ -43,9 +44,12 @@ interface FakeSchedulerControls {
      * Per-job failures are isolated (matching production): a job that throws does
      * NOT prevent the remaining due jobs from running. A failure with retries
      * left is silently re-enqueued with exponential backoff on the virtual clock
-     * — mirroring `SchedulerDO`'s default retry policy
-     * ({@link DEFAULT_RETRY_POLICY}: 5 retries, 30s base delay, doubling —
-     * `packages/scheduler/src/scheduler-do.ts:89-90`) — rather than surfaced.
+     * — mirroring `SchedulerDO`'s default retry policy (`MAX_RETRY_ATTEMPTS`
+     * retries, `RETRY_BASE_DELAY_MS` base delay, doubling; both imported from
+     * `@lunora/scheduler`) — rather than surfaced. Advancing far enough to
+     * observe a terminal failure therefore costs the WHOLE backoff schedule
+     * (30s + 60s + 120s + 240s + 480s = 930s of virtual clock at today's
+     * defaults), not a single tick.
      * Only once a job's retry budget is exhausted is the failure surfaced: it is
      * recorded on {@link FakeSchedulerControls.failures} and, by default,
      * re-thrown so a test still sees the error. A single such failure is
@@ -103,44 +107,6 @@ interface SweepOptions {
 }
 
 /**
- * Overrides for the fake scheduler's retry budget, passed to
- * {@link createFakeScheduler}. Both fields default to
- * {@link DEFAULT_RETRY_POLICY} — `SchedulerDO`'s production values — so a
- * harness that never configures this sees production-faithful retry behaviour.
- * A smaller `baseMs` (or `maxAttempts`) lets a test exhaust the retry budget
- * without advancing the virtual clock through the full production backoff
- * schedule (30s, 60s, 120s, 240s, 480s by default).
- */
-interface SchedulerRetryPolicy {
-    /**
-     * Base backoff in ms before the first retry; doubles on each subsequent
-     * retry (exponential backoff — the only policy `SchedulerDO`'s default
-     * applies; the fake scheduler does not model a per-job `RetryPolicy`).
-     * @default 30_000
-     */
-    baseMs?: number;
-
-    /**
-     * Retries allowed after the original attempt before a failure is dropped
-     * into `recordedFailures`, matching `SchedulerDO`'s dead-letter park.
-     * @default 5
-     */
-    maxAttempts?: number;
-}
-
-/**
- * The fake scheduler's default retry budget — a direct mirror of
- * `SchedulerDO`'s `MAX_RETRY_ATTEMPTS` / `RETRY_BASE_DELAY_MS`
- * (`packages/scheduler/src/scheduler-do.ts:89-90`). Those constants are
- * module-private (not exported), so this duplicates the values rather than
- * importing them — keep the two in sync if production's defaults ever change.
- */
-const DEFAULT_RETRY_POLICY: Required<SchedulerRetryPolicy> = {
-    baseMs: 30_000,
-    maxAttempts: 5,
-};
-
-/**
  * Top-level dispatch for a scheduled job — wired by the harness. Unlike the
  * `runInternal` closure used by `ctx.run*` composition (which rides whatever
  * transaction span is already open), a scheduled job is a fresh top-level entry:
@@ -170,10 +136,9 @@ type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, conte
  * construction time, we take thunks so the references are resolved lazily at
  * dispatch time.
  *
- * `retryPolicy` overrides the retry budget a failing job is given before it is
- * dropped into `recordedFailures`; see {@link SchedulerRetryPolicy}. Left
- * unset, it defaults to {@link DEFAULT_RETRY_POLICY} — `SchedulerDO`'s
- * production values — so the fake scheduler retries the way production does.
+ * The retry budget is not configurable: it is `@lunora/scheduler`'s
+ * `MAX_RETRY_ATTEMPTS` / `RETRY_BASE_DELAY_MS` verbatim, so a harness retries
+ * exactly the way production does.
  */
 const createFakeScheduler = (
     getDispatch: () => ScheduledDispatch,
@@ -181,7 +146,6 @@ const createFakeScheduler = (
     getActionContext: () => unknown,
     getFunctionRegistry: () => Map<string, { handler: unknown; kind: string }>,
     now: number,
-    retryPolicy?: SchedulerRetryPolicy,
 ): { controls: FakeSchedulerControls; scheduler: Scheduler } => {
     // Seed the virtual clock from the harness's `now` (which honours
     // `options.now`) so `ctx.scheduler.runAt(ctx.now + delay, …)` schedules
@@ -189,9 +153,6 @@ const createFakeScheduler = (
     // here would desync the two and fire (or strand) delayed jobs.
     let nowMs = now;
     let nextId = 1;
-
-    const maxAttempts = retryPolicy?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts;
-    const baseMs = retryPolicy?.baseMs ?? DEFAULT_RETRY_POLICY.baseMs;
 
     /** All pending (not yet executed or cancelled) jobs, in enqueue order. */
     const pending = new Map<string, FakeScheduledJob>();
@@ -289,10 +250,10 @@ const createFakeScheduler = (
      * matching production. Unlike production's HTTP round-trip, the fake
      * scheduler runs the retry decision synchronously right here, mirroring
      * `SchedulerDO.recordRetry()` (`packages/scheduler/src/scheduler-do.ts:875-909`):
-     * a failure whose `attempts` is still within the budget (`maxAttempts`,
-     * default 5 — see {@link DEFAULT_RETRY_POLICY}) is
-     * silently re-enqueued with exponential backoff — `baseMs * 2 ** (attempts -
-     * 1)` on the virtual clock — and is NOT added to `failed`/`recordedFailures`.
+     * a failure whose `attempts` is still within `MAX_RETRY_ATTEMPTS` is
+     * silently re-enqueued with exponential backoff — `RETRY_BASE_DELAY_MS *
+     * 2 ** (attempts - 1)` on the virtual clock — and is NOT added to
+     * `failed`/`recordedFailures`.
      * Only once the budget is exhausted does the failure get recorded, mirroring
      * production's dead-letter park; captured (terminal) failures are then
      * surfaced by `runSweep` below.
@@ -332,7 +293,7 @@ const createFakeScheduler = (
                 // failure, so the very first failure sets it to 1 (not 0-indexed).
                 const attempts = (job.attempts ?? 0) + 1;
 
-                if (attempts > maxAttempts) {
+                if (attempts > MAX_RETRY_ATTEMPTS) {
                     // Retry budget exhausted — terminal, matching the DO's
                     // dead-letter park. Isolate the failure (the sweep continues
                     // to the remaining jobs) but never swallow it: record so the
@@ -347,7 +308,7 @@ const createFakeScheduler = (
                     // policy; the fake scheduler does not model a per-job
                     // `RetryPolicy`). Silent: production does not surface a
                     // mid-retry failure either.
-                    const delayMs = baseMs * 2 ** (attempts - 1);
+                    const delayMs = RETRY_BASE_DELAY_MS * 2 ** (attempts - 1);
 
                     pending.set(job.id, { ...job, attempts, scheduledFor: nowMs + delayMs });
                 }
@@ -401,5 +362,5 @@ const createFakeScheduler = (
     return { controls, scheduler };
 };
 
-export { createFakeScheduler, DEFAULT_RETRY_POLICY };
-export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SchedulerRetryPolicy, SweepOptions };
+export { createFakeScheduler };
+export type { FakeScheduledJob, FakeSchedulerControls, ScheduledJobFailure, SweepOptions };

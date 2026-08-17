@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { codeTool, resolveReferences, runToolScript } from "../src/code-tool";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "../src/types";
-import { DurableStepJournal } from "./loop-harness";
+import { DurableStepJournal, passthroughStep } from "./loop-harness";
 
 const UNKNOWN_REF_PATTERN = /unknown result "missing"/u;
 const UNKNOWN_TOOL_PATTERN = /unknown tool "nope"/u;
@@ -11,7 +11,9 @@ const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 const BOOM_PATTERN = /boom/u;
 
-const context = {} as AgentToolContext;
+// `step` is required on AgentToolContext — production always threads a real
+// durable handle — so a hand-built context supplies the pass-through double.
+const context = { step: passthroughStep } as AgentToolContext;
 
 /** A fake tool that records the input it was called with and returns `output`. */
 const fakeTool = (output: unknown, calls: unknown[] = []): AgentToolDefinition => {
@@ -168,7 +170,7 @@ describe(runToolScript, () => {
             inputSchema: {} as never,
             isLunoraAgentTool: true,
         };
-        const baseContext = { idempotencyKey: "tool:code:call_1", toolCallId: "call_1" } as AgentToolContext;
+        const baseContext = { idempotencyKey: "tool:code:call_1", step: passthroughStep, toolCallId: "call_1" } as AgentToolContext;
 
         await runToolScript(
             {

@@ -112,19 +112,18 @@ export interface AgentToolContext {
     setState: (state: Record<string, unknown>) => Promise<void>;
 
     /**
-     * The durable-step handle (`step.do`/`waitForEvent`), present when the tool
-     * is dispatched through the real agent loop (`agent-loop.ts` threads it
-     * into every tool's context). `codeTool` uses it to give each script step
-     * its OWN nested durable boundary — see `code-tool.ts` — so a failure at
-     * script step 3 retries only step 3, not steps 1–2's already-committed
-     * side effects. Cloudflare Workflows supports a `step.do` nested inside
-     * another `step.do`'s callback (the codeTool call's own enclosing step).
-     * Most tools never touch this directly. Absent when `execute` is invoked
-     * directly outside the loop (e.g. a unit test driving `runToolScript` or
-     * a tool's `execute` by hand) — `codeTool` degrades to calling steps
-     * without a nested boundary in that case.
+     * The durable-step handle (`step.do`/`waitForEvent`). ALWAYS present:
+     * `agent-loop.ts` threads it into every tool's context unconditionally, and
+     * it is required rather than optional so a missing handle is a compile
+     * error instead of a silent durability downgrade. `codeTool` uses it to give
+     * each script step its OWN nested durable boundary — see `code-tool.ts` — so
+     * a failure at script step 3 retries only step 3, not steps 1–2's
+     * already-committed side effects. Cloudflare Workflows supports a `step.do`
+     * nested inside another `step.do`'s callback (the codeTool call's own
+     * enclosing step). Most tools never touch this directly; a test driving
+     * `execute`/`runToolScript` by hand passes a pass-through double.
      */
-    step?: AgentStepLike;
+    step: AgentStepLike;
     /** The thread this tool call belongs to. */
     threadKey: string;
     /** The provider-issued tool-call id. */
@@ -133,15 +132,17 @@ export interface AgentToolContext {
 
 /**
  * The READ-ONLY view of {@link AgentToolContext} handed to a `needsApproval`
- * gate function — every field except `setState`. A gate that mutates thread
- * state is a side effect inside a decision predicate, which this type makes a
- * compile-time error rather than a documented-but-unenforced rule: `getState`
- * and `run` stay available (reads are legitimate gate inputs, and the
+ * gate function — every field except `setState` and `step`. A gate that mutates
+ * thread state is a side effect inside a decision predicate, which this type
+ * makes a compile-time error rather than a documented-but-unenforced rule:
+ * `getState` and `run` stay available (reads are legitimate gate inputs, and the
  * function form is resolved inside its own durable step, so they are
- * replay-safe there too).
+ * replay-safe there too). `step` is dropped for the same reason — the loop
+ * already runs the gate inside a durable step of its own, so a gate has no
+ * business opening another.
  * @experimental
  */
-export type AgentApprovalContext = Omit<AgentToolContext, "setState">;
+export type AgentApprovalContext = Omit<AgentToolContext, "setState" | "step">;
 
 /**
  * An agent tool. Unlike a raw AI SDK tool, `execute` is NOT handed to the

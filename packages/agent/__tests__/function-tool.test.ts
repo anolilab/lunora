@@ -5,7 +5,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent } from "../src/define-agent";
 import { functionTool } from "../src/function-tool";
 import type { AgentToolContext } from "../src/types";
-import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, loopDefaults, memoryRuntime, passthroughStep, scriptedGenerate, toolTurn } from "./loop-harness";
 
 /** A minimal `AgentToolContext` for driving `execute` directly. */
 const toolContext = (run: AgentToolContext["run"], overrides?: Partial<AgentToolContext>): AgentToolContext => {
@@ -16,6 +16,7 @@ const toolContext = (run: AgentToolContext["run"], overrides?: Partial<AgentTool
         reportProgress: () => {},
         run,
         setState: async () => {},
+        step: passthroughStep,
         threadKey: "thread-1",
         toolCallId: "call_1",
         ...overrides,

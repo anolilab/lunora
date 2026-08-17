@@ -17,8 +17,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { evaluationAttributes as sharedEvaluationAttributes, sanitizeEvaluationName } from "../../../shared/evaluation-attributes";
 import type { EvaluationAttributeValue } from "../../../shared/evaluation-attributes";
+import { evaluationAttributes as sharedEvaluationAttributes, sanitizeEvaluationName } from "../../../shared/evaluation-attributes";
 
 /**
  * Structural slice of the post-hoc span handle `ctx.trace` hands its body (see the
@@ -89,9 +89,15 @@ const evaluationAttributes = (input: Pick<RecordEvaluationInput, "label" | "name
     try {
         return sharedEvaluationAttributes(input);
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        // ONLY the builder's documented misuse errors become `BAD_REQUEST`. A
+        // blanket re-wrap would turn any future internal failure into a
+        // caller-blaming code with a spliced-together message, hiding the real
+        // fault behind an error the caller cannot act on.
+        if (!(error instanceof TypeError)) {
+            throw error;
+        }
 
-        throw new LunoraError("BAD_REQUEST", `@lunora/testing: ${message}`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/testing: ${error.message}`);
     }
 };
 
@@ -108,10 +114,16 @@ const recordEvaluation = (input: RecordEvaluationInput): Record<string, Evaluati
     input.span?.setAttributes(attributes);
     // The same key as the span attribute, so the live view (trace ring) and the
     // durable trend (metric buckets) name the eval identically.
-    input.metrics?.gauge(`gen_ai.evaluation.${sanitizeEvaluationName(input.name)}.score`, input.score, input.label === undefined ? undefined : { label: input.label });
+    input.metrics?.gauge(
+        `gen_ai.evaluation.${sanitizeEvaluationName(input.name)}.score`,
+        input.score,
+        input.label === undefined ? undefined : { label: input.label },
+    );
 
     return attributes;
 };
 
-export type { EvaluationAttributeValue, EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput };
+export type { EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput };
 export { evaluationAttributes, recordEvaluation };
+
+export { type EvaluationAttributeValue } from "../../../shared/evaluation-attributes";

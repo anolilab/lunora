@@ -67,6 +67,7 @@
         "@lunora/agent": "1.0.0-alpha.55",
         "@lunora/errors": "1.0.0-alpha.22",
         "@lunora/mail": "1.0.0-alpha.50",
+        "@lunora/scheduler": "1.0.0-alpha.31",
         "@lunora/server": "1.0.0-alpha.74",
         "@lunora/shard-engine": "1.0.0-alpha.28"
     },

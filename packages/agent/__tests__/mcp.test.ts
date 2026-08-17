@@ -4,7 +4,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent } from "../src/define-agent";
 import type { McpCallResult, McpClientLike, McpToolInfo } from "../src/mcp";
 import { adaptMcpResult, mcpTools } from "../src/mcp";
-import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, loopDefaults, memoryRuntime, passthroughStep, scriptedGenerate, toolTurn } from "./loop-harness";
 
 /** A mock MCP client: canned tool list + a `callTool` recording its calls. */
 const mockClient = (
@@ -147,6 +147,7 @@ describe(mcpTools, () => {
                 reportProgress: () => {},
                 run: async () => null,
                 setState: async () => {},
+                step: passthroughStep,
                 threadKey: "thread-1",
                 toolCallId: "call_1",
             },

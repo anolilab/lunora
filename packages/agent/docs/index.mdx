@@ -452,6 +452,16 @@ in one turn it can `findUser`, then feed `{ "$from": "u", "$path": "id" }` into
 `recentOrders`. The whole script runs in a single `codeTool` call and returns
 each step's output plus the `final` one.
 
+Every step's output **must be JSON-serializable.** Each step runs inside its own
+durable `step.do`, so the workflow host serializes the returned value before the
+next step — or the tool result — ever sees it. A `Date` comes back as an ISO
+string, a `Map`/`Set` as `{}`, `undefined` as `null` or a dropped key, and a
+`bigint` throws outright. This applies to the value a later step reads through
+`{ "$from": … }` exactly as much as to the returned results: the hand-off is
+durable state, not an in-memory one. A composed tool that wants to pass a rich
+value should return its JSON form (`date.toISOString()`, `[...map]`) and let the
+consuming step rebuild it.
+
 This is a **safe interpreted data-flow** between the whitelisted tools you hand
 `codeTool`, not arbitrary JavaScript, so there is no `eval` or isolate and it
 runs natively in workerd. Each composed tool still dispatches through the same
