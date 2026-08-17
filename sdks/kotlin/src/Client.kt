@@ -242,7 +242,10 @@ class Client(
          * Whether a failed replay may be retried rather than dropped.
          *
          * A raw exception from the injected poster is the network, not the server:
-         * no verdict was reached, so the write is still good.
+         * no verdict was reached, so the write is still good. `Exception`, not
+         * `RuntimeException`: a poster is a bare function type with no exception
+         * discipline, and every realistic one (HttpURLConnection, OkHttp) throws
+         * a checked `IOException` on the dropped connection this loop exists for.
          *
          * A codec failure is the exception to that: it carries no code but is not
          * a blip either — the same arguments will fail to encode on every attempt,
@@ -250,7 +253,7 @@ class Client(
          * forever. [flushOfflineQueue] settles such writes before the replay loop;
          * this arm is what keeps one surfacing from anywhere else terminal too.
          */
-        fun isTransient(error: RuntimeException): Boolean = when (error) {
+        fun isTransient(error: Exception): Boolean = when (error) {
             is ApiException -> error.code in TRANSIENT_ERROR_CODES
             is OfflineException -> false
             is WireFormatException -> false

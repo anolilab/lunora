@@ -636,12 +636,39 @@ private fun offlineFlushReplaysAndConfirmsOptimistic() {
     check(store.removed == ids(case["persistRemoveCalls"]), "every terminally settled write is un-persisted")
     check(confirmed == listOf(count(case["confirmedCommitCursor"]).toLong()), "and the committed write confirms against the echoed cursor")
 
+    checkedExceptionRequeuesInOrder()
     submitQueuesWhileOffline(count(case["confirmedCommitCursor"]))
     submitBeforeFirstConnectFailsFast()
     overflowDuringSubmitSettles()
     concurrentSubmitAndFlush()
     optimisticTransformRunsOutsideTheLock()
     emptyShardKeyNeverReachesTheWire()
+}
+
+/**
+ * A CHECKED exception from the poster requeues the whole remaining backlog, in
+ * order, rather than escaping the flush.
+ *
+ * `IOException` is the canonical transient failure this loop exists for — it is
+ * what HttpURLConnection and OkHttp throw on a dropped connection — and a poster
+ * is a bare function type, so nothing stops it. The writes have already been
+ * drained by then, so an escaping exception destroys every unreplayed one: no
+ * settle, no rollback, and with the default in-memory queue no record either.
+ */
+private fun checkedExceptionRequeuesInOrder() {
+    val store = MemoryStore()
+    val client = Client("https://app.example", { _, _, _ -> throw IOException("connection reset") })
+
+    client.offlineQueue = OfflineQueue(persistence = store)
+
+    for (id in listOf("m1", "m2", "m3")) client.offlineQueue.enqueue(QueuedMutation(id, "messages:send", WireValue.Obj(emptyList())))
+
+    val report = client.flushOfflineQueue()
+
+    check(report.requeued == listOf("m1", "m2", "m3"), "a checked exception requeues the whole backlog")
+    check(queuedIds(client.offlineQueue.items()) == listOf("m1", "m2", "m3"), "at the front, in submission order")
+    check(report.rejected.isEmpty(), "and settles none of them terminally")
+    check(store.removed.isEmpty(), "nor un-persists them")
 }
 
 /**

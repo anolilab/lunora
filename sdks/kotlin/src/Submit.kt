@@ -40,7 +40,7 @@ data class MutationSettled(
     val mutationId: String,
     val status: MutationStatus,
     val value: WireValue? = null,
-    val error: RuntimeException? = null,
+    val error: Exception? = null,
     val hadAwaiter: Boolean = false,
 )
 
@@ -271,7 +271,7 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
     for ((index, item) in sendable.withIndex()) {
         val reply = try {
             rpcFull(item.functionPath, item.args, item.shardKey, item.id, item.clientId)
-        } catch (error: RuntimeException) {
+        } catch (error: Exception) {
             if (!Client.isTransient(error)) {
                 synchronized(lock) { queue.unpersist(item.id) }
                 report.rejected.add(item.id)
@@ -400,7 +400,7 @@ internal fun Client.reportDiscarded(discarded: List<Discarded>) {
  * handler at all, so reporting through one would settle an evicted durable write
  * to nobody.
  */
-internal fun Client.settleWrite(entry: QueuedMutation, status: MutationStatus, value: WireValue?, error: RuntimeException?) {
+internal fun Client.settleWrite(entry: QueuedMutation, status: MutationStatus, value: WireValue?, error: Exception?) {
     if (status == MutationStatus.REJECTED) entry.onRollback?.invoke()
 
     emitSettled(MutationSettled(entry.id, status, value, error, entry.liveAwaiter), entry.onSettled)
