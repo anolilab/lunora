@@ -176,7 +176,20 @@ const AuthUIProvider = (props: AuthUIProviderProps): JSX.Element => {
 
 /** Read the resolved core controller context from the nearest provider. */
 const useAuthUI = (): ControllerContext => {
-    const value = useContext(AuthUIContext);
+    let value: AuthUISolidContext | undefined;
+
+    try {
+        value = useContext(AuthUIContext);
+    } catch {
+        /*
+         * Solid 2 throws rather than handing back an `undefined` context default
+         * — `ContextNotFoundError`, or `NoOwnerError` outside a reactive owner.
+         * Both mean "no provider above this call", which the guard below reports
+         * by name; without the catch a missing provider surfaces as a bare
+         * framework error.
+         */
+        value = undefined;
+    }
 
     if (!value) {
         throw new LunoraError("INTERNAL", "useAuthUI must be used inside <AuthUIProvider />");

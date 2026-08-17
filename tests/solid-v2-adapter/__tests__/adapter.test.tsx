@@ -1,5 +1,14 @@
 import type { FunctionReference, Preloaded } from "@lunora/client";
-import { createConnectionStatus, createMutation, createQuery, createSubscription, hydratePreloaded, LunoraContext, LunoraProvider } from "@lunora/solid";
+import {
+    createConnectionStatus,
+    createMutation,
+    createQuery,
+    createSubscription,
+    hydratePreloaded,
+    LunoraContext,
+    LunoraProvider,
+    useLunora,
+} from "@lunora/solid";
 import { render } from "@solidjs/testing-library";
 import * as solid from "solid-js";
 import { createSignal, flush } from "solid-js";
@@ -203,5 +212,19 @@ describe("@lunora/solid on Solid 2", () => {
         unmount();
 
         expect(fake.listenerCount()).toBe(0);
+    });
+
+    it("names the missing provider instead of leaking Solid 2's context error", () => {
+        // Solid 1.x hands back the context's `undefined` default here, so
+        // `useLunora`'s guard fires. Solid 2 throws `ContextNotFoundError`
+        // first, which would reach the user with no mention of the provider
+        // they forgot.
+        expect(() => {
+            render(() => {
+                useLunora();
+
+                return <div>nope</div>;
+            });
+        }).toThrow("useLunora must be used inside <LunoraProvider />");
     });
 });
