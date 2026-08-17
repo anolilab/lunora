@@ -1,31 +1,24 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ActionCallOptions, ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import { useMutation as useTanStackMutation } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useState } from "react";
 
 import { useLunora } from "./lunora-provider";
 
-/** Per-call options for {@link ActionHook.call}. */
-interface UseActionCallOptions {
-    /** Route the call to a specific shard, matching `client.action`'s option. */
-    shardKey?: string;
-}
-
-type CallVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: UseActionCallOptions };
+type CallVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: ActionCallOptions };
 
 interface ActionHook<F extends FunctionReference> {
     /**
      * Invoke the action. Awaitable, and rejects on failure — the same contract
      * as `useMutation`'s `mutate`.
      */
-    call: (args: ArgsOf<F>, options?: UseActionCallOptions) => Promise<ReturnOf<F>>;
+    call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
     /** The latest invocation's resolved value, or `undefined` before the first success. */
     data: ReturnOf<F> | undefined;
-    /** The latest invocation's error, or `null`. */
-    error: Error | null;
-    /** `true` when the latest invocation rejected. */
-    isError: boolean;
+    /** The latest invocation's error, or `undefined`. */
+    error: Error | undefined;
     /** `true` while ANY invocation from this hook is in flight (ref-counted, so overlapping calls compose). */
     pending: boolean;
     /** Clear the latest `data`/`error` back to idle. */
@@ -41,12 +34,29 @@ interface ActionHook<F extends FunctionReference> {
  * shipped, so every app that called an action reached for `useLunora()` and
  * re-derived the same pending/error wrapper by hand. This is that wrapper, once.
  *
- * Built on TanStack Query's mutation cache (the same cache the query and
- * mutation hooks use), so it composes with Query Devtools and exposes the latest
- * call's `data`/`error` plus `reset()`. `pending` is ref-counted across
- * overlapping invocations of THIS hook instance, so it clears only once every
- * concurrent call has settled, and a sibling component calling the same action
- * never affects it.
+ * The request state machine is the shared `createCallRunner` from
+ * `@lunora/client` — the same one Vue, Solid and Svelte bind to their own
+ * primitives — so `pending`, error normalization and latest-invocation ordering
+ * behave identically in every adapter. Only the `useState` cells are React's.
+ * TanStack's mutation cache still carries the call so it shows up in Query
+ * Devtools alongside `useQuery`/`useMutation`.
+ *
+ * **Lifecycle contract** (identical across the adapters): `data` and `error`
+ * both track the LATEST invocation, not the last to settle — a double-click
+ * whose first call resolves after the second cannot overwrite the second's
+ * outcome. A success clears `error`; a failure leaves the previous `data` in
+ * place, so a transient error does not blank the view. `reset()` clears both,
+ * but does NOT cancel an in-flight call, whose result still lands.
+ *
+ * **Why the two TanStack defaults are overridden.** `networkMode` is `"always"`
+ * because the default `"online"` pauses the retryer *after* the call is already
+ * marked pending: offline, the promise would never settle, the spinner would
+ * stick, and the action would silently fire minutes later on reconnect. `retry`
+ * is pinned to `0` — not inherited from an app-supplied QueryClient — because
+ * `client.action` sends no idempotency key, so a retry after a 502 on an action
+ * that already ran server-side would run it a second time. A mutation may pause
+ * and retry safely; it carries a `mutationId` and an offline queue. An action
+ * carries neither.
  *
  * **What it deliberately does not carry.** There is no `optimistic` /
  * `optimisticUpdate` and no `withOptimisticUpdate`, which `useMutation` has. An
@@ -64,33 +74,45 @@ interface ActionHook<F extends FunctionReference> {
 const useAction = <F extends FunctionReference>(function_: F): ActionHook<F> => {
     const client = useLunora();
 
-    // Local, ref-counted pending across overlapping calls of this hook instance.
-    const pendingCountReference = useRef(0);
+    const [data, setData] = useState<ReturnOf<F> | undefined>(undefined);
+    const [error, setError] = useState<Error | undefined>(undefined);
     const [pending, setPending] = useState(false);
 
-    const action = useTanStackMutation<ReturnOf<F>, Error, CallVariables<F>>({
+    const { mutateAsync, reset: resetMutation } = useTanStackMutation<ReturnOf<F>, Error, CallVariables<F>>({
         mutationFn: async ({ args, options }) => client.action(function_, args, options),
-        // `onMutate` fires when a call starts, `onSettled` when it resolves or
-        // rejects — so overlapping calls compose and `pending` only clears once
-        // the last one settles.
-        onMutate: () => {
-            pendingCountReference.current += 1;
-            setPending(true);
-        },
-        onSettled: () => {
-            pendingCountReference.current -= 1;
-            setPending(pendingCountReference.current > 0);
-        },
+        // See the "why the two TanStack defaults are overridden" note above.
+        networkMode: "always",
+        retry: 0,
     });
 
-    // `mutateAsync`/`reset` are referentially stable across renders.
-    const { data, error, isError, mutateAsync, reset } = action;
+    // One runner per hook instance, built lazily so its in-flight ref-count and
+    // latest-invocation token survive re-renders. `mutateAsync` and `reset` are
+    // bound once by TanStack's MutationObserver and read the *current* options
+    // on each call, so capturing them here is safe and needs no memo deps.
+    const [{ call, reset }] = useState(() => {
+        return {
+            call: createCallRunner(async (args: ArgsOf<F>, options?: ActionCallOptions) => mutateAsync({ args, options }), {
+                setError,
+                setPending,
+                setResult: (result) => {
+                    // Wrap in a thunk so a function-valued server result is stored,
+                    // not mistaken for a `useState` updater and invoked.
+                    setData(() => result);
+                    setError(undefined);
+                },
+            }),
+            reset: (): void => {
+                setData(undefined);
+                setError(undefined);
+                // Clear TanStack's own cache entry too, so Devtools doesn't keep
+                // showing a result the hook has already discarded.
+                resetMutation();
+            },
+        };
+    });
 
-    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing, same as `useMutation`'s `mutate`: React Compiler bails this hook, so this `useCallback` is what keeps `call` referentially stable for consumers that place it in effect deps. Keep it.
-    const call = useCallback(async (args: ArgsOf<F>, options?: UseActionCallOptions): Promise<ReturnOf<F>> => mutateAsync({ args, options }), [mutateAsync]);
-
-    return { call, data, error, isError, pending, reset };
+    return { call, data, error, pending, reset };
 };
 
-export type { ActionHook, UseActionCallOptions };
+export type { ActionHook };
 export { useAction };

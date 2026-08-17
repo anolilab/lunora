@@ -1,15 +1,14 @@
-import type { FunctionReference } from "@lunora/client";
-import { act, render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import type { FunctionReference, LunoraClient } from "@lunora/client";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { useAction } from "../src/use-action";
 import { createMockClient } from "./mock-client";
 
-const makeRef = (reference: string): FunctionReference => {
-    return { __lunoraRef: reference };
-};
+const runRef: FunctionReference = { __lunoraRef: "commands:run" };
 
 /** A promise plus its resolver, so a test can hold a call open and settle it deliberately. */
 const deferred = (): { promise: Promise<unknown>; resolve: (value: unknown) => void } => {
@@ -21,25 +20,67 @@ const deferred = (): { promise: Promise<unknown>; resolve: (value: unknown) => v
     return { promise, resolve: settle };
 };
 
-interface HarnessProps {
-    onCall: (call: () => Promise<unknown>) => void;
-    options?: { shardKey?: string };
-}
-
-const Harness = ({ onCall, options }: HarnessProps): ReactElement => {
-    const { call, error, isError, pending } = useAction(makeRef("commands:run"));
-
-    onCall(() => call({ command: "lunora" }, options));
-
-    return (
-        <>
-            <div data-testid="pending">{pending ? "yes" : "no"}</div>
-            <div data-testid="error">{isError ? (error?.message ?? "error") : "none"}</div>
-        </>
+/** Mount `useAction` under a provider bound to `client`, optionally with a caller-supplied QueryClient. */
+const renderAction = (client: LunoraClient, queryClient?: QueryClient) => {
+    const wrapper = ({ children }: { children: ReactNode }): ReactElement => (
+        <LunoraProvider client={client} queryClient={queryClient}>
+            {children}
+        </LunoraProvider>
     );
+
+    return renderHook(() => useAction(runRef), { wrapper });
 };
 
 describe("useAction", () => {
+    afterEach(() => {
+        // `onlineManager` is a module singleton; the offline test must not leak
+        // its state into anything that runs after it.
+        onlineManager.setOnline(true);
+    });
+
+    it("still runs the action while the browser is offline", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.action.mockRejectedValue(new Error("Failed to fetch"));
+
+        const { result } = renderAction(mock.asClient);
+
+        onlineManager.setOnline(false);
+
+        // TanStack's default `networkMode: "online"` pauses the retryer AFTER
+        // the call is already marked pending, so offline the promise would never
+        // settle and the action would silently fire on reconnect instead. An
+        // action has no offline queue and no idempotency key, so it must fail
+        // fast and let the caller decide.
+        await act(async () => {
+            await expect(result.current.call({ command: "lunora" })).rejects.toThrow("Failed to fetch");
+        });
+
+        expect(mock.action).toHaveBeenCalledTimes(1);
+        expect(result.current.pending).toBe(false);
+    });
+
+    it("never retries, even under a QueryClient whose mutations default to retrying", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.action.mockRejectedValue(new Error("bad gateway"));
+
+        // The common app recipe. A mutation may safely inherit it — it carries a
+        // `mutationId` the server dedupes against. `client.action` sends no such
+        // key, so an inherited retry re-runs a charge that already succeeded.
+        const { result } = renderAction(mock.asClient, new QueryClient({ defaultOptions: { mutations: { retry: 2 } } }));
+
+        await act(async () => {
+            await expect(result.current.call({ command: "lunora" })).rejects.toThrow("bad gateway");
+        });
+
+        expect(mock.action).toHaveBeenCalledTimes(1);
+    });
+
     it("invokes client.action and flips `pending` while in-flight", async () => {
         expect.hasAssertions();
 
@@ -48,26 +89,15 @@ describe("useAction", () => {
 
         mock.action.mockReturnValue(first.promise);
 
-        let trigger: () => Promise<unknown> = async () => undefined;
+        const { result } = renderAction(mock.asClient);
 
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
-                    onCall={(call) => {
-                        trigger = call;
-                    }}
-                />
-            </LunoraProvider>,
-        );
-
-        expect(screen.getByTestId("pending").textContent).toBe("no");
+        expect(result.current.pending).toBe(false);
 
         let resolved: unknown;
         let inFlight: Promise<unknown> | undefined;
 
         act(() => {
-            inFlight = trigger().then((value) => {
+            inFlight = result.current.call({ command: "lunora" }).then((value) => {
                 resolved = value;
 
                 return value;
@@ -75,7 +105,7 @@ describe("useAction", () => {
         });
 
         await waitFor(() => {
-            expect(screen.getByTestId("pending").textContent).toBe("yes");
+            expect(result.current.pending).toBe(true);
         });
 
         await act(async () => {
@@ -85,7 +115,8 @@ describe("useAction", () => {
 
         expect(resolved).toEqual({ code: 0 });
         expect(mock.action).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "commands:run" }), { command: "lunora" }, undefined);
-        expect(screen.getByTestId("pending").textContent).toBe("no");
+        expect(result.current.pending).toBe(false);
+        expect(result.current.data).toEqual({ code: 0 });
     });
 
     it("forwards a per-call shardKey to the client", async () => {
@@ -95,23 +126,10 @@ describe("useAction", () => {
 
         mock.action.mockResolvedValue({ code: 0 });
 
-        let trigger: () => Promise<unknown> = async () => undefined;
-
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; see above.
-                    onCall={(call) => {
-                        trigger = call;
-                    }}
-                    // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- one-shot render; a memoised object adds nothing here.
-                    options={{ shardKey: "project-1" }}
-                />
-            </LunoraProvider>,
-        );
+        const { result } = renderAction(mock.asClient);
 
         await act(async () => {
-            await trigger();
+            await result.current.call({ command: "lunora" }, { shardKey: "project-1" });
         });
 
         expect(mock.action).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "commands:run" }), { command: "lunora" }, { shardKey: "project-1" });
@@ -124,32 +142,93 @@ describe("useAction", () => {
 
         mock.action.mockRejectedValue(new Error("command refused"));
 
-        let trigger: () => Promise<unknown> = async () => undefined;
-
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; see above.
-                    onCall={(call) => {
-                        trigger = call;
-                    }}
-                />
-            </LunoraProvider>,
-        );
+        const { result } = renderAction(mock.asClient);
 
         // The awaitable must reject — a caller that awaits `call()` has to be able
         // to branch on failure, which is why this maps to `mutateAsync` rather
         // than TanStack's fire-and-forget `mutate`.
         await act(async () => {
-            await expect(trigger()).rejects.toThrow("command refused");
+            await expect(result.current.call({ command: "lunora" })).rejects.toThrow("command refused");
         });
 
         await waitFor(() => {
-            expect(screen.getByTestId("error").textContent).toBe("command refused");
+            expect(result.current.error?.message).toBe("command refused");
         });
 
         // And `pending` clears on the failure path, not just the success path.
-        expect(screen.getByTestId("pending").textContent).toBe("no");
+        expect(result.current.pending).toBe(false);
+    });
+
+    it("normalizes a thrown non-Error so `error.message` is always readable", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.action.mockRejectedValue("refused");
+
+        const { result } = renderAction(mock.asClient);
+
+        await act(async () => {
+            await expect(result.current.call({ command: "lunora" })).rejects.toThrow("refused");
+        });
+
+        await waitFor(() => {
+            expect(result.current.error).toBeInstanceOf(Error);
+        });
+
+        expect(result.current.error?.message).toBe("refused");
+    });
+
+    it("keeps the previous `data` when a later call fails", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.action.mockResolvedValueOnce({ code: 0 }).mockRejectedValueOnce(new Error("command refused"));
+
+        const { result } = renderAction(mock.asClient);
+
+        await act(async () => {
+            await result.current.call({ command: "lunora" });
+        });
+
+        expect(result.current.data).toEqual({ code: 0 });
+
+        await act(async () => {
+            await expect(result.current.call({ command: "lunora" })).rejects.toThrow("command refused");
+        });
+
+        // The documented contract, shared with every other adapter: a failure
+        // sets `error` and leaves the last successful `data` alone, so a
+        // transient error does not blank the view.
+        await waitFor(() => {
+            expect(result.current.error?.message).toBe("command refused");
+        });
+
+        expect(result.current.data).toEqual({ code: 0 });
+    });
+
+    it("clears `data` and `error` on reset", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        mock.action.mockResolvedValue({ code: 0 });
+
+        const { result } = renderAction(mock.asClient);
+
+        await act(async () => {
+            await result.current.call({ command: "lunora" });
+        });
+
+        expect(result.current.data).toEqual({ code: 0 });
+
+        act(() => {
+            result.current.reset();
+        });
+
+        expect(result.current.data).toBeUndefined();
+        expect(result.current.error).toBeUndefined();
     });
 
     it("keeps `pending` true until the last of several overlapping calls settles", async () => {
@@ -163,23 +242,12 @@ describe("useAction", () => {
         // promise-returning implementation trips `no-misused-promises`.
         mock.action.mockReturnValueOnce(calls[0]?.promise).mockReturnValueOnce(calls[1]?.promise);
 
-        let trigger: () => Promise<unknown> = async () => undefined;
-
-        render(
-            <LunoraProvider client={mock.asClient}>
-                <Harness
-                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; see above.
-                    onCall={(call) => {
-                        trigger = call;
-                    }}
-                />
-            </LunoraProvider>,
-        );
+        const { result } = renderAction(mock.asClient);
 
         let both: Promise<unknown> | undefined;
 
         act(() => {
-            both = Promise.all([trigger(), trigger()]);
+            both = Promise.all([result.current.call({ command: "a" }), result.current.call({ command: "b" })]);
         });
 
         await waitFor(() => {
@@ -193,7 +261,7 @@ describe("useAction", () => {
             calls[0]?.resolve({ code: 0 });
         });
 
-        expect(screen.getByTestId("pending").textContent).toBe("yes");
+        expect(result.current.pending).toBe(true);
 
         await act(async () => {
             calls[1]?.resolve({ code: 0 });
@@ -201,7 +269,7 @@ describe("useAction", () => {
         });
 
         await waitFor(() => {
-            expect(screen.getByTestId("pending").textContent).toBe("no");
+            expect(result.current.pending).toBe(false);
         });
     });
 });

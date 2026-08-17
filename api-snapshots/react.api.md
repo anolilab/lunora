@@ -13,10 +13,9 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ```ts
 interface ActionHook<F extends FunctionReference> {
-    call: (args: ArgsOf<F>, options?: UseActionCallOptions) => Promise<ReturnOf<F>>;
+    call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
     data: ReturnOf<F> | undefined;
-    error: Error | null;
-    isError: boolean;
+    error: Error | undefined;
     pending: boolean;
     reset: () => void;
 }
@@ -404,14 +403,6 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 ### `UploadResult` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
-
-### `UseActionCallOptions` (interface)
-
-```ts
-interface UseActionCallOptions {
-    shardKey?: string;
-}
-```
 
 ### `UseAgentApi` (interface)
 

@@ -68,7 +68,7 @@ export {
     useTusUpload,
     useUpload,
 } from "./upload";
-export type { ActionHook, UseActionCallOptions } from "./use-action";
+export type { ActionHook } from "./use-action";
 export { useAction } from "./use-action";
 export type { AdminAuthListResult, UseAuthSessionsOptions, UseAuthUsersOptions, UseImpersonateResult, UseOrganizationsOptions } from "./use-admin-auth";
 export { useAuthSessions, useAuthUsers, useImpersonate, useOrganizations } from "./use-admin-auth";
