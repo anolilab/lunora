@@ -65,7 +65,7 @@ it queues the write, shows a predicted value immediately, and replays in order
 once the socket is back.
 
 ```go
-client.Identity = &currentUserID
+client.SetIdentity(&currentUserID)
 // Capacity, an app version, and a durable store are all optional; the default is
 // an in-memory queue of 1000 writes.
 client.SetOfflineQueue(lunora.NewOfflineQueue(lunora.OfflineQueueOptions{
@@ -105,7 +105,7 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.OnMutationSettled`.
 
-`client.Identity` is an opaque, **non-secret** stamp — a user id, not a bearer
+`client.SetIdentity` records an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
 replays, so a restart cannot push one user's queued writes as another.
 

@@ -570,8 +570,8 @@ func TestClientIDIsPerInstanceAndRidesEveryWrite(t *testing.T) {
 	first := NewClient("https://app.example", nil)
 	second := NewClient("https://app.example", nil)
 
-	if first.ClientID == "" || first.ClientID == second.ClientID {
-		t.Fatalf("client ids %q and %q, want two distinct non-empty ids", first.ClientID, second.ClientID)
+	if first.ClientID() == "" || first.ClientID() == second.ClientID() {
+		t.Fatalf("client ids %q and %q, want two distinct non-empty ids", first.ClientID(), second.ClientID())
 	}
 
 	var sentClientID string
@@ -591,15 +591,15 @@ func TestClientIDIsPerInstanceAndRidesEveryWrite(t *testing.T) {
 
 	// Persisted with the record: a replay after a restart must namespace under
 	// the id that ISSUED the write, not whatever the new session minted.
-	if got, _ := store.appended[0]["clientId"].(string); got != first.ClientID {
-		t.Fatalf("persisted clientId: got %q, want %q", got, first.ClientID)
+	if got, _ := store.appended[0]["clientId"].(string); got != first.ClientID() {
+		t.Fatalf("persisted clientId: got %q, want %q", got, first.ClientID())
 	}
 
 	first.AttachSocket(func(map[string]any) error { return nil })
 	first.FlushOfflineQueue("")
 
-	if sentClientID != first.ClientID {
-		t.Fatalf("replayed client id header: got %q, want %q", sentClientID, first.ClientID)
+	if sentClientID != first.ClientID() {
+		t.Fatalf("replayed client id header: got %q, want %q", sentClientID, first.ClientID())
 	}
 
 	// And on the direct path, where the header comes from the rpcFull fallback.
@@ -609,8 +609,8 @@ func TestClientIDIsPerInstanceAndRidesEveryWrite(t *testing.T) {
 		t.Fatalf("direct submit: %v", err)
 	}
 
-	if sentClientID != first.ClientID {
-		t.Fatalf("direct client id header: got %q, want %q", sentClientID, first.ClientID)
+	if sentClientID != first.ClientID() {
+		t.Fatalf("direct client id header: got %q, want %q", sentClientID, first.ClientID())
 	}
 }
 
@@ -663,7 +663,7 @@ func TestFlushRejectsAWriteStampedUnderAnotherIdentity(t *testing.T) {
 	})
 
 	current := "user-b"
-	client.Identity = &current
+	client.SetIdentity(&current)
 
 	var codes []string
 

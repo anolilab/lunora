@@ -203,7 +203,7 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 		return MutationOutcome{MutationID: writeID, Status: MutationQueued}, nil
 	}
 
-	// No client id argument: rpcFull falls back to Client.ClientID, which is the
+	// No client id argument: rpcFull falls back to Client.ClientID(), which is the
 	// id issuing this write.
 	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "")
 	if err != nil {
@@ -257,7 +257,7 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 
 	c.mu.Lock()
 	queue := c.offline
-	identity := c.Identity
+	identity := c.identity
 	c.mu.Unlock()
 
 	conflicted := c.dropStalePreconditions(queue)
@@ -555,13 +555,13 @@ func (c *Client) newQueuedWriteLocked(
 	rollbacks []func(*[]func()),
 ) *QueuedMutation {
 	stamped := SignedOut()
-	if c.Identity != nil {
-		stamped = IdentityOf(*c.Identity)
+	if c.identity != nil {
+		stamped = IdentityOf(*c.identity)
 	}
 
 	return &QueuedMutation{
 		Args:         options.Args,
-		ClientID:     c.ClientID,
+		ClientID:     c.clientID,
 		FunctionPath: options.FunctionPath,
 		ID:           writeID,
 		// Bound at enqueue time, so the write can only ever replay as whoever

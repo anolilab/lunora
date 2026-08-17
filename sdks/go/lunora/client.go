@@ -83,9 +83,20 @@ type Client struct {
 	// Post performs the HTTP round-trip.
 	Post HTTPPoster
 
-	// ClientID identifies this client to the shard. It rides every write that
+	// mu guards clientID, identity, subscriptions, nextID, and send.
+	//
+	// Not optional in Go. The normal topology is a socket read loop calling
+	// HandleFrame on one goroutine while application code calls Subscribe on
+	// another, and Go's map runtime answers a concurrent read/write with
+	// `fatal error: concurrent map read and map write` — which no recover()
+	// catches. An unsynchronised map here kills the consumer's process.
+	mu sync.Mutex
+	// clientID identifies this client to the shard. It rides every write that
 	// carries an idempotency key, because an anonymous caller has no
-	// server-minted user id to namespace its de-duplication rows by.
+	// server-minted user id to namespace its de-duplication rows by. Read it with
+	// ClientID and replace it with SetClientID — both under mu, because the write
+	// path reads it from whichever goroutine called Submit while a sign-in may be
+	// replacing it from another.
 	//
 	// NewClient mints a fresh one per instance, which is what a shared constant
 	// cannot be: the shard namespaces anonymous idempotency by this value, so two
@@ -93,25 +104,17 @@ type Client struct {
 	// colliding caller-supplied mutation id makes the second write short-circuit
 	// to the first caller's cached result without ever running.
 	//
-	// Pin a stable value here when the offline queue is DURABLE: a write restored
-	// after a restart replays under the id that issued it, so a per-process id
-	// would namespace the replay somewhere the original write never was.
-	ClientID string
-	// Identity is an opaque, stable, NON-SECRET stamp for whoever is signed in —
+	// Pin a stable value with SetClientID when the offline queue is DURABLE: a
+	// write restored after a restart replays under the id that issued it, so a
+	// per-process id would namespace the replay somewhere the original write
+	// never was.
+	clientID string
+	// identity is an opaque, stable, NON-SECRET stamp for whoever is signed in —
 	// a user id, not a bearer token. It is persisted alongside every queued write
 	// and re-checked before that write replays, so a restart cannot push one
 	// user's queued writes as another. nil means signed out, which is itself an
-	// identity a write can be stamped with.
-	Identity *string
-
-	// mu guards subscriptions, nextID, and send.
-	//
-	// Not optional in Go. The normal topology is a socket read loop calling
-	// HandleFrame on one goroutine while application code calls Subscribe on
-	// another, and Go's map runtime answers a concurrent read/write with
-	// `fatal error: concurrent map read and map write` — which no recover()
-	// catches. An unsynchronised map here kills the consumer's process.
-	mu            sync.Mutex
+	// identity a write can be stamped with. See Identity/SetIdentity.
+	identity      *string
 	send          FrameSender
 	subscriptions map[string]*subscription
 	shapes        map[string]*shapeSubscription
@@ -173,13 +176,50 @@ type subscription struct {
 func NewClient(baseURL string, post HTTPPoster) *Client {
 	return &Client{
 		BaseURL:       baseURL,
-		ClientID:      RandomID(),
+		clientID:      RandomID(),
 		Post:          post,
 		offline:       NewOfflineQueue(OfflineQueueOptions{}),
 		pokes:         map[string]*pokeBuffer{},
 		shapes:        map[string]*shapeSubscription{},
 		subscriptions: map[string]*subscription{},
 	}
+}
+
+// ClientID returns the id this client namespaces anonymous idempotency under.
+func (c *Client) ClientID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.clientID
+}
+
+// SetClientID replaces it. Call it before the first write: a write already
+// queued keeps the id that ISSUED it, which is what makes a replay after a
+// restart land in the namespace the original write was destined for.
+func (c *Client) SetClientID(clientID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.clientID = clientID
+}
+
+// Identity returns the stamp queued writes are bound to; nil means signed out.
+func (c *Client) Identity() *string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.identity
+}
+
+// SetIdentity records who is signed in. Accessors rather than an exported field:
+// a consumer setting it from a sign-in handler while the socket goroutine is
+// mid-flush is the ordinary case, and an unsynchronised field there is a data
+// race the consumer's own `go test -race` would report against this package.
+func (c *Client) SetIdentity(identity *string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.identity = identity
 }
 
 // AttachSocket registers the sender used for subscription frames. Call it once
@@ -411,7 +451,7 @@ func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutatio
 		// single key space and a colliding mutation id suppresses another
 		// client's write.
 		if clientID == "" {
-			clientID = c.ClientID
+			clientID = c.ClientID()
 		}
 
 		if clientID != "" {

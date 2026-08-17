@@ -162,7 +162,16 @@ module Lunora
     # re-checked before that write replays, so a restart cannot push one user's
     # queued writes as another. nil means signed out, which is itself an identity
     # a write can be stamped with.
-    attr_accessor :identity
+    #
+    # Read and written under the same mutex the flush snapshots it under, rather
+    # than through +attr_accessor+: a consumer setting it from a sign-in handler
+    # while the socket thread is mid-flush is the ordinary case, and the write
+    # path binds every queued write to whatever it reads here.
+    def identity = @mutex.synchronize { @identity }
+
+    def identity=(value)
+      @mutex.synchronize { @identity = value }
+    end
 
     # The durable write queue backing +submit+.
     attr_accessor :offline_queue
