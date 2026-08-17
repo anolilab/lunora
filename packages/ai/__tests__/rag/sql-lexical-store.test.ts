@@ -202,6 +202,44 @@ describe("sqlLexicalStore", () => {
         expect(durable.map((match) => match.id)).toStrictEqual(inMemory.map((match) => match.id));
     });
 
+    it("reads document bodies only for the hits that survive ranking", async () => {
+        expect.assertions(3);
+
+        const { close, exec } = open();
+        const bodies: number[] = [];
+
+        opened.push(close);
+
+        const lexical = sqlLexicalStore({
+            exec: async (sql, parameters) => {
+                const rows = await exec(sql, parameters);
+
+                if (sql.includes("text")) {
+                    bodies.push(rows.length);
+                }
+
+                return rows;
+            },
+        });
+
+        // Every document carries the query term, so the posting scan matches
+        // all 40. Selecting the body on the join read all 40 into the isolate
+        // to rank them and then threw 37 away — the cost scaling with the
+        // corpus rather than with `topK`.
+        await lexical.index(
+            Array.from({ length: 40 }, (_, index) => chunk(`d${String(index)}#0`, `storm cloud number ${String(index)}`)),
+            {},
+        );
+
+        bodies.length = 0;
+
+        const matches = await lexical.search("storm", { topK: 3 });
+
+        expect(matches).toHaveLength(3);
+        expect(matches[0]?.text).toMatch(/^storm cloud number/u);
+        expect(bodies).toStrictEqual([3]);
+    });
+
     it("rejects a table name that is not a bare identifier", () => {
         expect.assertions(1);
 

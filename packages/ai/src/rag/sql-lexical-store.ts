@@ -199,16 +199,24 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             const averageLength = readCount(stats?.["total_length"]) / documentCount;
 
             // One join fetches the postings for every query term together with
-            // the document row each needs for scoring and filtering — rather
-            // than a query per term plus a hydration round-trip per hit. Split
-            // across statements only when the query has more distinct terms
-            // than one statement may bind placeholders for.
+            // what each needs for scoring and filtering — rather than a query
+            // per term plus a hydration round-trip per hit. Split across
+            // statements only when the query has more distinct terms than one
+            // statement may bind placeholders for.
+            //
+            // `d.text` is deliberately NOT selected here. A posting row exists
+            // per (term, document), so a term common to the corpus returns one
+            // row per matching document — and carrying the document body on
+            // every one of them reads the whole corpus into the isolate to rank
+            // it and then discards all but `topK`. Only `length` (for BM25's
+            // length normalisation) and `metadata` (for the filter) are needed
+            // to score; the bodies are fetched below, for the survivors only.
             const rows: Record<string, unknown>[] = [];
 
             for (const batch of inListBatches(queryTerms)) {
                 // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; a query rarely has more than 64 distinct terms
                 const batchRows = await exec(
-                    `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length, d.text AS text, d.metadata AS metadata ` +
+                    `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length, d.metadata AS metadata ` +
                         `FROM ${terms} t JOIN ${documents} d ON d.id = t.id AND d.namespace = t.namespace ` +
                         `WHERE t.namespace = ? AND t.term IN (${placeholderList(batch.length)})`,
                     [namespace, ...batch],
@@ -227,7 +235,7 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
                 documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
             }
 
-            const scores = new Map<string, { score: number; text: string }>();
+            const scores = new Map<string, number>();
 
             for (const row of rows) {
                 const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
@@ -242,20 +250,40 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
                 const id = String(row["id"]);
                 const idf = bm25Idf(documentCount, documentFrequency.get(String(row["term"])) ?? 1);
                 const contribution = bm25TermScore(idf, readCount(row["frequency"]), readCount(row["length"]), averageLength);
-                const existing = scores.get(id);
 
-                if (existing) {
-                    existing.score += contribution;
-                } else {
-                    scores.set(id, { score: contribution, text: String(row["text"]) });
+                scores.set(id, (scores.get(id) ?? 0) + contribution);
+            }
+
+            const ranked = [...scores.entries()].toSorted(([, a], [, b]) => b - a).slice(0, searchOptions.topK);
+
+            if (ranked.length === 0) {
+                return [];
+            }
+
+            // Hydrate the bodies now that the result set is bounded by `topK`,
+            // so the text this reads is what the caller actually receives.
+            const texts = new Map<string, string>();
+
+            for (const batch of inListBatches(ranked.map(([id]) => id))) {
+                // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; `topK` is small, so this is normally a single round trip
+                const textRows = await exec(`SELECT id, text FROM ${documents} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [
+                    namespace,
+                    ...batch,
+                ]);
+
+                for (const row of textRows) {
+                    texts.set(String(row["id"]), String(row["text"]));
                 }
             }
 
-            const matches: LexicalMatch[] = [...scores.entries()].map(([id, entry]) => {
-                return { id, score: entry.score, text: entry.text };
+            // `?? ""` covers a document deleted between the two statements: it
+            // scored, so it is a real hit, and dropping it would silently
+            // shorten the result set.
+            const matches: LexicalMatch[] = ranked.map(([id, score]) => {
+                return { id, score, text: texts.get(id) ?? "" };
             });
 
-            return matches.toSorted((a, b) => b.score - a.score).slice(0, searchOptions.topK);
+            return matches;
         },
     };
 };
