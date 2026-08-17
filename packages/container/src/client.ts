@@ -302,6 +302,60 @@ const DEFAULT_COLD_START_BACKOFF_MS = 500;
 /** The header `@cloudflare/containers`' `switchPort` sets to target a non-default container port. */
 const TARGET_PORT_HEADER = "cf-container-target-port";
 
+/**
+ * First path segment reserved for framework routes on the container — today
+ * just the exec contract's `CONTAINER_EXEC_PATH`.
+ */
+const RESERVED_PATH_SEGMENT = "__lunora";
+
+/** The leading path segment of `pathname`, ignoring empty ones. `"//__lunora//exec"` → `"__lunora"`. */
+const firstSegment = (pathname: string): string => pathname.split("/").find((segment) => segment !== "") ?? "";
+
+/**
+ * Refuse a caller-supplied `fetch` into the reserved namespace.
+ *
+ * `handle.exec` owns those routes and reaches them through the *inner* fetch,
+ * so a `fetch` aimed there is either a mistake or an end-run: `@lunora/agent`
+ * gates `op: "exec"` behind human approval, and a model that reaches the same
+ * route as `op: "fetch"` runs a command unattended. Guarding here rather than
+ * in the gate is what makes that total — this is the last place that sees the
+ * request before the container does, and it compares the same resolved
+ * pathname the container's own router will, including the percent-decoded
+ * spelling, since routers commonly unescape before matching.
+ */
+const assertPathNotReserved = (input: Request | string, label: string): void => {
+    // Resolved exactly the way `toRequest` resolves it, or the guard reads a
+    // different path than the one that gets sent: `new URL("/\\x", base)` sees
+    // the leading `/\` as an authority and yields `/x`, while the concatenation
+    // `toRequest` does yields `//\x` → `//x`.
+    const raw = typeof input === "string" ? input : input.url;
+    const url = URL.parse(raw.startsWith("/") ? `http://container${raw}` : raw);
+
+    if (url === null) {
+        // Not a URL `toRequest` can build either — it will reject this input on
+        // its own terms, and an unparseable path reaches no route.
+        return;
+    }
+
+    const { pathname } = url;
+    let decoded = pathname;
+
+    try {
+        decoded = decodeURIComponent(pathname);
+    } catch {
+        // A malformed escape can't be what a router decoded it to; the raw
+        // spelling below is still checked.
+    }
+
+    if (firstSegment(pathname) === RESERVED_PATH_SEGMENT || firstSegment(decoded) === RESERVED_PATH_SEGMENT) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${label}: \`/${RESERVED_PATH_SEGMENT}/*\` is reserved for Lunora's own container routes and cannot be reached with \`fetch\`. ` +
+                `Use \`exec\` to run a command.`,
+        );
+    }
+};
+
 const toRequest = (input: Request | string, init?: RequestInit, port?: number, traceparent?: string): Request => {
     const request = typeof input === "string" && input.startsWith("/") ? new Request(`http://container${input}`, init) : new Request(input, init);
 
@@ -452,9 +506,17 @@ const coldStartRetryingHandle = (
 
     return {
         // Built over this handle's own `fetch`, so exec inherits the cold-start
-        // retry and `.port()` routing rather than re-deriving them.
+        // retry and `.port()` routing rather than re-deriving them — and over
+        // the *inner* one, since exec is what the reserved namespace is for.
         exec: execViaFetch(fetchWithRetry, label),
-        fetch: fetchWithRetry,
+        // `async` so a refusal surfaces as a rejected promise, like every other
+        // failure on this handle, rather than throwing synchronously past a
+        // caller that only awaits.
+        fetch: async (input, init) => {
+            assertPathNotReserved(input, label);
+
+            return fetchWithRetry(input, init);
+        },
         port: (targetPort) => coldStartRetryingHandle(send, label, options, targetPort, traceparent),
     };
 };
@@ -544,8 +606,9 @@ const poolHandleFor = (
     const attempts = Math.max(1, options.attempts ?? 3);
     const baseBackoff = options.backoffMs ?? 100;
     const maxBackoff = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
+    const poolLabel = `${handleLabel(spec)}.pool()`;
     const retryingFetch =
-        (shouldRetry: (response: Response) => boolean | Promise<boolean>): ContainerHandle["fetch"] =>
+        (shouldRetry: (response: Response) => boolean | Promise<boolean>, shouldRetryError: (error: unknown) => boolean): ContainerHandle["fetch"] =>
         async (input, init) => {
             // Only a string input can be re-issued safely; a pre-built Request
             // may carry a body that's consumed on the first send, so re-building
@@ -574,12 +637,27 @@ const poolHandleFor = (
                     }
                 } catch (error: unknown) {
                     lastError = error;
+
+                    // The throw path needs the same narrowing as the response
+                    // path, or the exec guarantee below is only half true: a
+                    // container that ran the command and *then* threw (isolate
+                    // OOM, "Network connection lost", a DO reset) would have it
+                    // re-run on two more instances. It also lets a fired
+                    // deadline out immediately instead of being swallowed and
+                    // slept on.
+                    if (!shouldRetryError(error)) {
+                        throw error;
+                    }
                 }
             }
 
             // Exhausted attempts after a thrown error on the last try.
             throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(totalAttempts)} attempts failed`);
         };
+
+    // A pooled `fetch` keeps the blanket retry on both arms: its caller chose
+    // the method and can reason about replaying it.
+    const poolFetch = retryingFetch(options.retryOn ?? retryOnServerError, () => true);
 
     return {
         // A pooled exec re-picks an instance per attempt — so it retries only on
@@ -591,8 +669,12 @@ const poolHandleFor = (
         // instances — `pool().exec("pnpm", { args: ["publish"] })` publishing
         // three times. A cold-start transient means the request never reached
         // the container, so re-running it is safe by construction.
-        exec: execViaFetch(retryingFetch(isColdStartTransient), `${handleLabel(spec)}.pool()`),
-        fetch: retryingFetch(options.retryOn ?? retryOnServerError),
+        exec: execViaFetch(retryingFetch(isColdStartTransient, isColdStartError), poolLabel),
+        fetch: async (input, init) => {
+            assertPathNotReserved(input, poolLabel);
+
+            return poolFetch(input, init);
+        },
         port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort, traceparent),
     };
 };

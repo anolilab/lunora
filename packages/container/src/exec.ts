@@ -212,6 +212,18 @@ const execViaFetch =
             throw new LunoraError("BAD_REQUEST", `${label}: exec requires a non-empty \`command\``);
         }
 
+        const limit = options.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
+
+        // Checked before the command runs, not after. A cap that isn't a whole
+        // positive number isn't a cap: `NaN` — the shape of
+        // `Number(env.EXEC_LIMIT)` on a typo — makes every comparison false, so
+        // the reader buffers the whole body, which is the isolate-terminating
+        // outcome the cap exists to prevent; a negative one overflows on the
+        // first byte instead.
+        if (!Number.isSafeInteger(limit) || limit <= 0) {
+            throw new LunoraError("BAD_REQUEST", `${label}: exec \`maxOutputBytes\` must be a positive whole number of bytes, got ${String(limit)}`);
+        }
+
         const deadline = execDeadline(options.signal, options.timeoutMs);
 
         // The whole call, not just the fetch: `fetch` resolves on HEADERS, so
@@ -248,7 +260,6 @@ const execViaFetch =
                 );
             }
 
-            const limit = options.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
             const body = await readCapped(response.body, limit, deadline.signal);
 
             if (body.overflowed) {

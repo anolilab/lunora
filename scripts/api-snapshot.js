@@ -52,6 +52,13 @@ const packagesDir = join(rootDir, "packages");
 const snapshotsDir = join(rootDir, "api-snapshots");
 
 /**
+ * The line `renderExport` emits in place of a tagged export's signature, and
+ * the string the fully-tracked check below scans for. One constant, not two
+ * literals: reworded in only one place, the check would silently pass.
+ */
+const UNTRACKED_MARKER = "signature not tracked";
+
+/**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
  * `agent`, `ai`, `container` and `platform-node` ARE covered, at TIER_3, and
@@ -366,7 +373,7 @@ const renderExport = (checker, pkgDirName, symbol) => {
     const header = `### \`${name}\` (${kind})`;
 
     if (experimental) {
-        return `${header}\n\n_Tagged \`@experimental\` — signature not tracked; churn here does not fail the gate._`;
+        return `${header}\n\n_Tagged \`@experimental\` — ${UNTRACKED_MARKER}; churn here does not fail the gate._`;
     }
 
     if (isForeign) {
@@ -582,8 +589,16 @@ const rendered = buildAll();
  */
 const FULLY_TRACKED_SNAPSHOTS = new Set(["container.api.md"]);
 
-/** The line `renderExport` emits in place of a tagged export's signature. */
-const UNTRACKED_MARKER = "signature not tracked";
+// A configured snapshot that no longer renders would make this check silently
+// inert — the loop below only sees what `rendered` contains, so a package
+// leaving TIER_3 (or being renamed) would drop its enforcement without a word.
+for (const fileName of FULLY_TRACKED_SNAPSHOTS) {
+    if (!rendered.has(fileName)) {
+        console.error(`❌ FULLY_TRACKED_SNAPSHOTS names ${fileName}, which this run does not render.`);
+        console.error("   Remove it from the set, or restore the package to the guard.");
+        process.exit(1);
+    }
+}
 
 const untracked = [];
 

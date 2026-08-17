@@ -249,10 +249,14 @@ and "the command's result is unknown" must not look the same.
 Run the command directly — do not concatenate `args` into a shell string, which
 would make every argument an injection point.
 
+`/__lunora/*` is **reserved** for Lunora's own container routes. `handle.fetch`
+refuses any path resolving into it, so serve your application's routes elsewhere
+and reach exec through `exec`.
+
 <Callout type="warn">
     `exec` runs whatever it is given. When a model chooses the command — an `@lunora/agent` `containerTool`, say — gate it: that tool's default approval policy
-    already pauses for a human on `exec` **and** on any `fetch` that resolves to `/__lunora/exec`, since both reach the same command path. Restrict what can run
-    inside the container too, rather than relying on the caller.
+    pauses for a human on `exec` and on any non-idempotent `fetch`. A `fetch` cannot be used to reach the exec route around that gate — `/__lunora/*` is
+    reserved and `handle.fetch` refuses it — but restrict what can run inside the container too, rather than relying on the caller.
 </Callout>
 
 ## Multi-port containers

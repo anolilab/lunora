@@ -367,6 +367,89 @@ describe("containerHandle.exec", () => {
         expect(requests).toHaveLength(2);
     });
 
+    it("still recognises a cold-start transient whose body arrives in one oversized chunk", async () => {
+        expect.assertions(2);
+
+        let seen = 0;
+        const { namespace, requests } = execNamespace(() => {
+            seen += 1;
+
+            // The sentinel leads a body far past the 1KB scan window, in a single
+            // chunk. A capped read that drops the overrunning chunk whole sees an
+            // empty prefix, matches nothing, and silently stops retrying cold
+            // starts — so the cap has to keep the part that fits.
+            return seen === 1
+                ? new Response(`no Container instance available${" ".repeat(8192)}`, { status: 503 })
+                : jsonResponse({ code: 0, stderr: "", stdout: "ok" });
+        });
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+
+        await expect(containers.runner!.pool({ backoffMs: 0 }).exec("ls")).resolves.toStrictEqual({ code: 0, stderr: "", stdout: "ok" });
+        expect(requests).toHaveLength(2);
+    });
+
+    it("refuses a fetch into the reserved /__lunora/ namespace, however it is spelled", async () => {
+        expect.assertions(6);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+
+        // `exec` owns these routes and reaches them through the inner fetch, so a
+        // caller-supplied `fetch` aimed there is an end-run around the approval
+        // gate `@lunora/agent` puts in front of command execution. Checked on the
+        // resolved pathname — the same one the container's router sees — so the
+        // `..`, backslash and percent-encoded spellings all fail with it.
+        const handle = containers.runner!.get("s");
+
+        await expect(handle.fetch("/__lunora/exec")).rejects.toThrow(/reserved for Lunora's own container routes/u);
+        await expect(handle.fetch("/foo/../__lunora/exec")).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch(String.raw`/\__lunora\exec`)).rejects.toThrow(/reserved/u);
+        await expect(handle.fetch("/%5F%5Flunora/exec")).rejects.toThrow(/reserved/u);
+        await expect(containers.runner!.pool().fetch("/__lunora/exec")).rejects.toThrow(/reserved/u);
+
+        // Nothing was sent, and a route merely sharing the prefix's letters is fine.
+        await handle.fetch("/__lunora-status");
+
+        expect(requests).toHaveLength(1);
+    });
+
+    it("rejects a maxOutputBytes that is not a cap, before running anything", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = execNamespace(() => jsonResponse({ code: 0 }));
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+
+        // `NaN` is the shape of `Number(env.EXEC_LIMIT)` on a typo, and it makes
+        // every `>` comparison false — the reader would buffer the whole body,
+        // which is the isolate-terminating outcome the cap exists to prevent.
+        await expect(containers.runner!.get("s").exec("ls", { maxOutputBytes: Number.NaN })).rejects.toThrow(/must be a positive whole number/u);
+        await expect(containers.runner!.get("s").exec("ls", { maxOutputBytes: Number.POSITIVE_INFINITY })).rejects.toThrow(/must be a positive whole number/u);
+        await expect(containers.runner!.get("s").exec("ls", { maxOutputBytes: -1 })).rejects.toThrow(/must be a positive whole number/u);
+
+        // Rejected before the command runs, not after it has already had effects.
+        expect(requests).toHaveLength(0);
+    });
+
+    it("does not re-run a pooled command when the container throws mid-response", async () => {
+        expect.assertions(3);
+
+        let seen = 0;
+        const { namespace, requests } = execNamespace(() => {
+            seen += 1;
+
+            throw new Error("Network connection lost");
+        });
+        const containers = createContainerContext({ CONTAINER_RUNNER: namespace }, SPEC);
+
+        // Same hazard as the 500 case, through the throw arm: the container may
+        // have run the command and died while answering, so re-picking an
+        // instance publishes twice more. Only a cold-start throw — which means
+        // the request never arrived — is replayable.
+        await expect(containers.runner!.pool({ backoffMs: 0 }).exec("pnpm", { args: ["publish"] })).rejects.toThrow(/Network connection lost/u);
+        expect(seen).toBe(1);
+        expect(requests).toHaveLength(1);
+    });
+
     it("names the accessor and the pool in an error from the test double", async () => {
         expect.assertions(1);
 

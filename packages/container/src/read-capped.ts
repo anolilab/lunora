@@ -53,19 +53,34 @@ const readCapped = async (stream: Response["body"], limit: number, signal?: Abor
                 break;
             }
 
-            bytes += value.byteLength;
-
-            if (bytes > limit) {
+            if (bytes + value.byteLength > limit) {
+                // Keep the part that fits rather than dropping the chunk whole:
+                // one oversized chunk would otherwise leave `text` empty, and
+                // both callers read a *prefix* to decide something — the
+                // cold-start sentinel scan, and the body quoted into an error.
                 overflowed = true;
+                text += decoder.decode(value.subarray(0, limit - bytes), { stream: true });
 
                 break;
             }
 
+            bytes += value.byteLength;
             text += decoder.decode(value, { stream: true });
         }
+
+        // Flush whatever the streaming decoder is still holding. Without it a
+        // multi-byte sequence split across the cap — or across a truncated
+        // body's last chunk — is dropped instead of surfacing as U+FFFD.
+        text += decoder.decode();
     } finally {
         signal?.removeEventListener("abort", onAbort);
-        await reader.cancel();
+
+        // NOT awaited. `cancel()` on one branch of a tee'd body — which is what
+        // `response.clone().body` hands us — does not settle until the other
+        // branch is read or dropped, so awaiting it hangs the caller forever on
+        // exactly the case the cap exists for: a body too big to read whole.
+        // Nothing downstream needs the teardown to have finished.
+        reader.cancel().catch(() => undefined);
     }
 
     if (signal?.aborted === true) {
