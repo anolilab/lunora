@@ -21,6 +21,7 @@
         "auth-ui-vue/**",
         "auth-ui-svelte/**",
         "auth-ui-solid/**",
+        "auth-ui-solid-v2/**",
         "auth-ui-angular/**",
         "ai/ai.ts",
         "browser/browser.ts",
