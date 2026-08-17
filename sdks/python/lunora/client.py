@@ -738,8 +738,13 @@ class LunoraClient:
 
             try:
                 await flush()
-                # The socket is back, so the writes made while it was down go out
-                # now, in order, before anything new is submitted.
+                # The socket is back, so the backlog replays now — among itself in
+                # submission order. It is NOT ordered against concurrent writes:
+                # `attach_socket` above has already cleared the queue-it decision,
+                # so a `submit` racing this flush goes straight over HTTP and can
+                # land ahead of the backlog still replaying. The reference client
+                # has the same window; closing it needs a flushing flag in the
+                # queue-it decision, which is a protocol change, not a port fix.
                 await self.flush_offline_queue(shard_key)
                 async for raw in socket:
                     if raw == "lunora-pong":
