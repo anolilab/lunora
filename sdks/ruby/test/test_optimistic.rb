@@ -232,16 +232,21 @@ class TestOptimisticRollback < Minitest::Test
     client, seen = primed_client(case_data["base"])
     client.detach_socket
     read_back = nil
+    read_back_all = nil
 
     client.submit("messages:send", {}, optimistic_update: lambda { |store, _args|
       store.set_query(QUERY, {}, case_data["value"])
       # Reflects the override already written in this batch, before anything is
-      # installed on the subscription.
+      # installed on the subscription — through BOTH readers, or a multi-step
+      # update that patches every variant of a list and then reads it back
+      # composes onto the value it just replaced.
       read_back = store.get_query(QUERY, {})
+      read_back_all = store.get_all_queries(QUERY).map(&:last)
     })
 
     assert_equal case_data["displayedAfterApply"], seen.last
     assert_equal case_data["displayedAfterApply"], read_back
+    assert_equal [case_data["displayedAfterApply"]], read_back_all
 
     deliver(client, case_data["frame"])
 

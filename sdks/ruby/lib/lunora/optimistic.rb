@@ -268,9 +268,15 @@ module Lunora
 
       # Every loaded subscription on +function_path+ as [args, value] pairs — for
       # a write that must patch every variant of a list query without enumerating
-      # their args up front.
+      # their args up front. Reflects overrides already written in this batch,
+      # exactly as +get_query+ does: an update that patches a list and then reads
+      # it back must not be handed the value it just replaced.
       def get_all_queries(function_path)
-        @matching.call(function_path)
+        @matching.call(function_path).map do |args, value|
+          key = override_key(function_path, args)
+
+          [args, @overrides.key?(key) ? @overrides[key] : value]
+        end
       end
 
       # Write an optimistic override for a subscribed query. A no-op when nothing

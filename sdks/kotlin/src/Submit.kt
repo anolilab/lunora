@@ -221,11 +221,17 @@ fun Client.flushOfflineQueue(shardKey: String? = null): FlushReport {
     // of the FIFO and retry it on every reconnect forever, never settling its
     // caller and blocking every write behind it.
     val sendable = mutableListOf<QueuedMutation>()
-    val unencodable = mutableListOf<QueuedMutation>()
+    val unencodable = mutableListOf<Pair<QueuedMutation, String>>()
 
-    for (item in stamped) (if (isEncodable(item)) sendable else unencodable).add(item)
+    for (item in stamped) {
+        val failure = encodeFailure(item)
 
-    settleTerminal(queue, unencodable, report, OFFLINE_WRITE_UNENCODABLE, "offline mutation dropped: arguments cannot be wire-encoded")
+        if (failure == null) sendable.add(item) else unencodable.add(item to failure)
+    }
+
+    for ((item, failure) in unencodable) {
+        settleTerminal(queue, listOf(item), report, OFFLINE_WRITE_UNENCODABLE, "offline mutation dropped: its arguments cannot be wire-encoded: $failure")
+    }
 
     replay(queue, sendable, report)
 
@@ -244,13 +250,19 @@ private fun Client.staleWrites(queue: OfflineQueue): Set<String> {
     return pending.filter { item -> item.precondition?.let { !it() } == true }.mapTo(mutableSetOf()) { it.id }
 }
 
-/** Whether a queued write's arguments survive the wire codec. */
-private fun isEncodable(item: QueuedMutation): Boolean = try {
+/**
+ * Why a queued write's arguments do not survive the wire codec, or null if they do.
+ *
+ * The codec's own message, not a fixed string: which cap was exceeded — depth,
+ * bigint digits, an unsupported type — is the only thing that tells a consumer
+ * what to change about the write it can never send.
+ */
+private fun encodeFailure(item: QueuedMutation): String? = try {
     Wire.encode(item.args)
 
-    true
+    null
 } catch (error: Exception) {
-    false
+    error.message ?: error.toString()
 }
 
 /** Drops [entries] for good, un-persisting each and settling it with [code]. */
