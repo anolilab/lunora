@@ -181,4 +181,47 @@ describe("rivet shard state", () => {
             actor.cleanup();
         }
     });
+
+    it("keeps the shard's uncommitted rows out of a snapshot", async () => {
+        expect.assertions(2);
+
+        const actor = createRivetActorDouble();
+
+        try {
+            const first = await openRivetShardState(actor);
+            const { host } = createRivetShardHost(actor, first);
+
+            await host.transaction(async () => {
+                host.sql.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY)");
+                host.sql.exec("INSERT INTO notes (id) VALUES (1)");
+            });
+
+            // `serialize()` reads the working copy as it stands, open
+            // transaction included — so a flush racing a transaction (a
+            // `close()` on the sleep path, say) would make the uncommitted row
+            // durable and, because the dirty flag is cleared on success, never
+            // re-snapshot the state that actually survived the rollback.
+            await host
+                .transaction(async () => {
+                    host.sql.exec("INSERT INTO notes (id) VALUES (2)");
+                    await first.flush();
+
+                    throw new Error("mutation failed");
+                })
+                .catch(() => undefined);
+
+            expect(first.isDirty).toBe(true);
+
+            first.close();
+
+            const second = await openRivetShardState(actor);
+            const { host: woken } = createRivetShardHost(actor, second);
+
+            expect(woken.sql.exec("SELECT id FROM notes ORDER BY id").toArray()).toStrictEqual([{ id: 1 }]);
+
+            second.close();
+        } finally {
+            actor.cleanup();
+        }
+    });
 });

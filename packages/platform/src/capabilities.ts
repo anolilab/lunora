@@ -277,8 +277,16 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
  * `crossShardFanout` is `unsupported` rather than `emulated` because the
  * coordinator needs to *enumerate* shard keys and the RivetKit client only
  * addresses them (`getOrCreate`, `getForId`). A fan-out query would answer from
- * no shards instead of all of them — a wrong answer, not a slow one — so it
- * fails the codegen gate rather than shipping a silent hole.
+ * no shards instead of all of them — a wrong answer, not a slow one.
+ *
+ * That rating is **not** enforced by codegen today, and saying otherwise would
+ * be worse than the gap: `gateAgainstMatrix` walks `CAPABILITY_TO_FEATURE` in
+ * `@lunora/codegen`, whose keys are the app-imported `ctx.*` add-ons, and a
+ * `.shardBy()` fan-out query is not one of them — there is no usage probe for
+ * it to gate on, exactly as with `shardAlarms`. An app targeting `rivet` with a
+ * fan-out query therefore gets no diagnostic. Closing it needs a usage probe
+ * first; until then this row informs Studio parity reporting and a reader, not
+ * the build.
  *
  * What is `unsupported` for the ordinary reason — nothing binds it yet — is
  * most of the Cloudflare product surface (`queues`, `workflows`, object
@@ -301,8 +309,8 @@ export const RIVET_CAPABILITIES: PlatformCapabilities = {
             note: "Rivet has no cross-actor SQL product to point @lunora/sql-store at. An actor's SQLite is actor-scoped by design, so a `.global()` table would need an external database (Postgres/PlanetScale) this host does not bind",
         },
         websocketHibernation: {
-            level: "native",
-            note: "`options.canHibernateWebSocket: true` lets the actor sleep with its sockets still open and wake on the next frame or close — the same bargain DO hibernation makes. Rivet documents it as beta, and per-connection state that must survive a sleep has to live in `c.conn.state`, not in a closure",
+            level: "emulated",
+            note: "`options.canHibernateWebSocket: true` lets the actor sleep with its sockets still open and wake on the next frame or close — the connection half is genuinely the platform's, and Rivet documents it as beta. The subscription half is not: Rivet hibernates the socket, not Lunora's attachment/tag state, so the host persists that itself in `_lunora_sockets` and rebuilds the runtime registry on every wake. Rebinding is not automatic either — Rivet hands `onWebSocket` a fresh socket, so the actor must stash the socket id in `c.conn.state` and call `attachSocket(id, ws)`; a plain `accept` mints a new id and orphans the subscription. Working, and Lunora's own bookkeeping rather than the platform's, which is what `emulated` means",
         },
         durableStreams: {
             level: "unsupported",

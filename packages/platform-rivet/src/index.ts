@@ -6,11 +6,13 @@
  *
  * A Rivet Actor is the closest primitive to a Durable Object outside
  * Cloudflare: one addressable, single-writer instance per key, with its own
- * SQLite database, its own durable schedules, and a sleep/wake lifecycle. Five
+ * SQLite database, its own durable schedules, and a sleep/wake lifecycle. Four
  * things this host therefore gets from the platform rather than rebuilding —
- * sharded state, alarms, hibernated WebSockets, runtime cron registration, and
- * placement at create time — are things `@lunora/platform-node` has to emulate
- * with `setTimeout` and a table.
+ * sharded state, alarms, runtime cron registration, and placement at create
+ * time — are things `@lunora/platform-node` has to emulate with `setTimeout`
+ * and a table. WebSocket hibernation is half a fifth: Rivet keeps the
+ * connection open across a sleep, while the attachment and tag state on it is
+ * this host's own `_lunora_sockets` table, rebuilt on every wake.
  *
  * ## The one structural mismatch
  *
@@ -54,7 +56,11 @@ export type { RivetShardDirectoryOptions } from "./rivet-shard-directory";
 export { createRivetShardDirectory } from "./rivet-shard-directory";
 export type { RivetShardDatabase, RivetShardHost, RivetShardHostOptions } from "./rivet-shard-host";
 export { createRivetShardHost, restoreRivetAlarm, RIVET_ALARM_ACTION } from "./rivet-shard-host";
-export type { RivetShardState } from "./rivet-shard-state";
-export { clearRivetShardSnapshot, openRivetShardState } from "./rivet-shard-state";
+// `RivetShardState` and `openRivetShardState` are deliberately NOT exported:
+// the working copy is a `better-sqlite3` connection, and publishing it makes the
+// shard's storage engine a recorded promise — the one detail the sync facade
+// exists to hide. `createRivetPlatform` composes it, and `RivetPlatform.flush`
+// is the one thing a caller actually needs from it.
+export { clearRivetShardSnapshot } from "./rivet-shard-state";
 export type { RivetSocketHost } from "./rivet-socket-host";
 export { createRivetSocketHost } from "./rivet-socket-host";

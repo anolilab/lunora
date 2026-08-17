@@ -44,13 +44,38 @@ import Database from "better-sqlite3";
 import type { RivetActorLike, RivetRawDatabaseLike } from "./rivet-context";
 
 /**
- * The table Rivet's actor SQLite holds the snapshot in.
+ * The table Rivet's actor SQLite holds the snapshots in.
  *
- * One row, checked to id 0. Rivet's database is the durable side of this
- * package and the app's own `onMigrate` tables live beside it, so the name is
- * prefixed the same way every other Lunora-owned table is.
+ * Two rows, one per working copy (see {@link SHARD_SLOT} /
+ * {@link REGISTRY_SLOT}). Rivet's database is the durable side of this package
+ * and the app's own `onMigrate` tables live beside it, so the name is prefixed
+ * the same way every other Lunora-owned table is.
  */
 const SNAPSHOT_TABLE = "_lunora_shard_snapshot";
+
+/** Snapshot slot for the shard's working copy — the engine's own SQL. */
+const SHARD_SLOT = 0;
+
+/**
+ * Snapshot slot for the host registry copy — this package's bookkeeping.
+ *
+ * A **second connection**, not a second table on the first one, and the reason
+ * is transactional isolation rather than tidiness. `ShardHost.transaction` runs
+ * a raw `BEGIN`/`COMMIT` on the shard copy and awaits the caller's closure
+ * inside it, while Rivet does *not* serialize `onWebSocket` against actions
+ * (see `./rivet-shard-host`'s header). A socket accepted during that await
+ * would join the open transaction on a shared connection and be **rolled back**
+ * with it — the row would vanish while the runtime map still held the socket,
+ * so every later attachment write would silently update zero rows. Symmetrically
+ * a `close()`'s `DELETE` would be undone, resurrecting a dead subscriber on the
+ * next wake.
+ *
+ * Separating the connections also keeps the snapshot cost honest: the engine
+ * calls `serializeAttachment` on every subscription change, and on a shared
+ * copy each one would dirty — and therefore re-serialize — the whole shard
+ * database. Here it re-serializes only the socket registry.
+ */
+const REGISTRY_SLOT = 1;
 
 /**
  * Base64, not a BLOB.
@@ -66,49 +91,65 @@ const encodeSnapshot = (bytes: Buffer): string => bytes.toString("base64");
 
 const decodeSnapshot = (data: string): Buffer => Buffer.from(data, "base64");
 
-/** The shard's synchronous working copy, plus the durable snapshot around it. */
+/** The shard's synchronous working copies, plus the durable snapshots around them. */
 interface RivetShardState {
     /**
-     * Close the working copy. Does **not** flush: a caller that wants the
+     * Close both working copies. Does **not** flush: a caller that wants the
      * pending writes durable calls {@link RivetShardState.flush} first, and one
      * tearing down after a failure deliberately does not.
      */
     close: () => void;
 
     /**
-     * The synchronous working copy. Every contract in this package that needs
-     * sync storage — the engine's SQL, the socket registry's attachments and
-     * tags — runs against this one connection, so a single snapshot covers all
-     * of them.
+     * The shard's synchronous working copy — the engine's SQL and its
+     * transactions. See {@link RivetShardState.registry} for the host's own
+     * bookkeeping, which deliberately does not share this connection.
      */
     readonly database: Database.Database;
 
     /**
-     * Serialize the working copy back into Rivet's SQLite, if anything changed
-     * since the last flush. A no-op when clean, so calling it at every boundary
-     * costs nothing on read-only work.
+     * Serialize whichever working copies changed back into Rivet's SQLite. A
+     * no-op when both are clean, so calling it at every boundary costs nothing
+     * on read-only work.
+     *
+     * The shard copy is skipped — and left dirty for the next boundary — while
+     * a transaction is open on it, because `serialize()` captures uncommitted
+     * rows and clearing the flag would make a subsequent `ROLLBACK` invisible
+     * to every later snapshot.
      */
     flush: () => Promise<void>;
 
     /**
-     * Whether a write has happened since the last successful flush. Read by the
-     * shard host to decide whether a boundary needs a flush at all, and by
-     * tests to pin that reads do not dirty the shard.
+     * Whether a write has happened to the shard copy since the last successful
+     * flush. Read by the shard host to decide whether a boundary needs a flush
+     * at all, and by tests to pin that reads do not dirty the shard.
      */
     readonly isDirty: boolean;
 
     /**
-     * Mark the working copy as changed. Called by every writer against
-     * {@link RivetShardState.database} — the SQL executor classifies statements
-     * itself, but the socket registry writes through prepared statements it
-     * owns, so the flag is set explicitly rather than sniffed.
+     * Mark the shard copy as changed. Called by the SQL executor, which
+     * classifies statements itself rather than having the flag sniffed from the
+     * query text.
      */
     markDirty: () => void;
+
+    /** Mark {@link RivetShardState.registry} as changed. */
+    markRegistryDirty: () => void;
+
+    /**
+     * The host's own bookkeeping copy — today, the socket registry.
+     *
+     * Separate from {@link RivetShardState.database} so a write from an
+     * `onWebSocket` handler cannot be swallowed by a shard transaction that
+     * happens to be open; see {@link REGISTRY_SLOT}.
+     */
+    readonly registry: Database.Database;
 }
 
 /** Row shape of the snapshot table. */
 interface SnapshotRow extends Record<string, unknown> {
     data: string;
+    id: number;
 }
 
 /**
@@ -124,20 +165,36 @@ interface SnapshotRow extends Record<string, unknown> {
 const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<RivetShardState> => {
     const { db } = actor;
 
-    await db.execute(`CREATE TABLE IF NOT EXISTS ${SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 0), data TEXT NOT NULL)`);
+    await db.execute(`CREATE TABLE IF NOT EXISTS ${SNAPSHOT_TABLE} (id INTEGER PRIMARY KEY CHECK (id IN (0, 1)), data TEXT NOT NULL)`);
 
-    const rows = await db.execute<SnapshotRow>(`SELECT data FROM ${SNAPSHOT_TABLE} WHERE id = 0`);
-    const snapshot = rows[0]?.data;
+    const rows = await db.execute<SnapshotRow>(`SELECT id, data FROM ${SNAPSHOT_TABLE}`);
+    const snapshots = new Map(rows.map((row) => [row.id, row.data]));
 
     // `new Database(buffer)` restores a serialized database into memory;
     // `":memory:"` is the first-wake case, where there is nothing to restore.
-    const database = snapshot === undefined ? new Database(":memory:") : new Database(decodeSnapshot(snapshot));
+    const open = (slot: number): Database.Database => {
+        const snapshot = snapshots.get(slot);
+
+        return snapshot === undefined ? new Database(":memory:") : new Database(decodeSnapshot(snapshot));
+    };
+
+    const database = open(SHARD_SLOT);
+    const registry = open(REGISTRY_SLOT);
 
     let dirty = false;
+    let registryDirty = false;
     let closed = false;
 
+    const persist = async (slot: number, source: Database.Database): Promise<void> => {
+        await db.execute(
+            `INSERT INTO ${SNAPSHOT_TABLE} (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data`,
+            slot,
+            encodeSnapshot(source.serialize()),
+        );
+    };
+
     const flush = async (): Promise<void> => {
-        if (!dirty) {
+        if (!dirty && !registryDirty) {
             return;
         }
 
@@ -145,14 +202,28 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
             throw new LunoraError("INTERNAL_ERROR", "@lunora/platform-rivet: cannot flush a shard state that has already been closed");
         }
 
-        const encoded = encodeSnapshot(database.serialize());
+        // `Database.serialize()` has no transaction guard: called between
+        // `BEGIN` and `ROLLBACK` it captures the uncommitted rows, and since a
+        // successful flush clears `dirty`, nothing would ever re-snapshot the
+        // state that actually survived — the next wake hydrates rows the shard
+        // rolled back. Skipping leaves the flag set, and both boundaries
+        // (`runSerialized`, `transaction`) flush again after their own
+        // `COMMIT`, so the write is deferred rather than dropped.
+        if (dirty && !database.inTransaction) {
+            await persist(SHARD_SLOT, database);
 
-        await db.execute(`INSERT INTO ${SNAPSHOT_TABLE} (id, data) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data`, encoded);
+            // Cleared only after the durable write resolves. Clearing first
+            // would drop the very writes a failed flush still owes, and the
+            // next boundary would find nothing to retry.
+            dirty = false;
+        }
 
-        // Cleared only after the durable write resolves. Clearing first would
-        // drop the very writes a failed flush still owes, and the next boundary
-        // would find nothing to retry.
-        dirty = false;
+        // No guard here, and none needed: nothing ever opens a transaction on
+        // the registry copy — that is what it is separate for.
+        if (registryDirty) {
+            await persist(REGISTRY_SLOT, registry);
+            registryDirty = false;
+        }
     };
 
     return {
@@ -160,6 +231,7 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
             if (!closed) {
                 closed = true;
                 database.close();
+                registry.close();
             }
         },
         database,
@@ -170,16 +242,20 @@ const openRivetShardState = async (actor: Pick<RivetActorLike, "db">): Promise<R
         markDirty: () => {
             dirty = true;
         },
+        markRegistryDirty: () => {
+            registryDirty = true;
+        },
+        registry,
     };
 };
 
 /**
- * Drop the persisted snapshot. Exposed for the destroy path — an actor that
+ * Drop both persisted snapshots. Exposed for the destroy path — an actor that
  * Lunora tears down should not leave a shard database behind in Rivet's
  * storage — and for tests that need a first-wake actor over a reused database.
  */
 const clearRivetShardSnapshot = async (database: RivetRawDatabaseLike): Promise<void> => {
-    await database.execute(`DELETE FROM ${SNAPSHOT_TABLE} WHERE id = 0`);
+    await database.execute(`DELETE FROM ${SNAPSHOT_TABLE}`);
 };
 
 export type { RivetShardState };

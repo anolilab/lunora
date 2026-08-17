@@ -2,12 +2,13 @@
  * Rivet adapter: the provider-neutral `@lunora/platform` `SocketHost` over the
  * WebSockets Rivet hands to `onWebSocket`.
  *
- * Rivet is the only non-Cloudflare target so far that can honour the
- * hibernation* half of this contract rather than merely the durability half.
- * With `options.canHibernateWebSocket: true` an actor sleeps with its sockets
- * still open and Rivet wakes it on the next frame or on close — the same
- * bargain Durable Object hibernation makes, and something a Node process cannot
- * do at all (a TCP socket cannot outlive the process holding it).
+ * Rivet is the only non-Cloudflare target so far that can keep the *connection*
+ * across a sleep rather than only its durable state. With
+ * `options.canHibernateWebSocket: true` an actor sleeps with its sockets still
+ * open and Rivet wakes it on the next frame or on close — something a Node
+ * process cannot do at all (a TCP socket cannot outlive the process holding
+ * it). It is half of what Durable Object hibernation gives, which is why the
+ * matrix rates this target's hibernation `emulated`: the other half is below.
  *
  * That still leaves this file with a job, because Rivet hibernates the
  * connection*, not Lunora's *subscription state*:
@@ -15,11 +16,21 @@
  * - **Runtime state** — the live `WebSocket`, its in-memory tag set — lives in
  * a `Map` for the current wake.
  * - **Durable state** — the attachment and tags, keyed by socket id — lives in
- * `_lunora_sockets` inside the shard's synchronous working copy (see
- * `./rivet-shard-state`), so it is captured by the same snapshot as the rest
- * of the shard and comes back on the next wake.
+ * `_lunora_sockets` inside the host registry working copy (see
+ * `./rivet-shard-state`), so it is snapshotted alongside the shard and comes
+ * back on the next wake.
  *
- * The working copy is used rather than Rivet's `c.db` for one reason:
+ * Those two halves are joined by {@link RivetSocketHost.restoreSockets}, which
+ * the composition root calls on every wake: without it `runtimeSockets` starts
+ * empty, `getSockets(tag)` answers `[]`, and every poke and delta for a
+ * connection that outlived a sleep is dropped silently — the durable rows would
+ * be write-only. Rebinding the live transport to a restored record is
+ * {@link RivetSocketHost.attachSocket}'s job, and it is why the actor's
+ * `onWebSocket` handler must rebind by id rather than `accept` a second time:
+ * `accept` mints a fresh id, orphaning both the durable row and the engine's
+ * subscription state keyed by it.
+ *
+ * The registry copy is used rather than Rivet's `c.db` for one reason:
  * `SocketHandle.serializeAttachment` is **synchronous**, and every entry point
  * into Rivet's SQLite is a promise. An adapter that ignored that would have to
  * fire-and-forget the durable write, which is how an attachment goes missing
@@ -52,19 +63,40 @@ interface RivetSocket {
 /** Row shape of `_lunora_sockets`. */
 interface SocketRow {
     attachment: Buffer | null;
+    id: string;
     tags: string;
 }
 
-/** The socket host plus the hooks the conformance TCK needs to drive a recycle. */
+/** The socket host, plus the wake and recycle hooks around it. */
 interface RivetSocketHost {
     /**
-     * Re-create a runtime socket from durable state — what a wake does for a
-     * hibernated connection.
+     * Bind a live transport socket to an already-restored record.
+     *
+     * This is the wake half of hibernation. Rivet re-invokes `onWebSocket` for
+     * a connection that slept with the actor, and the handler must rebind that
+     * socket to the id it was originally accepted under — the id the engine's
+     * subscription state is keyed by. Calling `accept` again instead mints a
+     * new id, so the durable row is orphaned and the subscription is lost.
+     * @returns the rebound handle, or `undefined` for an id this host has no
+     * restored record for (a genuinely new connection — `accept` it).
+     */
+    attachSocket: (id: string, raw: unknown) => SocketHandle | undefined;
+
+    /**
+     * Re-create one runtime socket from durable state, by id.
      *
      * `attachment` is a fallback for an id this host never durably tracked (a
-     * synthetic id a test constructs); a real wake restores what was persisted.
+     * synthetic id a test constructs); a real wake restores what was persisted,
+     * including an attachment the engine deliberately cleared.
      */
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
+
+    /**
+     * Re-create a runtime socket for **every** durable row — what a wake does.
+     * Called by the composition root before anything can enumerate sockets.
+     * @returns the restored handles, in no particular order.
+     */
+    restoreSockets: () => SocketHandle[];
     /** Drop the runtime socket map while keeping durable attachments and tags. */
     simulateRecycle: () => void;
     /** The `SocketHost` contract implementation. */
@@ -97,7 +129,7 @@ const asTransport = (raw: unknown): RivetWebSocketLike | undefined => {
 };
 
 /**
- * Build the socket registry over the shard's working copy.
+ * Build the socket registry over the host's registry working copy.
  *
  * `send` and `close` go straight to the transport socket Rivet supplied, so a
  * host that is handed a real `WebSocket` really does deliver. Frames are not
@@ -106,31 +138,41 @@ const asTransport = (raw: unknown): RivetWebSocketLike | undefined => {
  * prove it against and recording would only duplicate the send queue in memory.
  */
 const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
-    const { database } = state;
+    const { registry } = state;
 
-    database.exec("CREATE TABLE IF NOT EXISTS _lunora_sockets (id TEXT PRIMARY KEY, attachment BLOB, tags TEXT NOT NULL DEFAULT '[]')");
+    registry.exec("CREATE TABLE IF NOT EXISTS _lunora_sockets (id TEXT PRIMARY KEY, attachment BLOB, tags TEXT NOT NULL DEFAULT '[]')");
 
-    const upsertRow = database.prepare<[string, Buffer | null, string]>(
+    const upsertRow = registry.prepare<[string, Buffer | null, string]>(
         `INSERT INTO _lunora_sockets (id, attachment, tags) VALUES (?, ?, ?)
          ON CONFLICT (id) DO UPDATE SET attachment = excluded.attachment, tags = excluded.tags`,
     );
-    const updateAttachment = database.prepare<[Buffer | null, string]>("UPDATE _lunora_sockets SET attachment = ? WHERE id = ?");
-    const updateTags = database.prepare<[string, string]>("UPDATE _lunora_sockets SET tags = ? WHERE id = ?");
-    const selectRow = database.prepare<[string], SocketRow>("SELECT attachment, tags FROM _lunora_sockets WHERE id = ?");
-    const deleteRow = database.prepare<[string]>("DELETE FROM _lunora_sockets WHERE id = ?");
+    const updateAttachment = registry.prepare<[Buffer | null, string]>("UPDATE _lunora_sockets SET attachment = ? WHERE id = ?");
+    const updateTags = registry.prepare<[string, string]>("UPDATE _lunora_sockets SET tags = ? WHERE id = ?");
+    const selectRow = registry.prepare<[string], SocketRow>("SELECT id, attachment, tags FROM _lunora_sockets WHERE id = ?");
+    const selectAll = registry.prepare<[], SocketRow>("SELECT id, attachment, tags FROM _lunora_sockets");
+    const deleteRow = registry.prepare<[string]>("DELETE FROM _lunora_sockets WHERE id = ?");
 
     const runtimeSockets = new Map<string, RivetSocket>();
     const handleIds = new WeakMap<SocketHandle, string>();
 
+    /**
+     * Transport socket → record, so `handleFor` is a lookup rather than a scan.
+     * `@lunora/shard-engine`'s inbound-frame path calls it once per message; a
+     * `[...values()].find()` there allocates an array of every socket on the
+     * shard per frame, which is the cost `SocketHandle`'s "not a wrapper" note
+     * exists to avoid.
+     */
+    const socketsByRaw = new Map<unknown, RivetSocket>();
+
     const persistAttachment = (id: string, value: unknown): void => {
         // eslint-disable-next-line unicorn/no-null -- writing SQL NULL into a nullable BLOB column; better-sqlite3 has no other spelling for it
         updateAttachment.run(value === undefined ? null : serialize(value), id);
-        state.markDirty();
+        state.markRegistryDirty();
     };
 
     const persistTags = (id: string, tags: Set<string>): void => {
         updateTags.run(JSON.stringify([...tags]), id);
-        state.markDirty();
+        state.markRegistryDirty();
     };
 
     /**
@@ -153,11 +195,15 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
             close: (code, reason) => {
                 runtimeSockets.delete(socket.id);
 
+                if (socket.raw !== undefined) {
+                    socketsByRaw.delete(socket.raw);
+                }
+
                 // A closed socket is never restored, so its durable row is
                 // garbage the moment it closes — and leaving it would fan
                 // updates at a dead subscriber on the next wake.
                 deleteRow.run(socket.id);
-                state.markDirty();
+                state.markRegistryDirty();
 
                 transport?.close(code, reason);
             },
@@ -174,7 +220,39 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
         socket.handle = handle;
         handleIds.set(handle, socket.id);
 
+        if (socket.raw !== undefined) {
+            socketsByRaw.set(socket.raw, socket);
+        }
+
         return handle;
+    };
+
+    /**
+     * Rebuild one runtime record from its durable row.
+     *
+     * `fallbackAttachment` covers an id with no row at all. It deliberately
+     * does **not** cover a row whose `attachment` is SQL `NULL`: that is the
+     * engine clearing state with `serializeAttachment(undefined)`, and falling
+     * back there would resurrect exactly what it dropped.
+     */
+    const materialize = (id: string, row: SocketRow | undefined, fallbackAttachment: unknown): SocketHandle => {
+        let attachment = fallbackAttachment;
+
+        if (row !== undefined) {
+            attachment = row.attachment === null ? undefined : deserialize(row.attachment);
+        }
+
+        const record: RivetSocket = {
+            attachment,
+            handle: undefined as unknown as SocketHandle,
+            id,
+            raw: undefined,
+            tags: new Set(row === undefined ? [] : (JSON.parse(row.tags) as string[])),
+        };
+
+        runtimeSockets.set(id, record);
+
+        return createHandle(record, undefined);
     };
 
     const socket: SocketHost = {
@@ -195,7 +273,7 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
             runtimeSockets.set(id, record);
             // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
             upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
-            state.markDirty();
+            state.markRegistryDirty();
 
             return createHandle(record, asTransport(raw));
         },
@@ -204,7 +282,7 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
 
             return (tag === undefined ? sockets : sockets.filter((record) => record.tags.has(tag))).map((record) => record.handle);
         },
-        handleFor: (raw) => [...runtimeSockets.values()].find((record) => record.raw === raw)?.handle,
+        handleFor: (raw) => (raw === undefined ? undefined : socketsByRaw.get(raw)?.handle),
         idFor: (handle) => {
             const id = handleIds.get(handle);
 
@@ -248,23 +326,29 @@ const createRivetSocketHost = (state: RivetShardState): RivetSocketHost => {
     };
 
     return {
-        restoreSocket: (id, attachment) => {
-            const row = selectRow.get(id);
-            const persisted = row?.attachment ?? undefined;
-            const record: RivetSocket = {
-                attachment: persisted === undefined ? attachment : deserialize(persisted),
-                handle: undefined as unknown as SocketHandle,
-                id,
-                raw: undefined,
-                tags: new Set(row === undefined ? [] : (JSON.parse(row.tags) as string[])),
-            };
+        attachSocket: (id, raw) => {
+            const record = runtimeSockets.get(id);
 
-            runtimeSockets.set(id, record);
+            if (record === undefined) {
+                return undefined;
+            }
 
-            return createHandle(record, undefined);
+            if (record.raw !== undefined) {
+                socketsByRaw.delete(record.raw);
+            }
+
+            record.raw = raw;
+
+            // A fresh handle rather than a mutated one: the transport is
+            // captured by `createHandle`'s closure, which is what keeps `send`
+            // off a property lookup on the fan-out path.
+            return createHandle(record, asTransport(raw));
         },
+        restoreSocket: (id, attachment) => materialize(id, selectRow.get(id), attachment),
+        restoreSockets: () => selectAll.all().map((row) => materialize(row.id, row, undefined)),
         simulateRecycle: () => {
             runtimeSockets.clear();
+            socketsByRaw.clear();
         },
         socket,
     };
