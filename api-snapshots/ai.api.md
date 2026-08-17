@@ -262,7 +262,6 @@ interface RagSourceOptions {
         key: string;
         status: "indexed" | "skipped" | "unchanged";
     }) => void;
-    prune?: boolean;
 }
 ```
 
@@ -270,14 +269,8 @@ interface RagSourceOptions {
 
 ```ts
 interface RagSourceSync {
-    sync: (source: RagObjectSource) => Promise<RagSyncReport>;
+    sync: (source: RagObjectSource, passOptions?: RagSyncPassOptions) => Promise<RagSyncReport>;
 }
-```
-
-### `RagSqlDialect` (type)
-
-```ts
-type RagSqlDialect = "postgres" | "sqlite";
 ```
 
 ### `RagSqlExec` (type)
@@ -312,6 +305,14 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
     delayMs?: number;
     id?: (document: Document) => string;
     text: (document: Document) => string | undefined;
+}
+```
+
+### `RagSyncPassOptions` (interface)
+
+```ts
+interface RagSyncPassOptions {
+    knownKeys?: Iterable<string>;
 }
 ```
 
@@ -367,6 +368,7 @@ interface RagVectorStore {
 ```ts
 interface RagVectorStoreCapabilities {
     maxDimensions: number | false;
+    maxIdBytes: number | false;
     maxMetadataBytes: number | false;
     maxTopK: number;
     maxTopKWithMetadata: number;

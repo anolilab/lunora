@@ -62,6 +62,7 @@ const fakeStore = (capabilities: RagVectorStoreCapabilities): { queries: RagVect
 /** A store with no limits at all — what a pgvector-backed adapter would declare. */
 const UNLIMITED: RagVectorStoreCapabilities = {
     maxDimensions: false,
+    maxIdBytes: false,
     maxMetadataBytes: false,
     maxTopK: 1000,
     maxTopKWithMetadata: 1000,
@@ -73,6 +74,7 @@ describe("vectorizeStore", () => {
 
         expect(VECTORIZE_CAPABILITIES).toStrictEqual({
             maxDimensions: 1536,
+            maxIdBytes: 64,
             maxMetadataBytes: 10 * 1024,
             maxTopK: 100,
             maxTopKWithMetadata: 50,
@@ -128,7 +130,7 @@ describe("a custom store's capabilities replace Vectorize's", () => {
         const { queries, store } = fakeStore(UNLIMITED);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: modelOfWidth(768), index: "docs", store: () => store });
 
-        await docs({ vectors: undefined as never }).retrieve("question", { topK: 400 });
+        await docs({}).retrieve("question", { topK: 400 });
 
         // Vectorize would have clamped this to 50.
         expect(queries[0]?.topK).toBe(400);
@@ -141,7 +143,7 @@ describe("a custom store's capabilities replace Vectorize's", () => {
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: modelOfWidth(3072), index: "docs", store: () => store });
 
         // 3072 dims — rejected against Vectorize's 1536, fine here.
-        await expect(docs({ vectors: undefined as never }).index({ id: "a", text: "hello world" })).resolves.toMatchObject({ chunks: 1 });
+        await expect(docs({}).index({ id: "a", text: "hello world" })).resolves.toMatchObject({ chunks: 1 });
     });
 
     it("accepts metadata beyond Vectorize's 10 KiB budget", async () => {
@@ -150,7 +152,7 @@ describe("a custom store's capabilities replace Vectorize's", () => {
         const { store } = fakeStore(UNLIMITED);
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: modelOfWidth(768), index: "docs", store: () => store });
 
-        await expect(docs({ vectors: undefined as never }).index({ id: "a", metadata: { blob: "x".repeat(50_000) }, text: "hello" })).resolves.toMatchObject({
+        await expect(docs({}).index({ id: "a", metadata: { blob: "x".repeat(50_000) }, text: "hello" })).resolves.toMatchObject({
             chunks: 1,
         });
     });
@@ -161,9 +163,7 @@ describe("a custom store's capabilities replace Vectorize's", () => {
         const { store } = fakeStore({ ...UNLIMITED, maxDimensions: 512 });
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: modelOfWidth(768), index: "docs", store: () => store });
 
-        await expect(docs({ vectors: undefined as never }).index({ id: "a", text: "hello" })).rejects.toThrow(
-            /produces 768-dimension vectors, over the 512-dimension ceiling/u,
-        );
+        await expect(docs({}).index({ id: "a", text: "hello" })).rejects.toThrow(/produces 768-dimension vectors, over the 512-dimension ceiling/u);
     });
 
     it("lets an explicit maxEmbeddingDimensions override the store", async () => {
@@ -178,7 +178,7 @@ describe("a custom store's capabilities replace Vectorize's", () => {
             store: () => store,
         });
 
-        await expect(docs({ vectors: undefined as never }).index({ id: "a", text: "hello" })).rejects.toThrow(/over the 256-dimension ceiling/u);
+        await expect(docs({}).index({ id: "a", text: "hello" })).rejects.toThrow(/over the 256-dimension ceiling/u);
     });
 
     it("is built once per bound context, with that context", () => {
@@ -199,8 +199,8 @@ describe("a custom store's capabilities replace Vectorize's", () => {
 
         // A store needing per-request state (a pgvector connection off ctx.sql)
         // depends on getting the bound context, not the definition.
-        docs({ auth: { orgId: "org-1" }, vectors: undefined as never });
-        docs({ auth: { orgId: "org-2" }, vectors: undefined as never });
+        docs({ auth: { orgId: "org-1" } });
+        docs({ auth: { orgId: "org-2" } });
 
         expect(seen).toStrictEqual([{ orgId: "org-1" }, { orgId: "org-2" }]);
         expect(seen).toHaveLength(2);
