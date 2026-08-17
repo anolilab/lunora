@@ -184,13 +184,20 @@ describe("defineRagSource", () => {
         expect.assertions(1);
 
         const { rag } = fakeRag();
+
+        // Lifted out of the object literal on purpose: as a shorthand method
+        // Prettier writes `async *list()` while `generator-star-spacing` demands
+        // `async* list()`, so no single spelling satisfies both gates. A function
+        // expression sidesteps them (and `func-style` rules out a declaration;
+        // a generator cannot be an arrow).
+        const list = async function* () {
+            yield { key: "a.txt" };
+            yield { key: "b.txt" };
+        };
+
         const report = await defineRagSource(rag).sync({
             get: () => "text",
-
-            async* list() {
-                yield { key: "a.txt" };
-                yield { key: "b.txt" };
-            },
+            list,
         });
 
         expect(report.indexed).toStrictEqual(["a.txt", "b.txt"]);
