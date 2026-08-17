@@ -70,7 +70,15 @@ export { LunoraProvider } from "./lunora-provider";
 // The version-neutral element types this adapter's components are typed with —
 // `solid-js` exports the `JSX` namespace in 1.x only, so the public surface
 // cannot name it and stay installable on both majors. See ./solid-compat.
-export type { SolidChildren, SolidElement } from "./solid-compat";
+/*
+ * `SolidElement` is deliberately NOT re-exported. It is `any` — see
+ * `solid-compat.ts` for why nothing narrower can serve both majors in return
+ * position — so as a public name it would hand callers `any` under a type-shaped
+ * alias. The generated declarations render the components' return type as `any`
+ * directly instead: ugly, honest, and impossible to annotate a variable with by
+ * accident. `SolidChildren` is a real structural union and stays exported.
+ */
+export type { SolidChildren } from "./solid-compat";
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.
 export type { ArgsOf, FunctionReference, OptimisticUpdate, Preloaded, ReturnOf, Unsubscribe } from "@lunora/client";

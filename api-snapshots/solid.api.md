@@ -554,12 +554,6 @@ type SolidChildren = SolidChildrenArray | boolean | null | number | (object & {
 }) | (string & {}) | undefined;
 ```
 
-### `SolidElement` (type)
-
-```ts
-type SolidElement = any;
-```
-
 ### `Unauthenticated` (const)
 
 ```ts
