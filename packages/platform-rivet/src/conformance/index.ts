@@ -16,6 +16,7 @@
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { pollJobDispatched, waitPastTarget } from "@lunora/platform/conformance";
 
+import type { RivetWebSocketLike } from "../rivet-context";
 import { createRivetShardKvStore } from "../rivet-kv-store";
 import { createRivetSchedulerHost, RIVET_SCHEDULER_ACTION } from "../rivet-scheduler-host";
 import { createRivetShardDirectory } from "../rivet-shard-directory";
@@ -41,6 +42,17 @@ export const createRivetConformanceHost = async (): Promise<ConformanceHost> => 
     const { restoreSocket, simulateRecycle, socket } = createRivetSocketHost(state);
     const { kv, ready: kvReady } = createRivetShardKvStore(actor.db);
 
+    /**
+     * Frames each raw socket was handed.
+     *
+     * The suite's "accepts a socket and can send/close" leg only asserts
+     * delivery where the host makes frames observable — and without a
+     * `createSocket` it accepts a plain `{}`, which this host's `asTransport`
+     * correctly refuses, so `send` becomes a no-op and a host that dropped
+     * every frame would pass. Supplying a real transport with a recording
+     * `send` turns that skipped branch into an assertion.
+     */
+    const transports: { frames: string[]; raw: RivetWebSocketLike }[] = [];
 
     /**
      * Job ids this host actually delivered.
@@ -76,8 +88,29 @@ export const createRivetConformanceHost = async (): Promise<ConformanceHost> => 
             state.close();
             actor.cleanup();
         },
+        createSocket: () => {
+            const record: { frames: string[]; raw: RivetWebSocketLike } = {
+                frames: [],
+                raw: {
+                    close: () => {
+                        // Nothing to tear down: the recording is the transport.
+                    },
+                    send: (data) => {
+                        // Text only: the suite's delivery leg sends a string,
+                        // and stringifying a buffer would record
+                        // "[object Object]" as if it were a frame.
+                        record.frames.push(typeof data === "string" ? data : "<binary>");
+                    },
+                },
+            };
+
+            transports.push(record);
+
+            return record.raw;
+        },
         directory: createRivetShardDirectory(createRivetNamespaceDouble()),
         kv,
+        readFrames: (handle) => transports.find((record) => socket.handleFor(record.raw) === handle)?.frames ?? [],
         restoreSocket,
         scheduler,
         shard,
