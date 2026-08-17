@@ -5,8 +5,9 @@
  * so the same adapter runs on a Durable Object's SQLite, D1, `node:sqlite`, or
  * Postgres over Hyperdrive — and this package stays free of every one of them.
  *
- * The two supported placeholder styles are the only dialect difference the
- * stores need: SQLite and D1 bind positionally with `?`, Postgres with `$1`.
+ * The statements the stores emit are SQLite-shaped (`ON CONFLICT … DO UPDATE`,
+ * `CREATE INDEX IF NOT EXISTS`, `?` placeholders), so the executor must front a
+ * SQLite engine — a Durable Object, D1, or `node:sqlite`.
  * @experimental
  */
 
@@ -22,21 +23,42 @@
  */
 type RagSqlExec = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>> | ReadonlyArray<Record<string, unknown>>;
 
-/** Which placeholder style {@link RagSqlExec} binds. */
-type RagSqlDialect = "postgres" | "sqlite";
+/** A comma-separated `?` placeholder list for `count` bound parameters. */
+const placeholderList = (count: number): string => Array.from<string>({ length: count }).fill("?").join(", ");
 
 /**
- * Build the placeholder for the `index`-th (0-based) bound parameter.
+ * How many values one `IN (…)` list may spend on placeholders.
  *
- * Centralised because getting it wrong is not a type error and not a test
- * failure on the dialect you developed against — it is a runtime error on the
- * other one.
+ * Workerd caps `SQLITE_MAX_VARIABLE_NUMBER` at **100** per statement on both
+ * Durable Object storage and D1 — the two backends these stores target — and
+ * exceeding it is a prepare-time `too many SQL variables` failure, not a slow
+ * query. 64 leaves headroom for the namespace binding and anything else the
+ * same statement carries.
+ *
+ * `node:sqlite` (what the tests run on) is built with the stock 32 766 cap and
+ * cannot reproduce the limit, so the guard is the batching itself plus the
+ * assertions on rendered SQL — not an integration test that would pass either
+ * way.
  */
-const placeholder = (dialect: RagSqlDialect, index: number): string => (dialect === "postgres" ? `$${String(index + 1)}` : "?");
+const IN_LIST_BUDGET = 64;
 
-/** A comma-separated placeholder list for `count` parameters starting at `offset`. */
-const placeholderList = (dialect: RagSqlDialect, count: number, offset = 0): string =>
-    Array.from({ length: count }, (_, index) => placeholder(dialect, offset + index)).join(", ");
+/**
+ * Split `items` into slices of at most `budget` entries, so each becomes one
+ * statement that stays under the placeholder cap. An empty input yields no
+ * slices.
+ * @param items the values to batch
+ * @param budget entries per slice; lower it when each entry costs more than one placeholder (a multi-row `VALUES` list spends one per column)
+ */
+const inListBatches = <T>(items: ReadonlyArray<T>, budget: number = IN_LIST_BUDGET): T[][] => {
+    const size = Math.max(1, Math.floor(budget));
+    const batches: T[][] = [];
+
+    for (let start = 0; start < items.length; start += size) {
+        batches.push(items.slice(start, start + size));
+    }
+
+    return batches;
+};
 
 /** A bare SQL identifier: letters, digits and underscore, not starting with a digit. */
 const BARE_IDENTIFIER = /^[A-Z_]\w*$/i;
@@ -103,5 +125,5 @@ const readJsonColumn = (value: unknown): unknown => {
     return value;
 };
 
-export type { RagSqlDialect, RagSqlExec };
-export { assertSafeIdentifier, cosineSimilarity, placeholder, placeholderList, readJsonColumn };
+export type { RagSqlExec };
+export { assertSafeIdentifier, cosineSimilarity, IN_LIST_BUDGET, inListBatches, placeholderList, readJsonColumn };

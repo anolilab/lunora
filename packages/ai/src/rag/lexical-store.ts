@@ -1,4 +1,4 @@
-import { bm25Idf, bm25TermScore, tokenize } from "./bm25";
+import { bm25Idf, bm25TermScore, tokenize, tokenizeQuery } from "./bm25";
 import matchesMetadataFilter from "./metadata-filter";
 import type { LexicalMatch, RagLexicalStore } from "./types";
 
@@ -137,7 +137,7 @@ const bm25LexicalStore = (): RagLexicalStore => {
                 return Promise.resolve([]);
             }
 
-            const queryTerms = [...new Set(tokenize(query))];
+            const queryTerms = tokenizeQuery(query);
 
             if (queryTerms.length === 0) {
                 return Promise.resolve([]);

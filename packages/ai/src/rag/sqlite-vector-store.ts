@@ -18,7 +18,7 @@
  */
 import matchesMetadataFilter from "./metadata-filter";
 import type { RagSqlExec } from "./sql";
-import { assertSafeIdentifier, cosineSimilarity, placeholder, placeholderList, readJsonColumn } from "./sql";
+import { assertSafeIdentifier, cosineSimilarity, inListBatches, placeholderList, readJsonColumn } from "./sql";
 import type { RagVectorMatch, RagVectorMatches, RagVectorQueryInput, RagVectorRecord, RagVectorUpsertInput } from "./types";
 import type { RagVectorStore, RagVectorStoreCapabilities } from "./vector-store";
 
@@ -52,6 +52,18 @@ const DEFAULT_TABLE = "lunora_rag_vectors";
 const DEFAULT_MAX_SCAN = 50_000;
 
 /**
+ * Result-count ceiling reported through {@link RagVectorStoreCapabilities}.
+ *
+ * Deliberately NOT {@link SqliteVectorStoreOptions.maxScan}: that bounds how
+ * much of a namespace may be READ, which is a corpus-size limit and says
+ * nothing about how many chunks a single retrieval should return. Publishing it
+ * as `maxTopK` let `retrieve(q, { topK: 50000 })` through, and every one of
+ * those chunks is concatenated into one prompt. 100 matches the ceiling the
+ * text-store path advertises everywhere else.
+ */
+const MAX_TOP_K = 100;
+
+/**
  * The value bound for a SQL NULL. `null` is not interchangeable with
  * `undefined` here — drivers bind `undefined` as "no parameter" or reject it
  * outright, so this is the one place the codebase's no-`null` rule does not
@@ -74,16 +86,24 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
 
     const capabilities: RagVectorStoreCapabilities = {
         maxDimensions: options.maxDimensions ?? false,
-        // Rows are TEXT columns in an ordinary table: no per-vector metadata
-        // budget exists to enforce.
+        // Rows are TEXT columns in an ordinary table: neither the id nor the
+        // metadata has a budget to enforce.
+        maxIdBytes: false,
         maxMetadataBytes: false,
-        maxTopK: maxScan,
-        maxTopKWithMetadata: maxScan,
+        // Metadata is an ordinary TEXT column, so returning it costs nothing
+        // extra and the two ceilings are the same number.
+        maxTopK: MAX_TOP_K,
+        maxTopKWithMetadata: MAX_TOP_K,
     };
 
     /**
      * Create the table on first use. Idempotent, and awaited by every operation
      * so a store handed a fresh database works without a migration step.
+     *
+     * A failed attempt clears the memo rather than caching the rejection: the
+     * promise is stored before it settles, so without this one transient error
+     * poisons the store for the isolate's lifetime and every later operation
+     * re-throws it.
      */
     let ready: Promise<void> | undefined;
 
@@ -94,7 +114,11 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
                 [],
             );
             await exec(`CREATE INDEX IF NOT EXISTS ${table}_namespace ON ${table} (namespace)`, []);
-        })();
+        })().catch((error: unknown) => {
+            ready = undefined;
+
+            throw error;
+        });
 
         await ready;
     };
@@ -116,7 +140,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         // on `id` alone, re-indexing a chunk id that another tenant also uses
         // would rewrite THEIR row into this namespace, losing their data.
         await exec(
-            `INSERT INTO ${table} (id, namespace, vector, metadata) VALUES (${placeholderList("sqlite", 4)}) ` +
+            `INSERT INTO ${table} (id, namespace, vector, metadata) VALUES (${placeholderList(4)}) ` +
                 `ON CONFLICT(namespace, id) DO UPDATE SET vector = excluded.vector, metadata = excluded.metadata`,
             [input.id, namespaceKey(input.namespace), JSON.stringify([...vector]), input.metadata === undefined ? SQL_NULL : JSON.stringify(input.metadata)],
         );
@@ -135,7 +159,11 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             throw new TypeError("@lunora/ai/rag: sqliteVectorStore query requires both `input` and `embed`");
         }
 
-        const rows = await exec(`SELECT id, vector, metadata FROM ${table} WHERE namespace = ${placeholder("sqlite", 0)}`, [namespaceKey(input.namespace)]);
+        // `LIMIT maxScan + 1` rather than an unbounded SELECT: the overflow row
+        // is what proves the namespace outgrew the bound, and reading only one
+        // past it is the difference between an explanatory error and an isolate
+        // OOM-killed materialising 50 000 JSON vectors before it can throw.
+        const rows = await exec(`SELECT id, vector, metadata FROM ${table} WHERE namespace = ? LIMIT ?`, [namespaceKey(input.namespace), maxScan + 1]);
 
         if (rows.length > maxScan) {
             throw new RangeError(
@@ -180,16 +208,25 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             return [];
         }
 
-        const rows = await exec(
-            `SELECT id, metadata FROM ${table} WHERE namespace = ${placeholder("sqlite", 0)} AND id IN (${placeholderList("sqlite", ids.length, 1)})`,
-            [namespaceKey(namespace), ...ids],
-        );
+        const records: RagVectorRecord[] = [];
 
-        return rows.map((row) => {
-            const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
+        // One statement per batch: a caller-sized `IN (…)` list is a caller-
+        // sized placeholder count, and workerd's per-statement cap is 100.
+        for (const batch of inListBatches(ids)) {
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; concurrent fan-out would multiply the subrequest budget
+            const rows = await exec(`SELECT id, metadata FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [
+                namespaceKey(namespace),
+                ...batch,
+            ]);
 
-            return { id: String(row["id"]), ...(metadata === undefined ? {} : { metadata }) };
-        });
+            for (const row of rows) {
+                const metadata = readJsonColumn(row["metadata"]) as Record<string, unknown> | undefined;
+
+                records.push({ id: String(row["id"]), ...(metadata === undefined ? {} : { metadata }) });
+            }
+        }
+
+        return records;
     };
 
     const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<unknown> => {
@@ -202,10 +239,10 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         // Scoped by namespace as well as id: the caller's namespace is the
         // tenant boundary, and a delete that ignored it would let one tenant
         // remove another's chunk by guessing an id.
-        await exec(`DELETE FROM ${table} WHERE namespace = ${placeholder("sqlite", 0)} AND id IN (${placeholderList("sqlite", ids.length, 1)})`, [
-            namespaceKey(namespace),
-            ...ids,
-        ]);
+        for (const batch of inListBatches(ids)) {
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
+            await exec(`DELETE FROM ${table} WHERE namespace = ? AND id IN (${placeholderList(batch.length)})`, [namespaceKey(namespace), ...batch]);
+        }
 
         return undefined;
     };
@@ -214,4 +251,4 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
 };
 
 export type { SqliteVectorStoreOptions };
-export default sqliteVectorStore;
+export { sqliteVectorStore };

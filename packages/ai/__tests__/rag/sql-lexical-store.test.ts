@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import bm25LexicalStore from "../../src/rag/lexical-store";
 import type { RagSqlExec } from "../../src/rag/sql";
-import sqlLexicalStore from "../../src/rag/sql-lexical-store";
+import { sqlLexicalStore } from "../../src/rag/sql-lexical-store";
 import type { StoredRagChunk } from "../../src/rag/types";
 
 const open = (): { close: () => void; exec: RagSqlExec } => {
@@ -164,6 +164,42 @@ describe("sqlLexicalStore", () => {
 
         // The empty chunk must not inflate the corpus statistics.
         await expect(lexical.search("storm", { topK: 5 })).resolves.toHaveLength(1);
+    });
+
+    it("indexes and searches non-ASCII text", async () => {
+        expect.assertions(4);
+
+        const lexical = store();
+
+        await lexical.index([chunk("de#0", "Schlüsselrotation im Betrieb"), chunk("ja#0", "鍵のローテーション"), chunk("ru#0", "ротация ключей")], {});
+
+        // `/[a-z0-9]+/` tokenised every one of these to NOTHING, both stores
+        // skip token-less chunks, and hybrid retrieval then quietly degraded to
+        // vector-only with nothing logged.
+        await expect(lexical.search("Schlüsselrotation", { topK: 5 })).resolves.toHaveLength(1);
+        // CJK is not segmented — an unbroken run is one token, so it matches
+        // the run, not a substring of it. Still indexed, where it used to be
+        // dropped entirely.
+        await expect(lexical.search("鍵のローテーション", { topK: 5 })).resolves.toHaveLength(1);
+        await expect(lexical.search("ключей", { topK: 5 })).resolves.toHaveLength(1);
+
+        // Diacritics are folded, so the unaccented spelling still finds it.
+        await expect(lexical.search("Schlusselrotation", { topK: 5 })).resolves.toHaveLength(1);
+    });
+
+    it("ranks identically to the in-memory store on non-ASCII text", async () => {
+        expect.assertions(1);
+
+        const lexical = store();
+        const memory = bm25LexicalStore();
+        const chunks = [chunk("a#0", "Grüße aus Köln"), chunk("b#0", "Grüße aus Berlin und Köln")];
+
+        await lexical.index(chunks, {});
+        await memory.index(chunks, {});
+
+        const [durable, inMemory] = await Promise.all([memory.search("Köln", { topK: 5 }), lexical.search("Köln", { topK: 5 })]);
+
+        expect(durable.map((match) => match.id)).toStrictEqual(inMemory.map((match) => match.id));
     });
 
     it("rejects a table name that is not a bare identifier", () => {
