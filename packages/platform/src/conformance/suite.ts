@@ -30,6 +30,9 @@ type VitestApi = {
  * defineHostContractSuite("reference", createReferenceHost, { describe, expect, it });
  * ```
  */
+/** The message every host raises once `disposeTerminally` has run. */
+const PLATFORM_CLOSED = /platform closed/u;
+
 const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, vitest: VitestApi): void => {
     const { describe, expect, it } = vitest;
 
@@ -812,8 +815,6 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const { removeTag, setTag } = host.socket;
                 const { scheduler } = host;
 
-                expect.assertions(3 + (setTag === undefined ? 0 : 1) + (removeTag === undefined ? 0 : 1) + (scheduler === undefined ? 0 : 1));
-
                 // A live handle to probe setTag/removeTag against, minted
                 // before disposal so the leg exercises "was accepted, then the
                 // platform closed under it" — not "closed before it ever
@@ -829,23 +830,39 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 const throwsClosed = async (function_: () => unknown): Promise<void> => {
                     await expect(async () => {
                         await function_();
-                    }).rejects.toThrow(/platform closed/);
+                    }).rejects.toThrow(PLATFORM_CLOSED);
                 };
 
-                await throwsClosed(() => host.shard.alarms.set(Date.now() + 1000));
-                await throwsClosed(() => host.shard.alarms.delete());
-                await throwsClosed(() => host.socket.accept(rawSocket(host), {}));
+                // One list drives BOTH the expected assertion count and the calls
+                // themselves, so the two cannot drift. A hand-summed
+                // `3 + (setTag === undefined ? 0 : 1) + …` has to be re-derived by
+                // whoever adds the next optional leg, and gets it wrong silently.
+                const legs: (() => unknown)[] = [
+                    () => host.shard.alarms.set(Date.now() + 1000),
+                    () => host.shard.alarms.delete(),
+                    () => host.socket.accept(rawSocket(host), {}),
+                    ...(setTag === undefined
+                        ? []
+                        : [
+                              (): void => {
+                                  setTag(handle, "room-a");
+                              },
+                          ]),
+                    ...(removeTag === undefined
+                        ? []
+                        : [
+                              (): void => {
+                                  removeTag(handle, "room-a");
+                              },
+                          ]),
+                    ...(scheduler === undefined ? [] : [() => scheduler.schedule("tasks/remind", {}, { delayMs: 10 })]),
+                ];
 
-                if (setTag !== undefined) {
-                    await throwsClosed(() => setTag(handle, "room-a"));
-                }
+                expect.assertions(legs.length);
 
-                if (removeTag !== undefined) {
-                    await throwsClosed(() => removeTag(handle, "room-a"));
-                }
-
-                if (scheduler !== undefined) {
-                    await throwsClosed(() => scheduler.schedule("tasks/remind", {}, { delayMs: 10 }));
+                for (const leg of legs) {
+                    // eslint-disable-next-line no-await-in-loop -- each leg asserts against a platform already disposed; running them sequentially keeps a failure attributable to one leg
+                    await throwsClosed(leg);
                 }
             });
         });

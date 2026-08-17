@@ -1,6 +1,7 @@
 //! The RPC and WebSocket transport, ported from `shared`'s reference client.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 
 use serde_json::{json, Map, Value};
@@ -272,6 +273,12 @@ enum PokeOp {
 /// release their internal lock before invoking your callback, and a caller's
 /// `Mutex` cannot. A handler that runs while the guard is held must not re-lock
 /// the same client — take what it needs and hand off.
+/// How many un-applied poke buffers the client retains before evicting the
+/// oldest. Concurrent in-flight pokes number in the low single digits, so this
+/// is far above any legitimate working set; it exists purely to bound the
+/// buffers a failed decode intentionally leaves behind.
+const MAX_PENDING_POKES: usize = 64;
+
 pub struct Client {
     base_url: String,
     post: Option<HttpPoster>,
@@ -280,6 +287,7 @@ pub struct Client {
     subscriptions: HashMap<String, Subscription>,
     shapes: HashMap<String, ShapeSubscription>,
     pokes: HashMap<String, HashMap<String, Vec<Value>>>,
+    poke_order: VecDeque<String>,
     next_id: usize,
     next_shape_id: usize,
 }
@@ -291,6 +299,7 @@ impl Client {
             base_url: base_url.into(),
             next_id: 0,
             next_shape_id: 0,
+            poke_order: VecDeque::new(),
             pokes: HashMap::new(),
             post,
             send: None,
@@ -489,7 +498,20 @@ impl Client {
             }
             "pokeStart" => {
                 if let Some(poke_id) = frame.get("pokeId").and_then(Value::as_str) {
-                    self.pokes.insert(poke_id.to_string(), HashMap::new());
+                    if self.pokes.insert(poke_id.to_string(), HashMap::new()).is_none() {
+                        self.poke_order.push_back(poke_id.to_string());
+                    }
+
+                    // A poke whose decode failed is deliberately left buffered
+                    // (see `apply_poke`), and nothing ever retries it — so a
+                    // peer streaming malformed pokes, each with a fresh id,
+                    // would grow this map without bound. Evict oldest-first at
+                    // the cap; a poke that old is no longer going to complete.
+                    while self.poke_order.len() > MAX_PENDING_POKES {
+                        if let Some(oldest) = self.poke_order.pop_front() {
+                            self.pokes.remove(&oldest);
+                        }
+                    }
                 }
             }
             "pokePart" => self.buffer_poke_part(&frame),
@@ -578,6 +600,7 @@ impl Client {
         // Every row in the batch decoded successfully — commit. Only now is the
         // buffer removed.
         self.pokes.remove(poke_id);
+        self.poke_order.retain(|candidate| candidate != poke_id);
 
         for (shape_id, ops) in decoded {
             let Some(shape) = self.shapes.get_mut(&shape_id) else {
@@ -884,5 +907,28 @@ mod tests {
         assert_eq!(shape.epoch, Some(json!("epoch1")));
 
         assert!(!client.pokes.contains_key("poke1"), "a successfully applied poke's buffer is removed");
+    }
+
+    /// A poke whose decode fails is left buffered on purpose, and nothing ever
+    /// retries it. Without a cap, a peer sending a stream of malformed pokes —
+    /// each with a fresh `pokeId`, so each lands in its own slot — grows
+    /// `self.pokes` for the life of the client. The cap evicts oldest-first.
+    #[test]
+    fn pending_poke_buffers_are_capped() {
+        let mut client = Client::new("https://app.example", None);
+
+        for index in 0..(MAX_PENDING_POKES + 10) {
+            let poke_id = format!("poke-{index}");
+
+            client.handle_frame(&poke_start(&poke_id).to_string()).expect("pokeStart");
+        }
+
+        assert_eq!(client.pokes.len(), MAX_PENDING_POKES, "the buffer map stays at the cap");
+        assert_eq!(client.poke_order.len(), MAX_PENDING_POKES, "the eviction order tracks the map");
+        assert!(!client.pokes.contains_key("poke-0"), "the oldest buffer was evicted");
+        assert!(
+            client.pokes.contains_key(&format!("poke-{}", MAX_PENDING_POKES + 9)),
+            "the newest buffer is retained"
+        );
     }
 }

@@ -3315,6 +3315,15 @@ abstract class ShardDO {
         // `delta.row` is the fully-decoded document a write just applied, which
         // can carry `bigint`/`Date`/`ArrayBuffer` — a raw `JSON.stringify` drops
         // an `ArrayBuffer` to `{}` and throws outright on a `bigint`.
+        //
+        // `encodeWire` is STRICT where the old raw `JSON.stringify` was lossy: a
+        // value the wire refuses (a `RegExp`, a class instance) used to broadcast
+        // as `{}` and now throws here. That is deliberate — a subscriber silently
+        // receiving `{}` for a row field is corruption it cannot detect — but it
+        // IS a behaviour change for a subclass or trigger that puts such a value
+        // in a row, and this runs after the write committed, so the throw
+        // surfaces on an otherwise-successful mutation. Keep rows to values the
+        // wire round-trips; every other outbound path already requires that.
         const deltaJson = JSON.stringify(encodeWire(delta));
 
         for (const ws of sockets) {
