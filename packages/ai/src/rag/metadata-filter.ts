@@ -11,6 +11,11 @@
  * `$lte` / `$gt` / `$gte`, set membership `$in` / `$nin`, and dot-notation
  * paths into nested objects (`{ "author.id": 7 }`).
  *
+ * **A missing field satisfies nothing**, negative operators included: `$ne` and
+ * `$nin` hold only for a row that HAS the field and whose value differs, which
+ * is Vectorize's own behaviour and the only reading compatible with failing
+ * closed. Strings order by code point, as Vectorize orders them.
+ *
  * **Unknown operators fail closed.** A filter this evaluator does not
  * understand must exclude the row rather than admit it: the filters that matter
  * are tenant and RBAC scopes, and the failure mode of guessing wrong is a
@@ -46,17 +51,24 @@ const valueAtPath = (metadata: Record<string, unknown>, path: string): unknown =
     return current;
 };
 
-/** Loose equality over the JSON-ish scalars metadata holds. */
-const scalarEquals = (left: unknown, right: unknown): boolean => left === right;
-
-/** Ordered comparison, defined only for two numbers or two strings. */
+/**
+ * Ordered comparison, defined only for two numbers or two strings.
+ *
+ * Strings compare by code point (`<`), NOT `localeCompare`: collation depends on
+ * the runtime's ICU build, so the same `$lt` could order differently on workerd
+ * and on Node — and Vectorize itself orders by code point.
+ */
 const compare = (left: unknown, right: unknown): number | undefined => {
     if (typeof left === "number" && typeof right === "number") {
         return left - right;
     }
 
     if (typeof left === "string" && typeof right === "string") {
-        return left.localeCompare(right);
+        if (left === right) {
+            return 0;
+        }
+
+        return left < right ? -1 : 1;
     }
 
     return undefined;
@@ -66,19 +78,25 @@ const compare = (left: unknown, right: unknown): number | undefined => {
 const matchesOperator = (operator: string, operand: unknown, value: unknown): boolean => {
     switch (operator) {
         case "$eq": {
-            return scalarEquals(value, operand);
+            return value === operand;
         }
 
         case "$in": {
-            return Array.isArray(operand) && operand.some((entry) => scalarEquals(value, entry));
+            return Array.isArray(operand) && operand.includes(value);
         }
 
+        // A row whose field is ABSENT does not satisfy a negative predicate.
+        // `undefined !== "acme"` is true, so without this gate a chunk indexed
+        // with no `tenant` key passes `{ tenant: { $ne: "acme" } }` and its full
+        // text reaches fusion — the cross-tenant leak this module's header says
+        // it fails closed against. Vectorize likewise matches only rows that
+        // HAVE the field.
         case "$ne": {
-            return !scalarEquals(value, operand);
+            return value !== undefined && value !== operand;
         }
 
         case "$nin": {
-            return Array.isArray(operand) && !operand.some((entry) => scalarEquals(value, entry));
+            return value !== undefined && Array.isArray(operand) && !operand.includes(value);
         }
 
         default: {
@@ -131,7 +149,7 @@ const matchesMetadataFilter = (metadata: Record<string, unknown> | undefined, fi
         const value = valueAtPath(metadata, path);
 
         if (!isOperatorClause(clause)) {
-            if (!scalarEquals(value, clause)) {
+            if (value !== clause) {
                 return false;
             }
 
