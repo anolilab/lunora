@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { assertSafeAddresses, assertSafeHeaderValue } from "./address";
 import { isCaptureTransport } from "./capture-transport";
 import { createCloudflareTransport } from "./cloudflare-transport";
@@ -140,8 +141,10 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         // consumer, where Cloudflare Queues' at-least-once redelivery would mint
         // a fresh key on every retry and defeat dedup entirely. A caller-supplied
         // key wins; otherwise generate one so every queued send still carries a
-        // stable key a consumer can dedupe against.
-        const idempotencyKey = options_.idempotencyKey ?? crypto.randomUUID();
+        // stable key a consumer can dedupe against. `randomSessionId` is the
+        // shared generator: `randomUUID` where available, Web Crypto bytes
+        // otherwise — a bare `crypto.randomUUID()` throws on runtimes lacking it.
+        const idempotencyKey = options_.idempotencyKey ?? randomSessionId();
 
         await options.queue.send(toQueuedPayload({ ...payload, idempotencyKey }));
 

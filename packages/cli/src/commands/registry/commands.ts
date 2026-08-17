@@ -3,16 +3,15 @@
  * resolve / reconcile / apply / catalog modules: `add`, `list`, `view`, and
  * `build`. Plus the small plan/report renderers they share.
  */
-import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 
 import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { confirmDepMutation, resolveDepRange } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
-import reconcileItems from "./reconcile";
+import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
 import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
 import { emptyResult } from "./types";
@@ -316,17 +315,10 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
             for (const file of manifest.files) {
                 options.logger.info(`--- ${file.to} (${file.merge}) ---`);
 
-                const sourcePath = join(directory, file.from);
-
-                // Refuse to read through a symlink: a hostile registry source could
-                // ship a symlink at a manifest-declared `file.from` path and have
-                // `view` print whatever host file the link targets, e.g.
-                // `~/.ssh/id_rsa`, straight to the terminal.
-                if (lstatSync(sourcePath).isSymbolicLink()) {
-                    throw new LunoraError("INTERNAL", `registry item "${name}": refusing to read "${file.from}" — it is a symlink, not a regular file`);
-                }
-
-                const content = readFileSync(sourcePath, "utf8");
+                // Shared with `add` so both read paths carry the same symlink
+                // refusal. `useUmbrella: false` — `view` shows the item's source
+                // verbatim, not the per-project umbrella rewrite `add` writes.
+                const content = readItemFile(directory, file, false, name);
 
                 for (const line of content.split("\n")) {
                     options.logger.info(line);

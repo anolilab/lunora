@@ -86,7 +86,7 @@ describe("registry — refuses to read an item file through a symlink", () => {
     });
 
     it("registry view refuses a symlinked item file and prints no content from the link target", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         writeSymlinkedItem("scratch-marker-view\n");
         const { lines, logger } = capturingLogger();
@@ -96,6 +96,9 @@ describe("registry — refuses to read an item file through a symlink", () => {
         expect(result.code).toBe(1);
         expect(lines.join("\n")).not.toContain("scratch-marker-view");
         expect(lines.join("\n")).toContain("foo");
+        // `view` must refuse through the SAME guard `add` uses (readItemFile),
+        // not a pasted copy that can drift — assert its exact wording.
+        expect(lines.join("\n")).toContain(`refusing to read "foo.ts" — it is a symlink, not a regular file`);
     });
 
     it("a normal regular-file item still applies and views correctly (regression guard)", async () => {

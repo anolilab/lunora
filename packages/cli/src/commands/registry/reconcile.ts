@@ -36,6 +36,9 @@ const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
  * host file the link targets, e.g. `~/.ssh/id_rsa`. Registry manifests declare
  * each file explicitly, so refusing (rather than `init`'s silent skip) is
  * correct here: skipping would silently produce a broken install.
+ *
+ * Exported so `registry view` reads item files through the same guard — a
+ * pasted copy of it drifted from this one once already.
  */
 const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean, itemKey: string): string => {
     const sourcePath = join(itemDirectory, file.from);
@@ -454,4 +457,4 @@ const reconcileItems = (
     return { bindings: bindingsApplied, deps: depsAdded, skipped, written };
 };
 
-export default reconcileItems;
+export { readItemFile, reconcileItems };
