@@ -1089,6 +1089,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return registered.handler(ctx, args);
         }
 
+        // Only a `mutation` may enter the base class's single-writer gate for
+        // mutation-replay dedup — it is `blockConcurrencyWhile`, so gating an
+        // action would stall every other dispatch on the shard for the length of
+        // its outbound I/O, on nothing but a caller-supplied header. Unregistered
+        // paths answer `false`; `handleRpc` above rejects them anyway.
+        protected override isMutationFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
+        }
+
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
             this.ensureMigrated();
 
@@ -1517,7 +1526,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // so both write to the same trace.
             const span = this.makeDispatchSpan(traceAnchor, observability);
 
-            const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
+            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };
+            const globalDb: DatabaseWriterLike = config.d1?.(env, globalRequest) ?? globalDbStub;
             // `ctx.db`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
             // breakdown) to the wide event rather than a span per call, so a
