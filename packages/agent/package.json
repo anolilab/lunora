@@ -106,6 +106,7 @@
         "yaml": "catalog:content"
     },
     "devDependencies": {
+        "@lunora/container": "workspace:*",
         "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -113,6 +114,14 @@
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/container": ">=1.0.0-alpha.32 <2.0.0-0"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/container": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

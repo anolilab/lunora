@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import type { ContainerHandle } from "@lunora/container";
+import { CONTAINER_EXEC_PATH, createContainerTestContext } from "@lunora/container";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { sandboxComponent } from "../src/component";
 import { SANDBOX_INVOKE_PATH } from "../src/paths";
 import { browserTool, containerTool } from "../src/sandbox";
+import type { SandboxContainerAccessor } from "../src/sandbox-component";
 import type { AgentToolContext } from "../src/types";
 
 const EMPTY_NAME_ERROR = /requires a container `name`/u;
@@ -112,6 +115,30 @@ describe(containerTool, () => {
         expect((always.needsApproval as (input: { op: string }) => boolean)({ op: "fetch" })).toBe(true);
     });
 
+    it("gates the exec route @lunora/container actually POSTs to", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
+
+        // The claim the gate's own comment makes, made true. `CONTAINER_EXEC_ROUTE`
+        // is a second literal of `@lunora/container`'s `CONTAINER_EXEC_PATH`
+        // (the packages can't share a runtime import), and drift between them
+        // does not fail loudly — it silently un-gates model-chosen command
+        // execution, which is the one thing this policy exists to stop.
+        expect(needsApproval({ op: "fetch", path: CONTAINER_EXEC_PATH })).toBe(true);
+    });
+
+    it("keeps the structural container accessor a subset of the real one", () => {
+        // `SandboxContainerAccessor` re-declares `exec`/`fetch` by hand so the
+        // component module stays free of a runtime import. Hand-copied
+        // structural mirrors drift — this is what notices when they do, in the
+        // types AND at runtime, since `handle.exec` only exists in
+        // `@lunora/container` from the version the peer range names.
+        expectTypeOf<ContainerHandle>().toExtend<ReturnType<SandboxContainerAccessor["any"]>>();
+
+        const accessor: SandboxContainerAccessor = createContainerTestContext({ box: () => new Response("ok") }).box!;
+
+        expect(accessor.any().exec).toBeTypeOf("function");
+    });
+
     it("gates a fetch whose path resolves to the privileged exec route", () => {
         const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
 
@@ -127,6 +154,30 @@ describe(containerTool, () => {
         expect(needsApproval({ op: "fetch", path: "/__lunora/execute" })).toBe(false);
         // The pre-E2 route is no longer privileged — nothing dispatches there now.
         expect(needsApproval({ op: "fetch", path: "/exec" })).toBe(false);
+    });
+
+    it("gates a percent-encoded or absolute-URL spelling of the exec route", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
+
+        // A container router that decodes before matching routes all of these to
+        // its exec handler, so the gate has to recognise them too.
+        expect(needsApproval({ op: "fetch", path: "/__lunora/%65xec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "/%5F%5Flunora/exec" })).toBe(true);
+        // `ContainerHandle.fetch` only prefixes the synthetic origin for a
+        // leading `/`, so an absolute URL passes through to the container verbatim.
+        expect(needsApproval({ op: "fetch", path: "https://container/__lunora/exec" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "https://container/__lunora/exec?x=1" })).toBe(true);
+        expect(needsApproval({ op: "fetch", path: "https://container/health" })).toBe(false);
+    });
+
+    it("never throws out of the gate on a malformed path", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
+
+        // A gate that throws fails OPEN — the exception escapes the policy and
+        // leaves the caller deciding what an errored approval check means. A
+        // lone `%` is not a valid escape and `decodeURIComponent` rejects it.
+        expect(needsApproval({ op: "fetch", path: "/100%" })).toBe(false);
+        expect(needsApproval({ method: "POST", op: "fetch", path: "/%zz" })).toBe(true);
     });
 
     it("gates a fetch using a non-idempotent method, even off the exec route", () => {

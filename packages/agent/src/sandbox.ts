@@ -152,9 +152,10 @@ const BROWSER_TOOL_SCHEMA = jsonSchema<BrowserToolInput>({
 /**
  * The privileged route the container `exec` op POSTs to. Must stay in lockstep
  * with `CONTAINER_EXEC_PATH` in `@lunora/container` — duplicated as a literal
- * rather than imported because `@lunora/agent` does not depend on that package,
- * and a wrong value here silently un-gates command execution rather than
- * failing loudly. A test pins the two together.
+ * rather than imported because `@lunora/agent` only *optionally* peers on that
+ * package, and a wrong value here silently un-gates command execution rather
+ * than failing loudly. `sandbox.test.ts` imports the real constant (dev-only)
+ * and asserts this gate returns `true` for it, so the two cannot drift.
  */
 const CONTAINER_EXEC_ROUTE = "/__lunora/exec";
 
@@ -162,28 +163,54 @@ const CONTAINER_EXEC_ROUTE = "/__lunora/exec";
 const CONTAINER_PATH_QUERY_SPLIT = /[?#]/u;
 
 /**
+ * Percent-decode one path segment, falling back to the raw text.
+ *
+ * The fallback is the whole point: `decodeURIComponent` throws on a malformed
+ * escape (`"%zz"`), and this runs inside a security gate. A gate that throws
+ * fails **open** — the exception escapes `needsApproval` and the caller is left
+ * deciding what an errored policy means. Returning the undecoded segment is
+ * strictly no worse than not decoding at all.
+ */
+const decodeSegment = (segment: string): string => {
+    try {
+        return decodeURIComponent(segment);
+    } catch {
+        return segment;
+    }
+};
+
+/**
  * Normalize a container fetch `path` to its resolved route so the default gate
  * can tell whether a `fetch` reaches the privileged exec route. Strips the
- * query/fragment and resolves empty/`.`/`..` segments — `"/__lunora/exec"`,
- * `"__lunora/exec"`, `"//__lunora//exec"`, `"/./__lunora/exec"` and
- * `"/foo/../__lunora/exec"` all normalize to `"/__lunora/exec"`.
+ * query/fragment, percent-decodes each segment, and resolves empty/`.`/`..`
+ * segments — `"/__lunora/exec"`, `"__lunora/exec"`, `"//__lunora//exec"`,
+ * `"/./__lunora/exec"`, `"/foo/../__lunora/exec"` and `"/__lunora/%65xec"` all
+ * normalize to `"/__lunora/exec"`.
+ *
+ * An absolute URL is reduced to its pathname first. `ContainerHandle.fetch`
+ * resolves a string against a synthetic origin only when it starts with `/`, so
+ * `"http://container/__lunora/exec"` reaches the container verbatim — treating
+ * it as a bare path here would leave the gate matching `"/http:/container/…"`
+ * while the request still lands on the exec route.
  */
-const normalizeContainerPath = (path: string | undefined): string => {
-    const [raw = ""] = (path ?? "").split(CONTAINER_PATH_QUERY_SPLIT);
+const normalizeContainerPath = (path = ""): string => {
+    const [raw = ""] = (URL.canParse(path) ? new URL(path).pathname : path).split(CONTAINER_PATH_QUERY_SPLIT);
     const segments: string[] = [];
 
     for (const segment of raw.split("/")) {
-        if (segment === "" || segment === ".") {
+        const decoded = decodeSegment(segment);
+
+        if (decoded === "" || decoded === ".") {
             continue;
         }
 
-        if (segment === "..") {
+        if (decoded === "..") {
             segments.pop();
 
             continue;
         }
 
-        segments.push(segment);
+        segments.push(decoded);
     }
 
     return `/${segments.join("/")}`;

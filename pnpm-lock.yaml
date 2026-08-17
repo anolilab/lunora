@@ -2362,6 +2362,9 @@ importers:
         specifier: catalog:content
         version: 2.9.0
     devDependencies:
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../container
       '@lunora/dispatch':
         specifier: workspace:*
         version: link:../dispatch
