@@ -5,12 +5,12 @@
         "lint:eslint": {
             "cache": true,
             "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
-            "command": "eslint src"
+            "command": "fumadocs-mdx && eslint src"
         },
         "lint:eslint:fix": {
             "cache": true,
             "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
-            "command": "eslint src --fix"
+            "command": "fumadocs-mdx && eslint src --fix"
         }
     }
 }

@@ -31,13 +31,20 @@
    drives these instead of `background-image`.
 
    The initial values are only a floor: the element sets both from the theme
-   tokens inline, so a re-brand still reaches them. */
+   tokens inline, so a re-brand still reaches them.
+
+   Where `@property` is unsupported the registration is ignored and the two
+   stops fall back to discrete interpolation — the strip snaps between hues
+   instead of sweeping. The strip still renders in brand colours, so this
+   degrades to the pre-animation appearance rather than breaking. */
+/* eslint-disable-next-line css/use-baseline -- intentional progressive enhancement, degrades to discrete interpolation */
 @property --strip-a {
     syntax: "<color>";
     inherits: false;
     initial-value: #5ce1ef;
 }
 
+/* eslint-disable-next-line css/use-baseline -- intentional progressive enhancement, degrades to discrete interpolation */
 @property --strip-b {
     syntax: "<color>";
     inherits: false;
