@@ -8,9 +8,18 @@
  *
  * - **Timing and durability are Rivet's.** A schedule survives sleep, restart,
  * upgrade and crash, and Rivet wakes the actor to deliver it. There is no
- * `setTimeout` here, no re-arm-on-construction, and no window in which a
- * process that was down eats a job — the three things `@lunora/platform-node`
- * has to build by hand.
+ * `setTimeout` here and no window in which a process that was down eats a
+ * job — two of the three things `@lunora/platform-node` has to build by hand.
+ *
+ * The third, **re-arming on construction**, this host does need, for a reason
+ * specific to Rivet: a schedule is *consumed by firing*. Delivery therefore
+ * nulls `schedule_id` before invoking `onDispatch` and re-arms (or deletes) the
+ * row after — and in between, the job has no armed schedule anywhere. An actor
+ * torn down inside that window (crash, upgrade, redeploy, an `onDispatch` that
+ * outruns Rivet's action timeout) would leave a row that is pending forever and
+ * delivered never. {@link createRivetSchedulerHost} closes it by re-arming
+ * every pending row with no schedule id, which is what makes `deadLetter`'s
+ * at-least-once claim true rather than aspirational.
  * - **Runtime cron registration is Rivet's.** `SchedulerHost.cron` is optional
  * precisely because Cloudflare cannot offer it (its crons live in
  * `wrangler.jsonc` and are reconciled at build time). `c.cron.set` registers
@@ -29,6 +38,7 @@
  */
 
 import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import { DEFAULT_RETRY_POLICY, retryBackoffMs } from "@lunora/platform";
 
 import type { RivetActorLike } from "./rivet-context";
 
@@ -53,18 +63,6 @@ const CRON_NAME_PREFIX = "lunora:";
 
 const JOBS_TABLE = "_lunora_scheduler_jobs";
 
-/**
- * Retry policy applied when a caller supplies none. Identical to
- * `@lunora/platform-node`'s, deliberately: two hosts disagreeing on how many
- * times "at-least-once" tries is a portability trap, not a tuning opportunity.
- */
-const DEFAULT_RETRY = {
-    backoffMultiplier: 2,
-    initialDelayMs: 1000,
-    maxAttempts: 5,
-    maxDelayMs: 60_000,
-} as const;
-
 /** Row shape of the job table. */
 interface JobRow extends Record<string, unknown> {
     args: string;
@@ -79,10 +77,6 @@ interface JobRow extends Record<string, unknown> {
     schedule_id: string | null;
     scheduled_for: number;
 }
-
-/** Delay before attempt number `attempts` (1-based), capped at `maxDelayMs`. */
-const backoffFor = (attempts: number, row: Pick<JobRow, "backoff_multiplier" | "initial_delay_ms" | "max_delay_ms">): number =>
-    Math.min(row.max_delay_ms, row.initial_delay_ms * row.backoff_multiplier ** Math.max(0, attempts - 1));
 
 const toStatus = (row: JobRow): ScheduledJobStatus => {
     return {
@@ -128,6 +122,14 @@ interface RivetSchedulerHost {
      * parked/pending invariants without burning five real backoff delays.
      */
     parkJob: (id: string) => Promise<boolean>;
+
+    /**
+     * Resolves once the job table exists and every pending row has been
+     * re-armed. The composition root awaits it alongside the KV store's, so a
+     * construction failure surfaces at `createVars` rather than on whichever
+     * call happens to touch the table first.
+     */
+    ready: Promise<void>;
     /** The `SchedulerHost` contract implementation. */
     scheduler: SchedulerHost;
 }
@@ -156,7 +158,6 @@ const createRivetSchedulerHost = (actor: Pick<RivetActorLike, "cron" | "db" | "s
                 initial_delay_ms INTEGER NOT NULL,
                 backoff_multiplier REAL NOT NULL,
                 max_delay_ms INTEGER NOT NULL,
-                shard_key TEXT,
                 schedule_id TEXT,
                 parked INTEGER NOT NULL DEFAULT 0
             )`,
@@ -177,6 +178,33 @@ const createRivetSchedulerHost = (actor: Pick<RivetActorLike, "cron" | "db" | "s
 
         await db.execute(`UPDATE ${JOBS_TABLE} SET schedule_id = ?, scheduled_for = ? WHERE id = ?`, scheduleId, scheduledFor, id);
     };
+
+    /**
+     * Re-arm every pending job that has no Rivet schedule behind it.
+     *
+     * A row reaches that state exactly one way: `deliverScheduledJob` nulled
+     * `schedule_id` (the schedule was consumed by firing) and the actor died
+     * before it re-armed or deleted the row. Nothing else looks at such a row
+     * again, so without this pass it is pending forever and delivered never.
+     *
+     * `Math.max(Date.now(), …)` because the original target is usually in the
+     * past by now: an overdue job fires immediately rather than being armed for
+     * a moment that has been and gone.
+     */
+    const recover = async (): Promise<void> => {
+        await ready;
+
+        const orphans = await db.execute<Pick<JobRow, "id" | "scheduled_for">>(
+            `SELECT id, scheduled_for FROM ${JOBS_TABLE} WHERE parked = 0 AND schedule_id IS NULL`,
+        );
+
+        for (const row of orphans) {
+            // eslint-disable-next-line no-await-in-loop -- each `arm` is two round trips against the same actor; parallelising them would interleave writes to one row set for no wall-clock gain on a set that is empty in the common case
+            await arm(row.id, Math.max(Date.now(), row.scheduled_for));
+        }
+    };
+
+    const recovered = recover();
 
     const scheduler: SchedulerHost = {
         cancel: async (id) => {
@@ -259,19 +287,21 @@ const createRivetSchedulerHost = (actor: Pick<RivetActorLike, "cron" | "db" | "s
             const id = crypto.randomUUID();
 
             await db.execute(
+                // The scheduling options' routing hint is not stored: it tells
+                // a worker which shard to pick, and a Rivet job already lives in
+                // the actor that *is* the shard. Persisting it would be a column
+                // nothing reads.
                 `INSERT INTO ${JOBS_TABLE}
-                   (id, function_path, args, scheduled_for, attempts, max_attempts, initial_delay_ms, backoff_multiplier, max_delay_ms, shard_key, schedule_id, parked)
-                 VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, NULL, 0)`,
+                   (id, function_path, args, scheduled_for, attempts, max_attempts, initial_delay_ms, backoff_multiplier, max_delay_ms, schedule_id, parked)
+                 VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, NULL, 0)`,
                 id,
                 functionPath,
                 JSON.stringify(args),
                 scheduledFor,
-                retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts,
-                retry?.initialDelayMs ?? DEFAULT_RETRY.initialDelayMs,
-                retry?.backoffMultiplier ?? DEFAULT_RETRY.backoffMultiplier,
-                retry?.maxDelayMs ?? DEFAULT_RETRY.maxDelayMs,
-                // eslint-disable-next-line unicorn/no-null -- SQL NULL for an absent routing hint; the column is nullable and `undefined` is not bindable
-                scheduleOptions?.shardKey ?? null,
+                retry?.maxAttempts ?? DEFAULT_RETRY_POLICY.maxAttempts,
+                retry?.initialDelayMs ?? DEFAULT_RETRY_POLICY.initialDelayMs,
+                retry?.backoffMultiplier ?? DEFAULT_RETRY_POLICY.backoffMultiplier,
+                retry?.maxDelayMs ?? DEFAULT_RETRY_POLICY.maxDelayMs,
             );
 
             await arm(id, scheduledFor);
@@ -328,7 +358,15 @@ const createRivetSchedulerHost = (actor: Pick<RivetActorLike, "cron" | "db" | "s
                 // is the whole reason `deadLetter` exists.
                 await (attempts >= row.max_attempts
                     ? db.execute(`UPDATE ${JOBS_TABLE} SET parked = 1 WHERE id = ?`, id)
-                    : arm(id, Date.now() + backoffFor(attempts, row)));
+                    : arm(
+                          id,
+                          Date.now() +
+                              retryBackoffMs(attempts, {
+                                  backoffMultiplier: row.backoff_multiplier,
+                                  initialDelayMs: row.initial_delay_ms,
+                                  maxDelayMs: row.max_delay_ms,
+                              }),
+                      ));
 
                 return true;
             }
@@ -338,6 +376,7 @@ const createRivetSchedulerHost = (actor: Pick<RivetActorLike, "cron" | "db" | "s
             return true;
         },
         parkJob: park,
+        ready: recovered,
         scheduler,
     } satisfies RivetSchedulerHost;
 };

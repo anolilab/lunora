@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createRivetActorDouble } from "../src/conformance/rivet-actor-double";
 import { createRivetSchedulerHost, RIVET_CRON_ACTION, RIVET_SCHEDULER_ACTION } from "../src/rivet-scheduler-host";
@@ -108,6 +108,54 @@ describe("rivet scheduler host", () => {
             // actor for a job that no longer exists — on every cancelled job,
             // forever.
             await expect(actor.schedule.list()).resolves.toStrictEqual([]);
+        } finally {
+            actor.cleanup();
+        }
+    });
+
+    it("re-arms a job the actor died mid-dispatch on", async () => {
+        expect.assertions(2);
+
+        const actor = createRivetActorDouble();
+
+        try {
+            // A delivery that never returns. The row is already in its
+            // vulnerable state by then: the attempt has been counted and
+            // `schedule_id` nulled out, because a Rivet schedule is consumed by
+            // firing and the re-arm only happens after `onDispatch` settles.
+            const stuck = new Promise<void>(() => {
+                // Never resolves: this is the actor dying mid-dispatch.
+            });
+            const first = createRivetSchedulerHost(actor, { onDispatch: async () => stuck });
+
+            await first.ready;
+            actor.actions.set(RIVET_SCHEDULER_ACTION, async (id) => first.deliverScheduledJob(id as string));
+
+            const job = await first.scheduler.schedule("tasks/remind", {}, { delayMs: 0 });
+
+            // Polled rather than asserted, so the retries do not inflate the
+            // assertion count: the wait is for the dispatch path to reach its
+            // vulnerable state, not a claim about it.
+            await vi.waitFor(async () => {
+                const rows = await actor.db.execute<{ schedule_id: string | null }>("SELECT schedule_id FROM _lunora_scheduler_jobs WHERE id = ?", job.id);
+
+                if (rows[0]?.schedule_id !== null) {
+                    throw new Error("the dispatch path has not nulled schedule_id yet");
+                }
+            });
+
+            // Nothing armed anywhere: the schedule fired and was consumed, and
+            // the row that owed a re-arm never got one.
+            await expect(actor.schedule.list()).resolves.toStrictEqual([]);
+
+            // The wake. Without the recovery pass this job is pending forever
+            // and delivered never — `list()` keeps reporting it, and nothing
+            // ever looks at it again.
+            const second = createRivetSchedulerHost(actor);
+
+            await second.ready;
+
+            await expect(actor.schedule.list()).resolves.toHaveLength(1);
         } finally {
             actor.cleanup();
         }

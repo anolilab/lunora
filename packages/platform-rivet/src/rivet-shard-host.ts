@@ -215,12 +215,18 @@ const createRivetShardHost = (
         get: () => pendingAlarm?.timestamp ?? null,
         set: async (timestamp: number | Date) => {
             const ms = typeof timestamp === "number" ? timestamp : timestamp.getTime();
-            const previous = pendingAlarm;
 
             // `ShardAlarms` is a single slot; Rivet's scheduler is a list. Arm
             // the replacement first, then cancel the one it replaces — the
             // other order leaves a window where a crash loses both.
             const id = await actor.schedule.at(ms, RIVET_ALARM_ACTION);
+
+            // Read AFTER the await, not before. Two overlapping `set` calls
+            // that both sampled `pendingAlarm` up front would each see the same
+            // predecessor, so one of the two schedules they armed would never
+            // be cancelled — and would later fire a spurious `deliverAlarm()`
+            // for an alarm the engine believes it replaced.
+            const previous = pendingAlarm;
 
             pendingAlarm = { id, timestamp: ms };
 
@@ -364,20 +370,28 @@ const createRivetShardHost = (
  */
 const restoreRivetAlarm = async (actor: Pick<RivetActorLike, "schedule">, host: ShardHost): Promise<number | undefined> => {
     const pending = await actor.schedule.list();
-    const alarm = pending
-        .filter((entry) => entry.action === RIVET_ALARM_ACTION)
-        .toSorted((left, right) => left.runAt - right.runAt)
-        .at(0);
+    const alarms = pending.filter((entry) => entry.action === RIVET_ALARM_ACTION).toSorted((left, right) => left.runAt - right.runAt);
+    const alarm = alarms.at(0);
 
     if (alarm === undefined) {
         return undefined;
     }
 
     // Re-arming through the contract keeps one code path for "an alarm is
-    // pending at T": the extra schedule this creates is cancelled by `set`
-    // itself, which retires the entry it replaces.
+    // pending at T". The schedule it creates is not in `alarms`, which was read
+    // first, so retiring every entry in that list leaves exactly one armed.
+    //
+    // Every entry, not just the earliest: `ShardAlarms` is a single slot, so a
+    // second pending entry is by definition an alarm the engine no longer
+    // believes in. Leaving it armed makes it fire a spurious `deliverAlarm()`,
+    // and — because each wake would restore the earliest and re-ignore the
+    // rest — it would survive every subsequent wake too.
     await host.alarms.set(alarm.runAt);
-    await actor.schedule.cancel(alarm.id);
+
+    for (const entry of alarms) {
+        // eslint-disable-next-line no-await-in-loop -- one round trip per stale entry against one actor; the list is a single entry in every non-pathological case
+        await actor.schedule.cancel(entry.id);
+    }
 
     return alarm.runAt;
 };
