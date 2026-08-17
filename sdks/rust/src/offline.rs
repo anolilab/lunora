@@ -30,6 +30,7 @@
 use std::collections::HashSet;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Map, Value};
@@ -211,6 +212,17 @@ impl QueuedMutation {
 
 static RANDOM_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// The process-wide hash key the id suffix is derived under, drawn ONCE.
+///
+/// `RandomState::new()` seeds a thread-local key pair from the OS on its FIRST
+/// call per thread and thereafter bumps it by one per call. Drawing a fresh
+/// `RandomState` per id is therefore what leaked the relation between successive
+/// ids: they were SipHash of a known counter under linearly-related keys, so an
+/// observer who had seen a few could narrow the next. Drawing one and keeping it
+/// makes the counter the only varying input under a key that never leaves the
+/// process — no dependency, no second entropy source.
+static RANDOM_ID_KEY: OnceLock<RandomState> = OnceLock::new();
+
 /// Mints a process-unique id — for a mutation's idempotency key, and for the
 /// per-instance [`crate::client::Client::client_id`].
 ///
@@ -226,17 +238,25 @@ static RANDOM_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// timestamp separates them, and the `RandomState` suffix separates two processes
 /// that started within the same nanosecond.
 ///
-/// UNPREDICTABILITY is what it does NOT guarantee, and no caller may rely on it.
-/// `RandomState::new()` draws from a thread-local key that is bumped by one per
-/// call, so successive ids on a thread are SipHash of a known counter under
-/// linearly-related keys — an observer who has seen a few can narrow the next.
-/// Nothing here is a capability: an id is an idempotency key or a client stamp,
-/// both of which the server treats as a namespace label rather than a secret. A
-/// use that needs an unguessable value wants a CSPRNG, not this.
+/// UNPREDICTABILITY matters here too, and the suffix is what carries it. An id
+/// IS security-relevant despite being a namespace label: for an unauthenticated
+/// caller the server keys its idempotency cache by
+/// `(x-lunora-client-id, x-lunora-mutation-id)` and both headers are
+/// attacker-settable, so someone who can predict a victim's next mutation id can
+/// pre-POST a write under it and have the victim's real write short-circuit to
+/// the attacker's cached result — reported committed, never executed, its
+/// optimistic overlay confirmed.
+///
+/// The suffix is therefore SipHash of the counter under [`RANDOM_ID_KEY`], a
+/// process-wide key drawn once from the OS. Successive ids no longer share a key
+/// relation, and predicting one means recovering that key from its outputs. This
+/// is a keyed pseudo-random function, not a CSPRNG: a use that needs a true
+/// unguessable capability (a token, a nonce a peer must not forge) should draw
+/// its own.
 pub fn random_id() -> String {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| since.as_nanos() as u64);
     let sequence = RANDOM_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let entropy = RandomState::new().hash_one(sequence);
+    let entropy = RANDOM_ID_KEY.get_or_init(RandomState::new).hash_one(sequence);
 
     format!("{nanos:016x}{sequence:08x}{entropy:016x}")
 }

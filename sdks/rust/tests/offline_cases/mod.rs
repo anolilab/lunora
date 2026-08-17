@@ -669,6 +669,15 @@ pub fn offline_queue_hydrates_persisted_writes() {
 
     assert_eq!(minted.len(), 2000, "minted ids must not collide");
 
+    // Across THREADS too: the counter is process-global and the suffix key is
+    // drawn once for the process, so a per-thread key would be the regression.
+    let threads: Vec<_> = (0..4)
+        .map(|_| std::thread::spawn(|| (0..500).map(|_| random_id()).collect::<Vec<_>>()))
+        .collect();
+    let concurrent: std::collections::HashSet<String> = threads.into_iter().flat_map(|handle| handle.join().expect("thread")).collect();
+
+    assert_eq!(concurrent.len(), 2000, "ids minted concurrently must not collide either");
+
     // The client id is minted per INSTANCE for the same reason: the shard
     // namespaces an anonymous write's idempotency row by it, so a per-language
     // constant would let one client's mutation id suppress another client's write.
