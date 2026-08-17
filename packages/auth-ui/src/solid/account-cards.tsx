@@ -127,6 +127,7 @@ const AvatarCard = (): JSX.Element => {
                 <div class="lunora-auth-avatar-row__actions">
                     <input
                         accept={ACCEPT_ATTRIBUTE}
+                        aria-label={t.avatarUpload}
                         class="lunora-auth-visually-hidden"
                         onChange={onPick}
                         ref={(element) => {

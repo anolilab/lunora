@@ -127,6 +127,7 @@ const AvatarCard = (): JSX.Element => {
                 <div class="lunora-auth-avatar-row__actions">
                     <input
                         accept={ACCEPT_ATTRIBUTE}
+                        aria-label={t.avatarUpload}
                         class="lunora-auth-visually-hidden"
                         onChange={onPick}
                         ref={(element) => {
@@ -180,7 +181,7 @@ const SetUsernameCard = (): JSX.Element => {
             <form class="lunora-auth-form" novalidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <Field
-                    autocomplete="username"
+                    autoComplete="username"
                     field={state.fields.username}
                     label={t.usernameLabel}
                     name="username"
