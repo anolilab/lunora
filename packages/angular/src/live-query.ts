@@ -1,10 +1,10 @@
 import type { Injector, Signal } from "@angular/core";
-import { DestroyRef, effect, inject, signal } from "@angular/core";
+import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 
 import { resolveLunoraClient } from "./client";
-import { shouldOpenSubscription } from "./platform";
+import { attachReactiveArgs, shouldOpenSubscription } from "./platform";
 
 /**
  * `LiveQueryOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
@@ -121,17 +121,11 @@ export const liveQuery = <F extends FunctionReference>(
             // `createQuery` uses for the same reason.
             const resolveArgs = args as () => ArgsOf<F> | "skip";
 
-            // Reactive form: `effect()`'s cleanup callback tears the previous
+            // Reactive form: the effect's cleanup callback tears the previous
             // subscription down BEFORE the next run opens the new one — the same
             // ordering guarantee Solid's `onCleanup` and Vue's `watch` cleanup
-            // give. `manualCleanup: true` keeps teardown unified through our own
-            // `destroyRef` below rather than also relying on whichever ambient
-            // `DestroyRef` the injector happens to resolve.
-            const effectRef = effect((onCleanup) => { open(resolveArgs(), onCleanup); }, { injector: options.injector, manualCleanup: true });
-
-            destroyRef.onDestroy(() => {
-                effectRef.destroy();
-            });
+            // give.
+            attachReactiveArgs(resolveArgs, { destroyRef, injector: options.injector }, open);
         } else {
             // Static form: resolves once, never re-runs — no `effect()`, so no DI
             // requirement beyond what this function already needed.

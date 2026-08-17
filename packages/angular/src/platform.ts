@@ -1,4 +1,5 @@
-import { inject, NgZone, PLATFORM_ID } from "@angular/core";
+import type { DestroyRef, Injector } from "@angular/core";
+import { effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
 
 /**
  * Whether a reactive primitive should open its live WebSocket subscription (and
@@ -47,4 +48,42 @@ export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: ()
     const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
 
     return zone ? zone.runOutsideAngular(register) : register();
+};
+
+/**
+ * Wire the reactive-args form of a primitive: re-run `open` whenever the tracked
+ * `args` thunk produces a new value, tearing the previous generation down first
+ * (via the `onCleanup` handed to `open`), and stop the whole effect when the
+ * owner is destroyed.
+ *
+ * `args` is read TRACKED — it is the only dependency the effect exists for.
+ * `open` runs UNTRACKED, which is load-bearing rather than an optimisation: a
+ * primitive that reads its own signals while building a generation (the
+ * paginated engine reads its page list) would otherwise take a dependency on
+ * them, so its very next write would re-run the effect, dispose the generation
+ * it just built, and reset the primitive to its initial state.
+ *
+ * `manualCleanup: true` keeps teardown unified through the owner's `DestroyRef`
+ * rather than also relying on whichever ambient `DestroyRef` the injector
+ * happens to resolve.
+ */
+export const attachReactiveArgs = <A>(
+    args: () => A,
+    owner: { destroyRef: DestroyRef; injector?: Injector },
+    open: (resolved: A, onCleanup: (teardown: () => void) => void) => void,
+): void => {
+    const effectRef = effect(
+        (onCleanup) => {
+            const resolved = args();
+
+            untracked(() => {
+                open(resolved, onCleanup);
+            });
+        },
+        { injector: owner.injector, manualCleanup: true },
+    );
+
+    owner.destroyRef.onDestroy(() => {
+        effectRef.destroy();
+    });
 };

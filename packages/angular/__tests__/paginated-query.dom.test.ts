@@ -374,12 +374,18 @@ describe("paginatedQuery — reactive args (plan 340)", () => {
         const firstArgs = { roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } };
         const secondArgs = { roomId: "room-b", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } };
 
-        const { results, status } = paginatedQuery(roomFn, () => {return { roomId: roomId() }}, {
-            client: fake.asClient,
-            destroyRef: destroy.asDestroyRef,
-            initialNumItems: NUM_ITEMS,
-            injector,
-        });
+        const { results, status } = paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            {
+                client: fake.asClient,
+                destroyRef: destroy.asDestroyRef,
+                initialNumItems: NUM_ITEMS,
+                injector,
+            },
+        );
 
         // The effect's first run is scheduled, not synchronous with creation —
         // flush it before asserting the initial engine/page subscription opened.
@@ -464,13 +470,64 @@ describe("paginatedQuery — reactive args (plan 340)", () => {
         expect(fake.subscriptions[0]?.args).toStrictEqual({ roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } });
     });
 
+    it("loadMore on the reactive form appends a page and survives the next effect flush", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const roomId = signal("room-a");
+
+        const { loadMore, results, status } = paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector },
+        );
+
+        TestBed.tick();
+
+        pushByArgs(
+            fake,
+            { roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+
+        expect(status()).toBe("CanLoadMore");
+
+        loadMore(NUM_ITEMS);
+
+        pushByArgs(
+            fake,
+            { roomId: "room-a", paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: null, isDone: true, page: secondPageItems },
+        );
+
+        expect(results()).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        // The regression: `loadMore` writes the engine's `pages` signal. If the
+        // engine were built INSIDE the tracked part of the reactive effect, that
+        // write would be one of the effect's dependencies — so the next flush
+        // would dispose the generation and rebuild it from `initialNumItems`,
+        // silently snapping the feed back to page one.
+        TestBed.tick();
+
+        expect(status()).toBe("Exhausted");
+        expect(results()).toStrictEqual([...firstPageItems, ...secondPageItems]);
+    });
+
     it("destroy tears down the reactive-form engine's subscriptions", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();
         const injector = TestBed.inject(Injector);
         const roomId = signal("room-a");
 
-        paginatedQuery(roomFn, () => {return { roomId: roomId() }}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector });
+        paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector },
+        );
         TestBed.tick();
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);

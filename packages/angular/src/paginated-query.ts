@@ -1,12 +1,12 @@
 import type { Injector, Signal } from "@angular/core";
-import { computed, DestroyRef, effect, inject, signal } from "@angular/core";
+import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 
 import { stableWireKey } from "../../../shared/wire-key";
 import { resolveLunoraClient } from "./client";
-import { shouldOpenSubscription } from "./platform";
+import { attachReactiveArgs, shouldOpenSubscription } from "./platform";
 
 // ── Shared types ────────────────────────────────────────────────────────────
 
@@ -58,10 +58,10 @@ const usePaginatedCore = <F extends FunctionReference>(
     reference: F,
     baseArgs: Record<string, unknown> | "skip",
     options: PaginatedQueryOptions,
+    registerTeardown?: (teardown: () => void) => void,
 ): PaginatedCore<F> => {
     const client = resolveLunoraClient(options.client);
-    const fromInjectionContext = options.destroyRef === undefined;
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    const fromInjectionContext = options.destroyRef === undefined && registerTeardown === undefined;
     const { initialNumItems, shardKey } = options;
 
     const functionPath = (reference as Record<string, unknown>)["__lunoraRef"] as string;
@@ -245,15 +245,23 @@ const usePaginatedCore = <F extends FunctionReference>(
 
     doRebuildPageResults();
 
-    // Teardown all subscriptions on destroy.
-    destroyRef.onDestroy(() => {
+    const teardown = (): void => {
         for (const entry of activeSubs.values()) {
             entry.unsub();
         }
 
         activeSubs.clear();
         resultsByKey.clear();
-    });
+    };
+
+    // A reactive generation registers with its own collector so the wrapper can
+    // dispose it on an args change; the DI path registers with the owning
+    // component's `DestroyRef`.
+    if (registerTeardown === undefined) {
+        (options.destroyRef ?? inject(DestroyRef)).onDestroy(teardown);
+    } else {
+        registerTeardown(teardown);
+    }
 
     const loadMore = (numberItems: number): void => {
         if (baseArgs === "skip") {
@@ -306,48 +314,21 @@ const usePaginatedCore = <F extends FunctionReference>(
 };
 
 /**
- * A `DestroyRef`-shaped handle this file controls entirely: `usePaginatedCore`
- * only ever calls `.onDestroy(cb)` once (its final teardown registration), and
- * {@link useReactivePaginatedCore} needs to fire that same callback itself —
- * to tear a generation's subscriptions down on an args change — without
- * waiting for the real component `DestroyRef` to fire. Structurally
- * compatible with `DestroyRef` (its only abstract member is `onDestroy`).
- */
-const createScopedDestroyRef = (): { destroyRef: DestroyRef; teardown: () => void } => {
-    let callbacks: (() => void)[] = [];
-
-    return {
-        destroyRef: {
-            onDestroy: (callback: () => void): (() => void) => {
-                callbacks.push(callback);
-
-                return () => {
-                    callbacks = callbacks.filter((registered) => registered !== callback);
-                };
-            },
-        } as DestroyRef,
-        teardown: (): void => {
-            const pending = callbacks;
-
-            callbacks = [];
-
-            for (const callback of pending) {
-                callback();
-            }
-        },
-    };
-};
-
-/**
  * Reactive wrapper around {@link usePaginatedCore}. A static `baseArgs` value
  * delegates straight through — today's behaviour, unchanged, no `effect()`
  * created. A reactive (function/`Signal`) `baseArgs` opens the resubscribe
- * boundary: on each args change, `effect()`'s cleanup callback disposes the
- * previous generation's core (via a {@link createScopedDestroyRef} scoped to
- * that generation) BEFORE the next run builds a fresh one — the ordering
- * `liveQuery`/`subscription` rely on. `usePaginatedCore`'s own internal
- * split/join bookkeeping is never re-keyed in place; each generation gets a
- * brand new, independent core instance.
+ * boundary: on each args change, the effect's cleanup callback disposes the
+ * previous generation's core (whose teardown was collected per generation)
+ * BEFORE the next run builds a fresh one — the ordering `liveQuery`/
+ * `subscription` rely on. `usePaginatedCore`'s own internal split/join
+ * bookkeeping is never re-keyed in place; each generation gets a brand new,
+ * independent core instance.
+ *
+ * Building the core runs UNTRACKED (see {@link attachReactiveArgs}). It reads
+ * its own `pages` signal while opening the first round of subscriptions, so a
+ * tracked build would make `loadMore` — and the subscribe callback's rebalance
+ * — dependencies of this effect: every page appended would dispose the
+ * generation that appended it and rebuild from page one.
  */
 const useReactivePaginatedCore = <F extends FunctionReference>(
     reference: F,
@@ -369,19 +350,16 @@ const useReactivePaginatedCore = <F extends FunctionReference>(
     const active = signal<PaginatedCore<F> | undefined>(undefined);
 
     if (shouldOpenSubscription(fromInjectionContext)) {
-        const effectRef = effect(
-            (onCleanup) => {
-                const scoped = createScopedDestroyRef();
+        attachReactiveArgs(baseArgs, { destroyRef, injector: options.injector }, (resolvedArgs, onCleanup) => {
+            const teardowns: (() => void)[] = [];
 
-                active.set(usePaginatedCore<F>(reference, baseArgs(), { ...options, client, destroyRef: scoped.destroyRef }));
+            active.set(usePaginatedCore<F>(reference, resolvedArgs, { ...options, client }, (teardown) => teardowns.push(teardown)));
 
-                onCleanup(scoped.teardown);
-            },
-            { injector: options.injector, manualCleanup: true },
-        );
-
-        destroyRef.onDestroy(() => {
-            effectRef.destroy();
+            onCleanup(() => {
+                for (const teardown of teardowns) {
+                    teardown();
+                }
+            });
         });
     }
 

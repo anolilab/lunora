@@ -1,10 +1,10 @@
 import type { Injector, Signal } from "@angular/core";
-import { DestroyRef, effect, inject, signal } from "@angular/core";
+import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 
 import { resolveLunoraClient } from "./client";
-import { shouldOpenSubscription } from "./platform";
+import { attachReactiveArgs, shouldOpenSubscription } from "./platform";
 
 /**
  * `SubscriptionOptions` is part of the experimental `@lunora/angular` API and may change without a major version bump.
@@ -124,13 +124,8 @@ export const subscription = <F extends FunctionReference>(
             const resolveArgs = args as () => ArgsOf<F> | "skip";
 
             // Reactive form — see `liveQuery`'s equivalent branch for the ordering
-            // and DI rationale; `manualCleanup: true` keeps teardown unified
-            // through our own `destroyRef` below.
-            const effectRef = effect((onCleanup) => { open(resolveArgs(), onCleanup); }, { injector: options.injector, manualCleanup: true });
-
-            destroyRef.onDestroy(() => {
-                effectRef.destroy();
-            });
+            // and DI rationale.
+            attachReactiveArgs(resolveArgs, { destroyRef, injector: options.injector }, open);
         } else {
             open(args, (unsubscribe) => destroyRef.onDestroy(unsubscribe));
         }
