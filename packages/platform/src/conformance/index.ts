@@ -10,3 +10,4 @@ export type { ConformanceHost, ConformanceHostFactory, ReferenceHost } from "./r
 export { createReferenceHost } from "./reference-host";
 export type { VitestApi } from "./suite";
 export { defineHostContractSuite } from "./suite";
+export { pollJobDispatched, waitPastTarget } from "./timing";

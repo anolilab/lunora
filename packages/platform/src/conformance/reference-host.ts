@@ -14,6 +14,7 @@ import type {
     SocketHandle,
     SocketHost,
 } from "../index";
+import { waitPastTarget } from "./timing";
 
 /**
  * A conformance host bundles all four platform contracts so a single factory
@@ -681,24 +682,19 @@ const createReferenceHost = (): ReferenceHost => {
 
     return {
         awaitAlarmFired: async (target) => {
-            // The reference host clears `alarmAt` from a real timer, so waiting
-            // past the target (plus a small margin) is enough to observe it.
-            await new Promise((resolve) => {
-                setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
-            });
+            // This host clears `alarmAt` from a real timer, so waiting past the
+            // target is enough to observe it.
+            await waitPastTarget(target);
         },
         awaitJobDispatched: async (id) => {
-            // Same wait-past-target strategy as `awaitAlarmFired`: look up the
-            // job's own `scheduledFor` while it is still pending and wait
-            // slightly past it. If it already fired (or never existed),
-            // there is nothing to wait for — answer from `dispatchedJobs`
-            // directly.
+            // Reads its own map rather than going through `pollJobDispatched`'s
+            // `scheduler.list()`: this host has the pending job in hand, and
+            // the shared helper exists for hosts whose job table is the only
+            // place that answer lives.
             const pendingJob = scheduledJobs.get(id);
 
             if (pendingJob !== undefined) {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, Math.max(0, pendingJob.scheduledFor - Date.now()) + 30);
-                });
+                await waitPastTarget(pendingJob.scheduledFor);
             }
 
             return dispatchedJobs.has(id);

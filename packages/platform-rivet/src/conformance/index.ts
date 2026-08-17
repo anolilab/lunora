@@ -14,6 +14,7 @@
  */
 
 import type { ConformanceHost } from "@lunora/platform/conformance";
+import { pollJobDispatched, waitPastTarget } from "@lunora/platform/conformance";
 
 import { createRivetShardKvStore } from "../rivet-kv-store";
 import { createRivetSchedulerHost, RIVET_SCHEDULER_ACTION } from "../rivet-scheduler-host";
@@ -39,6 +40,7 @@ export const createRivetConformanceHost = async (): Promise<ConformanceHost> => 
     const { deliverAlarm, host: shard } = createRivetShardHost(actor, state);
     const { restoreSocket, simulateRecycle, socket } = createRivetSocketHost(state);
     const { kv, ready: kvReady } = createRivetShardKvStore(actor.db);
+
 
     /**
      * Job ids this host actually delivered.
@@ -68,26 +70,8 @@ export const createRivetConformanceHost = async (): Promise<ConformanceHost> => 
     actor.actions.set(RIVET_SCHEDULER_ACTION, async (id) => deliverScheduledJob(id as string));
 
     return {
-        awaitAlarmFired: async (target) => {
-            // Wait past the target: the double fires through a real
-            // `setTimeout`, so a short margin is enough to observe the
-            // transition — the same strategy the reference and Node hosts use.
-            await new Promise((resolve) => {
-                setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
-            });
-        },
-        awaitJobDispatched: async (id) => {
-            const listed = await scheduler.list?.();
-            const pending = listed?.find((entry) => entry.id === id);
-
-            if (pending !== undefined) {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, Math.max(0, pending.scheduledFor - Date.now()) + 30);
-                });
-            }
-
-            return dispatched.has(id);
-        },
+        awaitAlarmFired: async (target) => waitPastTarget(target),
+        awaitJobDispatched: async (id) => pollJobDispatched(scheduler, dispatched, id),
         cleanup: () => {
             state.close();
             actor.cleanup();

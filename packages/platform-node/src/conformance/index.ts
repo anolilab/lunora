@@ -10,6 +10,7 @@
  */
 
 import type { ConformanceHost } from "@lunora/platform/conformance";
+import { pollJobDispatched, waitPastTarget } from "@lunora/platform/conformance";
 
 import { createNodeShardKvStore } from "../node-kv-store";
 import { createNodeSchedulerHost } from "../node-scheduler-host";
@@ -78,30 +79,8 @@ export const createNodeConformanceHost = (): ConformanceHost => {
     };
 
     return {
-        awaitAlarmFired: async (target) => {
-            // Same wait-past-target strategy the reference host uses: the alarm
-            // clears itself from a real `setTimeout`, so waiting slightly past
-            // the target is sufficient to observe the transition.
-            await new Promise((resolve) => {
-                setTimeout(resolve, Math.max(0, target - Date.now()) + 30);
-            });
-        },
-        awaitJobDispatched: async (id) => {
-            // Same wait-past-target strategy as `awaitAlarmFired`: read the
-            // job's own `scheduledFor` while it is still pending and wait
-            // slightly past it. A job already gone from `list()` either fired or
-            // never existed, and `dispatched` distinguishes those two.
-            const listed = await scheduler.list?.();
-            const pending = listed?.find((entry) => entry.id === id);
-
-            if (pending !== undefined) {
-                await new Promise((resolve) => {
-                    setTimeout(resolve, Math.max(0, pending.scheduledFor - Date.now()) + 30);
-                });
-            }
-
-            return dispatched.has(id);
-        },
+        awaitAlarmFired: async (target) => waitPastTarget(target),
+        awaitJobDispatched: async (id) => pollJobDispatched(scheduler, dispatched, id),
         cleanup,
         directory,
         disposeTerminally: cleanup,

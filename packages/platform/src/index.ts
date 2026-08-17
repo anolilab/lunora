@@ -87,6 +87,7 @@ export type { ShardKvListOptions, ShardKvStore } from "./kv-store";
 
 // Scheduler host
 export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "./scheduler-host";
+export { DEFAULT_RETRY_POLICY, retryBackoffMs } from "./scheduler-host";
 
 // Shard directory
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";
