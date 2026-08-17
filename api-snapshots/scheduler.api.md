@@ -183,6 +183,12 @@ interface LunoraSchedulerOptions {
 }
 ```
 
+### `MAX_RETRY_ATTEMPTS` (const)
+
+```ts
+const MAX_RETRY_ATTEMPTS = 5;
+```
+
 ### `MessageBatchLike` (interface)
 
 ```ts
@@ -297,6 +303,12 @@ interface QueueWorkpool {
 interface QueueWorkpoolOptions {
     queue: QueueLike<QueueJob>;
 }
+```
+
+### `RETRY_BASE_DELAY_MS` (const)
+
+```ts
+const RETRY_BASE_DELAY_MS = 3e4;
 ```
 
 ### `RetryPolicy` (interface)
