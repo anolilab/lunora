@@ -98,13 +98,13 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
     const query = async <TInput>(indexName: string, input: QueryInput<TInput>): Promise<VectorizeMatches> => {
         const index = resolveIndex(options.indexes, indexName);
 
-        // The ceiling depends on what the query returns: 20 when values or full
+        // The ceiling depends on what the query returns: 50 when values or full
         // metadata are requested, 100 otherwise.
         const wantsHeavyPayload = input.returnValues === true || input.returnMetadata === "all";
         const topKCeiling = wantsHeavyPayload ? MAX_TOP_K_WITH_VALUES : MAX_TOP_K;
 
         if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > topKCeiling)) {
-            const reason = wantsHeavyPayload ? ' (lowered to 20 because returnValues/returnMetadata:"all" is set)' : "";
+            const reason = wantsHeavyPayload ? ` (lowered to ${String(MAX_TOP_K_WITH_VALUES)} because returnValues/returnMetadata:"all" is set)` : "";
 
             throw new RangeError(`@lunora/bindings/vectors: topK must be an integer in [1, ${String(topKCeiling)}]${reason} (got ${String(input.topK)})`);
         }
