@@ -462,6 +462,9 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
     }
 };
 
+/** A non-empty string — the shape every binding's required fields must satisfy. */
+const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
 /**
  * The object-typed entries of a possibly-malformed bindings array from untrusted
  * JSONC. Tolerates a non-array value (e.g. a stray string) and drops `null` /
@@ -469,7 +472,7 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
  * can safely `.find`/`.map` string fields without a raw `TypeError`.
  */
 const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | undefined): T[] =>
-    Array.isArray(value) ? (value.filter((entry): entry is T => entry !== null && typeof entry === "object") as T[]) : [];
+    Array.isArray(value) ? value.filter((entry): entry is T => entry !== null && typeof entry === "object") : [];
 
 /**
  * Fold `wrangler.migrations[]` IN ORDER into the set of Durable Object classes
@@ -527,11 +530,7 @@ const validateDurableObjectMigrations = (wrangler: WranglerConfig, errors: strin
     const currentClasses = foldMigrationClasses(wrangler.migrations);
 
     for (const binding of objectBindingEntries(wrangler.durable_objects?.bindings)) {
-        if (
-            binding.script_name === undefined &&
-            isNonEmptyString(binding.class_name) &&
-            !currentClasses.has(binding.class_name)
-        ) {
+        if (binding.script_name === undefined && isNonEmptyString(binding.class_name) && !currentClasses.has(binding.class_name)) {
             errors.push(
                 `durable_objects.bindings declares class "${binding.class_name}" but it is missing from migrations — ` +
                     `add a migration entry with "new_sqlite_classes": ["${binding.class_name}"] (or "new_classes" for a non-SQLite-backed class), ` +
@@ -580,9 +579,6 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
         );
     }
 };
-
-/** A non-empty string — the shape every binding's required fields must satisfy. */
-const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
 /**
  * `Array.isArray` widens the readonly element type to `any`; restore it as a
@@ -913,9 +909,7 @@ const validateD1Databases = (wrangler: WranglerConfig, errors: string[]): void =
         }
 
         if (!isNonEmptyString(entry.database_id) && !isNonEmptyString(entry.database_name)) {
-            errors.push(
-                `${label} must have a "database_id" or a "database_name" — run \`wrangler d1 create\` and set one, or the binding can't resolve`,
-            );
+            errors.push(`${label} must have a "database_id" or a "database_name" — run \`wrangler d1 create\` and set one, or the binding can't resolve`);
         }
     }
 };

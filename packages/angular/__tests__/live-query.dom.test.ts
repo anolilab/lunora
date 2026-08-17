@@ -131,7 +131,13 @@ describe("liveQuery — reactive args (plan 340)", () => {
         // "outside an injection context" convention (explicit `client` +
         // `destroyRef`, e.g. `ngOnInit`); the caller supplies `injector`
         // explicitly instead, exactly like Angular's own `effect({ injector })`.
-        const data = liveQuery(listRef, () => {return { channelId: channelId() }}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector });
+        const data = liveQuery(
+            listRef,
+            () => {
+                return { channelId: channelId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector },
+        );
 
         // The effect's first run is scheduled, not synchronous with creation —
         // flush it before asserting the initial subscription opened.
@@ -213,7 +219,13 @@ describe("liveQuery — reactive args (plan 340)", () => {
         const injector = TestBed.inject(Injector);
         const channelId = signal("general");
 
-        liveQuery(listRef, () => {return { channelId: channelId() }}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector });
+        liveQuery(
+            listRef,
+            () => {
+                return { channelId: channelId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector },
+        );
         TestBed.tick();
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);

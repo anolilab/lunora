@@ -141,7 +141,13 @@ describe("subscription — reactive args (plan 340)", () => {
         const injector = TestBed.inject(Injector);
         const roomId = signal("r1");
 
-        const { data } = subscription(streamRef, () => {return { roomId: roomId() }}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector });
+        const { data } = subscription(
+            streamRef,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector },
+        );
 
         // The effect's first run is scheduled, not synchronous with creation —
         // flush it before asserting the initial subscription opened.
@@ -218,7 +224,13 @@ describe("subscription — reactive args (plan 340)", () => {
         const injector = TestBed.inject(Injector);
         const roomId = signal("r1");
 
-        subscription(streamRef, () => {return { roomId: roomId() }}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector });
+        subscription(
+            streamRef,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector },
+        );
         TestBed.tick();
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
