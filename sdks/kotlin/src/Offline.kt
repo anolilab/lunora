@@ -290,7 +290,7 @@ fun isStaleVersion(current: String?, stamped: String?): Boolean = current != nul
  * no multi-tab leader election, because there are no tabs.
  */
 class OfflineQueue(
-    private val maxItems: Int = DEFAULT_MAX_ITEMS,
+    maxItems: Int = DEFAULT_MAX_ITEMS,
     /**
      * Whether writes may queue before the socket has EVER connected. Off by
      * default: without it a misconfigured endpoint silently accumulates writes
@@ -304,6 +304,14 @@ class OfflineQueue(
      */
     private val version: String? = null,
 ) {
+    /**
+     * Clamped to at least one: a cap of zero accepts a write and evicts it in the
+     * same call, so every submit reports "queued" and then settles
+     * OFFLINE_QUEUE_OVERFLOW — a queue that cannot hold anything is a
+     * misconfiguration, not a policy.
+     */
+    private val maxItems: Int = maxItems.coerceAtLeast(1)
+
     private val items = mutableListOf<QueuedMutation>()
 
     /** Notified with the new depth after any size change. */

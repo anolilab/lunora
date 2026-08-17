@@ -19,7 +19,8 @@ pub use client::{
 pub use key::{stable_stringify, stable_wire_key};
 pub use offline::{
     identity_allows_replay, is_stale_version, random_id, Discarded, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, DEFAULT_MAX_ITEMS, TRANSIENT_ERROR_CODES,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW, CODE_OFFLINE_WRITE_UNENCODABLE, DEFAULT_MAX_ITEMS,
+    TRANSIENT_ERROR_CODES,
 };
 pub use optimistic::{
     apply_layer, confirm_layer, constant, drop_confirmed_layers, fold, rollback_layer, shared, OptimisticLayer, OptimisticState, SharedTransform, Transform,

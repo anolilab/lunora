@@ -143,6 +143,16 @@ class TestQueueOverflow < Minitest::Test
     assert_equal case_data["persistRemoveCalls"], store.removed
   end
 
+  def test_a_zero_capacity_is_clamped_to_one
+    ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
+    queue = Lunora::OfflineQueue.new(max_items: 0)
+
+    # Taken literally, a cap of zero accepts a write and evicts it in the same
+    # call: every submit reports "queued" and then settles OVERFLOW.
+    assert_empty queue.enqueue(entry("m1"))
+    assert_equal ["m1"], ids(queue.items)
+  end
+
   def test_close_rejects_every_queued_write_but_keeps_the_durable_records
     ConformanceManifest.covers("offline_queue_overflow_evicts_oldest")
     case_data = queue_case("clear")

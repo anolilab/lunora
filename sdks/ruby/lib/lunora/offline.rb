@@ -199,7 +199,11 @@ module Lunora
 
     def initialize(max_items: DEFAULT_MAX_ITEMS, queue_before_first_connect: false, persistence: nil, version: nil,
                    on_size_change: nil, on_persistence_error: nil)
-      @max_items = max_items
+      # Clamped to at least one: a cap of zero accepts a write and evicts it in
+      # the same call, so every submit reports "queued" and then settles
+      # OFFLINE_QUEUE_OVERFLOW — a queue that cannot hold anything is a
+      # misconfiguration, not a policy.
+      @max_items = [1, max_items].max
       @queue_before_first_connect = queue_before_first_connect
       @persistence = persistence
       @version = version

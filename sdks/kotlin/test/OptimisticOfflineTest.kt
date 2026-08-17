@@ -414,6 +414,13 @@ private fun offlineQueueOverflowEvictsOldest() {
     )
     check(store.removed == ids(case["persistRemoveCalls"]), "an evicted write is un-persisted")
 
+    // Taken literally, a cap of zero accepts a write and evicts it in the same
+    // call: every submit reports "queued" and then settles OVERFLOW.
+    val clamped = OfflineQueue(maxItems = 0)
+
+    check(clamped.enqueue(entry("m1")).isEmpty(), "a zero capacity is clamped to one")
+    check(queuedIds(clamped.items()) == listOf("m1"), "so the write it accepted stays queued")
+
     val clear = scenario("offlineQueue", "clear")
     val clearStore = MemoryStore()
     val closing = OfflineQueue(persistence = clearStore)
