@@ -248,16 +248,30 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
         expect(warn).not.toHaveBeenCalled();
     });
 
-    it("warns once and proceeds when the connection exposes no flag information", () => {
-        expect.assertions(3);
+    it("warns once PER CONNECTION and proceeds when the connection exposes no flag information", () => {
+        expect.assertions(4);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-        // A minimal `Mysql2Like` double — only `execute`, no `config`/`pool`.
+        // A minimal `Mysql2Like` double — only `execute`, no `config`/`pool`. This
+        // is the shape `types.ts` documents, so it is what a hand-written adapter
+        // actually passes.
         const connection = { execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] };
 
         expect(() => buildMysqlExec(connection)).not.toThrow();
+
+        // `buildMysqlExec` runs per REQUEST — the generated shard factory calls
+        // `createMysqlGlobalCtxDb` through its `hyperdriveGlobal` thunk every time.
+        // Building twice must not warn twice, or a busy worker floods its logs.
+        buildMysqlExec(connection);
+        buildMysqlExec(connection);
+
         expect(warn).toHaveBeenCalledTimes(1);
         expect(warn.mock.calls[0]?.[0]).toContain("CLIENT_FOUND_ROWS");
+
+        // A DIFFERENT connection is a different unknown, and still gets its warning.
+        buildMysqlExec({ execute: async () => [{}, undefined] as [Record<string, unknown>, undefined] });
+
+        expect(warn).toHaveBeenCalledTimes(2);
     });
 
     it("leaves the Postgres path untouched — no probe, no warning", async () => {
@@ -270,6 +284,56 @@ describe("buildMysqlExec CLIENT_FOUND_ROWS probe", () => {
 
         expect(result).toEqual({ rowsAffected: 0 });
         expect(warn).not.toHaveBeenCalled();
+    });
+
+    // The probe reads two UNDOCUMENTED `mysql2` internals (`connection.config
+    // .clientFlags` and `pool.pool.config.connectionConfig.clientFlags`) — neither
+    // is in the driver's `.d.ts`. If a release relocates them, every hand-written
+    // double in this file keeps passing while production silently degrades to the
+    // warn branch and the OCC guard goes unchecked. So pin the real thing:
+    // `createPool` is lazy, so this needs no MySQL server.
+    /** A real (never-connected) `mysql2` pool built with the given wire flags. */
+    const realPool = async (flag: string): Promise<{ end: () => Promise<void>; pool: unknown }> => {
+        const { createPool } = await import("mysql2/promise");
+        const pool = createPool({ database: "d", flags: [flag], host: "127.0.0.1", user: "u" });
+
+        return {
+            end: async () => {
+                await pool.end().catch(() => undefined);
+            },
+            pool,
+        };
+    };
+
+    it("accepts a real mysql2 pool built with flags: [FOUND_ROWS]", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const { end, pool } = await realPool("FOUND_ROWS");
+
+        try {
+            expect(() => buildMysqlExec(pool as never)).not.toThrow();
+
+            // The probe was DETERMINATE — a relocated driver internal would fall
+            // through to the "could not determine" warning instead.
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            await end();
+        }
+    });
+
+    it("rejects a real mysql2 pool built with flags: [-FOUND_ROWS]", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const { end, pool } = await realPool("-FOUND_ROWS");
+
+        try {
+            expect(() => buildMysqlExec(pool as never)).toThrow(LunoraError);
+            expect(warn).not.toHaveBeenCalled();
+        } finally {
+            await end();
+        }
     });
 
     it("probes once at construction — never per statement", async () => {
