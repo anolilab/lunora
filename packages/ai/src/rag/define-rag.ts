@@ -113,6 +113,33 @@ const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: numbe
     );
 };
 
+/**
+ * Refuse a chunk id over the store's per-id ceiling, naming what it is made of.
+ *
+ * The sibling of {@link assertMetadataFits}, and reachable the same way: a chunk
+ * id is `${namespace}#${sourceId}#${index}`, and a caller who passes a bucket
+ * key as the source id (which `defineRagSource` does by construction) has an id
+ * whose length they never chose. Vectorize rejects the upsert at the far side
+ * with nothing naming the cause.
+ */
+const assertIdFits = (id: string, sourceId: string, budget: number | false): void => {
+    if (budget === false) {
+        return;
+    }
+
+    const bytes = new TextEncoder().encode(id).length;
+
+    if (bytes <= budget) {
+        return;
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `@lunora/ai/rag: chunk id "${id}" for source "${sourceId}" is ${String(bytes)} bytes, over the store's ${String(budget)}-byte per-vector id ceiling — ` +
+            "shorten the source id (hash long keys before indexing them) or shorten the `namespace`, which is prefixed onto every chunk id",
+    );
+};
+
 /** Allowed shape of {@link RagConfig.embeddingModelVersion} — safe in a Vectorize namespace + chunk-id prefix. */
 const MODEL_VERSION_PATTERN = /^[\w.-]{1,40}$/;
 
@@ -234,8 +261,9 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * ```
  *
  * Pure composition — no new binding, no I/O until a method runs. Chunk text
- * lives in vector metadata by default (`topK` ≤ 20); supply `textStore` to move
- * it into your own storage and lift the ceiling to 100 — see `RagTextStore`.
+ * lives in vector metadata by default (`topK` ≤ 50 on Vectorize); supply
+ * `textStore` to move it into your own storage and lift the ceiling to 100 —
+ * see `RagTextStore`.
  *
  * `ctx.ai` is only needed to resolve a Workers AI `embeddingModel` id. Pass a
  * direct AI SDK `EmbeddingModel` object (`@ai-sdk/openai`, …) and the helper
@@ -295,6 +323,24 @@ const embedCostOf = (providerMetadata: unknown): number | undefined => {
     }
 
     return undefined;
+};
+
+/**
+ * The bound context's Vectorize facade, or a directed error. `vectors` is
+ * optional on {@link RagContext} because a configured `store` never reads it;
+ * without one it is the store, and its absence is a wiring mistake worth
+ * naming rather than a `cannot read 'query' of undefined` three calls later.
+ */
+const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext["vectors"]> => {
+    if (vectors === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/ai/rag: the bound context has no `vectors` (env.VECTORIZE) and no `store` is configured — " +
+                "bind a context whose `ctx.vectors` is wired, or configure `store` (e.g. `sqliteVectorStore`) to back this index without Vectorize.",
+        );
+    }
+
+    return vectors;
 };
 
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
@@ -362,9 +408,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     }
 
     /**
-     * Cross-call embedding retention. The index-path batch always seeds the
-     * cache regardless, so the floor is the number of chunks in flight; this
-     * bound governs what SURVIVES a call.
+     * Cross-call embedding retention. Governs only what SURVIVES a call — the
+     * index-path batch seeds a separate, unbounded, request-scoped map, so
+     * batching never depends on this being set and never evicts what is.
      */
     const cacheLimit = config.cacheEmbeddings ?? 0;
     const reranker = config.rerank;
@@ -390,7 +436,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // one this wraps `ctx.vectors` and declares exactly the Vectorize
         // constants the retrieval code used to hard-code, so the default path
         // is unchanged.
-        const store: RagVectorStore = config.store ? config.store(context) : vectorizeStore(context.vectors, config.index);
+        const store: RagVectorStore = config.store ? config.store(context) : vectorizeStore(requireVectors(context.vectors), config.index);
         const topKCeiling = textStore ? store.capabilities.maxTopK : store.capabilities.maxTopKWithMetadata;
 
         // An explicit `maxEmbeddingDimensions` always wins; otherwise the store
@@ -441,13 +487,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         /**
-         * Embeddings resolved earlier in this bound context, keyed by text.
-         *
-         * Two jobs. Within `index()` it is pre-filled by one `embedMany` call so
-         * the per-chunk `embed` callbacks `ctx.vectors.upsert` invokes are cache
-         * hits rather than N separate round-trips. Across calls it is the
-         * opt-in query cache (`cacheEmbeddings`), which matters because
-         * `retrieve()` re-embeds the same question every time it is asked.
+         * Cross-call query cache (`cacheEmbeddings`), keyed by text. Matters
+         * because `retrieve()` re-embeds the same question every time it is
+         * asked. Bounded by {@link cacheLimit}, and empty when that is 0.
          *
          * Safe to share: an embedding is a pure function of (model, text), and a
          * hit requires already holding the exact text, so nothing leaks that the
@@ -455,6 +497,16 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
          * level — so it cannot outlive the request that built it.
          */
         const embedCache = new Map<string, ReadonlyArray<number>>();
+
+        /**
+         * Embeddings produced by the in-flight `index()` batch. Deliberately
+         * UNBOUNDED and separate from {@link embedCache}: the batch seeds one
+         * entry per chunk of the document being indexed, and the per-chunk
+         * `embed` callbacks `store.upsert` invokes must all hit it — otherwise
+         * every chunk is embedded a second time and the batch is pure cost.
+         * Cleared when `index()` returns, so it never grows past one document.
+         */
+        const batchEmbeddings = new Map<string, ReadonlyArray<number>>();
 
         /** Evict oldest-first once the cache passes its bound (insertion-ordered Map). */
         const rememberEmbedding = (text: string, embedding: ReadonlyArray<number>): void => {
@@ -476,7 +528,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
-            const cached = embedCache.get(text);
+            const cached = embedCache.get(text) ?? batchEmbeddings.get(text);
 
             if (cached !== undefined) {
                 return cached;
@@ -567,16 +619,17 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         /**
-         * Embed `texts` in one batched call and seed {@link embedCache}, so the
-         * per-chunk `embed` callbacks that follow resolve without further I/O.
+         * Embed `texts` in one batched call and seed {@link batchEmbeddings}, so
+         * the per-chunk `embed` callbacks that follow resolve without further
+         * I/O.
          *
          * Best-effort: a provider that rejects the batch (or an AI SDK build
-         * without `embedMany`) leaves the cache empty and every chunk falls back
+         * without `embedMany`) leaves the map empty and every chunk falls back
          * to its own single embed — the pre-existing path. A batching
          * optimisation must never be the reason indexing fails.
          */
         const prefillEmbeddings = async (texts: ReadonlyArray<string>): Promise<void> => {
-            const pending = [...new Set(texts.filter((text) => !embedCache.has(text)))];
+            const pending = [...new Set(texts.filter((text) => !embedCache.has(text) && !batchEmbeddings.has(text)))];
 
             if (pending.length < 2) {
                 return;
@@ -598,7 +651,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 }
 
                 for (const [position, text] of pending.entries()) {
-                    rememberEmbedding(text, embeddings[position] as ReadonlyArray<number>);
+                    batchEmbeddings.set(text, embeddings[position] as ReadonlyArray<number>);
                 }
             } catch (error) {
                 // A dimension breach is a real configuration error and must
@@ -665,7 +718,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // and every write. (Vectorize applies mutations asynchronously, so
             // a hash written moments ago may not be visible yet — the worst
             // case is a redundant, idempotent re-index.)
-            if (previous.hash === hash && previous.chunks !== undefined) {
+            if (input.reindex !== true && previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
                     ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex)),
@@ -675,6 +728,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const pieces = splitter(input.text);
             const ids = pieces.map((_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex));
+            const longestId = ids.at(-1);
+
+            // Every id of a source shares its prefix and differs only in the
+            // chunk-index suffix, so the last one is the longest — checking it
+            // covers them all, before anything is embedded or written.
+            if (longestId !== undefined) {
+                assertIdFits(longestId, input.id, store.capabilities.maxIdBytes);
+            }
 
             if (pieces.length === 0 && input.allowEmptySources === false) {
                 throw new LunoraError("BAD_REQUEST", `@lunora/ai/rag: source "${input.id}" produced zero chunks — set allowEmptySources: true to allow this`);
@@ -712,53 +773,60 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             // One `embedMany` for the whole document instead of N single embeds:
             // `ctx.vectors.upsert` invokes `embed` per chunk, and those calls now
-            // hit the pre-filled cache. A provider without a real batch endpoint
-            // still fans out internally, so this is never worse — and with one it
-            // collapses a 200-chunk document from 200 round-trips to a handful.
+            // hit the pre-filled batch map. A provider without a real batch
+            // endpoint still fans out internally, so this is never worse — and
+            // with one it collapses a 200-chunk document from 200 round-trips to
+            // a handful.
             await prefillEmbeddings(pieces);
 
-            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
-                const id = ids[chunkIndex] as string;
-                const metadata: Record<string, unknown> = {
-                    ...input.metadata,
-                    [CHUNK_INDEX_KEY]: chunkIndex,
-                    [SOURCE_KEY]: input.id,
-                };
+            try {
+                await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+                    const id = ids[chunkIndex] as string;
+                    const metadata: Record<string, unknown> = {
+                        ...input.metadata,
+                        [CHUNK_INDEX_KEY]: chunkIndex,
+                        [SOURCE_KEY]: input.id,
+                    };
 
-                if (!textStore) {
-                    metadata[TEXT_KEY] = piece;
-                }
-
-                if (input.importance !== undefined) {
-                    metadata[IMPORTANCE_KEY] = input.importance;
-                }
-
-                // Chunk #0 carries the source's bookkeeping so re-index and
-                // remove() need no external record of the previous state.
-                if (chunkIndex === 0) {
-                    metadata[HASH_KEY] = hash;
-                    metadata[COUNT_KEY] = pieces.length;
-
-                    if (modelTag !== undefined) {
-                        metadata[MODEL_KEY] = modelTag;
+                    if (!textStore) {
+                        metadata[TEXT_KEY] = piece;
                     }
-                }
 
-                assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
+                    if (input.importance !== undefined) {
+                        metadata[IMPORTANCE_KEY] = input.importance;
+                    }
 
-                // Vector upsert
-                await store.upsert({
-                    embed: embedText,
-                    id,
-                    input: piece,
-                    metadata,
-                    namespace: effectiveNamespace,
+                    // Chunk #0 carries the source's bookkeeping so re-index and
+                    // remove() need no external record of the previous state.
+                    if (chunkIndex === 0) {
+                        metadata[HASH_KEY] = hash;
+                        metadata[COUNT_KEY] = pieces.length;
+
+                        if (modelTag !== undefined) {
+                            metadata[MODEL_KEY] = modelTag;
+                        }
+                    }
+
+                    assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
+
+                    // Vector upsert
+                    await store.upsert({
+                        embed: embedText,
+                        id,
+                        input: piece,
+                        metadata,
+                        namespace: effectiveNamespace,
+                    });
+
+                    // Progress callback — fires after the upsert so callers see a
+                    // consistent state when the callback runs.
+                    input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
                 });
-
-                // Progress callback — fires after the upsert so callers see a
-                // consistent state when the callback runs.
-                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
-            });
+            } finally {
+                // Request-scoped by construction: one document's worth of
+                // embeddings, released the moment its upserts are done.
+                batchEmbeddings.clear();
+            }
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,

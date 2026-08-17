@@ -361,7 +361,7 @@ describe("embedding batching and cache", () => {
     };
 
     it("embeds a multi-chunk document in one batched call", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { vectors } = countingStore();
         const docs = defineRag({ allowSharedNamespace: true, chunkOverlap: 0, chunkSize: 10, embeddingModel: model, index: "docs" });
@@ -373,6 +373,42 @@ describe("embedding batching and cache", () => {
 
         expect(result.chunks).toBe(5);
         // One embedMany for all five chunks; the per-chunk callbacks are hits.
+        expect(counters.embedMany).toBe(1);
+        // And the batch is what they hit: a single `embed` here means the batch
+        // seeded nothing and the document was paid for twice.
+        expect(counters.embed).toBe(0);
+    });
+
+    it("seeds the index batch without cacheEmbeddings and beyond its bound", async () => {
+        expect.assertions(2);
+
+        const { vectors } = countingStore();
+        // 12 chunks against a 2-entry cross-call bound: if the batch shared that
+        // bound it would evict itself down to 2 and re-embed the other 10.
+        const docs = defineRag({ allowSharedNamespace: true, cacheEmbeddings: 2, chunkOverlap: 0, chunkSize: 10, embeddingModel: model, index: "docs" });
+        const text = Array.from({ length: 12 }, (_, position) => `chunk${String(position).padStart(5, "0")}`).join("");
+
+        const result = await docs({ vectors }).index({ id: "a", text });
+
+        expect(result.chunks).toBe(12);
+        expect(counters.embed).toBe(0);
+    });
+
+    it("does not retain index-batch embeddings across calls", async () => {
+        expect.assertions(1);
+
+        const { vectors } = countingStore();
+        const docs = defineRag({ allowSharedNamespace: true, chunkOverlap: 0, chunkSize: 10, embeddingModel: model, index: "docs" });
+        const rag = docs({ vectors });
+        const text = ["alpha00000", "bravo11111"].join("");
+
+        await rag.index({ id: "a", text });
+        counters.embedMany = 0;
+        await rag.index({ id: "b", text });
+
+        // A second batch, not a hit on the first document's retained map —
+        // otherwise one long-lived bound context accumulates every chunk it
+        // ever indexed.
         expect(counters.embedMany).toBe(1);
     });
 
