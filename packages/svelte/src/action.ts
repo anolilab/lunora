@@ -1,5 +1,5 @@
 import type { ActionCallOptions, ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
-import { createActionRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
@@ -41,6 +41,11 @@ export interface ActionHandle<F extends FunctionReference> {
  * assumption a write will land; an action is not a write — it runs in the
  * Worker, may call a third party, and has no declared effect on any query.
  *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place.
+ * `reset()` clears both; it does not cancel an in-flight call.
+ *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient`.
  */
@@ -55,7 +60,7 @@ export function action<F extends FunctionReference>(clientOrFunction: LunoraClie
     const error = writable<Error | undefined>();
     const pending = writable(false);
 
-    const call = createActionRunner<F>(client, functionRef, {
+    const call = createCallRunner((args: ArgsOf<F>, options?: ActionCallOptions) => client.action(functionRef, args, options), {
         setError: (next) => {
             error.set(next);
         },

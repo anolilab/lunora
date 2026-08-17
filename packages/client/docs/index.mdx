@@ -149,19 +149,31 @@ party, and has no declared effect on any query.
 const result = await client.action(api.commands.run, { command: "lunora", args: ["verify"] });
 ```
 
-`createActionRunner(client, fn, sinks)` is the sibling of
-`createMutationRunner`, and exists for the same reason: it is the half of an
-adapter's action primitive that isn't framework-specific. It ref-counts
-overlapping invocations into `sinks.setPending` (so the flag clears only once
-the last settles), normalizes a thrown non-`Error`, and routes success/failure
-to `setResult` / `setError` before re-throwing. Every adapter's action
-primitive — React's `useAction`, Vue's `useAction`, Solid's `createAction`,
-Svelte's `action` — is this runner plus that framework's reactive sinks.
+## The shared call runner
+
+`createCallRunner(invoke, sinks)` is the half of an adapter's write primitive
+that isn't framework-specific — it backs both the `mutate` of
+`useMutation`/`createMutation`/`mutation` and the `call` of
+`useAction`/`createAction`/`action`, in every adapter. It ref-counts overlapping
+invocations into `sinks.setPending` (so the flag clears only once the last
+settles), normalizes a thrown non-`Error`, and routes success/failure to
+`setResult` / `setError` before re-throwing the same instance.
+
+`data` and `error` track the **latest** invocation rather than the last to
+settle: each call takes a monotonic token and writes the value sinks only while
+it is still the most recent one, so a double-click whose first call resolves
+after the second cannot leave the UI showing the first one's result — or an
+error for a call that succeeded.
+
+`invoke` is a pre-bound thunk, which is what lets one runner serve both
+procedure kinds: the runner forwards `options` without ever inspecting them, so
+the option type is inferred from the closure. What keeps `optimisticUpdate` off
+an action is the adapter's exported handle type, not this runner.
 
 ```ts
-import { createActionRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 
-const call = createActionRunner(client, api.commands.run, {
+const call = createCallRunner((args, options) => client.action(api.commands.run, args, options), {
     setError: (error) => {
         /* your framework's error sink */
     },
@@ -173,6 +185,11 @@ const call = createActionRunner(client, api.commands.run, {
     },
 });
 ```
+
+The adapters agree on one lifecycle contract on top of it: a success clears
+`error`, a failure leaves the previous `data` in place (a transient error does
+not blank the view), and `reset()` clears both without cancelling an in-flight
+call — a call that settles after a reset repopulates.
 
 You only reach for it when writing a custom adapter; app code uses the adapter
 primitive for its framework.

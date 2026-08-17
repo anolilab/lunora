@@ -1,5 +1,5 @@
 import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@lunora/client";
-import { createMutationRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
@@ -31,23 +31,31 @@ export interface MutationClient<F extends FunctionReference> {
  * Build a mutation handle bound to an explicit client. Internal seam used by the
  * provider-bound {@link createMutation}; exported for tests that inject a stub.
  * The ref-counted pending + error-normalize orchestration is the shared
- * `createMutationRunner` from `@lunora/client`; only the reactive sinks (Solid
+ * `createCallRunner` from `@lunora/client`; only the reactive sinks (Solid
  * signals) are adapter-specific.
+ *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place.
+ * `reset()` clears both; it does not cancel an in-flight call.
  */
 export const createMutationForClient = <F extends FunctionReference>(client: MutationClient<F>, function_: F): MutationHandle<F> => {
     const [data, setData] = createSignal<ReturnOf<F> | undefined>(undefined);
     const [error, setError] = createSignal<Error | undefined>(undefined);
     const [pending, setPending] = createSignal(false);
 
-    const mutate = createMutationRunner(client, function_, {
-        setError,
-        setPending,
-        setResult: (result) => {
-            // Wrap in a thunk so a function-valued server result is stored, not invoked.
-            setData(() => result);
-            setError(undefined);
+    const mutate = createCallRunner(
+        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => client.mutation(function_, args, options),
+        {
+            setError,
+            setPending,
+            setResult: (result) => {
+                // Wrap in a thunk so a function-valued server result is stored, not invoked.
+                setData(() => result);
+                setError(undefined);
+            },
         },
-    });
+    );
 
     const reset = (): void => {
         setData(() => undefined);

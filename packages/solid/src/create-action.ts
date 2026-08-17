@@ -1,5 +1,5 @@
 import type { ActionCallOptions, ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
-import { createActionRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
@@ -31,15 +31,20 @@ export interface ActionClient<F extends FunctionReference> {
  * Build an action handle bound to an explicit client. Internal seam used by the
  * provider-bound {@link createAction}; exported for tests that inject a stub.
  * The ref-counted pending + error-normalize orchestration is the shared
- * `createActionRunner` from `@lunora/client`; only the reactive sinks (Solid
+ * `createCallRunner` from `@lunora/client`; only the reactive sinks (Solid
  * signals) are adapter-specific.
+ *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place.
+ * `reset()` clears both; it does not cancel an in-flight call.
  */
 export const createActionForClient = <F extends FunctionReference>(client: ActionClient<F>, function_: F): ActionHandle<F> => {
     const [data, setData] = createSignal<ReturnOf<F> | undefined>(undefined);
     const [error, setError] = createSignal<Error | undefined>(undefined);
     const [pending, setPending] = createSignal(false);
 
-    const call = createActionRunner(client, function_, {
+    const call = createCallRunner((args: ArgsOf<F>, options?: ActionCallOptions) => client.action(function_, args, options), {
         setError,
         setPending,
         setResult: (result) => {

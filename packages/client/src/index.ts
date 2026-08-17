@@ -4,13 +4,12 @@
 // package at runtime, not the server runtime. One shared implementation, so
 // the two cannot drift.
 export { anyApi } from "../../../shared/any-api";
-export type { ActionCallOptions, ActionRunnerSinks } from "./action-runner";
-export { createActionRunner } from "./action-runner";
 export type { OptimisticMessage, ReconcileDurableMessage } from "./agent-chat-reconcile";
 export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from "./agent-chat-reconcile";
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
+export { createCallRunner } from "./call-runner";
 export type { ClientQueryRef } from "./client-query-store";
 export { createClientQuery } from "./client-query-store";
 export { TabCoordinator } from "./cross-tab";
@@ -23,6 +22,7 @@ export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
+    ActionCallOptions,
     BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,
@@ -34,8 +34,6 @@ export type {
     SyncWatermark,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
-export type { MutationRunnerSinks } from "./mutation-runner";
-export { createMutationRunner } from "./mutation-runner";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
 export { createMutatorRunner } from "./mutator-runner";
 export type { QueuedMutation } from "./offline-queue";

@@ -1151,10 +1151,6 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `ActionRunnerSinks` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
 ### `ArgsOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1360,10 +1356,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationDelta` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `MutationRunnerSinks` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1627,11 +1619,11 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `createActionRunner` (const)
+### `createAsyncStoragePersistence` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
-### `createAsyncStoragePersistence` (const)
+### `createCallRunner` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1660,10 +1652,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createLocalStore` (const)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `createMutationRunner` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

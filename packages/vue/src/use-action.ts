@@ -1,5 +1,5 @@
 import type { ActionCallOptions, ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
-import { createActionRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Ref } from "vue";
 import { ref, shallowRef } from "vue";
 
@@ -42,8 +42,14 @@ export interface ActionHandle<F extends FunctionReference> {
  *
  * `pending` is ref-counted across overlapping invocations of THIS handle, so it
  * flips back to `false` only once every concurrent call has settled. That
- * orchestration is the shared `createActionRunner` from `@lunora/client`; only
- * the refs are adapter-specific.
+ * orchestration is the shared `createCallRunner` from `@lunora/client`; only the
+ * refs are adapter-specific.
+ *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place so a
+ * transient error does not blank the view. `reset()` clears both; it does not
+ * cancel an in-flight call, whose result still lands.
  */
 export const useAction = <F extends FunctionReference>(function_: F): ActionHandle<F> => {
     const client = useLunora();
@@ -57,7 +63,7 @@ export const useAction = <F extends FunctionReference>(function_: F): ActionHand
         error.value = undefined;
     };
 
-    const call = createActionRunner<F>(client, function_, {
+    const call = createCallRunner((args: ArgsOf<F>, options?: ActionCallOptions) => client.action(function_, args, options), {
         setError: (next) => {
             error.value = next;
         },
