@@ -1629,20 +1629,23 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/unknown rls mode/);
     });
 
-    it("throws a diagnostic when a table name is a reserved JS keyword", () => {
+    // `await`/`yield` are reserved only in a module context and `eval`/`arguments` are
+    // not reserved words at all, yet `const <name> = sqliteTable(...)` is a SyntaxError
+    // for every one of them in the ES module codegen emits.
+    it.each(["class", "await", "yield", "eval", "arguments"])("throws a diagnostic when a table name is the reserved JS word %s", (name) => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
             import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
-                class: defineTable({ text: v.string() }),
+                ${name}: defineTable({ text: v.string() }),
             });
         `);
 
         expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
-        expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "class" is a reserved JavaScript word/u);
-        expect(() => discoverSchema(project, schemaPath)).toThrow(/const class = sqliteTable/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(new RegExp(`table name "${name}" is a reserved JavaScript word`, "u"));
+        expect(() => discoverSchema(project, schemaPath)).toThrow(new RegExp(`const ${name} = sqliteTable`, "u"));
     });
 
     it("throws a diagnostic when a base table key is declared more than once", () => {

@@ -154,12 +154,66 @@ const ownIfStatements = (predicate: PredicateFunction): IfStatement[] =>
     predicate.getDescendantsOfKind(SyntaxKind.IfStatement).filter((ifStatement) => enclosingFunction(ifStatement) === predicate);
 
 /**
+ * `true` for the operands that make an equality comparison read as an ABSENCE test:
+ * `null`, `undefined`, and the falsy literals `false` / `0` / `""`.
+ *
+ * `x === undefined` is the same assertion as `!x` for guard purposes — it is true
+ * exactly when the caller has no identity — so it must read `negative`, not the
+ * `positive` every `===` would otherwise get.
+ */
+const isAbsenceOperand = (node: TsNode): boolean => {
+    if (node.getKind() === SyntaxKind.NullKeyword || node.getKind() === SyntaxKind.FalseKeyword) {
+        return true;
+    }
+
+    if (Node.isIdentifier(node) && node.getText() === "undefined") {
+        return true;
+    }
+
+    if (Node.isNumericLiteral(node)) {
+        return node.getLiteralValue() === 0;
+    }
+
+    return Node.isStringLiteral(node) && node.getLiteralValue() === "";
+};
+
+/** `true` when either side of a comparison is an {@link isAbsenceOperand}. */
+const comparesAgainstAbsence = (left: TsNode, right: TsNode): boolean => isAbsenceOperand(left) || isAbsenceOperand(right);
+
+/** How each equality operator reads when NEITHER side is an absence operand. */
+const EQUALITY_POLARITY = new Map<SyntaxKind, "negative" | "positive">([
+    [SyntaxKind.EqualsEqualsEqualsToken, "positive"],
+    [SyntaxKind.EqualsEqualsToken, "positive"],
+    [SyntaxKind.ExclamationEqualsEqualsToken, "negative"],
+    [SyntaxKind.ExclamationEqualsToken, "negative"],
+]);
+
+/**
+ * Polarity of an equality comparison, or `undefined` when `operator` is not one.
+ *
+ * An absence operand inverts the base reading: `x === y` asserts a match (positive)
+ * but `x === undefined` asserts the caller has none (negative), and `x !== undefined`
+ * is the presence assertion `!x` inverted (positive).
+ */
+const equalityPolarity = (operator: SyntaxKind, left: TsNode, right: TsNode): "negative" | "positive" | undefined => {
+    const base = EQUALITY_POLARITY.get(operator);
+
+    if (base === undefined || !comparesAgainstAbsence(left, right)) {
+        return base;
+    }
+
+    return base === "positive" ? "negative" : "positive";
+};
+
+/**
  * Whether a guard condition reads as testing FOR access ("positive": true means
  * "this caller is allowed") or testing for its ABSENCE ("negative": true means
  * "this caller is NOT allowed") — judged purely from syntactic shape (`!`, `!==`/
- * `!=` read negative; a bare truthy check or `===`/`==` reads positive; an `&&`/`||`
- * chain reads as whichever polarity every operand agrees on), never by evaluating
- * what the condition actually means.
+ * `!=` read negative; a bare truthy check or `===`/`==` reads positive; comparing
+ * either equality operator against an absence operand — `null`, `undefined`,
+ * `false`, `0`, `""` — flips it, so `x === undefined` reads negative and
+ * `x !== undefined` positive; an `&&`/`||` chain reads as whichever polarity every
+ * operand agrees on), never by evaluating what the condition actually means.
  *
  * `"indeterminate"` covers everything this can't classify safely — a compound
  * condition mixing both polarities, `typeof`, `instanceof`, anything else — and the
@@ -176,13 +230,10 @@ const conditionPolarity = (condition: TsNode): "indeterminate" | "negative" | "p
 
     if (Node.isBinaryExpression(condition)) {
         const operator = condition.getOperatorToken().getKind();
+        const equality = equalityPolarity(operator, condition.getLeft(), condition.getRight());
 
-        if (operator === SyntaxKind.ExclamationEqualsEqualsToken || operator === SyntaxKind.ExclamationEqualsToken) {
-            return "negative";
-        }
-
-        if (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) {
-            return "positive";
+        if (equality !== undefined) {
+            return equality;
         }
 
         if (operator === SyntaxKind.AmpersandAmpersandToken || operator === SyntaxKind.BarBarToken) {
@@ -195,7 +246,12 @@ const conditionPolarity = (condition: TsNode): "indeterminate" | "negative" | "p
 
     // A bare truthy check (`ctx.auth.isAdmin`, `flags.enabled`, a call) — a caller
     // writing just the identifier is asserting it, not its absence.
-    if (Node.isIdentifier(condition) || Node.isPropertyAccessExpression(condition) || Node.isElementAccessExpression(condition) || Node.isCallExpression(condition)) {
+    if (
+        Node.isIdentifier(condition) ||
+        Node.isPropertyAccessExpression(condition) ||
+        Node.isElementAccessExpression(condition) ||
+        Node.isCallExpression(condition)
+    ) {
         return "positive";
     }
 
@@ -275,7 +331,10 @@ const denyArmCandidates = (predicate: PredicateFunction): TsNode[] => {
             continue;
         }
 
-        const denyStatement = polarity === "negative" ? directReturn(ifStatement.getThenStatement()) : (directReturn(ifStatement.getElseStatement()) ?? fallthroughReturn(ifStatement));
+        const denyStatement =
+            polarity === "negative"
+                ? directReturn(ifStatement.getThenStatement())
+                : (directReturn(ifStatement.getElseStatement()) ?? fallthroughReturn(ifStatement));
 
         if (denyStatement !== undefined) {
             candidates.push(returnedValue(denyStatement));

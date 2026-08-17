@@ -40,8 +40,16 @@ const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", 
  * is about `ctx.db` member shadowing, this one is about generated-code syntax.
  * If `emit.ts` ever stops emitting table names as bare `const` bindings, this
  * check becomes unnecessary.
+ *
+ * Scope is "illegal as a `const` binding in an ES module", which is wider than
+ * the unconditional keyword list: `await` and `yield` are reserved only in a
+ * module / strict-mode context, and `eval` / `arguments` are not reserved words
+ * at all yet `const eval = …` is still a SyntaxError under strict mode (which an
+ * ES module always is). All four fail identically in the emitted Drizzle module.
  */
 const RESERVED_JS_WORDS = new Set([
+    "arguments",
+    "await",
     "break",
     "case",
     "catch",
@@ -54,6 +62,7 @@ const RESERVED_JS_WORDS = new Set([
     "do",
     "else",
     "enum",
+    "eval",
     "export",
     "extends",
     "false",

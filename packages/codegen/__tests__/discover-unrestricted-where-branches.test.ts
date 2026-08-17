@@ -239,6 +239,91 @@ export const s = defineShape({
         expect(discover()).toStrictEqual([]);
     });
 
+    it("flags the `=== undefined` deny guard in ternary form", () => {
+        expect.assertions(1);
+
+        // `ctx.auth.userId === undefined` is the same assertion as `!ctx.auth.userId`,
+        // so the TRUE arm is the deny arm — reading `===` as positive classified `{}`
+        // as the allow arm and let a full-table replication for anonymous callers pass.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.userId === undefined ? {} : { userId: ctx.auth.userId }) });
+`,
+        );
+
+        expect(discover()).toMatchObject([{ exportName: "s", form: "empty-object", key: "where", owner: "defineShape" }]);
+    });
+
+    it("flags the `=== null` deny guard in if-statement early-return form", () => {
+        expect.assertions(1);
+
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const s = defineShape({
+    table: "nodes",
+    where: (ctx) => {
+        if (ctx.auth.userId === null) {
+            return {};
+        }
+
+        return { userId: ctx.auth.userId };
+    },
+});
+`,
+        );
+
+        expect(discover()).toMatchObject([{ exportName: "s", form: "empty-object", key: "where", owner: "defineShape" }]);
+    });
+
+    it("flags a `=== false` deny guard and leaves its `!== undefined` mirror alone", () => {
+        expect.assertions(2);
+
+        // `!== undefined` asserts presence, so its `{}` sits on the intentional allow
+        // side — the inverted equality must flip both operators, not just `===`.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const denied = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.isMember === false ? {} : { userId: ctx.auth.userId }) });
+export const mirror = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.userId !== undefined ? {} : { userId: "none" }) });
+`,
+        );
+
+        const forms = discover().map((branch) => `${branch.exportName}:${branch.form}`);
+
+        expect(forms).toContain("denied:empty-object");
+        expect(forms).not.toContain("mirror:empty-object");
+    });
+
+    it("still reads `===` between two non-nullish operands as positive", () => {
+        expect.assertions(1);
+
+        // The pre-existing classification: `{}` on the FALSE arm of an identity check is
+        // the deny arm, and `{}` on its TRUE arm is not. Both must survive the flip.
+        write(
+            "shapes.ts",
+            `import { defineShape, v } from "@lunora/server";
+
+export const denyArm = defineShape({
+    args: { userId: v.string() },
+    table: "nodes",
+    where: (ctx, { userId }) => (ctx.auth.userId === userId ? { userId } : {}),
+});
+export const allowArm = defineShape({
+    args: { userId: v.string() },
+    table: "nodes",
+    where: (ctx, { userId }) => (ctx.auth.userId === userId ? {} : { userId }),
+});
+`,
+        );
+
+        expect(discover()).toMatchObject([{ exportName: "denyArm", form: "empty-object", key: "where", owner: "defineShape" }]);
+    });
+
     it("leaves an arm returning allowAll() alone even in the deny position", () => {
         expect.assertions(1);
 
