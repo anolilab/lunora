@@ -52,6 +52,33 @@ class CountingMutationShard extends ShardDO {
     }
 }
 
+/**
+ * A shard that reports function kinds the way the generated subclass does
+ * (`messages:send` is the only mutation) and whose ACTION handler parks until
+ * released — standing in for the outbound I/O a real action awaits.
+ */
+class ParkingActionShard extends ShardDO {
+    public readonly started: string[] = [];
+
+    /** Set by the test: the action handler awaits it before returning. */
+    public parked: Promise<void> | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.started.push(functionPath);
+
+        if (functionPath === "messages:slowAction" && this.parked !== undefined) {
+            await this.parked;
+        }
+
+        return { ran: functionPath };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- pure predicate over the path, mirroring the codegen override
+    protected override isMutationFunction(functionPath: string): boolean {
+        return functionPath === "messages:send";
+    }
+}
+
 const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
     return {
         acceptWebSocket() {},
@@ -124,7 +151,70 @@ const mutationRequest = (mutationId?: string, userId?: string, clientId?: string
         method: "POST",
     });
 
+const rpcRequest = (functionPath: string, mutationId: string, userId: string): Request =>
+    new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath }),
+        headers: {
+            "content-type": "application/json",
+            "x-lunora-mutation-id": mutationId,
+            "x-lunora-userid": userId,
+        },
+        method: "POST",
+    });
+
 describe("shardDO mutation-replay dedup (dispatch path)", () => {
+    it("does NOT hold the single-writer gate for an action carrying a mutation-id header", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new ParkingActionShard(makeSerializedState(database), {});
+
+            let release: () => void = () => {};
+
+            shard.parked = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            // `x-lunora-mutation-id` is caller-supplied and the runtime forwards
+            // it verbatim for EVERY function kind. Gating on its presence alone
+            // put an action's whole body — an LLM call, a payment round-trip —
+            // inside `blockConcurrencyWhile`, so any caller could freeze every
+            // query, mutation, socket frame and alarm on the shard for that long,
+            // repeatedly, with a fresh id each time.
+            const slowAction = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
+
+            // Let the action reach its park before the sibling is dispatched.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect(shard.started).toStrictEqual(["messages:slowAction"]);
+
+            const sibling = shard.fetch(rpcRequest("messages:otherAction", "m-2", "u1"));
+
+            const outcome = await Promise.race([
+                sibling.then(() => "sibling-served"),
+                new Promise((resolve) => {
+                    setTimeout(resolve, 50, "blocked-behind-action");
+                }),
+            ]);
+
+            expect(outcome).toBe("sibling-served");
+
+            release();
+
+            const slowResponse = await slowAction;
+
+            await expect(slowResponse.json()).resolves.toEqual({ result: { ran: "messages:slowAction" } });
+        } finally {
+            database.close();
+        }
+    });
+
     it("runs a mutation once and serves the cached result on replay of the same id", async () => {
         expect.assertions(3);
 

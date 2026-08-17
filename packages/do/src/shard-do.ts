@@ -655,6 +655,32 @@ interface StmtSample {
 type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
 
 /**
+ * The per-request identity/replay fields a dispatch must run under. Captured
+ * before the mutation-replay gate and re-pinned inside it, because the gate only
+ * delays ENTRY: a sibling `fetch()`'s prologue can overwrite the shared
+ * `currentRequest*` fields while this dispatch waits its turn. Kept as one named
+ * shape so the capture list lives in exactly one place instead of being an
+ * unenforced "remember to add the next field here too" invariant.
+ */
+interface RequestScope {
+    clientId: string | undefined;
+    clientSeq: number | undefined;
+    mutationId: string | undefined;
+    mutatorClass: ClientMutationClass | undefined;
+    system: boolean;
+    userId: string | undefined;
+}
+
+/**
+ * How an RPC dispatch resolved: the handler ran (`"ran"`), or the mutation-replay
+ * cache already held this `(identity, mutationId)`'s result (`"cached"`).
+ * Tagged rather than inferred from which half is `undefined`, so a `"cached"`
+ * outcome whose stored value happens to BE `undefined` cannot be misread as a
+ * fresh run.
+ */
+type DispatchOutcome = { cached: { value: unknown }; kind: "cached" } | { kind: "ran"; result: unknown };
+
+/**
  * Optional shard-level configuration passed through `super(state, env, …)`.
  * Reserved as a bag rather than positional args so subclasses don't break
  * when new knobs land. Today the only knob is the reactive cache; future
@@ -2819,6 +2845,36 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath` names a registered `mutation` — the only function
+     * kind whose dispatch may enter the single-writer gate.
+     *
+     * The gate is `ShardHost.runSerialized`, which on Cloudflare is
+     * `state.blockConcurrencyWhile`: it stalls EVERY other dispatch on the
+     * shard (queries, WebSocket frames, alarms) for as long as the closure
+     * runs. A mutation already ran inside it — `runInTransaction` composes the
+     * same gate — so wrapping its dedup check costs nothing extra. An action
+     * does not: it is dispatched straight off `handleRpc` and routinely awaits
+     * seconds of outbound I/O (an LLM call, a payment round-trip). Gating one
+     * would let any caller freeze the whole shard for that long, repeatedly and
+     * cheaply, just by attaching an `x-lunora-mutation-id` header — which the
+     * runtime forwards verbatim for every kind. Queries are the same story with
+     * a smaller constant.
+     *
+     * Nothing outside a mutation writes the dedup row either
+     * (`persistIdempotentResult` runs from the mutation transaction's
+     * bookkeeping), so a non-mutation's cache read could only ever miss.
+     *
+     * The base class has no function registry, so the default is `true` — the
+     * conservative answer, preserving the gate wherever the kind is unknown.
+     * The codegen-generated subclass overrides it with the real
+     * `LUNORA_FUNCTIONS` lookup, which is what production dispatch uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isMutationFunction(_functionPath: string): boolean {
+        return true;
+    }
+
+    /**
      * Classify an in-flight custom-mutator push against the shard's stored
      * high-watermark for `currentRequestClientId`. The watermark is the highest
      * per-client sequence the DO has applied, so the push is exactly one of:
@@ -4720,68 +4776,72 @@ abstract class ShardDO {
             // above), the same source `persistIdempotentResult` reads when it
             // records the row after the handler commits.
             //
-            // The read and the `handleRpc` call below run inside ONE
+            // For a MUTATION the read and the `handleRpc` call run inside ONE
             // `ShardHost.runSerialized` span — the same single-writer gate
             // `ShardRunner.runInTransaction` composes with `transaction` — so two
             // concurrent dispatches carrying the same `mutationId` can't both
-            // observe a cache miss and both run the handler. Skipped entirely
-            // when there is no `mutationId` to dedupe (queries, actions, legacy
-            // clients): those have nothing to serialize against and must not pay
-            // the gate's cost.
+            // observe a cache miss and both run the handler. A mutation was
+            // already going to hold that gate, so the widened span costs it
+            // nothing.
             //
-            // `(identity, mutationId)` is captured into LOCALS here and re-pinned
-            // onto the instance fields as the FIRST statement inside the gated
-            // closure. The gate itself only delays entry — while THIS dispatch
-            // waits its turn, another dispatch's prologue (a sibling `fetch()`,
-            // same "concurrent fetches" characteristic the gate exists to guard
-            // against) can run and overwrite these same shared fields before this
-            // closure is admitted. `readIdempotentResult`, and the write-side
-            // calls `handleRpc` makes via `commitMutationBookkeeping` (persisting
-            // the result, advancing the client watermark), all read them
-            // straight off `this`, so without the re-pin a dedup check (or its
-            // commit) could silently run under ANOTHER dispatch's identity —
+            // An action or query takes the SAME dedup read WITHOUT the gate. The
+            // gate is `blockConcurrencyWhile`: it stalls every other dispatch on
+            // the shard, and an action routinely awaits seconds of outbound I/O
+            // it can never roll back. Gating one would let any caller freeze the
+            // whole shard for that long — repeatedly, and for free — by attaching
+            // an `x-lunora-mutation-id` header the runtime forwards verbatim for
+            // every kind. See {@link isMutationFunction}. The exactly-once
+            // guarantee an action gets is therefore the weaker, pre-gate one:
+            // a sequential replay short-circuits, two genuinely concurrent
+            // dispatches of the same id can both miss.
+            //
+            // `(identity, mutationId)` is captured into a LOCAL scope here and
+            // re-pinned onto the instance fields as the FIRST statement inside
+            // the gated closure. The gate itself only delays entry — while THIS
+            // dispatch waits its turn, another dispatch's prologue (a sibling
+            // `fetch()`, same "concurrent fetches" characteristic the gate exists
+            // to guard against) can run and overwrite these same shared fields
+            // before this closure is admitted. `readIdempotentResult`, and the
+            // write-side calls `handleRpc` makes via `commitMutationBookkeeping`
+            // (persisting the result, advancing the client watermark), all read
+            // them straight off `this`, so without the re-pin a dedup check (or
+            // its commit) could silently run under ANOTHER dispatch's identity —
             // exactly the kind of corruption this fix exists to close, just moved
             // one field over. (`dispatchTrace`/`dispatchHeadroom` above capture
             // the same way, for the same reason, on the other side of `handleRpc`.)
-            const dedupUserId = this.currentRequestUserId;
-            const dedupClientId = this.currentRequestClientId;
-            const dedupClientSeq = this.currentRequestClientSeq;
-            const dedupSystem = this.currentRequestSystem;
-            const dedupMutatorClass = this.currentMutatorClass;
-            const dedupMutationId = this.currentRequestMutationId;
+            const requestScope = this.captureRequestScope();
 
-            const dispatchOutcome =
-                dedupMutationId === undefined
-                    ? {
-                          cached: undefined,
-                          // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
-                          // leaves) ONLY for the handler, so `validateArgs` sees real
-                          // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form
-                          // for the request log/metrics below (JSON-safe — a raw `bigint`
-                          // there would throw `JSON.stringify`).
-                          result: await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom),
-                      }
-                    : await this.shardHost.runSerialized(async () => {
-                          this.currentRequestUserId = dedupUserId;
-                          this.currentRequestClientId = dedupClientId;
-                          this.currentRequestClientSeq = dedupClientSeq;
-                          this.currentRequestSystem = dedupSystem;
-                          this.currentMutatorClass = dedupMutatorClass;
-                          this.currentRequestMutationId = dedupMutationId;
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
+            // leaves) ONLY for the handler, so `validateArgs` sees real
+            // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
+            // the request log/metrics below (JSON-safe — a raw `bigint` there
+            // would throw `JSON.stringify`).
+            const runHandler = async (): Promise<unknown> =>
+                await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
 
-                          const cached = this.readIdempotentResult(dedupMutationId);
+            const dedupMutationId = requestScope.mutationId;
 
-                          if (cached !== undefined) {
-                              return { cached, result: undefined };
-                          }
+            const dedupedDispatch = async (cacheKey: string): Promise<DispatchOutcome> => {
+                const cached = this.readIdempotentResult(cacheKey);
 
-                          return {
-                              cached: undefined,
-                              result: await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom),
-                          };
-                      });
+                return cached === undefined ? { kind: "ran", result: await runHandler() } : { cached, kind: "cached" };
+            };
 
-            if (dispatchOutcome.cached !== undefined) {
+            let dispatchOutcome: DispatchOutcome;
+
+            if (dedupMutationId === undefined) {
+                dispatchOutcome = { kind: "ran", result: await runHandler() };
+            } else if (this.isMutationFunction(payload.functionPath)) {
+                dispatchOutcome = await this.shardHost.runSerialized(async () => {
+                    this.restoreRequestScope(requestScope);
+
+                    return await dedupedDispatch(dedupMutationId);
+                });
+            } else {
+                dispatchOutcome = await dedupedDispatch(dedupMutationId);
+            }
+
+            if (dispatchOutcome.kind === "cached") {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
             }
 
@@ -5070,6 +5130,32 @@ abstract class ShardDO {
      * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
      * dispatches forwarded under the same client trace accumulate separately.
      */
+
+    /**
+     * Snapshot the per-request identity/replay fields into a {@link RequestScope}.
+     * Paired with {@link ShardDO.restoreRequestScope}; see that type's docstring
+     * for why the dispatch path needs it.
+     */
+    private captureRequestScope(): RequestScope {
+        return {
+            clientId: this.currentRequestClientId,
+            clientSeq: this.currentRequestClientSeq,
+            mutationId: this.currentRequestMutationId,
+            mutatorClass: this.currentMutatorClass,
+            system: this.currentRequestSystem,
+            userId: this.currentRequestUserId,
+        };
+    }
+
+    /** Re-pin a {@link RequestScope} captured by {@link ShardDO.captureRequestScope}. */
+    private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestClientId = scope.clientId;
+        this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestMutationId = scope.mutationId;
+        this.currentMutatorClass = scope.mutatorClass;
+        this.currentRequestSystem = scope.system;
+        this.currentRequestUserId = scope.userId;
+    }
 
     /**
      * The dispatch entry's db tally, created on first use. Shares the entry with
