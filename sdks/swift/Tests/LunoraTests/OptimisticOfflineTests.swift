@@ -394,7 +394,7 @@ extension ConformanceTests {
         // `shardKey: ""` belongs to the default shard, and comparing the two
         // strictly leaves it queued for a shard nothing ever flushes.
         XCTAssertEqual(
-            sharded.drain { lunoraShardKey($0.shardKey) == lunoraShardKey(target) }.map { $0.id },
+            sharded.drain { lunoraSameShard($0.shardKey, target) }.map { $0.id },
             ids(shard["drained"]).compactMap { $0 },
             "one shard's writes drained, an empty key counting as the null one"
         )
@@ -457,7 +457,7 @@ extension ConformanceTests {
 
         for id in ids(testCase["enqueue"]) {
             for discarded in queue.enqueue(entry(try XCTUnwrap(id))) {
-                XCTAssertEqual(discarded.code, lunoraOfflineQueueOverflow, "the eviction is coded")
+                XCTAssertEqual(discarded.code, LunoraOfflineCode.queueOverflow, "the eviction is coded")
                 evicted.append(discarded.entry.id)
             }
         }
@@ -484,7 +484,7 @@ extension ConformanceTests {
         let discarded = closing.clear()
 
         XCTAssertEqual(discarded.map { $0.entry.id }, ids(clear["rejected"]).compactMap { $0 })
-        XCTAssertTrue(discarded.allSatisfy { $0.code == lunoraClientClosed }, "with the documented code")
+        XCTAssertTrue(discarded.allSatisfy { $0.code == LunoraOfflineCode.clientClosed }, "with the documented code")
         XCTAssertEqual(clearStore.removed, [], "closing un-persists nothing")
         XCTAssertEqual(clearStore.records.count, enqueued.count, "so a later session can restore them")
     }
@@ -512,7 +512,7 @@ extension ConformanceTests {
             ids(testCase["conflicted"]).compactMap { $0 },
             "only the write whose precondition failed is dropped"
         )
-        XCTAssertTrue(conflicted.allSatisfy { $0.code == lunoraOfflinePreconditionFailed }, "with the documented code")
+        XCTAssertTrue(conflicted.allSatisfy { $0.code == LunoraOfflineCode.preconditionFailed }, "with the documented code")
         XCTAssertEqual(queuedIDs(queue), ids(testCase["remaining"]), "and the valid writes keep their FIFO order")
     }
 
@@ -612,7 +612,7 @@ extension ConformanceTests {
             }
 
             XCTAssertEqual(
-                lunoraIdentityAllowsReplay(stamped, spec["current"] as? String),
+                stamped.allowsReplay(under: spec["current"] as? String),
                 try XCTUnwrap(spec["replays"] as? Bool),
                 "identity gate: \(spec["name"] as? String ?? "?")"
             )
@@ -736,7 +736,7 @@ extension ConformanceTests {
         XCTAssertEqual(settled.first?.status, .rejected, "as a rejection")
         XCTAssertEqual(
             (settled.first?.error as? LunoraAPIError)?.code,
-            lunoraOfflineQueueOverflow,
+            LunoraOfflineCode.queueOverflow,
             "carrying the documented overflow code"
         )
         XCTAssertEqual(client.pendingMutationCount, maxItems, "and the cap is respected")

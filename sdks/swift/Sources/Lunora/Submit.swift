@@ -141,7 +141,7 @@ extension LunoraClient {
         // Checked before any overlay is applied, so the common "already closed"
         // case leaves nothing displayed. The enqueue below re-checks it.
         if withLock({ closed }) {
-            throw LunoraAPIError(code: lunoraClientClosed, message: "client is closed")
+            throw LunoraAPIError(code: LunoraOfflineCode.clientClosed, message: "client is closed")
         }
 
         var deferred: LunoraOptimistic.Deferred = []
@@ -158,7 +158,7 @@ extension LunoraClient {
             // next disconnect — after `submit` has already answered `queued`.
             queued = try withLock { () -> (Bool, [LunoraDiscarded]) in
                 if closed {
-                    throw LunoraAPIError(code: lunoraClientClosed, message: "client is closed")
+                    throw LunoraAPIError(code: LunoraOfflineCode.clientClosed, message: "client is closed")
                 }
 
                 guard send == nil, wasEverConnected || storedOfflineQueue.queueBeforeFirstConnect else {
@@ -229,7 +229,7 @@ extension LunoraClient {
     /// committed is de-duplicated rather than applied twice. Per write: success
     /// confirms its optimistic overlay against the ECHOED commit cursor; a coded
     /// verdict is terminal; a transient failure — a raw transport error, or one of
-    /// ``lunoraTransientErrorCodes`` — stops the flush and re-queues that write and
+    /// ``LunoraOfflineCode.transient`` — stops the flush and re-queues that write and
     /// every unreplayed one, in order, for the next attempt.
     @discardableResult
     public func flushOfflineQueue(shardKey: String? = nil) -> LunoraFlushReport {
@@ -248,7 +248,7 @@ extension LunoraClient {
             .map {
                 LunoraDiscarded(
                     entry: $0,
-                    code: lunoraOfflinePreconditionFailed,
+                    code: LunoraOfflineCode.preconditionFailed,
                     message: "offline mutation skipped: precondition failed before replay"
                 )
             }
@@ -264,7 +264,7 @@ extension LunoraClient {
         // An absent shard key and an empty one are the SAME shard: without the
         // normalisation a write submitted under `""` waits for a flush of a shard
         // nothing ever names.
-        let drained = withLock { queue.drain { lunoraShardKey($0.shardKey) == lunoraShardKey(shardKey) } }
+        let drained = withLock { queue.drain { lunoraSameShard($0.shardKey, shardKey) } }
 
         if drained.isEmpty { return report }
 
@@ -273,7 +273,7 @@ extension LunoraClient {
         var sendable: [LunoraQueuedMutation] = []
 
         for entry in drained {
-            if lunoraIdentityAllowsReplay(entry.identity, current) {
+            if entry.identity.allowsReplay(under: current) {
                 sendable.append(entry)
 
                 continue
@@ -284,7 +284,7 @@ extension LunoraClient {
             reportDiscarded([
                 LunoraDiscarded(
                     entry: entry,
-                    code: lunoraOfflineIdentityChanged,
+                    code: LunoraOfflineCode.identityChanged,
                     message: "offline mutation skipped: auth identity changed before replay"
                 )
             ])
@@ -325,7 +325,7 @@ extension LunoraClient {
                         status: .rejected,
                         value: nil,
                         error: LunoraAPIError(
-                            code: lunoraOfflineWriteUnencodable,
+                            code: LunoraOfflineCode.writeUnencodable,
                             message: "offline mutation dropped: \(error)"
                         ),
                         hadAwaiter: entry.liveAwaiter
@@ -401,7 +401,7 @@ extension LunoraClient {
     public static func isTransient(_ error: Error) -> Bool {
         guard let api = error as? LunoraAPIError else { return true }
 
-        return lunoraTransientErrorCodes.contains(api.code)
+        return LunoraOfflineCode.transient.contains(api.code)
     }
 
     /// Registers both optimistic paths' layers.
@@ -442,7 +442,7 @@ extension LunoraClient {
             },
             matching: { path in
                 registry
-                    .filter { $0.functionPath == path && lunoraShardKey($0.shardKey) == lunoraShardKey(options.shardKey) }
+                    .filter { $0.functionPath == path && lunoraSameShard($0.shardKey, options.shardKey) }
                     .map { LunoraQueryEntry(args: $0.args, value: $0.state.lastValue) }
             }
         )
@@ -474,7 +474,7 @@ extension LunoraClient {
         return registry.filter {
             $0.functionPath == functionPath
                 && $0.argsKey == argsKey
-                && lunoraShardKey($0.shardKey) == lunoraShardKey(shardKey)
+                && lunoraSameShard($0.shardKey, shardKey)
         }
     }
 

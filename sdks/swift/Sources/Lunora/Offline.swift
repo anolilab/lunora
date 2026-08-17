@@ -1,28 +1,41 @@
 import Foundation
 
-/// The oldest write was dropped because the queue is at capacity.
-public let lunoraOfflineQueueOverflow = "OFFLINE_QUEUE_OVERFLOW"
-/// The write's precondition no longer held when the flush reached it.
-public let lunoraOfflinePreconditionFailed = "OFFLINE_PRECONDITION_FAILED"
-/// The write was queued under a different identity than the one now in effect.
-public let lunoraOfflineIdentityChanged = "OFFLINE_IDENTITY_CHANGED"
-/// The write's arguments cannot be wire-encoded, so it can never replay.
-public let lunoraOfflineWriteUnencodable = "OFFLINE_WRITE_UNENCODABLE"
-/// The client was closed while the write was still queued.
-public let lunoraClientClosed = "CLIENT_CLOSED"
-
-/// The shard a key names. Absent and empty are the SAME shard, so a write
-/// submitted with `shardKey: ""` is drained by a flush for the default shard
-/// rather than sitting in a queue nothing ever flushes.
-public func lunoraShardKey(_ shardKey: String?) -> String { shardKey ?? "" }
-
-/// The coded errors a replay must NOT treat as the server's final word.
+/// Why a write never reached the server, as the codes a consumer matches on.
 ///
-/// The shard was momentarily unreachable, so the identical call under the same
-/// idempotency key is expected to succeed later, and dropping the write would
-/// lose it to a transient condition. Every other coded error IS a verdict:
-/// replaying it would only re-trigger the same failure, a poison-message loop.
-public let lunoraTransientErrorCodes: Set<String> = ["SHARD_ERROR", "SHARD_UNAVAILABLE"]
+/// A caseless enum rather than five prefixed globals: Swift has had namespacing
+/// since 2014, and `LunoraOfflineCode.queueOverflow` says what the prefix was
+/// standing in for.
+public enum LunoraOfflineCode {
+    /// The oldest write was dropped because the queue is at capacity.
+    public static let queueOverflow = "OFFLINE_QUEUE_OVERFLOW"
+    /// The write's precondition no longer held when the flush reached it.
+    public static let preconditionFailed = "OFFLINE_PRECONDITION_FAILED"
+    /// The write was queued under a different identity than the one now in effect.
+    public static let identityChanged = "OFFLINE_IDENTITY_CHANGED"
+    /// The write's arguments cannot be wire-encoded, so it can never replay.
+    public static let writeUnencodable = "OFFLINE_WRITE_UNENCODABLE"
+    /// The client was closed while the write was still queued.
+    public static let clientClosed = "CLIENT_CLOSED"
+
+    /// The coded errors a replay must NOT treat as the server's final word.
+    ///
+    /// The shard was momentarily unreachable, so the identical call under the
+    /// same idempotency key is expected to succeed later, and dropping the write
+    /// would lose it to a transient condition. Every other coded error IS a
+    /// verdict: replaying it would only re-trigger the same failure, a
+    /// poison-message loop.
+    public static let transient: Set<String> = ["SHARD_ERROR", "SHARD_UNAVAILABLE"]
+}
+
+/// Whether two shard keys name the same shard.
+///
+/// An absent key and an empty one are the SAME shard — an empty string names no
+/// shard, so both mean "the default one". Comparing them strictly leaves a write
+/// submitted with `""` queued forever, because nothing ever flushes a shard named
+/// `""`, and makes its optimistic overlay miss the subscription it targets. Named
+/// after the predicate its five siblings carry, so the comparison exists in one
+/// place rather than being spelled out at each call site.
+public func lunoraSameShard(_ left: String?, _ right: String?) -> Bool { (left ?? "") == (right ?? "") }
 
 /// Bounds the queue when no capacity is configured.
 public let lunoraDefaultMaxQueuedMutations = 1000
@@ -46,14 +59,17 @@ public enum LunoraIdentity: Equatable {
 
         return .subject(subject)
     }
-}
 
-/// Whether a write stamped `stamped` may replay under `current` (nil = signed out).
-public func lunoraIdentityAllowsReplay(_ stamped: LunoraIdentity, _ current: String?) -> Bool {
-    switch stamped {
-    case .absent: return true
-    case .signedOut: return current == nil
-    case .subject(let subject): return subject == current
+    /// Whether a write stamped this way may replay under `current` (nil = signed out).
+    ///
+    /// A method on the sum rather than a free function taking it: the three cases
+    /// are the whole of the answer, so the switch belongs where they are declared.
+    public func allowsReplay(under current: String?) -> Bool {
+        switch self {
+        case .absent: return true
+        case .signedOut: return current == nil
+        case .subject(let subject): return subject == current
+        }
     }
 }
 
@@ -396,7 +412,7 @@ public final class LunoraOfflineQueue {
             .map {
                 LunoraDiscarded(
                     entry: $0,
-                    code: lunoraOfflinePreconditionFailed,
+                    code: LunoraOfflineCode.preconditionFailed,
                     message: "offline mutation skipped: precondition failed before replay"
                 )
             }
@@ -417,7 +433,7 @@ public final class LunoraOfflineQueue {
     public func clear() -> [LunoraDiscarded] {
         drain { _ in true }
             .map {
-                LunoraDiscarded(entry: $0, code: lunoraClientClosed, message: "client closed with the write still queued")
+                LunoraDiscarded(entry: $0, code: LunoraOfflineCode.clientClosed, message: "client closed with the write still queued")
             }
     }
 
@@ -432,7 +448,7 @@ public final class LunoraOfflineQueue {
 
             unpersist(dropped.id)
             evicted.append(
-                LunoraDiscarded(entry: dropped, code: lunoraOfflineQueueOverflow, message: "offline queue overflow")
+                LunoraDiscarded(entry: dropped, code: LunoraOfflineCode.queueOverflow, message: "offline queue overflow")
             )
         }
 
