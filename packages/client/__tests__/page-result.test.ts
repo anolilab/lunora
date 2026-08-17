@@ -205,7 +205,7 @@ describe("insertionIndexFor — rows missing CREATION_FIELD or ID_FIELD", () => 
         expect(insertionIndexFor(list, row("new", 20))).toBe(2);
     });
 
-    it("ID_FIELD is irrelevant to placement — a row missing _id sorts identically to one that has it", () => {
+    it("`ID_FIELD` is irrelevant to placement — a row missing _id sorts identically to one that has it", () => {
         expect.assertions(1);
 
         // insertionIndexFor never reads ID_FIELD (only CREATION_FIELD); confirming
