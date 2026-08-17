@@ -566,6 +566,58 @@ if (mode !== "check" && mode !== "update") {
 
 const rendered = buildAll();
 
+/**
+ * Snapshots whose package documents, as a fact reviewers rely on, that NO
+ * individual export carries `@experimental`.
+ *
+ * `renderExport` skips signature tracking for a tagged export, so one tag
+ * copied in from a sibling file (where the tag is still house style) silently
+ * drops that export out of the gate — and the gate stays green, because a
+ * skipped signature is exactly what "no drift" looks like. An invariant a docs
+ * page asserts and nothing enforces is the shape this repo has been burned by;
+ * this is the enforcement.
+ *
+ * This runs before `update` writes anything, so `pnpm run api:update` cannot
+ * launder a newly-tagged export into the committed snapshot either.
+ */
+const FULLY_TRACKED_SNAPSHOTS = new Set(["container.api.md"]);
+
+/** The line `renderExport` emits in place of a tagged export's signature. */
+const UNTRACKED_MARKER = "signature not tracked";
+
+const untracked = [];
+
+for (const [fileName, content] of rendered) {
+    if (!FULLY_TRACKED_SNAPSHOTS.has(fileName)) {
+        continue;
+    }
+
+    let heading = "?";
+
+    for (const line of content.split("\n")) {
+        if (line.startsWith("### ")) {
+            heading = line.slice(4);
+        } else if (line.includes(UNTRACKED_MARKER)) {
+            untracked.push(`${fileName}: ${heading}`);
+        }
+    }
+}
+
+if (untracked.length > 0) {
+    console.error("❌ `@experimental` on an export of a fully-tracked package:");
+
+    for (const entry of untracked) {
+        console.error(`   ${entry}`);
+    }
+
+    console.error("");
+    console.error("A tagged export's signature is NOT tracked, so it drops out of this gate");
+    console.error("silently. Drop the tag (the package-level experimental status is published");
+    console.error("in ROADMAP.md and the package's docs), or drop the snapshot from");
+    console.error("FULLY_TRACKED_SNAPSHOTS in this script and fix the docs claim it backs.");
+    process.exit(1);
+}
+
 if (mode === "update") {
     mkdirSync(snapshotsDir, { recursive: true });
 
