@@ -34,6 +34,17 @@ import { deserialize, serialize } from "node:v8";
 import type { ShardKvListOptions, ShardKvStore } from "@lunora/platform";
 import type Database from "better-sqlite3";
 
+/**
+ * Escape a `LIKE` prefix so `%` and `_` in a caller's key are matched as
+ * literals.
+ *
+ * `ShardKvStore.list` promises the result contains *exactly* the keys under the
+ * prefix. Without escaping, a prefix of `s_` would also match `sx`, and a
+ * prefix sweep — TTL GC, a migration — would delete keys it was never pointed
+ * at. Cross-tenant, that is a data-loss bug rather than an off-by-one.
+ */
+const escapeLikePrefix = (prefix: string): string => prefix.replaceAll(/[\\%_]/gu, (character) => `\\${character}`);
+
 /** Build a `ShardKvStore` over a `better-sqlite3` table in the shard's database. */
 export const createNodeShardKvStore = (database: Database.Database): ShardKvStore => {
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_kv (key TEXT PRIMARY KEY, value BLOB NOT NULL)");
@@ -43,7 +54,10 @@ export const createNodeShardKvStore = (database: Database.Database): ShardKvStor
         "INSERT INTO _lunora_kv (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
     );
     const deleteStatement = database.prepare<[string]>("DELETE FROM _lunora_kv WHERE key = ?");
-    const scanStatement = database.prepare<[], { key: string; value: Buffer }>("SELECT key, value FROM _lunora_kv");
+    const scanStatement = database.prepare<[], { key: string; value: Buffer }>("SELECT key, value FROM _lunora_kv ORDER BY key");
+    const prefixStatement = database.prepare<[string], { key: string; value: Buffer }>(
+        String.raw`SELECT key, value FROM _lunora_kv WHERE key LIKE ? ESCAPE '\' ORDER BY key`,
+    );
 
     return {
         // eslint-disable-next-line @typescript-eslint/require-await -- the contract's delete is async so a real host can await I/O; this one is synchronous SQLite
@@ -61,20 +75,9 @@ export const createNodeShardKvStore = (database: Database.Database): ShardKvStor
         // eslint-disable-next-line @typescript-eslint/require-await -- see `delete`
         list: async <T = unknown>(options?: ShardKvListOptions): Promise<Map<string, T>> => {
             const prefix = options?.prefix ?? "";
-            // A LIKE-with-escaped-wildcards prefix scan would be the production
-            // move; for a spike, filter in JS the way the reference host's `Map`
-            // scan does — it keeps the query trivially correct while `%`/`_` in a
-            // real key would need escaping either way.
-            const rows = scanStatement.all();
-            const result = new Map<string, T>();
+            const rows = prefix === "" ? scanStatement.all() : prefixStatement.all(`${escapeLikePrefix(prefix)}%`);
 
-            for (const row of rows) {
-                if (row.key.startsWith(prefix)) {
-                    result.set(row.key, deserialize(row.value) as T);
-                }
-            }
-
-            return result;
+            return new Map(rows.map((row) => [row.key, deserialize(row.value) as T]));
         },
         // eslint-disable-next-line @typescript-eslint/require-await -- see `delete`
         put: async (key, value) => {
