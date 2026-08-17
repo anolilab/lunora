@@ -93,6 +93,20 @@ describe("mask_weak_hash_strategy_on_pii", () => {
         expect(findings).toHaveLength(0);
     });
 
+    it.each(["birthdate", "creditCard", "credit_card", "driversLicense", "fullName", "nationalId", "passport", "socialSecurity", "taxId", "tax_id"])(
+        'flags a "hash" strategy on the PII-named column "%s"',
+        (column) => {
+            expect.assertions(1);
+
+            // Every one of these was covered by the vocabulary this lint reads
+            // from. Deriving the matcher from a set that omitted them made a
+            // `mask({ creditCard: { strategy: "hash" } })` silently pass.
+            const findings = run([strategy({ column, strategy: "hash" })]);
+
+            expect(findings).toHaveLength(1);
+        },
+    );
+
     it('flags a "hash" strategy on "phoneNumber" (guards against over-narrowing)', () => {
         expect.assertions(1);
 
