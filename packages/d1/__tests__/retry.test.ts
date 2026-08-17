@@ -1,9 +1,27 @@
+import type { SqlCtxExec } from "@lunora/sql-store";
 import { describe, expect, it, vi } from "vitest";
 
-import { D1TimeoutError, isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry } from "../src/retry";
+import { D1TimeoutError, isReadOnlyD1Sql, isTransientD1Error, retryingExec, withD1Retry } from "../src/retry";
 
 /** No real waiting — the backoff schedule is asserted, not slept through. */
 const noSleep = async (): Promise<void> => {};
+
+/**
+ * Run `body` with `Date.now` reading a clock the test advances, so elapsed-time
+ * behaviour (deadlines, the slow-failure guard) is exercised without waiting.
+ */
+const withFakeClock = async (body: (advance: (ms: number) => void) => Promise<void>): Promise<void> => {
+    let clock = 0;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+
+    try {
+        await body((ms) => {
+            clock += ms;
+        });
+    } finally {
+        spy.mockRestore();
+    }
+};
 
 describe("isTransientD1Error", () => {
     it("recognises the errors Cloudflare says a healthy D1 produces", () => {
@@ -23,21 +41,16 @@ describe("isTransientD1Error", () => {
     });
 
     it("treats a deterministic failure as permanent", () => {
-        expect.assertions(4);
+        expect.assertions(6);
 
         // These fail identically on every attempt; retrying turns one fast
-        // failure into three slow ones and hides the cause.
+        // failure into three slow ones and hides the cause. None of them
+        // matches a needle, so no deny list is needed to exclude them.
         expect(isTransientD1Error(new Error("UNIQUE constraint failed: users.email"))).toBe(false);
         expect(isTransientD1Error(new Error('near "SELCT": syntax error'))).toBe(false);
         expect(isTransientD1Error(new Error("no such table: accounts"))).toBe(false);
         expect(isTransientD1Error(new Error("no such column: nope"))).toBe(false);
-    });
-
-    it("does not retry a constraint violation even when it mentions an internal error", () => {
-        expect.assertions(1);
-
-        // Some drivers wrap constraint failures in generic text; the
-        // deterministic signal has to win.
+        expect(isTransientD1Error(new Error("D1_ERROR: internal error: too many SQL variables"))).toBe(false);
         expect(isTransientD1Error(new Error("Internal error: FOREIGN KEY constraint failed"))).toBe(false);
     });
 
@@ -48,11 +61,30 @@ describe("isTransientD1Error", () => {
         expect(isTransientD1Error(undefined)).toBe(false);
         expect(isTransientD1Error({ nope: true })).toBe(false);
     });
+});
 
-    it("exports the matched substrings for callers extending the policy", () => {
-        expect.assertions(1);
+describe("isReadOnlyD1Sql", () => {
+    it("accepts the statements that cannot have applied anything", () => {
+        expect.assertions(4);
 
-        expect(TRANSIENT_D1_ERRORS.length).toBeGreaterThan(0);
+        expect(isReadOnlyD1Sql("SELECT * FROM users")).toBe(true);
+        expect(isReadOnlyD1Sql("  \n select 1")).toBe(true);
+        expect(isReadOnlyD1Sql("PRAGMA table_info('users')")).toBe(true);
+        expect(isReadOnlyD1Sql("EXPLAIN QUERY PLAN SELECT 1")).toBe(true);
+    });
+
+    it("rejects a write, including the ones D1 runs through all()", () => {
+        expect.assertions(5);
+
+        // The one that matters: `@lunora/sql-store` runs its optimistic-
+        // concurrency compare-and-swap as `UPDATE … RETURNING "id"` through
+        // `exec.all`. Re-running it reports a conflict for a write that landed.
+        expect(isReadOnlyD1Sql('UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING "id"')).toBe(false);
+        expect(isReadOnlyD1Sql('DELETE FROM "posts" WHERE "id" = ? RETURNING "id"')).toBe(false);
+        expect(isReadOnlyD1Sql("INSERT INTO seen (id) VALUES (?) RETURNING id")).toBe(false);
+        expect(isReadOnlyD1Sql("CREATE TABLE IF NOT EXISTS t (id TEXT)")).toBe(false);
+        // A CTE may end in UPDATE; unprovable means unretried.
+        expect(isReadOnlyD1Sql("WITH x AS (SELECT 1) SELECT * FROM x")).toBe(false);
     });
 });
 
@@ -127,7 +159,7 @@ describe("withD1Retry", () => {
         expect(calls).toBe(1);
     });
 
-    it("backs off exponentially, bounded by maxDelayMs", async () => {
+    it("backs off exponentially, bounded by the delay ceiling", async () => {
         expect.assertions(2);
 
         const delays: number[] = [];
@@ -140,9 +172,7 @@ describe("withD1Retry", () => {
                         throw new Error("network connection lost");
                     },
                     {
-                        attempts: 5,
-                        baseDelayMs: 100,
-                        maxDelayMs: 250,
+                        attempts: 7,
                         sleep: async (ms) => {
                             delays.push(ms);
                         },
@@ -150,9 +180,9 @@ describe("withD1Retry", () => {
                 ),
             ).rejects.toThrow(/network connection lost/iu);
 
-            // 100, 200, then clamped at 250. Math.random pinned to 1 so full
-            // jitter yields the ceiling.
-            expect(delays).toStrictEqual([100, 200, 250, 250]);
+            // 50, 100, 200, 400, 800, then clamped at 1000. Math.random pinned
+            // to 1 so full jitter yields the ceiling.
+            expect(delays).toStrictEqual([50, 100, 200, 400, 800, 1000]);
         } finally {
             randomSpy.mockRestore();
         }
@@ -172,7 +202,6 @@ describe("withD1Retry", () => {
                     },
                     {
                         attempts: 3,
-                        baseDelayMs: 100,
                         sleep: async (ms) => {
                             delays.push(ms);
                         },
@@ -183,46 +212,10 @@ describe("withD1Retry", () => {
             // Half the ceiling, not the ceiling: without jitter every caller
             // that hit the same blip retries together and re-converges on the
             // recovering database as one wave.
-            expect(delays).toStrictEqual([50, 100]);
+            expect(delays).toStrictEqual([25, 50]);
         } finally {
             randomSpy.mockRestore();
         }
-    });
-
-    it("reports each retry for logging", async () => {
-        expect.assertions(2);
-
-        const seen: number[] = [];
-
-        await expect(
-            withD1Retry(
-                async () => {
-                    throw new Error("network connection lost");
-                },
-                { attempts: 3, onRetry: (info) => seen.push(info.attempt), sleep: noSleep },
-            ),
-        ).rejects.toThrow(/network connection lost/iu);
-
-        expect(seen).toStrictEqual([1, 2]);
-    });
-
-    it("honours a narrowed retry policy", async () => {
-        expect.assertions(2);
-
-        let calls = 0;
-
-        await expect(
-            withD1Retry(
-                async () => {
-                    calls += 1;
-
-                    throw new Error("network connection lost");
-                },
-                { isRetryable: () => false, sleep: noSleep },
-            ),
-        ).rejects.toThrow(/network connection lost/iu);
-
-        expect(calls).toBe(1);
     });
 
     it("runs exactly once with an attempt budget of 1", async () => {
@@ -263,7 +256,7 @@ describe("stall handling", () => {
         await expect(withD1Retry(stall, { attempts: 1, timeoutMs: 20 })).rejects.toThrow(D1TimeoutError);
 
         // The point of the whole feature: the caller stops waiting.
-        expect(Date.now() - started).toBeLessThan(2000);
+        expect(Date.now() - started).toBeLessThan(500);
     });
 
     it("names the timeout and warns the underlying call may still run", async () => {
@@ -299,49 +292,123 @@ describe("stall handling", () => {
         expect(calls).toBe(2);
     });
 
-    it("bounds the whole operation with deadlineMs instead of compounding timeouts", async () => {
+    it("abandons an in-flight attempt once deadlineMs is spent", async () => {
         expect.assertions(2);
 
-        let calls = 0;
-        let clock = 0;
+        const started = Date.now();
 
-        await expect(
-            withD1Retry(
-                async () => {
-                    calls += 1;
-                    // Each attempt burns the per-attempt timeout.
-                    clock += 30_000;
+        // No timeoutMs: the deadline alone has to bound the attempt. Checking
+        // it only between attempts leaves the first one running forever.
+        await expect(withD1Retry(stall, { deadlineMs: 150, sleep: noSleep })).rejects.toThrow(D1TimeoutError);
 
-                    throw new Error("network connection lost");
-                },
-                { attempts: 10, deadlineMs: 45_000, now: () => clock, sleep: noSleep },
-            ),
-        ).rejects.toThrow(/network connection lost/u);
-
-        // Without a deadline this would run all 10 attempts — 300s of stall.
-        // The budget stops it after the second.
-        expect(calls).toBe(2);
+        expect(Date.now() - started).toBeLessThan(1000);
     });
 
-    it("does not apply a deadline when none is set", async () => {
+    it("stops retrying once the deadline is spent instead of compounding timeouts", async () => {
         expect.assertions(2);
 
-        let calls = 0;
-        let clock = 0;
+        await withFakeClock(async (advance) => {
+            let calls = 0;
 
-        await expect(
-            withD1Retry(
-                async () => {
-                    calls += 1;
-                    clock += 1_000_000;
+            await expect(
+                withD1Retry(
+                    async () => {
+                        calls += 1;
+                        // Each attempt burns most of the budget.
+                        advance(30_000);
 
-                    throw new Error("network connection lost");
-                },
-                { attempts: 3, now: () => clock, sleep: noSleep },
-            ),
-        ).rejects.toThrow(/network connection lost/u);
+                        throw new Error("network connection lost");
+                    },
+                    { attempts: 10, deadlineMs: 45_000, sleep: noSleep },
+                ),
+            ).rejects.toThrow(/network connection lost/u);
 
-        expect(calls).toBe(3);
+            // Without a deadline this would run all 10 attempts — 300s of
+            // stall. The budget stops it after the second.
+            expect(calls).toBe(2);
+        });
+    });
+
+    it("never sleeps a backoff the deadline cannot afford", async () => {
+        expect.assertions(2);
+
+        await withFakeClock(async (advance) => {
+            const delays: number[] = [];
+            const randomSpy = vi.spyOn(Math, "random").mockReturnValue(1);
+
+            try {
+                await expect(
+                    withD1Retry(
+                        async () => {
+                            advance(30);
+
+                            throw new Error("network connection lost");
+                        },
+                        {
+                            attempts: 5,
+                            deadlineMs: 60,
+                            sleep: async (ms) => {
+                                delays.push(ms);
+                                advance(ms);
+                            },
+                        },
+                    ),
+                ).rejects.toThrow(/network connection lost/u);
+
+                // Ceiling is 50ms, but only 30ms of budget is left.
+                expect(delays).toStrictEqual([30]);
+            } finally {
+                randomSpy.mockRestore();
+            }
+        });
+    });
+
+    it("does not retry a slow failure when nothing bounds the operation", async () => {
+        expect.assertions(2);
+
+        await withFakeClock(async (advance) => {
+            let calls = 0;
+
+            await expect(
+                withD1Retry(
+                    async () => {
+                        calls += 1;
+                        // The reported D1 failure mode: a 30-second hang that
+                        // then errors.
+                        advance(30_000);
+
+                        throw new Error("network connection lost");
+                    },
+                    { sleep: noSleep },
+                ),
+            ).rejects.toThrow(/network connection lost/u);
+
+            // Three attempts here is a 90-second request instead of a
+            // 30-second one — the amplification the defaults must not ship.
+            expect(calls).toBe(1);
+        });
+    });
+
+    it("still retries a fast failure when nothing bounds the operation", async () => {
+        expect.assertions(2);
+
+        await withFakeClock(async (advance) => {
+            let calls = 0;
+
+            await expect(
+                withD1Retry(
+                    async () => {
+                        calls += 1;
+                        advance(5);
+
+                        throw new Error("network connection lost");
+                    },
+                    { sleep: noSleep },
+                ),
+            ).rejects.toThrow(/network connection lost/u);
+
+            expect(calls).toBe(3);
+        });
     });
 
     it("clears its timer on the success path", async () => {
@@ -354,7 +421,7 @@ describe("stall handling", () => {
 
             // A Worker leaving a 5s timer armed per query keeps the isolate
             // alive for no reason.
-            expect(clearSpy.mock.calls.length).toBeGreaterThan(0);
+            expect(clearSpy).toHaveBeenCalledTimes(1);
         } finally {
             clearSpy.mockRestore();
         }
@@ -364,5 +431,76 @@ describe("stall handling", () => {
         expect.assertions(1);
 
         await expect(withD1Retry(async () => "ok", { sleep: noSleep })).resolves.toBe("ok");
+    });
+});
+
+describe("retryingExec", () => {
+    const failingExec = (): { calls: string[]; exec: SqlCtxExec } => {
+        const calls: string[] = [];
+
+        return {
+            calls,
+            exec: {
+                all: async (sql) => {
+                    calls.push(sql);
+
+                    throw new Error("D1_ERROR: Network connection lost");
+                },
+                run: async (sql) => {
+                    calls.push(sql);
+
+                    throw new Error("D1_ERROR: Network connection lost");
+                },
+            },
+        };
+    };
+
+    it("retries a read", async () => {
+        expect.assertions(2);
+
+        const { calls, exec } = failingExec();
+
+        await expect(retryingExec(exec, { sleep: noSleep }).all("SELECT * FROM posts", [])).rejects.toThrow(/Network connection lost/u);
+
+        expect(calls).toHaveLength(3);
+    });
+
+    it("does not retry an UPDATE … RETURNING running through all()", async () => {
+        expect.assertions(2);
+
+        const { calls, exec } = failingExec();
+
+        // The optimistic-concurrency compare-and-swap `@lunora/sql-store`
+        // issues. A retry after a lost response finds the guard clause no
+        // longer matching and reports a conflict for a write that applied.
+        await expect(retryingExec(exec, { sleep: noSleep }).all('UPDATE "posts" SET "title" = ? WHERE "id" = ? RETURNING "id"', ["x", "1"])).rejects.toThrow(
+            /Network connection lost/u,
+        );
+
+        expect(calls).toHaveLength(1);
+    });
+
+    it("passes writes through untouched", async () => {
+        expect.assertions(2);
+
+        const { calls, exec } = failingExec();
+        const batch = vi.fn<NonNullable<SqlCtxExec["batch"]>>(async () => {});
+
+        await expect(retryingExec({ ...exec, batch }, { sleep: noSleep }).run("INSERT INTO posts (id) VALUES (?)", ["1"])).rejects.toThrow(
+            /Network connection lost/u,
+        );
+
+        expect(calls).toHaveLength(1);
+    });
+
+    it("keeps the exec's optional batch seam", async () => {
+        expect.assertions(1);
+
+        const { exec } = failingExec();
+        const batch = vi.fn<NonNullable<SqlCtxExec["batch"]>>(async () => {});
+
+        await retryingExec({ ...exec, batch }).batch?.([{ params: [], sql: "INSERT INTO posts (id) VALUES ('1')" }]);
+
+        expect(batch).toHaveBeenCalledTimes(1);
     });
 });

@@ -12,17 +12,24 @@
  * Which means an application that does not retry has adopted D1's baseline
  * error rate as its own. This module is that retry layer.
  *
- * ## Reads and writes are not the same
+ * ## Only read-only statements retry
  *
  * Every error below is **ambiguous about whether the statement applied**. "The
  * connection dropped" does not say whether it dropped before or after the write
  * committed, and D1 has no interactive transactions to resolve it.
  *
- * So reads retry automatically and writes do not. Silently re-running
- * `UPDATE accounts SET balance = balance - 10` because the response was lost is
- * how a retry layer turns a transient blip into a corrupted balance. Writes
- * that are genuinely idempotent — an upsert on a primary key, a delete by id —
- * can opt in per call.
+ * So the automatic paths ({@link retryingExec}, `D1Session.all` / `.first`)
+ * retry a statement only when its leading keyword is `SELECT`, `PRAGMA` or
+ * `EXPLAIN`. The method is not the signal: D1 runs
+ * `UPDATE … RETURNING` through `.all()` exactly like `.run()`, and
+ * `@lunora/sql-store` does precisely that for its optimistic-concurrency
+ * compare-and-swap. Re-running one of those after a lost response either
+ * double-applies the write or — for the compare-and-swap shape — comes back
+ * with an empty `RETURNING` set and reports a conflict for a write that
+ * actually landed.
+ *
+ * Writes that are genuinely idempotent — an upsert on a primary key, a delete
+ * by id — can still opt in by calling {@link withD1Retry} directly.
  *
  * ## Retrying without a timeout makes a stall worse
  *
@@ -31,19 +38,22 @@
  * several times a day, on databases holding tens of megabytes.
  *
  * A retry loop wrapped around a stall *amplifies* it: three attempts at 30
- * seconds each is a 90-second request instead of a 30-second one. So set
+ * seconds each is a 90-second request instead of a 30-second one. Set
  * {@link D1RetryOptions.timeoutMs} to abandon an attempt that has clearly hung,
- * and {@link D1RetryOptions.deadlineMs} to bound the whole operation. Without
- * them this layer helps with fast errors and hurts with slow ones.
+ * and {@link D1RetryOptions.deadlineMs} to bound the whole operation. With
+ * neither configured this layer refuses to retry a *slow* failure at all (see
+ * {@link SLOW_FAILURE_MS}), so the default configuration helps with fast errors
+ * instead of compounding slow ones.
  *
  * **A timeout abandons the wait, not the work.** There is no way to cancel an
  * in-flight D1 operation from a Worker, so the subrequest continues and still
  * counts against the request's subrequest budget. What the timeout buys is that
- * your* request stops waiting — which is the difference between a user seeing
- * a fast error and a user watching a spinner for half a minute.
+ * the caller's request stops waiting — which is the difference between a user
+ * seeing a fast error and a user watching a spinner for half a minute.
  * @experimental
  */
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, unreachable } from "@lunora/errors";
+import type { SqlCtxExec } from "@lunora/sql-store";
 
 /**
  * Substrings identifying a D1 failure that is worth retrying, taken from
@@ -51,6 +61,17 @@ import { LunoraError } from "@lunora/errors";
  *
  * Matched as substrings because D1 wraps them with varying prefixes
  * (`D1_ERROR:`, `Error in D1 ...`) and appends request ids.
+ *
+ * Deliberately specific. A generic needle like `"internal error"` also matches
+ * `D1_ERROR: internal error: too many SQL variables`, which is deterministic —
+ * it fails identically on every attempt — and matching it would force a deny
+ * list of deterministic phrasings to patch the over-match back out.
+ *
+ * Two entries here are judgement calls rather than certainties.
+ * `exceeded its memory limit` and `storage operation exceeded timeout` are
+ * transient when the isolate was recycled under unrelated load, and
+ * deterministic when the query is simply too big for D1 to serve — in which
+ * case the retries are wasted work before the same failure surfaces.
  */
 const TRANSIENT_D1_ERRORS = [
     // The storage object took too long and was recycled mid-operation.
@@ -64,52 +85,56 @@ const TRANSIENT_D1_ERRORS = [
     "exceeded its memory limit",
     // The generic form of "your object was recycled, try again".
     "caused object to be reset",
-    // Cloudflare's own transient-failure marker.
-    "internal error",
 ] as const;
 
 /** Default number of attempts, including the first. */
 const DEFAULT_ATTEMPTS = 3;
 
 /** Base delay in ms; doubles each attempt. */
-const DEFAULT_BASE_DELAY_MS = 50;
+const BASE_DELAY_MS = 50;
 
 /** Ceiling on any single backoff wait, in ms. */
-const DEFAULT_MAX_DELAY_MS = 1000;
+const MAX_DELAY_MS = 1000;
+
+/**
+ * A failed attempt slower than this was a stall, not a blip — so when the
+ * caller configured neither {@link D1RetryOptions.timeoutMs} nor
+ * {@link D1RetryOptions.deadlineMs}, it is not retried.
+ *
+ * Without this the shipped defaults are the amplifying configuration the module
+ * warns about: three attempts, no bound, one 30-second D1 hang becoming a
+ * 90-second request. The threshold costs nothing on the failure mode retries
+ * exist for (a dropped connection comes back in milliseconds) and refuses only
+ * the case where retrying makes the outage worse.
+ */
+const SLOW_FAILURE_MS = 2000;
+
+/** Statements safe to run twice: they cannot have applied anything. */
+const READ_ONLY_STATEMENT = /^[\s(]*(?:select|pragma|explain)\b/iu;
+
+/**
+ * True when `sql` is a statement that can be re-run without applying anything
+ * twice.
+ *
+ * Conservative on purpose. `WITH …` is excluded even though a SQLite CTE is
+ * usually a read, because `WITH x AS (…) UPDATE …` is not; a statement this
+ * cannot prove read-only simply does not retry.
+ */
+const isReadOnlyD1Sql = (sql: string): boolean => READ_ONLY_STATEMENT.test(sql);
 
 /** Tuning for {@link withD1Retry}. */
 interface D1RetryOptions {
     /** Total attempts including the first. Default 3. Must be >= 1. */
     attempts?: number;
 
-    /** First backoff delay in ms, doubling each attempt. Default 50. */
-    baseDelayMs?: number;
-
     /**
-     * Total budget across every attempt and backoff, in ms. Once exceeded, the
-     * last error is rethrown instead of retrying again.
+     * Total budget across every attempt and backoff, in ms. An attempt still
+     * running when the budget expires is abandoned, and a backoff never sleeps
+     * past it.
      *
-     * `timeoutMs` bounds one attempt; this bounds the operation. Without it,
-     * `attempts × timeoutMs` plus backoff is the real worst case, which is
-     * rarely what a request handler can afford.
+     * `timeoutMs` bounds one attempt; this bounds the operation.
      */
     deadlineMs?: number;
-
-    /**
-     * Classify an error as retryable. Defaults to {@link isTransientD1Error}.
-     * Override to narrow it — never to widen it past errors you know are safe
-     * to re-run.
-     */
-    isRetryable?: (error: unknown) => boolean;
-
-    /** Ceiling on a single backoff wait, in ms. Default 1000. */
-    maxDelayMs?: number;
-
-    /** Reads the current time. Injected so tests need no clock control. */
-    now?: () => number;
-
-    /** Called before each retry — for logging or metrics. */
-    onRetry?: (info: { attempt: number; delayMs: number; error: unknown }) => void;
 
     /** Sleep implementation. Injected so tests need no timers. */
     sleep?: (ms: number) => Promise<void>;
@@ -118,11 +143,10 @@ interface D1RetryOptions {
      * Abandon a single attempt that has not settled within this many ms, and
      * treat it as a transient failure.
      *
-     * **Set this.** D1's characteristic failure is a stall, not a fast error,
-     * and a retry loop without a per-attempt timeout turns one 30-second hang
-     * into three. There is no safe default here — a legitimate analytical query
-     * and a stalled one look identical from outside — so the value has to come
-     * from what your workload actually needs.
+     * There is no default — a legitimate analytical query and a stalled one
+     * look identical from outside, so the value has to come from what your
+     * workload actually needs. Unset, {@link SLOW_FAILURE_MS} stops a slow
+     * failure from being retried rather than guessing a bound for you.
      *
      * Only ever applied to operations that are safe to abandon. It does not
      * cancel the underlying D1 call.
@@ -155,14 +179,21 @@ const isTransientD1Error = (error: unknown): boolean => {
         return false;
     }
 
-    // A constraint violation is deterministic: it will fail identically on
-    // every attempt, and its message can contain "internal error" in some
-    // driver wrappings. Never retry it.
-    if (message.includes("constraint") || message.includes("syntax error") || message.includes("no such table") || message.includes("no such column")) {
-        return false;
-    }
-
     return TRANSIENT_D1_ERRORS.some((needle) => message.includes(needle));
+};
+
+/**
+ * Full-jitter backoff for `attempt`, capped at {@link MAX_DELAY_MS}.
+ *
+ * Jittered because without it every request that hit the same D1 blip retries
+ * in lockstep and re-converges on the recovering database as one synchronised
+ * wave — which is how a brief incident becomes a sustained one.
+ */
+const backoffMs = (attempt: number): number => {
+    const ceiling = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** (attempt - 1));
+
+    // eslint-disable-next-line sonarjs/pseudo-random -- jitter spreads retry timing; it is not a security primitive and needs no CSPRNG
+    return Math.round(Math.random() * ceiling);
 };
 
 const defaultSleep = async (ms: number): Promise<void> =>
@@ -232,57 +263,69 @@ const withD1Retry = async <T>(operation: () => Promise<T>, options: D1RetryOptio
         throw new LunoraError("BAD_REQUEST", "@lunora/d1: `attempts` must be an integer >= 1");
     }
 
-    const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-    const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
-    const isRetryable = options.isRetryable ?? isTransientD1Error;
     const sleep = options.sleep ?? defaultSleep;
-    const now = options.now ?? Date.now;
     const { deadlineMs, timeoutMs } = options;
-    const startedAt = now();
-
-    let lastError: unknown;
+    const startedAt = Date.now();
+    // With no bound configured at all, a slow failure is refused a retry
+    // instead of being compounded. See SLOW_FAILURE_MS.
+    const unbounded = deadlineMs === undefined && timeoutMs === undefined;
+    /** Whatever is left of the operation's total budget; `Infinity` with no deadline. */
+    const budgetLeft = (): number => (deadlineMs === undefined ? Number.POSITIVE_INFINITY : deadlineMs - (Date.now() - startedAt));
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        // The deadline bounds this attempt, not just the decision to start
+        // another one — it documents the operation's worst case, and checking
+        // it only after a failure makes the real bound
+        // `deadlineMs + timeoutMs + backoff`.
+        const attemptBudgetMs = Math.min(timeoutMs ?? Number.POSITIVE_INFINITY, Math.max(budgetLeft(), 0));
+        const attemptStartedAt = Date.now();
+
         try {
             // eslint-disable-next-line no-await-in-loop -- sequential retry is the mechanism
-            return await (timeoutMs === undefined ? operation() : withTimeout(operation, timeoutMs));
+            return await (Number.isFinite(attemptBudgetMs) ? withTimeout(operation, attemptBudgetMs) : operation());
         } catch (error) {
-            lastError = error;
-
             // An abandoned attempt is retryable by definition: nothing came
             // back, so there is no error to classify.
-            const retryable = error instanceof D1TimeoutError || isRetryable(error);
+            const retryable = error instanceof D1TimeoutError || isTransientD1Error(error);
+            const wasStall = unbounded && Date.now() - attemptStartedAt >= SLOW_FAILURE_MS;
+            // Never sleep past the deadline either: waiting out a backoff the
+            // budget cannot afford burns the caller's time to reach the same
+            // failure.
+            const remainingMs = budgetLeft();
 
-            if (attempt === attempts || !retryable) {
+            if (attempt === attempts || !retryable || wasStall || remainingMs <= 0) {
                 throw error;
             }
-
-            // Stop once the operation's total budget is spent. Checked before
-            // sleeping, so an exhausted deadline fails immediately rather than
-            // waiting out a backoff it will never use.
-            if (deadlineMs !== undefined && now() - startedAt >= deadlineMs) {
-                throw error;
-            }
-
-            // Full jitter. Without it, every request that hit the same D1 blip
-            // retries in lockstep and re-converges on the recovering database
-            // as one synchronised wave — which is how a brief incident becomes
-            // a sustained one.
-            const ceiling = Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
-            // eslint-disable-next-line sonarjs/pseudo-random -- jitter spreads retry timing; it is not a security primitive and needs no CSPRNG
-            const delayMs = Math.round(Math.random() * ceiling);
-
-            options.onRetry?.({ attempt, delayMs, error });
 
             // eslint-disable-next-line no-await-in-loop -- sequential backoff is the mechanism
-            await sleep(delayMs);
+            await sleep(Math.min(backoffMs(attempt), remainingMs));
         }
     }
 
-    // Unreachable: the final attempt either returns or throws above. Present so
-    // the function has a definite return for every path.
-    throw lastError;
+    return unreachable("@lunora/d1: retry loop exited without returning or throwing");
+};
+
+/**
+ * Wrap a `.global()` exec so its **read-only** statements retry D1's transient
+ * failures.
+ *
+ * This is where the retry has to live to reach an application: `.global()`
+ * tables run every read through the exec codegen builds over the raw D1
+ * binding, not through a `D1Client`. `run` and `batch` are passed straight
+ * through — they are the write path, and a transient D1 error does not say
+ * whether the write applied.
+ *
+ * `all` is not the read path either. It only retries when
+ * {@link isReadOnlyD1Sql} proves the statement is one, because `UPDATE …
+ * RETURNING` runs through `all` too.
+ * @experimental
+ */
+const retryingExec = (exec: SqlCtxExec, options?: D1RetryOptions): SqlCtxExec => {
+    return {
+        ...exec,
+        all: async (sql, parameters) => (isReadOnlyD1Sql(sql) ? withD1Retry(async () => exec.all(sql, parameters), options) : exec.all(sql, parameters)),
+    };
 };
 
 export type { D1RetryOptions };
-export { D1TimeoutError, isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry };
+export { D1TimeoutError, isReadOnlyD1Sql, isTransientD1Error, retryingExec, withD1Retry };
