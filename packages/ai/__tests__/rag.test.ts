@@ -563,6 +563,38 @@ describe(defineRag, () => {
         expect(vi.mocked(embed)).toHaveBeenCalledTimes(embedCallsAfterFirst);
     });
 
+    it("re-runs the whole index path under `reindex`, mirroring into a newly attached store", async () => {
+        expect.assertions(3);
+
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const mirrored: string[] = [];
+        const lexicalStore = {
+            index: (chunks: ReadonlyArray<{ id: string }>) => {
+                mirrored.push(...chunks.map((entry) => entry.id));
+
+                return Promise.resolve();
+            },
+            search: () => Promise.resolve([]),
+        };
+
+        // Index once WITHOUT the lexical store — the shape of an app that adds
+        // hybrid search to a corpus it already indexed.
+        await defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" })(ctx).index({ id: "doc-1", text: "alpha | beta" });
+
+        const upgraded = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore })(ctx);
+
+        // The content hash still matches, so the ordinary re-sync short-circuits
+        // before reaching the lexical mirror: the keyword leg would return
+        // nothing forever, with no error.
+        await expect(upgraded.index({ id: "doc-1", text: "alpha | beta" })).resolves.toMatchObject({ unchanged: true });
+        expect(mirrored).toStrictEqual([]);
+
+        await upgraded.index({ id: "doc-1", reindex: true, text: "alpha | beta" });
+
+        expect(mirrored).toStrictEqual(["doc-1#0", "doc-1#1"]);
+    });
+
     it("deletes stale trailing chunks when a re-indexed source shrinks", async () => {
         expect.assertions(3);
 

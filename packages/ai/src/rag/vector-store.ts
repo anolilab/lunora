@@ -34,6 +34,18 @@ interface RagVectorStoreCapabilities {
     maxDimensions: number | false;
 
     /**
+     * Ceiling on a vector's id, in bytes, or `false` for no limit.
+     *
+     * Vectorize allows 64, and chunk ids are derived from the namespace and the
+     * caller's source id — a bucket key like
+     * `handbook/engineering/onboarding/day-one.md` under a uuid namespace is
+     * already past it. Without this the upsert is rejected at the far side with
+     * nothing naming the cause, the same failure {@link RagVectorStoreCapabilities.maxMetadataBytes}
+     * exists to replace.
+     */
+    maxIdBytes: number | false;
+
+    /**
      * Ceiling on the serialized metadata object per vector, in bytes, or
      * `false` for no limit. Covers the whole object — chunk text included when
      * no `textStore` moves it out.
@@ -70,6 +82,7 @@ interface RagVectorStore {
  */
 const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities = {
     maxDimensions: 1536,
+    maxIdBytes: 64,
     maxMetadataBytes: 10 * 1024,
     maxTopK: 100,
     maxTopKWithMetadata: 50,
