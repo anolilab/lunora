@@ -1,6 +1,9 @@
 ---
 title: "@lunora/values"
 description: The validator runtime — v.*, Validator, Infer, Id, ValidationError, and JSON Schema export.
+related:
+    - to: /docs/packages/server
+    - to: /docs/concepts/schema
 ---
 
 `@lunora/values` is the validator runtime behind Lunora: the `v.*` factories and
@@ -38,12 +41,12 @@ Lunora validator directly.
 | Factory                | Accepts                       | Notes                                                  |
 | ---------------------- | ----------------------------- | ------------------------------------------------------ |
 | `v.string()`           | `string`                      | UTF-8 text                                             |
-| `v.number()`           | `number`                      | Finite only — `NaN`/`±Infinity` throw                  |
+| `v.number()`           | `number`                      | Finite only; `NaN`/`±Infinity` throw                   |
 | `v.boolean()`          | `boolean`                     | `true` / `false`                                       |
 | `v.null()`             | `null`                        | Only `null`                                            |
 | `v.bigint()`           | `bigint`                      | Stored as INTEGER (int64) in D1                        |
 | `v.bytes()`            | `ArrayBuffer`                 | Binary; stored as BLOB. A `Uint8Array` is rejected     |
-| `v.any()`              | anything                      | Escape hatch — no runtime check                        |
+| `v.any()`              | anything                      | Escape hatch; no runtime check                         |
 | `v.id(table)`          | `Id<table>`                   | Branded id string for the given table                  |
 | `v.literal(value)`     | exact `value`                 | `string` / `number` / `boolean` / `bigint` / `null`    |
 | `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                                      |
@@ -61,7 +64,7 @@ Every factory returns a `Validator` with `parse(value)` (throws
 `{ ok: true, value } | { ok: false, error }`).
 
 <Callout type="warn">
-    `v.from(...)` validators are **args-only** — pass them to `query`/`mutation`/`action` args, never to a `defineTable` column. `defineTable` rejects them
+    `v.from(...)` validators are **args-only**: pass them to `query`/`mutation`/`action` args, never to a `defineTable` column. `defineTable` rejects them
     (anywhere in the column, including nested) because a Standard Schema value has no SQL column type. The wrapped `validate` must be synchronous; an async
     result throws.
 </Callout>
@@ -86,13 +89,13 @@ export const users = defineTable({
 });
 ```
 
-- `.default(value)` / `.$defaultFn(() => value)` — fill an absent field; the field becomes optional on insert.
-- `.$onUpdateFn(() => value)` — recompute on every patch/replace.
-- `.serverDefault(({ auth }) => value)` — stamp server-side on every write, overwriting any client value.
-- `.nullable()` — allow SQL `NULL`; widens select/insert to include `null`.
-- `.unique()` — synthesize a UNIQUE index.
-- `.$type<T>()` — retype select/insert without changing runtime parsing.
-- `.defaultNow()` — `v.timestamp()` / `v.date()` only; defaults to `Date.now()`.
+- `.default(value)` / `.$defaultFn(() => value)`: fill an absent field; the field becomes optional on insert.
+- `.$onUpdateFn(() => value)`: recompute on every patch/replace.
+- `.serverDefault(({ auth }) => value)`: stamp server-side on every write, overwriting any client value.
+- `.nullable()`: allow SQL `NULL`; widens select/insert to include `null`.
+- `.unique()`: synthesize a UNIQUE index.
+- `.$type<T>()`: retype select/insert without changing runtime parsing.
+- `.defaultNow()`: `v.timestamp()` / `v.date()` only; defaults to `Date.now()`.
 
 ## Refinements and metadata
 
@@ -142,8 +145,8 @@ separately (insert types may be optional via `.default()`/`.$defaultFn()`/`v.opt
 Thrown by `parse(value)` and surfaced by `query` / `mutation` / `action` when
 the input shape doesn't match the declared args. It carries:
 
-- `path: ValidationPath` — `(string | number)[]` from the root to the offending field, e.g. `["users", 0, "email"]`.
-- `expected: string` / `received: string` — the expected shape and a short description of what arrived.
+- `path: ValidationPath`: `(string | number)[]` from the root to the offending field, e.g. `["users", 0, "email"]`.
+- `expected: string` / `received: string`: the expected shape and a short description of what arrived.
 
 Helpers: `formatPath(path)` renders a path as `users[0].email` (`<root>` when
 empty), and `describeValue(value)` produces the short summary used in messages.
@@ -174,8 +177,3 @@ const schema = argsToJsonSchema({ id: v.id("users"), limit: v.optional(v.number(
 `<label>.<key>:` prefix. It is the shared arg/field parser used by the procedure
 builder, the HTTP route builder, and reusable workflow steps. `InferValidatorMap<A>`
 gives the object type of such a map (optional validators become optional keys).
-
-## See also
-
-- [@lunora/server](/docs/packages/server)
-- [Concepts: schema](/docs/concepts/schema)

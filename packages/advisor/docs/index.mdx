@@ -1,33 +1,42 @@
 ---
 title: "@lunora/advisor"
 description: "Schema and query lints — splinter-style advisors that surface in the Studio Advisors view, most of them at codegen time before you ship."
+related:
+    - to: /docs/packages/server
+      note: "the `defineSchema` / `defineTable` these lints analyze"
+    - to: /docs/packages/studio
+      note: "renders the Advisors view"
+    - to: /docs/packages/hyperdrive
+      note: "the `hyperdrive_outside_action` lint"
+    - to: /docs/packages/bindings
+      note: "the `r2sql_outside_action` lint and the Analytics SQL client the runtime feeder reads"
 ---
 
 `@lunora/advisor` is a set of lints over your Lunora app, modeled on Supabase's
 [splinter](https://github.com/supabase/splinter). Each lint is a pure rule over a
 normalized `LintContext`; `runAdvisor()` runs a set of them and flattens the
-results into a flat list of findings that the CLI, the Vite plugin, and the
+results into a single list of findings that the CLI, the Vite plugin, and the
 Studio Advisors view all render.
 
 You rarely call this package directly. `@lunora/codegen` runs the static lints
 during `lunora dev` and `lunora codegen`, so a problem shows up in your terminal
-and in Studio while you work — most of them **before the code ships**, which is
-the edge over an advisor that can only inspect a live database.
+and in Studio while you work. Most of them run **before the code ships**, unlike
+an advisor that can only inspect a live database.
 
 ## Two evidence tiers
 
 A lint draws its evidence from one of two sources:
 
-- **`static`** — runs against the declared `defineSchema` (tables, indexes,
+- **`static`**: runs against the declared `defineSchema` (tables, indexes,
   relations) plus the query reads and inserts the codegen feeder discovers in
   your function bodies. Deterministic and runnable at build time. Most lints are
   static.
-- **`runtime`** — reads observed signal from a running deployment (per-shard
+- **`runtime`**: reads observed signal from a running deployment (per-shard
   traffic, table scans, index hits, row samples). Three lints are runtime-only;
   they need a live worker.
 
-Every finding carries a `level` — `ERROR`, `WARN`, or `INFO` — and a `category`
-of `SECURITY`, `PERFORMANCE`, or `SCHEMA`.
+Every finding carries a `level` (`ERROR`, `WARN`, or `INFO`) and a `category` of
+`SECURITY`, `PERFORMANCE`, or `SCHEMA`.
 
 ## How findings surface
 
@@ -61,31 +70,31 @@ Secrets, injection & SSRF:
 
 IDOR & unscoped access (a user-derived key/id reaches a resource without a server-scoped check):
 
-| Lint                                     | Level   | Flags                                                                                                      |
-| ---------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
-| `owner_field_from_args_not_auth`         | `ERROR` | An ownership column written from `args` instead of the server identity                                     |
-| `storage_key_from_user_args`             | `ERROR` | An R2 object key taken directly from user args                                                             |
-| `kv_unscoped_user_key_idor`              | `ERROR` | A KV key derived from unscoped user args                                                                   |
-| `container_instance_key_from_user_input` | `WARN`  | A container instance key from arg-derived unscoped input (cross-tenant IDOR)                               |
-| `images_url_source_from_user_input`      | `WARN`  | An image-delivery URL built from unscoped user input                                                       |
-| `mail_recipient_from_request_input`      | `WARN`  | A mail recipient derived from request input                                                                |
-| `vectors_namespace_from_user_input`      | `WARN`  | A Vectorize namespace derived from unscoped user input                                                     |
-| `normalize_id_used_as_authorization`     | `INFO`  | A `normalizeId()` result gates access with no ownership/RLS check — it validates id _shape_, not ownership |
+| Lint                                     | Level   | Flags                                                                                                     |
+| ---------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| `owner_field_from_args_not_auth`         | `ERROR` | An ownership column written from `args` instead of the server identity                                    |
+| `storage_key_from_user_args`             | `ERROR` | An R2 object key taken directly from user args                                                            |
+| `kv_unscoped_user_key_idor`              | `ERROR` | A KV key derived from unscoped user args                                                                  |
+| `container_instance_key_from_user_input` | `WARN`  | A container instance key from arg-derived unscoped input (cross-tenant IDOR)                              |
+| `images_url_source_from_user_input`      | `WARN`  | An image-delivery URL built from unscoped user input                                                      |
+| `mail_recipient_from_request_input`      | `WARN`  | A mail recipient derived from request input                                                               |
+| `vectors_namespace_from_user_input`      | `WARN`  | A Vectorize namespace derived from unscoped user input                                                    |
+| `normalize_id_used_as_authorization`     | `INFO`  | A `normalizeId()` result gates access with no ownership/RLS check; it validates id _shape_, not ownership |
 
 RLS, masking & output shape:
 
-| Lint                                         | Level   | Flags                                                                                                          |
-| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
-| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy` — every tenant DO replicates the whole multitenant table |
-| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                         |
-| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                              |
-| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                         |
-| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                   |
-| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                     |
-| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column — recoverable                                   |
-| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                    |
-| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                              |
-| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                             |
+| Lint                                         | Level   | Flags                                                                                                         |
+| -------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------- |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy`; every tenant DO replicates the whole multitenant table |
+| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                        |
+| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                             |
+| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                        |
+| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                  |
+| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                    |
+| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column; the value is recoverable                      |
+| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                   |
+| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                             |
+| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                            |
 
 Auth configuration (`createAuth`):
 
@@ -138,15 +147,15 @@ Storage, AI, containers & payments:
 
 ### Performance
 
-| Lint                           | Level  | Flags                                                                                                         |
-| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------- |
-| `filter_without_index`         | `WARN` | A query filter on a column no index covers                                                                    |
-| `unbounded_collect`            | `WARN` | A `.collect()` with no index and no filter — the whole table, re-sent to every live subscriber on every write |
-| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table                                                         |
-| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table                                                        |
-| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed                                                        |
-| `duplicate_index`              | `INFO` | A redundant index already covered by another                                                                  |
-| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs                                                           |
+| Lint                           | Level  | Flags                                                                                                        |
+| ------------------------------ | ------ | ------------------------------------------------------------------------------------------------------------ |
+| `filter_without_index`         | `WARN` | A query filter on a column no index covers                                                                   |
+| `unbounded_collect`            | `WARN` | A `.collect()` with no index and no filter: the whole table, re-sent to every live subscriber on every write |
+| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table                                                        |
+| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table                                                       |
+| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed                                                       |
+| `duplicate_index`              | `INFO` | A redundant index already covered by another                                                                 |
+| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs                                                          |
 
 ### Schema
 
@@ -158,14 +167,14 @@ Storage, AI, containers & payments:
 | `shape_unknown_table`               | `ERROR` | A shape bound to a table that doesn't exist                                                        |
 | `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist                                               |
 | `workflow_duplicate_step_name`      | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result) |
-| `external_source_on_global`         | `ERROR` | A table that is both `.source()` and `.global()` — contradictory tiers                             |
+| `external_source_on_global`         | `ERROR` | A table that is both `.source()` and `.global()` (contradictory tiers)                             |
 | `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables                                                   |
 | `empty_index`                       | `WARN`  | An index declared with no fields                                                                   |
 | `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                        |
 | `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                                                                   |
 | `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                                                                 |
 | `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                     |
-| `queue_without_dlq`                 | `WARN`  | A `defineQueue` with no `deadLetterQueue` — exhausted messages are dropped, not captured           |
+| `queue_without_dlq`                 | `WARN`  | A `defineQueue` with no `deadLetterQueue`; exhausted messages are dropped, not captured            |
 | `table_without_insert`              | `INFO`  | A table no function inserts into                                                                   |
 | `workflow_unused`                   | `INFO`  | A workflow that is never started                                                                   |
 
@@ -183,7 +192,7 @@ worker has traffic.
 ## Run the lints yourself
 
 Adapt your schema with `fromServerSchema` and pass it to `runAdvisor`. The
-`source` option restricts to one tier — pass `"static"` to skip the runtime
+`source` option restricts to one tier: pass `"static"` to skip the runtime
 lints, which need a live deployment:
 
 ```ts
@@ -202,10 +211,10 @@ for (const finding of findings) {
 order. Each finding has `level`, `name`, `title`, `detail`, `description`,
 `remediation`, `categories`, `source`, and `metadata`. Options:
 
-- `lints` — the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
+- `lints`: the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
   `RUNTIME_LINTS` are also exported, as is each lint by name (e.g.
   `unindexedForeignKey`).
-- `source` — restrict to `"static"` or `"runtime"`. Omit to run both.
+- `source`: restrict to `"static"` or `"runtime"`. Omit to run both.
 
 ### Feeding the runtime lints
 
@@ -214,18 +223,18 @@ The runtime tier reads `shardTraffic`, `tableScans`, `indexHits`, and
 shard's durable counters.
 
 An Analytics-Engine-backed alternative feeder, `loadAnalyticsRuntimeMetrics`,
-exists in source (`src/ae-metrics.ts`) but is **quarantined** — not exported
-from `@lunora/advisor`'s package root, and not importable by consumers of the
+exists in source (`src/ae-metrics.ts`) but is **quarantined**: not exported from
+`@lunora/advisor`'s package root, and not importable by consumers of the
 published package. Nothing in the runtime writes the AE events it would read,
 so wiring it up today would silently read as "no dead indexes" rather than "no
 data" for the `index_utilization` lint. It stays internal, as groundwork for a
-future writer, until that gap closes — see the docblock atop `ae-metrics.ts`
-for the full read contract.
+future writer, until that gap closes. See the docblock atop `ae-metrics.ts` for
+the full read contract.
 
 ## Health map — score, verdicts, baseline
 
 The lints above answer _"what is wrong?"_. `scoreAdvisor()` answers _"how are we
-doing, and did it get worse?"_ — it rolls a lint run up into a weighted score, a
+doing, and did it get worse?"_ by rolling a lint run up into a weighted score, a
 grade, and a per-procedure verdict you can commit and diff in CI.
 
 It is a pure function over findings you already have, so it never re-runs a lint:
@@ -243,7 +252,7 @@ console.log(map.score, map.grade); // e.g. 84 "good"
 
 ### How a score is built
 
-Every procedure starts at 100 and loses each fired **rule's** weight — charged
+Every procedure starts at 100 and loses each fired **rule's** weight, charged
 once however many times that rule fires, so one lint hitting five call sites
 costs the same as one hitting a single call site.
 
@@ -255,29 +264,29 @@ costs the same as one hitting a single call site.
 
 A lint may override its own penalty with `Lint.weight`. Those per-procedure
 scores roll into a weighted mean: **public** handlers count double, **internal**
-ones and **queries** count half. Findings that name no procedure — schema shape,
-`wrangler.jsonc` config — land in a **project** bucket weighted against the
+ones and **queries** count half. Findings that name no procedure (schema shape,
+`wrangler.jsonc` config) land in a **project** bucket weighted against the
 procedure population, so schema debt still moves the grade.
 
-| Verdict   | Meaning                                         |
-| --------- | ----------------------------------------------- |
-| `clean`   | No lint fired                                   |
-| `warned`  | Scored at or above 50                           |
-| `failing` | Scored below 50                                 |
-| `exempt`  | Opted out — appears in the map, pulls no weight |
+| Verdict   | Meaning                                        |
+| --------- | ---------------------------------------------- |
+| `clean`   | No lint fired                                  |
+| `warned`  | Scored at or above 50                          |
+| `failing` | Scored below 50                                |
+| `exempt`  | Opted out; appears in the map, pulls no weight |
 
 Grades band the global score: `excellent` (≥ 90), `good` (≥ 70), `needs-work`
 (≥ 50), `at-risk` below that.
 
 <Callout type="info">
-    The verdicts are named for severity, not instrumentation, because every lint family feeds this score. A handler with a security finding is `failing` — it is
-    not a statement about telemetry.
+    The verdicts are named for severity, not instrumentation, because every lint family feeds this score. A handler with a security finding is `failing`; that
+    is not a statement about telemetry.
 </Callout>
 
 ### From the command line
 
-`lunora advisor` does all of this for you — scores the app, writes
-`lunora.advisor.map.json`, and gates on it:
+`lunora advisor` does all of this for you: it scores the app, writes
+`lunora.advisor.map.json`, and gates on it.
 
 ```sh
 lunora advisor                    # score, print a summary, write the artifact
@@ -322,7 +331,7 @@ if (diff.regressed) {
 
 <Callout type="warn">
     `parseAdvisorMap` returns `undefined` for a missing, malformed, or older-version baseline, and `compareToBaseline` returns `comparable: false` on a version
-    mismatch. Treat both as **"cannot verify"** and fail — reading them as "no regression" silently disables the gate.
+    mismatch. Treat both as **"cannot verify"** and fail; reading them as "no regression" silently disables the gate.
 </Callout>
 
 The artifact is deterministic apart from its timestamp: pass `generatedAt` to
@@ -330,13 +339,6 @@ make it byte-stable. `@lunora/codegen` exposes `toAdvisorContext()` to build the
 context straight from the feeder.
 
 <Callout type="info">
-    Some procedure-local lints — `filter_without_index` among them — currently report a file without an export name, so they land in the project bucket rather
+    Some procedure-local lints (`filter_without_index` among them) currently report a file without an export name, so they land in the project bucket rather
     than their procedure's row. Closing that gap is tracked work on the codegen feeder.
 </Callout>
-
-## See also
-
-- [@lunora/server](/docs/packages/server) — the `defineSchema` / `defineTable` these lints analyze
-- [@lunora/studio](/docs/packages/studio) — renders the Advisors view
-- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the `hyperdrive_outside_action` lint
-- [@lunora/bindings](/docs/packages/bindings) — the `r2sql_outside_action` lint and the Analytics SQL client the runtime feeder reads

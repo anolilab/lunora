@@ -1,6 +1,10 @@
 ---
 title: "@lunora/storage"
 description: R2-backed object storage with worker-signed and S3 presigned URLs.
+related:
+    - to: /docs/packages/server
+    - to: /docs/packages/react#file-uploads-lunorareactupload
+    - to: /docs/architecture
 ---
 
 `@lunora/storage` wraps a Cloudflare R2 binding with a typed API (`upload`,
@@ -12,7 +16,7 @@ directly.
 ## Wiring
 
 Declare the bucket on your app. The builder calls `createStorage` for you and
-exposes the result as `ctx.storage` in every handler — and the same declaration
+exposes the result as `ctx.storage` in every handler. The same declaration
 backs the studio file browser.
 
 ```ts
@@ -37,15 +41,15 @@ handlers get a read-only surface (`download`, `getMetadata`, `getSignedUrl`,
 (`store`, `delete`, `generateUploadUrl`, multipart, presigned). On `ctx.storage`,
 `download(key)` resolves to the `ReadableStream` directly.
 
-Build the full `Storage` outside a handler — or to use the object-level reads,
-ranged downloads, and multipart shown below — with
+Build the full `Storage` outside a handler (or to use the object-level reads,
+ranged downloads, and multipart shown below) with
 `createStorage({ bucket, publicBaseUrl?, signingSecret?, s3? })`. The examples
 that follow use such an instance, named `storage`.
 
 ## Direct upload from an action
 
 Minting an upload URL is a write capability, so it lives on an `action`. A
-`query` or `mutation` only gets the read-only projection — no
+`query` or `mutation` only gets the read-only projection, without
 `generateUploadUrl`, `store`, `upload`, or `delete`.
 
 ```ts
@@ -82,7 +86,7 @@ if (object) {
 }
 ```
 
-Pass `{ range }` to stream only a byte window — R2 resolves the range
+Pass `{ range }` to stream only a byte window. R2 resolves the range
 server-side, so the unwanted bytes never reach the Worker:
 
 ```ts
@@ -93,7 +97,7 @@ const head = await storage.download(key, { range: { offset: 0, length: 1024 } })
 the body (an R2 HEAD), returning `null` when the object is absent.
 
 `list(prefix?, { cursor, limit, delimiter })` paginates: echo `cursor` back for
-the next page while `truncated` is true. The cursor is opaque — treat it as a
+the next page while `truncated` is true. The cursor is opaque: treat it as a
 string, don't parse it.
 
 ```ts
@@ -109,7 +113,7 @@ do {
 
 A worker-signed URL resolves back through your Worker, so the request still
 passes your auth/policy/rate-limit gates before the body is served. `baseUrl`
-(and `.storage()`'s `publicBaseUrl`) must be a bare origin — `getSignedUrl`
+(and `.storage()`'s `publicBaseUrl`) must be a bare origin: `getSignedUrl`
 rejects a URL that carries a path, since the signature binds only host + key
 and verification reconstructs the key from the full URL pathname. The Worker
 route handling the signed download/upload (mounted at that origin, e.g.
@@ -170,19 +174,19 @@ await multipart.complete([part]);
 ## End-user uploads (RLS-gated)
 
 The admin studio upload path (`storageUpload` → `/_lunora/admin/storage`) is gated
-by an `adminToken` — right for the file browser, wrong for end users. For
+by an `adminToken`, which is right for the file browser and wrong for end users. For
 browser-driven uploads with **live progress, pause/resume, large-file resumable
 and per-part retry**, `@lunora/storage/upload` mounts `@visulima/storage`'s
 resumable upload handlers (TUS / chunked-REST / multipart) behind an app-supplied
 **RLS** gate. Drive it from the client with
 [`@lunora/react/upload`](/docs/packages/react#file-uploads-lunorareactupload)
 (or `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`, or the framework-agnostic
-`@lunora/client/upload`) — Lunora does not hand-roll the uploader.
+`@lunora/client/upload`). Lunora does not hand-roll the uploader.
 
 `createUploadHandler` returns a `fetch(request)` you mount on the route your
 client uploads to. The `authorize` callback is the RLS decision: it runs before
 every request (create, chunk PATCH, resume HEAD, delete) and **denies
-fail-closed** — returning `false` or throwing yields a `403`, never a `500`.
+fail-closed**: returning `false` or throwing yields a `403`, never a `500`.
 
 ```ts
 import { createR2UploadStorage, createUploadHandler } from "@lunora/storage/upload";
@@ -220,11 +224,5 @@ export default {
 
 `protocol` defaults to `"tus"` (the resumable, pause/resume-capable path); pass
 `"chunked-rest"` or `"multipart"` to mount a different one. Use a memory provider
-(`@visulima/storage/provider/memory`) in tests to exercise the whole flow —
-progress, pause/resume, resume-after-drop — without a live bucket.
-
-## See also
-
-- [@lunora/server](/docs/packages/server)
-- [@lunora/react — file uploads](/docs/packages/react#file-uploads-lunorareactupload)
-- [Architecture](/docs/architecture)
+(`@visulima/storage/provider/memory`) in tests to exercise the whole flow
+(progress, pause/resume, resume-after-drop) without a live bucket.

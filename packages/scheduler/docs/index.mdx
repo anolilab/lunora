@@ -1,6 +1,12 @@
 ---
 title: "@lunora/scheduler"
 description: Durable Object-backed scheduling for Lunora — runAfter/runAt, code-first cron jobs, and bounded-concurrency workpools.
+related:
+    - to: /docs/packages/server
+      note: "`ctx.scheduler`"
+    - to: /docs/packages/workflow
+      note: "durable multi-step workflows"
+    - to: /docs/architecture
 ---
 
 `@lunora/scheduler` ships a `SchedulerDO` you mount once per app. It stores
@@ -33,7 +39,7 @@ call back into.
 
 ### Standalone scheduler
 
-Outside a Lunora function — a plain Worker, a test — build the client yourself
+Outside a Lunora function (a plain Worker, a test), build the client yourself
 with `createScheduler`. This surface takes a typed **function reference** (from
 `_generated/api`) instead of a path:
 
@@ -54,7 +60,7 @@ await scheduler.cancel(id);
 
 Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
 
-Per-job `RunOptions` cover `shardKey` (routing hint) and `retry` — a retry
+Per-job `RunOptions` cover `shardKey` (routing hint) and `retry`, a retry
 policy with `maxAttempts` (default 5), `backoff` (`"exponential"` | `"linear"`),
 `baseMs` (default 30_000), and an optional `maxMs` ceiling. On exhaustion the job
 is parked under a dead-letter key rather than dropped.
@@ -63,7 +69,7 @@ is parked under a dead-letter key rather than dropped.
 
 Declare recurring jobs code-first in `lunora/crons.ts` with `cronJobs()`. Codegen
 discovers the file, compiles each schedule to a cron expression, emits the
-`wrangler.jsonc` `triggers.crons` array, and wires the runtime dispatch map — you
+`wrangler.jsonc` `triggers.crons` array, and wires the runtime dispatch map, so you
 never edit wrangler by hand:
 
 ```ts
@@ -86,7 +92,7 @@ export default crons;
 Each method takes a unique `name`, a schedule, a target, and optional `args`.
 Names must be unique within one `cronJobs()` registry. The target may be a
 function reference (a one-shot dispatch) or a durable workflow reference
-(`workflows.<name>`) — a workflow target starts a fresh workflow instance on each
+(`workflows.<name>`). A workflow target starts a fresh workflow instance on each
 fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="info">
@@ -96,7 +102,7 @@ fire, and its `args` are type-checked against the workflow's `params`.
 
 <Callout type="warn">
     **Migrating from Convex: `{ hours: 24 }` is not "once a day".** An interval compiles to a cron *step* within its field's period, so `interval.hours` is capped
-    at **23** and must divide 24 — `*/24` in a 0–23 field is not a recurrence. `{ days: 1 }` is not a unit either. Use `crons.daily(name, { hourUTC, minuteUTC },
+    at **23** and must divide 24: `*/24` in a 0-23 field is not a recurrence. `{ days: 1 }` is not a unit either. Use `crons.daily(name, { hourUTC, minuteUTC },
     …)` instead.
 
     Prefer `hourly`/`daily` over `interval` generally: they let you place a job *off* the boundary, which is how you stop a dozen jobs from all firing at `:00`.
@@ -130,7 +136,7 @@ schedule throws at authoring time. `isValidCronExpression` /
 ## Workpools
 
 For bounded-concurrency background work, `createWorkpool` builds a named logical
-pool inside the same `SchedulerDO` — no extra binding. The DO dispatches at most
+pool inside the same `SchedulerDO`, with no extra binding. The DO dispatches at most
 `maxConcurrency` of the pool's jobs at once and queues the rest durably, draining
 as the runtime reports completions:
 
@@ -153,7 +159,7 @@ await pool.cancel(id);
 
 Reach for the DO-backed `createWorkpool` when you need a hard concurrency cap,
 per-job cancellation, or per-job status. When you only want to rate-limit
-fire-and-forget work, `createQueueWorkpool` leans on Cloudflare Queues instead —
+fire-and-forget work, `createQueueWorkpool` leans on Cloudflare Queues instead:
 concurrency, retries, and dead-lettering are configured on the consumer in
 `wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`):
 
@@ -173,7 +179,7 @@ export const queueHandler = createQueueConsumer({
 ```
 
 The Queues-backed pool has no hard concurrency cap, per-job cancel, or per-job
-status — that's the trade for letting Cloudflare own retries and backoff.
+status; that's the trade for letting Cloudflare own retries and backoff.
 
 <Callout type="warn">
     Neither workpool is for multi-step orchestration. Reach for Cloudflare Workflows (`@lunora/workflow`) when you need durable `step.do` / `step.sleep` /
@@ -185,9 +191,3 @@ status — that's the trade for letting Cloudflare own retries and backoff.
 When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
 with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
 that and runs the function exactly as if it were an RPC call.
-
-## See also
-
-- [@lunora/server](/docs/packages/server) — `ctx.scheduler`
-- [@lunora/workflow](/docs/packages/workflow) — durable multi-step workflows
-- [Architecture](/docs/architecture)

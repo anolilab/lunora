@@ -15,8 +15,8 @@ Triggers, both backed by a `SchedulerDO` you mount once per app.
 `ctx.scheduler` is available on `MutationCtx` and `ActionCtx` (not on a
 read-only `QueryCtx`). It enqueues a function to run later by path:
 
-- `ctx.scheduler.runAfter(delayMs, functionPath, args?)` — run after a delay.
-- `ctx.scheduler.runAt(timestampMs, functionPath, args?)` — run at an absolute
+- `ctx.scheduler.runAfter(delayMs, functionPath, args?)` runs after a delay.
+- `ctx.scheduler.runAt(timestampMs, functionPath, args?)` runs at an absolute
   epoch-millisecond time.
 
 Both return the scheduled job's id (a string) so you can track or cancel it. The
@@ -45,9 +45,9 @@ await ctx.scheduler.runAt(trial.endsAt, "billing:expireTrial", { userId });
 
 ### Scheduling an agent or workflow
 
-`runAfter` / `runAt` also accept a generated durable-target reference —
-`agents.<name>` from [`@lunora/agent`](/docs/packages/agent) or
-`workflows.<name>` from [`@lunora/workflow`](/docs/packages/workflow) — instead
+`runAfter` / `runAt` also accept a generated durable-target reference
+(`agents.<name>` from [`@lunora/agent`](/docs/packages/agent) or
+`workflows.<name>` from [`@lunora/workflow`](/docs/packages/workflow)) instead
 of a `"namespace:function"` path. Each fire starts a **fresh durable instance**
 of that agent/workflow, so a one-shot delayed agent run is just a scheduled
 target:
@@ -67,7 +67,7 @@ export const ticketOpened = mutation.input({ ticketId: v.id("tickets") }).mutati
 The second argument's shape decides the dispatch: a string path runs a Lunora
 function, a generated `agents.<name>` / `workflows.<name>` reference starts a new
 durable instance with the args as its run input. For a **recurring** agent, give
-`cronJobs()` the same `agents.<name>` target — see
+`cronJobs()` the same `agents.<name>` target; see
 [recurring jobs](#recurring-jobs-cron-triggers) below.
 
 ### Scheduling from a mutation vs. an action

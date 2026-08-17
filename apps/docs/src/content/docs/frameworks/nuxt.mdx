@@ -1,6 +1,15 @@
 ---
 title: Nuxt
 description: Run Lunora and Nuxt as one Cloudflare Worker — the @lunora/nuxt module mounts /_lunora/** into Nitro, plus reactive-loader server helpers.
+related:
+    - to: /docs/packages/nuxt
+      note: "the full module reference (incl. the h3 version note)"
+    - to: /docs/frameworks/vue
+      note: "the reactive layer: `useQuery` / `useMutation` / `hydratePreloaded`"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff"
 ---
 
 `@lunora/nuxt` is a **Nuxt module** that runs Lunora and Nuxt as a **single
@@ -10,7 +19,7 @@ forwards every Lunora RPC, WebSocket upgrade, and admin request to your Lunora
 app in-process. One `wrangler.jsonc`, one deploy, a same-origin client.
 
 Nuxt _is_ Vue, so the reactive layer is [`@lunora/vue`](/docs/frameworks/vue)
-(`useQuery`, `useMutation`, `hydratePreloaded`) — `@lunora/nuxt` owns only the
+(`useQuery`, `useMutation`, `hydratePreloaded`); `@lunora/nuxt` owns only the
 server-side composition. This is the Nuxt-specific companion to
 [Bring your framework](/docs/frameworks/bring-your-framework) (Nuxt is a
 **class-B** framework there) and
@@ -18,7 +27,7 @@ server-side composition. This is the Nuxt-specific companion to
 see [`@lunora/nuxt`](/docs/packages/nuxt).
 
 <Callout type="warn">
-    **Preview.** Class-B single-worker composition is preview maturity — see the [verify before deploy](#verify-before-deploy) checks below before shipping.
+    **Preview.** Class-B single-worker composition is preview maturity; run the [verify before deploy](#verify-before-deploy) checks below before shipping.
 </Callout>
 
 ## Install
@@ -57,7 +66,7 @@ export default defineNuxtConfig({
 Nitro's `cloudflare_module` output exports only the SSR handler, so the
 deployed worker needs a wrapper that also exports the `ShardDO` Durable Object
 class. Add a `worker.ts` at the project root and point `wrangler.jsonc`'s
-`main` at it — not at the raw `.output/server/index.mjs`, or `wrangler deploy`
+`main` at it, not at the raw `.output/server/index.mjs`, or `wrangler deploy`
 fails on the missing DO class:
 
 ```ts title="worker.ts"
@@ -69,7 +78,7 @@ export { ShardDO } from "./lunora/server";
 { "main": "worker.ts" }
 ```
 
-`lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its
+`lunora/server.ts` is your built Lunora app (`defineApp().build()`): its
 default export is the worker (a `fetch` entrypoint), and it re-exports
 `ShardDO`. The module aliases the `#lunora/app` virtual to it and serves it at
 the `/_lunora/**` route.
@@ -100,17 +109,17 @@ export default defineNuxtConfig({
   wrapper (`wrangler.jsonc`'s `main`), which re-exports Nitro's SSR handler
   and `ShardDO`.
 
-Because everything is same-origin, the browser client needs no URL — the
+Because everything is same-origin, the browser client needs no URL: the
 default page-origin client from [`@lunora/vue`](/docs/frameworks/vue) loops
 `/_lunora/ws` straight back into the composed worker.
 
 ## Reactive loaders
 
 `@lunora/nuxt/server` re-exports the framework-neutral SSR helpers
-(`createServerClient`, `preloadQuery`, …) from `@lunora/client/ssr` — safe to
-import from a Nitro server route (no WebSocket, no browser globals). Preload
-on the server, hand the serializable token to the page, and seed a live
-`ref` with `@lunora/vue`'s `hydratePreloaded`:
+(`createServerClient`, `preloadQuery`, …) from `@lunora/client/ssr`. They open
+no WebSocket and touch no browser globals, so they are safe to import from a
+Nitro server route. Preload on the server, hand the serializable token to the
+page, and seed a live `ref` with `@lunora/vue`'s `hydratePreloaded`:
 
 ```ts title="server/api/posts.ts"
 import { createServerClient, preloadQuery } from "@lunora/nuxt/server";
@@ -141,7 +150,7 @@ handoff.
 
 ## Feature flags
 
-`@lunora/nuxt` ships no flag composable of its own — read `ctx.flags`
+`@lunora/nuxt` ships no flag composable of its own. Read `ctx.flags`
 server-side (a Nitro route, a function, or a reactive loader) and pass the
 resolved value down, or call `useFlag` / `useFlags` from `@lunora/vue`
 directly in a component for live updates over the WebSocket. Requires
@@ -150,7 +159,7 @@ directly in a component for live updates over the WebSocket. Requires
 ## Verify before deploy
 
 Single-worker composition rides on two Nitro behaviours that vary across
-versions — verify them on your pinned toolchain:
+versions, so verify them on your pinned toolchain:
 
 1. **WebSocket upgrade pass-through.** The live feed needs Nitro to return
    your Lunora app's `101 Switching Protocols` response (carrying its
@@ -168,8 +177,8 @@ See [Deploy your framework](/docs/frameworks/deploy).
 ## Alternative: two-worker split
 
 The default `@lunora/nuxt` setup above mounts Lunora _inside_ Nitro (one
-worker, one deploy). If you'd rather run Lunora as a fully separate worker —
-independent scaling or independent deploys — split into two workers instead.
+worker, one deploy). If you'd rather run Lunora as a fully separate worker, for
+independent scaling or independent deploys, split into two workers instead.
 Both workers below still target Nitro's `cloudflare_module` preset (the only
 one `@lunora/nuxt`'s in-process mounting or this split supports); this is a
 topology choice, not a way to reach an unsupported preset:
@@ -183,10 +192,3 @@ topology choice, not a way to reach an unsupported preset:
 
 This trades the same-origin convenience of the mounted route for two
 independently deployed workers.
-
-## See also
-
-- [@lunora/nuxt](/docs/packages/nuxt) — the full module reference (incl. the h3 version note)
-- [Vue](/docs/frameworks/vue) — the reactive layer: `useQuery` / `useMutation` / `hydratePreloaded`
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff

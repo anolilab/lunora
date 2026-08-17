@@ -1,6 +1,9 @@
 ---
 title: "@lunora/vite"
 description: The recommended dev-time experience — codegen, HMR, overlay.
+related:
+    - to: /docs/packages/cli
+    - to: /docs/getting-started
 ---
 
 `@lunora/vite` is a Vite plugin factory. A single `lunora()` call wires up
@@ -35,7 +38,7 @@ export default defineConfig({
 
 The plugin watches `<schemaDir>/**/*.ts`. On any change it parses the
 schema with `ts-morph`, regenerates `_generated/*.ts`, and the Vite module
-graph picks up the new types — your editor sees the change before you can
+graph picks up the new types, so your editor sees the change before you can
 swap windows.
 
 ## Wrangler validator
@@ -55,7 +58,7 @@ your schema, data, logs, and advisors without leaving the dev server. Set
 The plugin injects [`@visulima/vite-overlay`](https://www.npmjs.com/package/@visulima/vite-overlay)
 so runtime and codegen failures show up in the browser instead of only the
 terminal. On top of it Lunora registers **solution finders** that recognise
-framework-specific failures and render an actionable fix hint in the overlay:
+framework-specific failures and render a fix hint in the overlay:
 
 - a missing or non-object-literal `defineSchema(...)`
 - a reserved or duplicate table name
@@ -64,7 +67,7 @@ framework-specific failures and render an actionable fix hint in the overlay:
 - a container/workflow class that isn't re-exported by your worker entry
 - runtime unique-constraint and optimistic-concurrency (`ConflictError`) conflicts
 
-Pass an options object to forward overlay configuration — including your own
+Pass an options object to forward overlay configuration, including your own
 `solutionFinders`, which run alongside Lunora's (each error resolves to the
 highest-`priority` finder that recognises it):
 
@@ -81,11 +84,11 @@ Set `overlay: false` to disable it entirely.
 ## Dev-server state & AI agents
 
 While `vite dev` runs, the plugin registers the server in `.lunora/dev.json`
-(URL, PID, start time — per-checkout, gitignored, secret-free) and removes the
+(URL, PID, start time; per-checkout, gitignored, secret-free) and removes the
 record on shutdown. That record is what lets `lunora dev status`, `lunora dev
 stop`, and `lunora dev logs` manage a Vite-based project, and what
-`lunora dev --background` blocks on before reporting the URL and PID — so an
-AI agent can start, health-check (`GET /_lunora/status` on the worker), and
+`lunora dev --background` blocks on before reporting the URL and PID. An AI
+agent can then start, health-check (`GET /_lunora/status` on the worker), and
 stop your dev server without parsing terminal output or leaking zombie
 processes.
 
@@ -93,8 +96,3 @@ When an AI agent is detected (or `LUNORA_LOG_JSON=1` is set), the worker's
 structured log events pass through as raw single-line JSON instead of the
 pretty `[lunora]` terminal rendering, so machine consumers can parse them
 directly. Set `LUNORA_AGENT_MODE=0` to opt out of agent detection.
-
-## See also
-
-- [@lunora/cli](/docs/packages/cli)
-- [Getting started](/docs/getting-started)

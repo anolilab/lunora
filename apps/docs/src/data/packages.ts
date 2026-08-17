@@ -415,9 +415,9 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
-        description: "Cloudflare Access (Zero Trust) identity: verify the Cf-Access-Jwt-Assertion JWT and feed ctx.auth / RLS.",
+        description: "Cloudflare Access (Zero Trust) identity: Worker-scoped Access policies or JWKS-verified Access JWTs, fed into ctx.auth / RLS.",
         docsPath: "/docs/packages/cloudflare-access",
-        features: ["JWKS-verified Access JWTs", "resolveIdentity adapter", "Feeds ctx.auth & RLS"],
+        features: ["Worker-scoped Access policies", "JWKS-verified Access JWTs", "Feeds ctx.auth & RLS"],
         name: "Cloudflare Access",
         npmName: "@lunora/cloudflare-access",
         slug: "cloudflare-access",

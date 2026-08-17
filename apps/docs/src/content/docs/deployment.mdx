@@ -1,6 +1,9 @@
 ---
 title: Deployment
 description: Wrangler bindings, secrets, and the deploy flow.
+related:
+    - to: /docs/limits
+    - to: /docs/architecture
 ---
 
 Lunora apps deploy as a single Cloudflare Worker plus Durable Object class,
@@ -51,7 +54,7 @@ lists (e.g. you enabled a new addon), it offers to append just those.
 
 On every `lunora dev` / `vite dev` startup, Lunora also **auto-generates any
 empty secret** already in `.dev.vars` and ensures `LUNORA_ADMIN_TOKEN` is
-present — so a project scaffolded by `lunora add` (which writes its secrets
+present, so a project scaffolded by `lunora add` (which writes its secrets
 blank) boots with working values and the [Studio](/docs/packages/studio)
 authenticates without prompting. Only locally-generatable secrets are minted;
 provider keys (`RESEND_API_KEY`, `STRIPE_SECRET_KEY`, …) stay blank for you to
@@ -60,13 +63,13 @@ paste, and a real value is never overwritten.
 You can also manage keys by hand: `lunora env set NAME VALUE`, `lunora env list`,
 or generate strong values explicitly with `lunora env generate` (see below). To
 check a `.dev.vars` against its example for missing keys, still-unset
-placeholders, and stray extras, run `lunora env doctor` — it exits non-zero when
+placeholders, and stray extras, run `lunora env doctor`; it exits non-zero when
 anything is actionable, so it works as a CI gate or a pre-`dev` sanity check.
 
 ### Generating strong secrets
 
 `lunora env generate` mints cryptographically-strong values (32-byte hex, like
-`openssl rand -hex 32`) for the secrets your project can generate locally — use
+`openssl rand -hex 32`) for the secrets your project can generate locally. Use
 them for production or any other environment:
 
 ```bash
@@ -75,12 +78,12 @@ lunora env generate AUTH_SECRET     # print one
 lunora env generate --set           # write them into .dev.vars instead of printing
 ```
 
-Provider-issued keys (Resend, Stripe, Polar) are skipped — you obtain those from
+Provider-issued keys (Resend, Stripe, Polar) are skipped; you obtain those from
 the provider's dashboard.
 
 ### In production
 
-Cloudflare secrets are **per-environment and non-inheritable** — set them for the
+Cloudflare secrets are **per-environment and non-inheritable**. Set them for the
 environment you deploy to:
 
 ```bash
@@ -97,7 +100,7 @@ target worker's secrets first:
 
 - **Interactively**, it offers to generate + push any missing _generatable_
   secret before shipping, and flags provider keys for you to set by hand.
-- **Non-interactively (CI)**, a missing required secret **aborts the deploy** —
+- **Non-interactively (CI)**, a missing required secret **aborts the deploy**:
   better a failed pipeline than a worker that crashes on a missing secret. Set
   the secrets (the error lists them) and re-deploy.
 
@@ -151,9 +154,9 @@ Cloudflare caps a Worker script
 [in two places](https://developers.cloudflare.com/workers/platform/limits/):
 **3 MB on Workers Free and 10 MB on Workers Paid after gzip compression**, and
 **64 MB before compression** on both plans. Both are enforced at upload, so an
-over-budget bundle is a rejected deploy rather than a slow one — and a bundle
-that compresses unusually well (a large generated table, say) can sit under the
-gzip limit while breaching the raw one. Check both numbers.
+over-budget bundle is a rejected deploy rather than a slow one. A bundle that
+compresses unusually well (a large generated table, say) can sit under the gzip
+limit while breaching the raw one. Check both numbers.
 
 `lunora build` weighs what it wrote:
 
@@ -165,7 +168,7 @@ pnpm lunora build --format json | jq .bundle
 # { "files": 1, "gzipBytes": 422840, "rawBytes": 1725313 }
 ```
 
-Only the uploaded files are counted — the sourcemap and the esbuild metafile
+Only the uploaded files are counted: the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
 roughly triple the number. Compare `gzipBytes` against your plan's compressed
 limit and `rawBytes` against the 64 MB one; together they match what
@@ -232,8 +235,7 @@ otherwise be silently dropped by wrangler), but the **sink itself is a Logpush
 _job_** created in the Cloudflare dashboard or via the API, and Lunora does not
 manage its lifecycle. The Studio surfaces both halves: its **Logs → Log drains**
 panel renders the `{ "logpush": true }` snippet and deep-links to the Cloudflare
-observability dashboard where you create the job. Lunora validates the flag; the
-job lifecycle stays in Cloudflare.
+observability dashboard where you create the job.
 
 ## Platform configuration
 
@@ -322,8 +324,3 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
   no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
   binding; the only thing it adds is native-MQTT device ingest, a narrow case
   we'll revisit if it reaches GA and a concrete need appears.
-
-## See also
-
-- [Limits](/docs/limits)
-- [Architecture](/docs/architecture)

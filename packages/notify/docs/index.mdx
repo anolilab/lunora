@@ -23,7 +23,7 @@ export default defineNotify({
 });
 ```
 
-`defineNotify` is pure validation plus branding — it throws a `TypeError` on a
+`defineNotify` is pure validation plus branding: it throws a `TypeError` on a
 malformed channel rather than deferring the failure to the first send. Codegen
 discovers the default export, imports it into the generated worker, and builds
 the `ctx` facades from it.
@@ -46,13 +46,13 @@ reference them without restating string literals.
 `ctx.push.register(...)` accepts either a web-push subscription or an FCM token,
 optionally tied to a `userId`. Two stores ship:
 
-- `memorySubscriptionStore()` — tests and dev.
-- `d1SubscriptionStore(env.DB)` — durable and edge-safe.
+- `memorySubscriptionStore()`: tests and dev.
+- `d1SubscriptionStore(env.DB)`: durable and edge-safe.
 
 `SubscriptionStore` is a small interface (`get` / `list` / `delete` / …), so a
 custom backing store is a matter of implementing it. `list` filters apply
 server-side and take a `limit`, so a large audience never materializes wholesale
-inside the isolate. `broadcast` deliberately leaves the limit unset — it has to
+inside the isolate. `broadcast` deliberately leaves the limit unset: it has to
 reach everyone matched.
 
 Dead subscriptions prune themselves: an endpoint the push service reports as gone
@@ -61,7 +61,7 @@ rather than retried forever.
 
 ## What is deliberately not on the edge
 
-Only channels that survive workerd are wired here — Web Push and FCM run on Web
+Only channels that survive workerd are wired here: Web Push and FCM run on Web
 Crypto and `fetch`. APNs needs `node:http2`, and the SMS and Node-only queue
 adapters likewise have no edge implementation, so the edge facade does not expose
 them. Route heavy fan-out through `@lunora/queue` instead: `enqueuePushBroadcast`
@@ -70,7 +70,7 @@ never blocks on thousands of sends.
 
 ## Browser side
 
-`@lunora/notify/web` is the client half — service-worker registration and
+`@lunora/notify/web` is the client half: service-worker registration and
 permission flow, kept in its own subpath so none of it reaches the worker bundle:
 
 ```ts

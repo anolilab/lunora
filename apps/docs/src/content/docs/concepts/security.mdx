@@ -1,6 +1,17 @@
 ---
 title: Security
 description: Lunora's secure-by-default posture — the protections you get for free, how to opt out, and the advisor lints that catch the gaps.
+related:
+    - to: /docs/concepts/advisors
+      note: "the full lint catalog and how findings surface"
+    - to: /docs/concepts/rls
+      note: "per-row authorization"
+    - to: /docs/concepts/masking
+      note: "per-field redaction"
+    - to: /docs/packages/ratelimit
+      note: "the limiter `protectPublic` chains"
+    - to: /docs/packages/auth
+      note: "sessions, cookies, and Turnstile verification"
 ---
 
 Lunora is **secure by default**. The edge protections, auth-cookie hardening, and
@@ -53,7 +64,7 @@ createWorker({
 Set `headers: false` to disable the layer entirely, or any individual field to
 `false` to omit just that header.
 
-### CORS — deny cross-origin by default
+### CORS: deny cross-origin by default
 
 Cross-origin requests are denied unless you name an allowlist. There is no
 wildcard fallback:
@@ -73,7 +84,7 @@ When you don't pass `security.cors` in code, the worker falls back to env config
 `LUNORA_ALLOWED_ORIGINS` is a comma-separated allowlist and
 `LUNORA_CORS_ALLOW_CREDENTIALS` (`true`/`on`/`1`) opts credentials in. This lets a
 deployment set its origins through wrangler `vars` without a code change. Code
-config always wins — an explicit `security.cors` ignores the env vars entirely.
+config always wins: an explicit `security.cors` ignores the env vars entirely.
 
 A `*` wildcard combined with credentials is rejected: browsers refuse the
 combination and it defeats the allowlist. Set in code it throws at construction;
@@ -103,7 +114,7 @@ cookie-bearing handshake is rejected before the socket opens, closing the
 Cross-Site WebSocket Hijacking (CSWSH) hole where a hostile page rides the
 victim's session cookie into a live subscription. Same-origin and bearer-token
 handshakes are unaffected. A genuinely cross-origin, cookie-authenticated
-client must add its origin to `csrf.trustedOrigins` — the same allowlist the
+client must add its origin to `csrf.trustedOrigins`, the same allowlist the
 HTTP guard reads.
 
 ### Body cap
@@ -116,17 +127,17 @@ upload can't exhaust the worker's memory. This is always on.
 `createAuth` (`@lunora/auth`) hardens better-auth's defaults unless you override
 them:
 
-- **Cookie attributes** — `httpOnly: true`, `sameSite: "lax"`, `path: "/"` are
+- **Cookie attributes**: `httpOnly: true`, `sameSite: "lax"`, `path: "/"` are
   filled in when you don't supply `advanced.defaultCookieAttributes`.
-- **Secure cookies** — `useSecureCookies` is forced on for an HTTPS `baseURL`.
-- **Auth secret strength** — `AUTH_SECRET` shorter than 32 characters logs a
+- **Secure cookies**: `useSecureCookies` is forced on for an HTTPS `baseURL`.
+- **Auth secret strength**: `AUTH_SECRET` shorter than 32 characters logs a
   warning (not a throw, so dev isn't blocked) pointing at `openssl rand -hex 32`.
   A missing secret still throws.
 
 ## Protecting public procedures
 
 `protectPublic` (`@lunora/server`) is thin sugar that chains the recommended
-guards — a rate limit, then a CAPTCHA — into one `.use()`-able middleware. It is
+guards (a rate limit, then a CAPTCHA) into one `.use()`-able middleware. It is
 the recommended wrapper for any public mutation that creates users, sends mail,
 or consumes credits:
 
@@ -161,7 +172,7 @@ client-supplied address, so cross-shard reads must be authorized. Lunora
 non-default shard and is unaffected.
 
 A sharded app must either configure `authorizeShard(identity, shardKey)` (return
-`true` to allow) — plus `authorizeFanOut` for cross-shard reads — or set
+`true` to allow), plus `authorizeFanOut` for cross-shard reads, or set
 `allowUnauthenticatedShardAccess: true` to opt into open access:
 
 ```ts
@@ -240,11 +251,3 @@ through wrangler `vars`:
 
 This is the build-time twin of the runtime construction throw, so the
 misconfiguration surfaces before you deploy.
-
-## See also
-
-- [Advisors](/docs/concepts/advisors) — the full lint catalog and how findings surface.
-- [Row-level security](/docs/concepts/rls) — per-row authorization.
-- [Data masking](/docs/concepts/masking) — per-field redaction.
-- [Rate limiting](/docs/packages/ratelimit) — the limiter `protectPublic` chains.
-- [Auth](/docs/packages/auth) — sessions, cookies, and Turnstile verification.

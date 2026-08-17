@@ -13,12 +13,15 @@ import workflowsImg from "@/assets/studio/dark/workflows.png";
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill, SectionHead } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import { Kicker, Shell } from "@/kit/layout";
+import { PageHeader } from "@/kit/page-header";
 import { cn } from "@/lib/utils";
 
 /**
  * Lunora Studio landing page — a showcase of the local admin UI in the shared
- * dark Axon frame (charcoal, full-width dividers, vertical guides, hatch
- * spacers). Screenshots are dark-mode captures from src/assets/studio/dark.
+ * dark frame: the site-wide `PageHeader` over the shader field, then bands
+ * separated by hatch spacers. Screenshots are dark-mode captures from
+ * src/assets/studio/dark.
  */
 
 const Shot: FC<{ alt: string; src: string }> = ({ alt, src }) => (
@@ -76,12 +79,12 @@ const features: FeatureBlock[] = [
 const FeatureRow: FC<{ feature: FeatureBlock }> = ({ feature }) => (
     <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-14">
         <Reveal className={cn("flex flex-col gap-5", feature.flip && "lg:order-2")}>
-            <span className="font-mono text-xs tracking-[0.18em] text-white/40 uppercase">{feature.eyebrow}</span>
-            <h3 className="text-2xl font-semibold tracking-tight text-balance text-white sm:text-3xl">{feature.title}</h3>
-            <p className="text-base leading-relaxed text-white/55">{feature.desc}</p>
+            <span className="font-mono text-xs tracking-[0.18em] text-ink-faint uppercase">{feature.eyebrow}</span>
+            <h3 className="text-2xl font-semibold tracking-tight text-balance text-ink sm:text-3xl">{feature.title}</h3>
+            <p className="text-base leading-relaxed text-ink-muted">{feature.desc}</p>
             <ul className="mt-1 flex flex-col gap-3">
                 {feature.points.map((point) => (
-                    <li className="flex items-start gap-3 text-sm text-white/70" key={point}>
+                    <li className="flex items-start gap-3 text-sm text-ink-muted" key={point}>
                         <Check className="mt-0.5 size-4 shrink-0 text-sky-sapphire" />
                         {point}
                     </li>
@@ -120,31 +123,24 @@ const more: MoreItem[] = [
 ];
 
 const StudioLanding: FC = () => (
-    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
-        {/* vertical guide lines */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
-        />
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+        <PageHeader align="bottom" panelWidth="wide" size="short">
+            <div className="mb-7 flex items-center justify-between gap-4">
+                <Kicker>Lunora Studio</Kicker>
+                <Kicker>Zero setup</Kicker>
+            </div>
+            <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+                <h1 className="text-display font-bold text-ink">Your backend, fully visible.</h1>
+                <p className="max-w-sm text-body text-ink-muted">
+                    A local admin UI for your schema, data, SQL, logs, and advisors — running against your live edge database.
+                </p>
+            </div>
+        </PageHeader>
 
-        {/* hero */}
-        <section className="relative border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-40 pb-12 text-center sm:pt-44">
+        {/* hero shot */}
+        <section data-nav-theme="dark">
+            <Shell className="flex flex-col gap-10 pt-14 pb-4">
                 <Reveal className="flex flex-col items-center gap-6">
-                    <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
-                        <span className="size-1.5 bg-sky-sapphire" />
-                        Lunora Studio
-                    </span>
-                    <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-white sm:text-6xl">
-                        Your backend,{" "}
-                        <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
-                            fully visible.
-                        </span>
-                    </h1>
-                    <p className="max-w-xl text-lg leading-relaxed text-white/55">
-                        A local admin UI for your schema, data, SQL, logs, and advisors — running against your live edge database. It ships with every Lunora
-                        app, no setup required.
-                    </p>
                     <div className="flex flex-wrap items-center justify-center gap-2.5">
                         <Pill primary to="/docs/getting-started">
                             Get started
@@ -152,22 +148,22 @@ const StudioLanding: FC = () => (
                         </Pill>
                         <Pill to="/packages/studio">Studio package</Pill>
                     </div>
-                    <p className="flex items-center gap-2 font-mono text-sm text-white/45">
+                    <p className="flex items-center gap-2 font-mono text-sm text-ink-faint">
                         <TerminalSquare className="size-4" />
-                        opens automatically with <span className="text-white/70">lunora dev</span>
+                        it ships with every Lunora app and opens with <span className="text-ink-muted">lunora dev</span>
                     </p>
                 </Reveal>
-            </div>
-            <Reveal className="relative z-10 mx-auto max-w-6xl px-5 lg:px-0">
-                <Shot alt="Lunora Studio — overview" src={homeImg} />
-            </Reveal>
+                <Reveal>
+                    <Shot alt="Lunora Studio — overview" src={homeImg} />
+                </Reveal>
+            </Shell>
         </section>
 
         <HatchSpacer />
 
         {/* feature rows */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
                 <SectionHead
                     eyebrow="Everything in one place"
                     subtitle="Studio reads your schema and talks to your Durable Objects directly — so what you see is exactly what your app sees."
@@ -178,64 +174,64 @@ const StudioLanding: FC = () => (
                         <FeatureRow feature={feature} key={feature.title} />
                     ))}
                 </div>
-            </div>
+            </Shell>
         </section>
 
         <HatchSpacer />
 
         {/* secondary showcase */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
                 <div className="grid gap-10 lg:grid-cols-2 lg:gap-14">
                     <Reveal className="flex flex-col gap-5">
-                        <span className="flex items-center gap-2 font-mono text-xs tracking-[0.18em] text-white/40 uppercase">
+                        <span className="flex items-center gap-2 font-mono text-xs tracking-[0.18em] text-ink-faint uppercase">
                             <LayoutDashboard className="size-3.5 text-royal-amethyst" />
                             Dashboards
                         </span>
-                        <h3 className="text-2xl font-semibold tracking-tight text-white">Metrics, the moment you need them</h3>
-                        <p className="text-base leading-relaxed text-white/55">
+                        <h3 className="text-2xl font-semibold tracking-tight text-ink">Metrics, the moment you need them</h3>
+                        <p className="text-base leading-relaxed text-ink-muted">
                             Requests, errors, latency, and live connections — surfaced on a home overview and arranged into dashboards.
                         </p>
                         <Shot alt="Lunora Studio — dashboards" src={dashboardsImg} />
                     </Reveal>
                     <Reveal className="flex flex-col gap-5">
-                        <span className="flex items-center gap-2 font-mono text-xs tracking-[0.18em] text-white/40 uppercase">
+                        <span className="flex items-center gap-2 font-mono text-xs tracking-[0.18em] text-ink-faint uppercase">
                             <GitBranch className="size-3.5 text-crimson-energy" />
                             Workflows
                         </span>
-                        <h3 className="text-2xl font-semibold tracking-tight text-white">Observe durable workflows</h3>
-                        <p className="text-base leading-relaxed text-white/55">
+                        <h3 className="text-2xl font-semibold tracking-tight text-ink">Observe durable workflows</h3>
+                        <p className="text-base leading-relaxed text-ink-muted">
                             Workflows declared in code run as durable Cloudflare Workflows. Start an instance and watch its status from the studio.
                         </p>
                         <Shot alt="Lunora Studio — workflows" src={workflowsImg} />
                     </Reveal>
                 </div>
-            </div>
+            </Shell>
         </section>
 
         <HatchSpacer />
 
         {/* more in the box */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
                 <SectionHead eyebrow="And more" subtitle="The studio grows with your app — every Lunora capability shows up here." title="More in the box" />
-                <div className="mt-12 grid gap-px border border-white/[0.08] sm:grid-cols-2 lg:grid-cols-4 lg:border-x-0">
+                <div className="mt-12 grid gap-px border border-hairline sm:grid-cols-2 lg:grid-cols-4 lg:border-x-0">
                     {more.map((item) => (
-                        <div className="flex flex-col gap-3 bg-white/[0.012] p-8" key={item.title}>
-                            <span className="flex size-10 items-center justify-center border border-white/12 bg-white/[0.03] text-white/80">{item.icon}</span>
-                            <h3 className="text-base font-semibold text-white">{item.title}</h3>
-                            <p className="text-sm leading-relaxed text-white/45">{item.desc}</p>
+                        <div className="flex flex-col gap-3 bg-wash p-8" key={item.title}>
+                            <span className="flex size-10 items-center justify-center border border-hairline bg-wash text-ink-muted">{item.icon}</span>
+                            <h3 className="text-base font-semibold text-ink">{item.title}</h3>
+                            <p className="text-sm leading-relaxed text-ink-faint">{item.desc}</p>
                         </div>
                     ))}
                 </div>
-            </div>
+            </Shell>
         </section>
 
         <HatchSpacer />
 
         {/* CTA */}
-        <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 pt-24 lg:px-0">
+        <section data-nav-theme="dark">
+            <Shell className="pt-24">
                 <SectionHead
                     eyebrow="Zero setup"
                     subtitle="Studio runs locally with the Lunora CLI and Vite plugin — always pointed at your live edge database. Nothing to install, nothing to deploy."
@@ -248,7 +244,7 @@ const StudioLanding: FC = () => (
                     </Pill>
                     <Pill to="/packages/studio">Read the docs</Pill>
                 </div>
-            </div>
+            </Shell>
         </section>
 
         <HatchSpacer />

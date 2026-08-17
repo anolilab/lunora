@@ -9,7 +9,7 @@ it with one `.extend(...)` call and one re-export, and the component's tables ca
 never collide with the app's.
 
 Everything below is what `@lunora/agent`, `@lunora/ratelimit`, and the built-in
-presence component are made of — there is no privileged first-party path.
+presence component are made of. There is no privileged first-party path.
 
 ## Defining one
 
@@ -74,13 +74,13 @@ That is the whole installation. Codegen chases the re-export back to the
 component's registration call, so `api.voting.tally` is typed end to end exactly
 like a function you wrote yourself, and `voting_votes` appears in `Doc`/`api`
 types. A component whose extension lives in `node_modules` is introspected at
-codegen time — you do not vendor its schema.
+codegen time: you do not vendor its schema.
 
 ## What the namespace guarantees
 
 Every extension table is prefixed with the component's key (`votes` →
-`voting_votes`), and every intra-component reference — relation targets,
-aggregate and rank index `on`, standalone vector index `table` — is rewritten to
+`voting_votes`), and every intra-component reference (relation targets,
+aggregate and rank index `on`, standalone vector index `table`) is rewritten to
 match. So:
 
 - **An app can never collide with a component.** Your `votes` table and the
@@ -92,12 +92,11 @@ match. So:
 
 ## What a component does NOT get
 
-Stated plainly, because a component contract is only useful if its limits are
-known:
+A component contract is only useful if its limits are known:
 
 - **No isolation from the app's data.** A component's functions run with an
   ordinary `ctx.db` and can read and write app tables. The namespace prevents
-  accidents, not a malicious package — installing a component is as much trust as
+  accidents, not a malicious package. Installing a component is as much trust as
   installing any npm dependency.
 - **No per-component configuration surface.** There is no `app.use(component, {
 options })` layer; a component that needs configuration takes it as a factory
@@ -111,13 +110,13 @@ options })` layer; a component that needs configuration takes it as a factory
 
 ## Migrations
 
-A component's tables migrate with the app's — they are merged into one schema, so
+A component's tables migrate with the app's: they are merged into one schema, so
 `lunora migrate generate` sees them and one migration covers both. Upgrading a
 component that added a column is an ordinary schema change in your project.
 
 ## See also
 
-- [Schema](/docs/concepts/schema) — `defineSchema` and `.extend(...)`
-- [Middleware](/docs/concepts/middleware) — the `ctx` extension half
-- [Registry items](/docs/concepts/registry-items) — the copy-in alternative, for
+- [Schema](/docs/concepts/schema): `defineSchema` and `.extend(...)`
+- [Middleware](/docs/concepts/middleware): the `ctx` extension half
+- [Registry items](/docs/concepts/registry-items): the copy-in alternative, for
   code you want to own and edit rather than depend on

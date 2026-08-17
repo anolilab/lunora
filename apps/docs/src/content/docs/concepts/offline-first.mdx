@@ -8,11 +8,11 @@ WebSocket and writes go straight to your Worker. Two opt-in client options turn
 that into an **offline-first** experience, where the app boots from disk, renders
 cached reads before a socket opens, and accepts writes while disconnected:
 
-- **`queryCache`** — a durable read cache. Query results are persisted as their
+- **`queryCache`**: a durable read cache. Query results are persisted as their
   subscriptions advance and replayed on construction, so a reload renders the
   last-seen data immediately, then resumes the live subscription from the
   persisted cursor (no full snapshot refetch).
-- **`persistence`** — a durable store for the offline mutation outbox. Mutations
+- **`persistence`**: a durable store for the offline mutation outbox. Mutations
   issued while disconnected survive a reload and flush, exactly once, on
   reconnect.
 
@@ -73,9 +73,9 @@ A signed-out cache never leaks into a new session, and an identity change clears
 the cache outright. The offline outbox is gated by the same rule, so queued
 writes are never replayed under a different user.
 
-By default the fingerprint is a hash of the bearer token — which means a **token
-refresh** (same user, new JWT) reads as an identity change and would discard
-queued writes. Pass a stable subject (the user id) so a refresh during an offline
+By default the fingerprint is a hash of the bearer token, so a **token refresh**
+(same user, new JWT) reads as an identity change and would discard queued
+writes. Pass a stable subject (the user id) so a refresh during an offline
 window keeps them:
 
 ```ts
@@ -88,7 +88,7 @@ an unchanged token (e.g. the user id resolves a tick after the token was set)
 re-stamps in-flight queued writes rather than dropping them. A real user switch
 (the token _and_ subject both change) still drops the previous user's writes; pass
 `null` to clear the subject on an explicit sign-out. Prefer passing a stable id
-consistently — avoid a `user?.id` that's transiently `undefined` across a reload
+consistently, and avoid a `user?.id` that's transiently `undefined` across a reload
 boundary, since a value queued under the token-hash and replayed under the subject
 after a reload can still mismatch.
 
@@ -107,8 +107,8 @@ Omit it to disable version gating (records are never invalidated by version).
 **Adopting it is itself an invalidation event:** records written before you set
 `persistenceVersion` carry no version, so the first boot after enabling it purges
 all currently-queued offline writes (and cached reads). Enable it on a build where
-that clean slate is acceptable — typically the same breaking deploy you're
-protecting against — not purely speculatively.
+that clean slate is acceptable (typically the same breaking deploy you're
+protecting against), not purely speculatively.
 
 ## Multiple tabs
 
@@ -117,10 +117,10 @@ re-queuing and replaying the same persisted writes on reconnect, the standalone
 client elects a single **leader** (via the Web Locks API) that owns hydration;
 when the leader tab closes, another takes over. Server-side idempotency keeps
 replays exactly-once regardless, so this is an efficiency guard, not a
-correctness one. (Where Web Locks are unavailable — React Native, SSR — a single
-context hydrates directly.) One trade-off: because only the leader hydrates the
-_pre-existing_ persisted queue, writes left over from a prior session can sit until
-the leader flushes them — so if the leader is a backgrounded/offline tab while a
+correctness one. (Where Web Locks are unavailable, as in React Native and SSR, a
+single context hydrates directly.) One trade-off: because only the leader hydrates
+the _pre-existing_ persisted queue, writes left over from a prior session can sit
+until the leader flushes them. If the leader is a backgrounded/offline tab while a
 foreground tab is online, those carried-over writes wait for the leader (the writes
 stay durable and replay exactly-once; only their latency is affected). New writes
 made in any tab flush over that tab's own socket. Apps with heavy multi-tab offline
@@ -237,8 +237,8 @@ you writing sync glue:
    transform is recorded as a layer on the query, not applied once-and-forgotten.
    An unrelated server delta that lands while the write is still pending (queued
    offline, or in flight) is re-folded _under_ the layer instead of clobbering
-   it, so your change never flickers away and back. The layer is dropped — with
-   no double-count and no flicker — the moment a frame whose `cursor` reaches the
+   it, so your change never flickers away and back. The layer is dropped, with
+   no double-count and no flicker, the moment a frame whose `cursor` reaches the
    write's committed cursor arrives (the server echoes that cursor on the
    mutation response), so the drop is keyed on server-confirmed state rather than
    RPC-response timing, which races the WebSocket broadcast. A coded rejection
@@ -251,7 +251,7 @@ you writing sync glue:
 
 Lunora does not funnel `client.mutation` calls through a single ordered queue.
 Writes are concurrent, and the optimistic model above reconciles them by **commit
-cursor** rather than by a strict per-client sequence number — which buys the same
+cursor** rather than by a strict per-client sequence number, which buys the same
 gapless, no-double-count rebasing without making every write wait for the one
 before it.
 
@@ -262,10 +262,10 @@ Three of the four ways to issue a write are ordered anyway:
 | `await mutation(A)`, then `await mutation(B)`    | Yes      | B isn't sent until A resolves.                                                                                                                                   |
 | Queued offline, replayed on reconnect            | Yes      | The outbox is FIFO and the flush sends its chunks sequentially, preserving submission order across the whole replay.                                             |
 | [`@lunora/db`](/docs/packages/db) mutators       | Yes      | Each write carries a monotonic `mutationId`; the DO applies it only when it equals `watermark + 1`, halts the batch on a gap, and the client resends from there. |
-| `mutation(A); mutation(B);` — online, un-awaited | **No**   | Two independent requests. The DO applies them in _arrival_ order, which can differ from call order.                                                              |
+| `mutation(A); mutation(B);` (online, un-awaited) | **No**   | Two independent requests. The DO applies them in _arrival_ order, which can differ from call order.                                                              |
 
 Only the last row is unordered, and it only bites when those two writes are
-**causally dependent** — B assumes A has already committed. If that's your case,
+**causally dependent**: B assumes A has already committed. If that's your case,
 take whichever of these fits:
 
 - **Await the first.** `await mutation(A)` before issuing B. The simplest answer,
@@ -278,21 +278,21 @@ take whichever of these fits:
   is strictly ordered already, so a chain of fire-and-forget writes applies in call
   order without you awaiting anything.
 
-An opt-in `{ ordered: true }` mode for plain mutations is deliberately not shipped
-— see [Design boundaries](/docs/non-goals#also-deliberately-absent).
+An opt-in `{ ordered: true }` mode for plain mutations is deliberately not
+shipped; see [Design boundaries](/docs/non-goals#also-deliberately-absent).
 
 ## Surfacing rejected writes
 
 A queued write that the server ultimately rejects (a coded conflict, a validation
 or RLS denial) rolls its optimistic row back. For a write you `await` directly,
 that surfaces as the rejected `mutation()` Promise. But a write queued in one
-session and replayed in the next — after a reload — has no awaiter left, and the
+session and replayed in the next, after a reload, has no awaiter left, and the
 same is true for a write the queue evicts on overflow or discards on an identity
-change. Without a signal, the optimistic row would simply vanish, which users
-read as data loss.
+change. Without a signal, the optimistic row would vanish, which users read as
+data loss.
 
 `onMutationSettled` is the durable channel for exactly this. It fires once per
-queued write that reaches a terminal verdict — `committed` or `rejected` — and
+queued write that reaches a terminal verdict (`committed` or `rejected`), and
 includes replays whose original Promise is gone (`hadAwaiter: false`):
 
 ```ts
@@ -305,7 +305,7 @@ client.onMutationSettled((event) => {
 });
 ```
 
-`event` carries the `functionPath`, `args`, `shardKey`, and — on rejection — the
+`event` carries the `functionPath`, `args`, `shardKey`, and, on rejection, the
 `code` (e.g. `CONFLICT`, `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`)
 and `error`. Causally dependent writes that the server rejects in turn each
 surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
@@ -313,7 +313,7 @@ collection layer exposes the same idea as `onWriteRejected`.
 
 ## See also
 
-- [@lunora/db](/docs/packages/db) — the same outbox + optimistic model as a
+- [@lunora/db](/docs/packages/db): the same outbox + optimistic model as a
   TanStack DB collection layer, generated from your schema.
-- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas flow.
-- [@lunora/client](/docs/packages/client) — the transport these options configure.
+- [Real-time](/docs/concepts/realtime): how subscriptions and deltas flow.
+- [@lunora/client](/docs/packages/client): the transport these options configure.

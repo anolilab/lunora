@@ -12,8 +12,37 @@
    component CSS stay below. */
 @import "../../../../marketing/design-tokens/tokens.css";
 
+/* Site theme layer — surfaces, ink, accents, type scale, and layout rhythm for
+   the marketing + docs chrome. This is the file a downstream project swaps to
+   re-brand; see its header. Imported after the shared brand tokens so it can
+   build on them. */
+@import "../theme/tokens.css";
+
+/* Binds the Fumadocs article layout to the tokens above. Must come after
+   `fumadocs-ui/css/*` so the colour remap wins over their `.dark` defaults. */
+@import "../theme/fumadocs.css";
+
 @variant dark (&:where(.dark, .dark *)); /* <body class="dark"> */
 @variant light (&:where(.light, .light *)); /* <body class="light"> */
+
+/* The platform strip's two gradient stops. Registering them as `<color>` is
+   what makes them animatable — an unregistered custom property is a token
+   stream and interpolates discretely, which is the whole reason `strip-hue`
+   drives these instead of `background-image`.
+
+   The initial values are only a floor: the element sets both from the theme
+   tokens inline, so a re-brand still reaches them. */
+@property --strip-a {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: #5ce1ef;
+}
+
+@property --strip-b {
+    syntax: "<color>";
+    inherits: false;
+    initial-value: #a894ee;
+}
 
 @theme {
     /* Fonts, radius, and the color mappings (--color-*) now come from the shared
@@ -27,6 +56,15 @@
     --animate-shiny-text: shiny-text 8s infinite;
     --animate-scroll-left: scroll-left 45s linear infinite;
     --animate-scroll-right: scroll-right 60s linear infinite;
+
+    /* Matches the hero shader's 54s palette walk, so the two drift together. */
+    --animate-strip-hue: strip-hue 54s linear infinite;
+
+    /* The header field arrives rather than being there. Slow enough to read as
+       a fade and not a flash, and `both` so it holds at 0 until it starts —
+       the shader needs a frame or two to paint, and without the fill the field
+       pops in at full strength before the animation begins. */
+    --animate-field-in: field-in 1600ms cubic-bezier(0.16, 1, 0.3, 1) both;
 
     @keyframes button-shine {
         from {
@@ -92,6 +130,42 @@
             transform: translateX(0);
         }
     }
+
+    @keyframes field-in {
+        from {
+            opacity: 0;
+        }
+        to {
+            opacity: 1;
+        }
+    }
+
+    /* The platform strip's hue walk. The pair of stops advances one accent per
+       third, so the band moves through the palette the way the hero does — two
+       adjacent accents at a time, never all three at once. Every stop is a
+       `-tint`, which is what keeps the dark ink on the band above 4.5:1 for the
+       whole loop.
+
+       It animates the two stop *colours*, not the `background-image`. Animating
+       the image directly compiles to a discrete animation: measured, the band
+       held one gradient for a third of the cycle and then jumped to the next,
+       instead of drifting. Registered `<color>` properties interpolate, so the
+       gradient is declared once and its endpoints move. */
+    @keyframes strip-hue {
+        0%,
+        100% {
+            --strip-a: var(--site-accent-tint);
+            --strip-b: var(--site-accent-2-tint);
+        }
+        33.333% {
+            --strip-a: var(--site-accent-2-tint);
+            --strip-b: var(--site-accent-3-tint);
+        }
+        66.667% {
+            --strip-a: var(--site-accent-3-tint);
+            --strip-b: var(--site-accent-tint);
+        }
+    }
 }
 
 @layer base {
@@ -129,32 +203,7 @@
     }
 }
 
-#nd-sidebar {
-    background-color: var(--color-dark-coal);
-    border-color: transparent;
-
-    /* The sidebar panel is absolutely pinned to the viewport top, behind the
-       fixed h-16 navbar; drop it below the navbar so its items aren't hidden. */
-    top: 4rem;
-    height: calc(100dvh - 4rem);
-}
-
-/* Docs use the full page width — drop fumadocs' fixed ~1285px frame cap so the
-   sidebar, content, and TOC span edge to edge (paired with --fd-layout-width: 100%). */
-[class*="max-w-[1285px]"] {
-    max-width: none !important;
-}
-
-/* The page article starts at viewport top (under the fixed h-16 navbar); its
-   default top padding (pt-14) is less than the navbar, so the breadcrumb tucks
-   under it. Clear the navbar plus a little breathing room. */
-#nd-page {
-    padding-top: 5rem;
-}
-
-#nd-subnav > div {
-    border-bottom: 0;
-}
+/* Fumadocs article-layout rules live in `src/theme/fumadocs.css`. */
 
 html {
     scroll-behavior: smooth;

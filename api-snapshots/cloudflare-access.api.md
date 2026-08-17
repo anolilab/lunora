@@ -18,7 +18,18 @@ interface AccessClaims extends JWTPayload {
     email?: string;
     groups?: string[];
     identity_nonce?: string;
+    name?: string;
     type?: string;
+    user_uuid?: string;
+}
+```
+
+### `AccessJwtFallbackOptions` (interface)
+
+```ts
+interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "teamDomain"> {
+    aud?: string | string[];
+    teamDomain?: string;
 }
 ```
 
@@ -31,7 +42,7 @@ type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
 ### `CreateAccessResolverOptions` (interface)
 
 ```ts
-interface CreateAccessResolverOptions extends RequestVerifyOptions {
+interface CreateAccessResolverOptions extends AccessJwtFallbackOptions {
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
 }
 ```
@@ -39,7 +50,7 @@ interface CreateAccessResolverOptions extends RequestVerifyOptions {
 ### `ResolveIdentityFunction` (type)
 
 ```ts
-type ResolveIdentityFunction = (request: Request, env?: unknown) => (ResolvedIdentityLike | null) | Promise<ResolvedIdentityLike | null>;
+type ResolveIdentityFunction = (request: Request, env?: unknown, context?: ExecutionContextLike) => (ResolvedIdentityLike | null) | Promise<ResolvedIdentityLike | null>;
 ```
 
 ### `ResolvedAccessIdentity` (interface)
@@ -90,7 +101,7 @@ const composeResolvers: (...resolvers: ResolveIdentityFunction[]) => ResolveIden
 ### `createAccessResolver` (const)
 
 ```ts
-const createAccessResolver: (options: CreateAccessResolverOptions) => ResolveIdentityFunction;
+const createAccessResolver: (options?: CreateAccessResolverOptions) => ResolveIdentityFunction;
 ```
 
 ### `verifyAccessJwt` (const)
@@ -104,7 +115,7 @@ const verifyAccessJwt: (token: string, options: VerifyAccessJwtOptions) => Promi
 ### `AccessAdminGateOptions` (interface)
 
 ```ts
-interface AccessAdminGateOptions extends RequestVerifyOptions {
+interface AccessAdminGateOptions extends AccessJwtFallbackOptions {
     isAdmin: (claims: AccessClaims) => boolean | Promise<boolean>;
 }
 ```
@@ -112,7 +123,7 @@ interface AccessAdminGateOptions extends RequestVerifyOptions {
 ### `accessAdminGate` (const)
 
 ```ts
-const accessAdminGate: (options: AccessAdminGateOptions) => ((request: Request) => Promise<boolean>);
+const accessAdminGate: (options: AccessAdminGateOptions) => ((request: Request, context?: ExecutionContextLike) => Promise<boolean>);
 ```
 
 ## `@lunora/cloudflare-access/context`

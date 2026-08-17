@@ -1,10 +1,10 @@
 ---
 title: Non-JS SDKs
-description: Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java or Kotlin — vendored into your project and pinned to your CLI version.
+description: Generate a typed, self-contained Lunora client for Python, Go, Ruby, Rust, Swift, Java, Kotlin or Dart/Flutter — vendored into your project and pinned to your CLI version.
 ---
 
 Lunora's own clients are TypeScript, but the [wire protocol](/docs/concepts/wire-protocol)
-is not TypeScript-bound. `lunora sdk generate` emits a client for seven other
+is not TypeScript-bound. `lunora sdk generate` emits a client for eight other
 languages, built from your deployment's own function surface.
 
 ```bash
@@ -19,11 +19,12 @@ in the consuming project.
 
 | Language | `--lang` | Needs installing                                                     |
 | -------- | -------- | -------------------------------------------------------------------- |
-| Python   | `python` | nothing — standard library only                                      |
-| Go       | `go`     | nothing — standard library only                                      |
-| Java     | `java`   | nothing — JDK only                                                   |
-| Kotlin   | `kotlin` | nothing — JDK + Kotlin stdlib                                        |
-| Swift    | `swift`  | nothing — Foundation only                                            |
+| Python   | `python` | nothing; standard library only                                       |
+| Go       | `go`     | nothing; standard library only                                       |
+| Java     | `java`   | nothing; JDK only                                                    |
+| Kotlin   | `kotlin` | nothing; JDK + Kotlin stdlib                                         |
+| Swift    | `swift`  | nothing; Foundation only                                             |
+| Dart     | `dart`   | nothing; `dart:convert` only, so every Flutter target works          |
 | Rust     | `rust`   | `serde` + `serde_json`, already declared in the emitted `Cargo.toml` |
 | Ruby     | `ruby`   | `dry-struct` + `dry-types`, which the generated models require       |
 
@@ -35,8 +36,8 @@ in the consuming project.
 ## The output is pinned to your CLI version
 
 A vendored transport has to match the protocol vintage of the surface generated
-beside it. So the transport is fetched from the git tag matching the CLI you ran —
-`@lunora/cli@<version>` — and the copy records what it got:
+beside it. So the transport is fetched from the git tag matching the CLI you ran
+(`@lunora/cli@<version>`), and the copy records what it got:
 
 ```json title="sdk/python/lunora-transport.json"
 {
@@ -49,55 +50,91 @@ beside it. So the transport is fetched from the git tag matching the CLI you ran
 
 Regenerating with a newer CLI brings a newer transport, which is how you upgrade.
 If the exact tag has no transport for that language, the CLI falls back to the
-release branch, says so loudly, and records `versionMatched: false` — so a copy is
+release branch, says so loudly, and records `versionMatched: false`, so a copy is
 never silently a different vintage than the surface next to it.
 
-| Flag            | For                                                                 |
-| --------------- | ------------------------------------------------------------------- |
-| `--out <dir>`   | Output directory (default `./sdk/<lang>`)                           |
-| `--spec <path>` | An OpenRPC document other than `lunora/_generated/openrpc.json`     |
-| `--ref <tag>`   | Pin the transport explicitly. Never falls back — a miss is an error |
-| `--from <dir>`  | Copy from a local checkout of `sdks/` instead of fetching           |
+| Flag            | For                                                                |
+| --------------- | ------------------------------------------------------------------ |
+| `--out <dir>`   | Output directory (default `./sdk/<lang>`)                          |
+| `--spec <path>` | An OpenRPC document other than `lunora/_generated/openrpc.json`    |
+| `--ref <tag>`   | Pin the transport explicitly. Never falls back; a miss is an error |
+| `--from <dir>`  | Copy from a local checkout of `sdks/` instead of fetching          |
 
 ## Wiring it into your project
 
 The layout differs per language because each toolchain resolves differently. Point
 your build at the generated directory:
 
-| Language | Wire it up with                                                                                                  |
-| -------- | ---------------------------------------------------------------------------------------------------------------- |
-| Python   | put `sdk/python` on `sys.path`; `import lunora_api`                                                              |
-| Go       | `require`/`replace` the emitted module at `sdk/go`                                                               |
-| Ruby     | `$LOAD_PATH.unshift("sdk/ruby")`; `require "api"`                                                                |
-| Rust     | a path dependency on `sdk/rust` in your `Cargo.toml`                                                             |
-| Swift    | `.package(path: "sdk/swift")`, product `LunoraApi` — SwiftPM identifies a path package by its **directory name** |
-| Java     | `javac -sourcepath sdk/java`                                                                                     |
-| Kotlin   | `kotlinc sdk/kotlin …`                                                                                           |
+| Language | Wire it up with                                                                                                 |
+| -------- | --------------------------------------------------------------------------------------------------------------- |
+| Python   | put `sdk/python` on `sys.path`; `import lunora_api`                                                             |
+| Go       | `require`/`replace` the emitted module at `sdk/go`                                                              |
+| Ruby     | `$LOAD_PATH.unshift("sdk/ruby")`; `require "api"`                                                               |
+| Rust     | a path dependency on `sdk/rust` in your `Cargo.toml`                                                            |
+| Swift    | `.package(path: "sdk/swift")`, product `LunoraApi`. SwiftPM identifies a path package by its **directory name** |
+| Java     | `javac -sourcepath sdk/java`                                                                                    |
+| Kotlin   | `kotlinc sdk/kotlin …`                                                                                          |
+| Dart     | `lunora_sdk: {path: sdk/dart}` in `dependencies`; `import 'package:lunora_sdk/lunora_api.dart'`                 |
 
 ## What you get, and what you don't
 
 Every language implements the full wire codec, the stable subscription key, RPC,
 live subscriptions, the shape/poke protocol and resume-across-reconnect, and every
-client is safe to share across threads. All seven get typed argument and result
+client is safe to share across threads. All eight get typed argument and result
 models generated from your schema.
 
 One deliberate gap:
 
-- **Optimistic updates and the offline queue are JS-only.** The non-JS clients
-  speak the protocol; they do not implement the client-side mutation queue.
+- **Optimistic updates and the offline queue are JS and Dart only.** The other six
+  clients speak the protocol; they do not implement the client-side mutation queue.
+
+Three things only Dart gets, because a mobile client is disconnected routinely
+rather than exceptionally:
+
+- **A live query is a `Stream`.** `watchList(args)` (and `client.watch(path, args)`)
+  hands back a `Stream` a Flutter `StreamBuilder` consumes directly. It subscribes
+  on first listen and unsubscribes when the last listener cancels, so disposing the
+  widget disposes the subscription. The callback-shaped `subscribeList(...)` every
+  other language has is there too.
+- **Optimistic updates.** Pass `optimisticUpdate` to a generated mutation to patch
+  any number of subscribed queries before the server answers. A prediction is a
+  layer, so an unrelated push re-folds it onto the new value rather than wiping it,
+  and it is released the moment a frame carries the write's own commit — not when
+  the HTTP call returns, which races the socket. A failed write unwinds it.
+- **An offline mutation queue.** A write issued while disconnected is held and
+  replayed in order on reconnect, under the same idempotency key the call minted,
+  so a write the server already committed is not applied twice. Tell the client
+  about connectivity with `setConnected(true|false)`; give it a `LunoraPersistence`
+  to survive a process restart.
+
+```dart
+await api.messages.send(
+  MessagesSendArgs(channelId: 'c1', text: 'hello', kind: Kind.TEXT, tags: {}),
+  optimisticUpdate: (store, _) => store.setQuery(
+    'messages:list',
+    [...(store.getQuery('messages:list', args: listArgs)! as List), pending],
+    args: listArgs,
+  ),
+);
+```
+
+<Callout type="warn">
+    A per-call `optimistic` patches the query subscribed under the **mutation's own** path and args — the shorthand for a counter or a document-by-id, where a
+    query and a mutation share both. To patch a differently-named query, which is the usual case, use `optimisticUpdate`: its store names its targets.
+</Callout>
 
 Two things are worth knowing about the models everywhere:
 
 - **An argument or result carrying a `v.bigint()` or `v.bytes()` stays untyped.**
   JSON Schema describes both as a plain integer and a plain string, but the wire
-  needs a tagged value no generated field can produce — so no model is emitted and
+  needs a tagged value no generated field can produce, so no model is emitted and
   the call takes wire values directly. `lunora sdk generate` names the functions.
 - **A result is only typed if you declare `.output()`.** Without one the return
   type is inferred by TypeScript and absent from the schema, so the SDK hands back
   its language's `any` rather than guessing a shape.
 
 HTTP and the socket are injected in every language rather than assumed, so you
-keep your own stack, timeouts, retries and socket library — and the conformance
+keep your own stack, timeouts, retries and socket library, and the conformance
 suites run with no network.
 
 ## Conformance
@@ -106,7 +143,7 @@ Every SDK is tested against the same golden frames in
 [`protocol/fixtures/`](https://github.com/anolilab/lunora/tree/alpha/protocol/fixtures)
 as the reference TypeScript client, and
 [`protocol/conformance-cases.json`](https://github.com/anolilab/lunora/tree/alpha/protocol/conformance-cases.json)
-lists the cases every suite must exercise — adding a name there turns all seven
+lists the cases every suite must exercise. Adding a name there turns all eight
 languages red until each one covers it.
 
 CI also generates each SDK into a scratch directory outside the repository, then

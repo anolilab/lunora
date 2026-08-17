@@ -1,0 +1,18 @@
+{
+    "rules": {
+        // This package is entirely Angular. React Doctor scans it because it
+        // globs `.ts`, and `effect-needs-cleanup` then fires on
+        // `client.subscribe` in `paginated-query.ts`, reporting "no cleanup
+        // path". There is one: each `Unsubscribe` is stored on its entry and
+        // released from `destroyRef.onDestroy(...)`, which is Angular's teardown
+        // hook. The rule only recognises a `useEffect` return value, so it cannot
+        // see it.
+        "react-doctor/effect-needs-cleanup": "off",
+        // NOT turned off: `react-doctor/js-index-maps`, which flags an
+        // `array.find()` inside a loop in the same file. That one is
+        // framework-agnostic and a real suggestion, so it should keep reporting.
+        //
+        // The gates that do cover this package: `tsc --noEmit`, ESLint, and the
+        // tests in `__tests__/`.
+    },
+}

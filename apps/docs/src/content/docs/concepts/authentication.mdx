@@ -24,9 +24,9 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 Every function context (`QueryCtx`, `MutationCtx`, and `ActionCtx`) carries an
 `auth` handle with the resolved caller:
 
-- `ctx.auth.userId` — the verified user id, or `null` when the request is
+- `ctx.auth.userId`: the verified user id, or `null` when the request is
   anonymous. This is the value to branch on for "is someone signed in?".
-- `ctx.auth.getIdentity()` — resolves the raw identity claims (the better-auth
+- `ctx.auth.getIdentity()`: resolves the raw identity claims (the better-auth
   session payload) as a record, or `null` when unauthenticated. Reach for it when
   you need more than the id (email, name, roles, custom claims).
 
@@ -52,13 +52,13 @@ different user (see [real-time](/docs/concepts/realtime)).
 configures a better-auth instance and Lunora forwards requests to it. Out of the
 box that gives you:
 
-- **Email / password** — PBKDF2-SHA-256 hashing that runs in WebCrypto, no Node
-  polyfills.
-- **OAuth** — GitHub and Google social providers (real code → token → userinfo
+- **Email / password**: PBKDF2-SHA-256 hashing that runs in WebCrypto, with no
+  Node polyfills.
+- **OAuth**: GitHub and Google social providers (real code → token → userinfo
   exchanges, with `id_token` signatures verified against the provider's JWKS),
   plus any other provider via `genericOAuth`.
 - **Passkeys / WebAuthn, 2FA, magic-link, email-OTP, admin, organization, and
-  more** — curated better-auth plugins re-exported from
+  more**: curated better-auth plugins re-exported from
   [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
   import paths.
 
@@ -163,10 +163,10 @@ re-evaluate the policy under the socket's verified identity on each push.
 
 ## See also
 
-- [Queries & mutations](/docs/concepts/queries-mutations) — the `ctx` shape these
+- [Queries & mutations](/docs/concepts/queries-mutations): the `ctx` shape these
   functions run under.
-- [Row-level security](/docs/concepts/rls) — turning `ctx.auth` into per-row
+- [Row-level security](/docs/concepts/rls): turning `ctx.auth` into per-row
   authorization.
-- [Real-time](/docs/concepts/realtime) — how identity is stamped on a live socket.
-- [@lunora/auth](/docs/packages/auth) — full server configuration.
-- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and more.
+- [Real-time](/docs/concepts/realtime): how identity is stamped on a live socket.
+- [@lunora/auth](/docs/packages/auth): full server configuration.
+- [@lunora/auth plugins](/docs/packages/auth/plugins): passkeys, org, admin, 2FA, and more.

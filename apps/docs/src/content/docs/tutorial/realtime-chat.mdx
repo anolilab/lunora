@@ -73,14 +73,14 @@ pnpm lunora migrate generate init
 # wrote lunora/migrations/20240401123456_init.sql
 ```
 
-Commit the SQL and the `.snapshot.json` next to it — both are deterministic.
+Commit the SQL and the `.snapshot.json` next to it; both are deterministic.
 
 </Step>
 
 <Step>
 ## 4. Write the query
 
-Create `lunora/messages.ts` (the template already has a starter version — replace
+Create `lunora/messages.ts` (the template already has a starter version; replace
 its contents with the real implementation):
 
 ```ts
@@ -117,7 +117,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 });
 ```
 
-`ctx.db.insert` types itself against your schema — pass the wrong shape and
+`ctx.db.insert` types itself against your schema: pass the wrong shape and
 TypeScript yells. At runtime the insert broadcasts a delta envelope; every
 client subscribed to `list` for that `channelId` re-renders.
 
@@ -197,9 +197,9 @@ channel, hibernated when idle, billed by the millisecond.
 
 ## Where to next
 
-- [Concepts: sharding](/docs/concepts/sharding) — when to reach for `.shardBy()`
-  vs. `.global()`
-- [@lunora/auth](/docs/packages/auth) — replace the `must be signed in` stub
+- [Concepts: sharding](/docs/concepts/sharding), for when to reach for
+  `.shardBy()` vs. `.global()`
+- [@lunora/auth](/docs/packages/auth), to replace the `must be signed in` stub
   with real sessions
-- [@lunora/storage](/docs/packages/storage) — attach images and files to messages
-- [Limits](/docs/limits) — the per-DO ceilings you're now under
+- [@lunora/storage](/docs/packages/storage), to attach images and files to messages
+- [Limits](/docs/limits), the per-DO ceilings you're now under

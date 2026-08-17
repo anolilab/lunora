@@ -43,6 +43,18 @@ type RuntimeVerb = "action" | "mutation" | "query";
 /** One RPC function, parsed and language-neutral. */
 interface SdkMethod {
     /**
+     * Where this function's ARGUMENT nulls mean "unset" and where they mean
+     * "null" — see {@link ModelNullPaths}.
+     *
+     * On the method rather than on a shared render input because it is a
+     * per-method fact and the parser already holds the schema it comes from. Read
+     * by the three targets whose rendered models cannot tell the two apart
+     * (ruby, rust, swift); the other five have a marker of their own and ignore
+     * it.
+     */
+    argsNullPaths: ModelNullPaths;
+
+    /**
      * Generated args model name, or `undefined` when NO model could be named for
      * this function's arguments.
      *
@@ -254,6 +266,269 @@ const argsChoice = <T>(method: SdkMethod, choices: { none: T; typed: (type: stri
     return method.takesArgs ? choices.untyped : choices.none;
 };
 
+/**
+ * A path from a model's root to one property. `*` stands for every element of an
+ * array or every value of a record, neither of which has named positions.
+ */
+type SchemaPath = ReadonlyArray<string>;
+
+/**
+ * Where a model's nulls mean different things — the one fact a generated model
+ * flattens away, and the reason three ports could not send a `v.nullable()`
+ * argument at all.
+ *
+ * An unset `v.optional()` and a `v.nullable()` set to null are the SAME value in
+ * every generated model (a nil field), and opposite things on the wire: the
+ * validator rejects an explicit null for the first and requires the key present
+ * for the second. Neither Ruby, Rust nor Swift renders a marker telling them
+ * apart, so the distinction is computed here, from the schema, where `required`
+ * still exists — and handed to the targets that need it.
+ *
+ * Two lists rather than one because the ports need opposite operations. Ruby and
+ * Rust project a whole value tree and prune nulls, so they prune at
+ * {@link ModelNullPaths.optional} and nowhere else — which also stops them
+ * dropping a legitimate null inside a record or an array, as a blanket prune
+ * does. Swift's `JSONEncoder` has already dropped every struct-property nil
+ * before the transport sees a tree, so it restores nulls at
+ * {@link ModelNullPaths.nullable} instead: an absent key at a required path can
+ * only have been a nil, so putting the null back is exact.
+ *
+ * A `$ref` is NOT resolved. `openrpc.ts` inlines everything it emits, so this
+ * never comes up for a generated document — but `--spec` accepts a hand-written
+ * one, and there a `$ref`'d sub-object contributes no paths at all: the ports
+ * that prune would send its unset optionals as null, and Swift would not restore
+ * its nullables. Inline the schema, or teach this to follow the pointer.
+ *
+ * Both lists name PROPERTIES only. A record's values and an array's elements can
+ * be null too, but no port drops one: the pruning ports prune at `optional`
+ * paths, which a `*` position can never be, and `JSONEncoder` drops a nil only
+ * from a struct property — a nil inside a dictionary or array encodes as null.
+ * Listing a `*` leaf would also make Swift's restore INVENT record keys that
+ * were never there, which is why the walk records the path it descends through
+ * but never the `*` position itself.
+ */
+interface ModelNullPaths {
+    /** Required properties that permit null — a null there is a VALUE and must survive. */
+    nullable: ReadonlyArray<SchemaPath>;
+    /** Properties absent from their object's `required` — a null there means UNSET. */
+    optional: ReadonlyArray<SchemaPath>;
+}
+
+/** Bounds the schema walk; a real args schema is far shallower, and a `$ref` cycle must not hang codegen. */
+const MAX_SCHEMA_DEPTH = 32;
+
+/**
+ * Whether `schema` accepts an explicit null.
+ *
+ * `.nullable()` renders as `{ anyOf: [inner, { type: "null" }] }` and
+ * `v.union(v.null(), …)` as an `anyOf` carrying the same branch, so the test is
+ * the branch rather than a flag. A bare `{ type: "null" }` and the JSON Schema
+ * type-array spelling are accepted too — neither is what this repo emits, but
+ * `--spec` takes a hand-written document.
+ */
+const permitsNull = (schema: unknown, depth = 0): boolean => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return false;
+    }
+
+    const node = schema as Record<string, unknown>;
+
+    if (node["type"] === "null" || (Array.isArray(node["type"]) && node["type"].includes("null"))) {
+        return true;
+    }
+
+    return ["anyOf", "oneOf"].some((key) => {
+        const branches = node[key];
+
+        return Array.isArray(branches) && branches.some((branch) => permitsNull(branch, depth + 1));
+    });
+};
+
+/** The accumulator the walk below appends to. */
+interface NullPathSink {
+    nullable: string[][];
+    optional: string[][];
+}
+
+/** One object shape a node contributes: its properties and which of them it requires. */
+interface ObjectShape {
+    properties: Record<string, unknown>;
+    required: Set<string>;
+}
+
+/**
+ * Fold what a node states itself into each of its alternatives.
+ *
+ * With no alternatives the node IS the shape — unless it declared nothing at
+ * all, in which case there is no shape to speak of.
+ */
+const mergeAlternatives = (base: ObjectShape, alternatives: ObjectShape[], conjunctCount: number): ObjectShape[] => {
+    if (alternatives.length === 0) {
+        return conjunctCount === 0 ? [] : [base];
+    }
+
+    return alternatives.map((alternative) => {
+        return {
+            properties: { ...base.properties, ...alternative.properties },
+            required: new Set([...base.required, ...alternative.required]),
+        };
+    });
+};
+
+/**
+ * The object shapes quicktype will MERGE into a single class for this node.
+ *
+ * This is the part that cannot be read off one `required` list, and getting it
+ * wrong regresses working calls. quicktype folds the branches of an `anyOf` into
+ * ONE class whose every property is nullable unless every branch requires it —
+ * so for `v.union(v.object({a}), v.object({b}))` it renders one class with `a`
+ * and `b` both optional, and a model built from it emits BOTH, one of them null.
+ * A walk that read each branch's own `required` in isolation would call both
+ * properties required, prune nothing, and send `{"a":"x","b":null}` — which
+ * neither branch of the union accepts.
+ *
+ * So an `anyOf`/`oneOf` yields one shape PER BRANCH and the caller intersects:
+ * a property is required only where every shape both has it and requires it. A
+ * non-object branch — the `{ type: "null" }` of a `.nullable()`, say — yields no
+ * shape at all, so wrapping an object in `.nullable()` does not make its
+ * properties optional. An `allOf` is a conjunction rather than a choice, so its
+ * branches fold INTO the surrounding shape instead of standing beside it.
+ */
+/** The shape a node declares directly, if it declares one. */
+const ownShape = (node: Record<string, unknown>): ObjectShape[] => {
+    const { properties } = node;
+
+    if (properties === null || typeof properties !== "object") {
+        return [];
+    }
+
+    const declared = node["required"];
+
+    return [
+        {
+            properties: properties as Record<string, unknown>,
+            required: new Set(Array.isArray(declared) ? declared.filter((key): key is string => typeof key === "string") : []),
+        },
+    ];
+};
+
+/** The shapes under one combinator key. */
+const branchShapes = (node: Record<string, unknown>, key: string, depth: number): ObjectShape[] => {
+    const branches = node[key];
+
+    if (!Array.isArray(branches)) {
+        return [];
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutually recursive with the collector below
+    return branches.flatMap((branch) => objectShapes(branch, depth + 1));
+};
+
+const objectShapes = (schema: unknown, depth = 0): ObjectShape[] => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return [];
+    }
+
+    const node = schema as Record<string, unknown>;
+    // `allOf` branches all hold at once, so they merge into the shape here rather
+    // than becoming alternatives beside it.
+    const conjuncts = [...ownShape(node), ...branchShapes(node, "allOf", depth)];
+
+    const base: ObjectShape = {
+        properties: Object.assign({}, ...conjuncts.map((shape) => shape.properties)) as Record<string, unknown>,
+        required: new Set(conjuncts.flatMap((shape) => [...shape.required])),
+    };
+
+    const alternatives = [...branchShapes(node, "anyOf", depth), ...branchShapes(node, "oneOf", depth)];
+
+    return mergeAlternatives(base, alternatives, conjuncts.length);
+};
+
+/** Every node whose `items`/`additionalProperties` this one's `*` position covers. */
+const wildcardSources = (schema: unknown, depth = 0): Record<string, unknown>[] => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return [];
+    }
+
+    const node = schema as Record<string, unknown>;
+    const sources = [node];
+
+    for (const key of ["anyOf", "oneOf", "allOf"]) {
+        const branches = node[key];
+
+        if (Array.isArray(branches)) {
+            for (const branch of branches) {
+                sources.push(...wildcardSources(branch, depth + 1));
+            }
+        }
+    }
+
+    return sources;
+};
+
+const collectNullPaths = (schema: unknown, prefix: ReadonlyArray<string>, into: NullPathSink, depth = 0): void => {
+    if (depth > MAX_SCHEMA_DEPTH || schema === null || typeof schema !== "object") {
+        return;
+    }
+
+    const shapes = objectShapes(schema);
+    const keys = [...new Set(shapes.flatMap((shape) => Object.keys(shape.properties)))].toSorted((a, b) => a.localeCompare(b));
+
+    for (const key of keys) {
+        const path = [...prefix, key];
+        // Present AND required in every merged shape. A shape that lacks the key
+        // fails the test on its own, which is what makes a property missing from
+        // one union branch optional in the class quicktype renders.
+        const required = shapes.every((shape) => shape.required.has(key));
+        const children = shapes.map((shape) => shape.properties[key]).filter((child) => child !== undefined);
+
+        if (!required) {
+            into.optional.push(path);
+        } else if (children.some((child) => permitsNull(child))) {
+            into.nullable.push(path);
+        }
+
+        for (const child of children) {
+            collectNullPaths(child, path, into, depth + 1);
+        }
+    }
+
+    // A record's values and an array's elements take the `*` segment. The `*`
+    // position ITSELF is never recorded: no port drops a null there, and listing
+    // one would make Swift's restore invent record keys that were never sent.
+    // `additionalProperties: false` is a boolean and falls out of the type test.
+    for (const source of wildcardSources(schema)) {
+        for (const key of ["additionalProperties", "items"]) {
+            const child = source[key];
+
+            if (child !== null && typeof child === "object") {
+                collectNullPaths(child, [...prefix, "*"], into, depth + 1);
+            }
+        }
+    }
+};
+
+/** Sorted so two runs over one schema emit byte-identical paths. */
+const byPath = (a: SchemaPath, b: SchemaPath): number => a.join("\u0000").localeCompare(b.join("\u0000"));
+
+/**
+ * The {@link ModelNullPaths} of one schema.
+ *
+ * Exported for `__tests__/sdk-null-paths.test.ts`, which exercises the walk
+ * directly — every other caller reaches it through {@link SdkMethod.argsNullPaths}.
+ */
+const nullPathsOf = (schema: unknown): ModelNullPaths => {
+    const into: NullPathSink = { nullable: [], optional: [] };
+
+    collectNullPaths(schema, [], into);
+
+    // Merged alternatives can reach one property by more than one route, and the
+    // same nested object can be walked once per branch that carries it.
+    const distinct = (paths: string[][]): string[][] => [...new Map(paths.map((path) => [path.join("\u0000"), path])).values()].toSorted(byPath);
+
+    return { nullable: distinct(into.nullable), optional: distinct(into.optional) };
+};
+
 /** Parse one OpenRPC method. Model names are derived HERE and nowhere else. */
 const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     const [namespace = "", functionName = ""] = method.name.split(":");
@@ -266,6 +541,7 @@ const parseMethod = (method: OpenRpcMethod): SdkMethod => {
     // would render as a plain number/string and every call would fail the
     // server's validator. The caller passes wire values directly instead.
     return {
+        argsNullPaths: nullPathsOf(argsSchema),
         argsType: isTypedSchema(argsSchema) && !hasUnrepresentableWireType(argsSchema) ? `${base}Args` : undefined,
         takesArgs: isTypedSchema(argsSchema),
         functionName,
@@ -488,6 +764,7 @@ const referencedModels = (namespaces: ReadonlyArray<SdkNamespace>): ReadonlyArra
         ),
     ].toSorted((a, b) => a.localeCompare(b));
 
+export type { ModelNullPaths, SchemaPath };
 export {
     allMethods,
     argsChoice,
@@ -498,6 +775,7 @@ export {
     isTypedSchema,
     kotlinLiteral,
     modelSources,
+    nullPathsOf,
     parseMethod,
     parseSpec,
     referencedModels,

@@ -1,14 +1,24 @@
 ---
 title: "@lunora/testing"
 description: In-memory harness for queries, mutations, and actions, plus E2E mail-catcher helpers.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "the `query` / `mutation` / `action` functions the harness runs"
+    - to: /docs/concepts/rls
+      note: "drive procedures with `withIdentity` to test authorization"
+    - to: /docs/packages/mail
+      note: "captures the outbound email the helpers read"
+    - to: /docs/packages/auth
+      note: "the verification / reset / magic-link flows you test end-to-end"
 ---
 
 `@lunora/testing` is the toolkit for testing a Lunora app. It ships two
 surfaces: an **in-memory function harness** (`lunoraTest`) that runs your
 `query` / `mutation` / `action` functions against a fresh `node:sqlite`
-database — no Durable Object, no `wrangler`, no network — and the **mail-catcher
-helpers** re-exported from [`@lunora/mail/testing`](/docs/packages/mail) for
-driving end-to-end email flows.
+database, with no Durable Object, no `wrangler`, and no network; and the
+**mail-catcher helpers** re-exported from
+[`@lunora/mail/testing`](/docs/packages/mail) for driving end-to-end email
+flows.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -36,7 +46,7 @@ bun add -D @lunora/testing
 database, builds the same `ctx.db` writer the real Durable Object builds, and
 returns a harness whose methods execute a registered function's `handler`
 directly. It mirrors the first five methods of Convex's `convexTest`, and all
-of them share one database — so a write from a mutation is visible to a later
+of them share one database, so a write from a mutation is visible to a later
 query.
 
 ```ts
@@ -70,7 +80,7 @@ test("sends and lists a message", async () => {
 
 Each `lunoraTest(...)` opens one in-memory database backed by a native handle.
 Call `t.close()` (typically in an `afterEach`) to release it when a test
-finishes — it is idempotent, so closing any view of the harness is safe.
+finishes. It is idempotent, so closing any view of the harness is safe.
 
 ```ts
 const open: ReturnType<typeof lunoraTest>[] = [];
@@ -158,7 +168,7 @@ Internal functions (`internalQuery` / `internalMutation` / `internalAction`)
 are unreachable from the external RPC boundary in production. The harness
 enforces that contract: calling one through `t.query` / `t.mutation` /
 `t.action` throws, while calling it through `ctx.runQuery` / `ctx.runMutation` /
-`ctx.runAction` from another function succeeds — mirroring prod's trusted
+`ctx.runAction` from another function succeeds. That mirrors prod's trusted
 system dispatch.
 
 ```ts
@@ -239,7 +249,7 @@ test("scheduled mutation runs after advance", async () => {
 
 The virtual clock is per-harness, so parallel tests are isolated. A path not in
 the `functions` map (or pointing at a query) produces a `console.warn` and is
-dropped — matching production behaviour for unknown paths. Jobs run through the
+dropped, which matches production behaviour for unknown paths. Jobs run through the
 same dispatch as `ctx.runMutation`, so they share the harness database.
 
 ### Subscriptions
@@ -263,7 +273,7 @@ test("subscription re-emits after a mutation", async () => {
 });
 ```
 
-Subscriptions are table-agnostic — any mutation triggers a re-evaluation. The
+Subscriptions are table-agnostic: any mutation triggers a re-evaluation. The
 iterable buffers at most one pending result, so if several mutations fire
 between two `next()` calls the next read reflects the most recent state.
 
@@ -286,7 +296,7 @@ test("stubbed surfaces throw a clear error", async () => {
 ```
 
 <Callout type="warn">
-    The stub only throws when a handler actually touches it — functions that never reach for `ctx.storage` / `ctx.vectors` / `ctx.workflows` still run. Real R2
+    The stub only throws when a handler actually touches it: functions that never reach for `ctx.storage` / `ctx.vectors` / `ctx.workflows` still run. Real R2
     storage, Vectorize, and Cloudflare Workflows are deferred to a follow-up.
 </Callout>
 
@@ -304,13 +314,13 @@ deterministically. They are re-exported from `@lunora/testing`:
 | `listCapturedMail`   | Read the captured-mail inbox, newest first.                                         |
 | `waitForMail`        | Poll the inbox until a message matching `to` (and optional `subjectMatch`) appears. |
 | `extractLink`        | Pull the first link out of a captured message (html first, then text).              |
-| `InboxOptions`       | Type — options for `listCapturedMail`.                                              |
-| `WaitForMailOptions` | Type — options for `waitForMail`.                                                   |
+| `InboxOptions`       | Type: options for `listCapturedMail`.                                               |
+| `WaitForMailOptions` | Type: options for `waitForMail`.                                                    |
 
 `waitForMail` takes the worker `baseUrl`, the admin bearer token (the worker
 gates introspection behind `LUNORA_ADMIN_TOKEN`), the recipient `to`, and an
 optional `subjectMatch`. It polls (default every 250ms, timing out after 10s)
-and returns the matching `CapturedMail` — or throws on timeout. `extractLink`
+and returns the matching `CapturedMail`, or throws on timeout. `extractLink`
 takes an optional `match` substring to disambiguate the action link from a logo
 or footer URL.
 
@@ -357,10 +367,3 @@ test("password reset email carries a working link", async () => {
 | `pollMs`       | `250`        | Poll interval in ms.                                |
 | `timeoutMs`    | `10000`      | Give up after this many ms.                         |
 | `fetch`        | `globalThis` | Inject a `fetch` implementation (e.g. a stub).      |
-
-## See also
-
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
-- [Concepts: row-level security](/docs/concepts/rls) — drive procedures with `withIdentity` to test authorization
-- [@lunora/mail](/docs/packages/mail) — captures the outbound email the helpers read
-- [@lunora/auth](/docs/packages/auth) — the verification / reset / magic-link flows you test end-to-end

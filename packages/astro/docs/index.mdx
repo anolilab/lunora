@@ -3,10 +3,10 @@ title: "@lunora/astro"
 description: "Astro integration: single-worker composition plus reactive-loader server helpers."
 ---
 
-`@lunora/astro` owns two server-side seams for running Lunora inside an Astro app on Cloudflare. Astro is multi-framework at the UI layer, so this package is not a reactive runtime — reactivity comes from whichever island adapter you hydrate with (`@lunora/react`, `@lunora/solid`, `@lunora/svelte`, `@lunora/vue`).
+`@lunora/astro` owns two server-side seams for running Lunora inside an Astro app on Cloudflare. Astro is multi-framework at the UI layer, so this package is not a reactive runtime; reactivity comes from whichever island adapter you hydrate with (`@lunora/react`, `@lunora/solid`, `@lunora/svelte`, `@lunora/vue`).
 
-- **Single-worker composition** — `withLunora` wraps the Worker `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) is mounted inside it. One worker, one deploy.
-- **Reactive-loader server helpers** — `@lunora/astro/server` re-exports the framework-neutral SSR contract (`createServerClient`, `preloadQuery`, `serializePreloaded`, `getServerSession`) for use in `.astro` frontmatter and server endpoints.
+- **Single-worker composition**: `withLunora` wraps the Worker `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) is mounted inside it. One worker, one deploy.
+- **Reactive-loader server helpers**: `@lunora/astro/server` re-exports the framework-neutral SSR contract (`createServerClient`, `preloadQuery`, `serializePreloaded`, `getServerSession`) for use in `.astro` frontmatter and server endpoints.
 
 ## Install
 
@@ -14,7 +14,7 @@ description: "Astro integration: single-worker composition plus reactive-loader 
 pnpm add @lunora/astro
 ```
 
-`astro` is an optional peer dependency (`^6.0.0`) — the host app provides it.
+`astro` is an optional peer dependency (`^6.0.0`); the host app provides it.
 
 ## Composition
 
@@ -40,7 +40,7 @@ export default defineConfig({
 </Step>
 <Step>
 
-Compose the worker. On Astro 6 / `@astrojs/cloudflare` v13 the adapter no longer emits a `dist/_worker.js` bundle — import `handle` (the adapter's built-in SSR fetch function) and wrap it:
+Compose the worker. On Astro 6 / `@astrojs/cloudflare` v13 the adapter no longer emits a `dist/_worker.js` bundle, so import `handle` (the adapter's built-in SSR fetch function) and wrap it:
 
 ```ts title="src/worker.ts"
 import { handle } from "@astrojs/cloudflare/handler";
@@ -75,11 +75,11 @@ Point wrangler at the composed entry:
 withLunora(host, optionsInput);
 ```
 
-- `host` — Astro's emitted Cloudflare handler, either a bare `fetch` function or a `{ fetch }` object (a `scheduled` on the object is preserved when Lunora configures no cron surface).
-- `optionsInput` — Lunora worker options minus `httpRouter`, or an `(env) => options` factory so per-request bindings like `env.SHARD` wire in. Returns a `{ fetch, scheduled, serverQuery }` worker.
+- `host`: Astro's emitted Cloudflare handler, either a bare `fetch` function or a `{ fetch }` object (a `scheduled` on the object is preserved when Lunora configures no cron surface).
+- `optionsInput`: Lunora worker options minus `httpRouter`, or an `(env) => options` factory so per-request bindings like `env.SHARD` wire in. Returns a `{ fetch, scheduled, serverQuery }` worker.
 
 <Callout type="info">
-    `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime` — the same composer codegen's `buildFrameworkWorker` uses
+    `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime`, the same composer codegen's `buildFrameworkWorker` uses
     for SvelteKit.
 </Callout>
 
@@ -125,12 +125,12 @@ Re-exported from `@lunora/astro/server`:
 | `getServerSession`     | Resolve the current session from a headers source (`Request`/`Headers`) + an auth instance. |
 
 <Callout type="warn">
-    Create a `createServerClient` per request rather than sharing a module-level instance — the bearer token is request-scoped, and a shared client would leak
+    Create a `createServerClient` per request rather than sharing a module-level instance: the bearer token is request-scoped, and a shared client would leak
     one request's auth into another.
 </Callout>
 
 ## Related
 
-- [`@lunora/runtime`](/docs/packages/runtime) — the Worker runtime `withLunora` composes with.
-- [`@lunora/client`](/docs/packages/client) — the browser SDK; `@lunora/astro/server` re-exports its `/ssr` contract.
-- [`@lunora/react`](/docs/packages/react), [`@lunora/solid`](/docs/packages/solid), [`@lunora/svelte`](/docs/packages/svelte), [`@lunora/vue`](/docs/packages/vue) — island adapters that ship `hydratePreloaded`.
+- [`@lunora/runtime`](/docs/packages/runtime): the Worker runtime `withLunora` composes with.
+- [`@lunora/client`](/docs/packages/client): the browser SDK; `@lunora/astro/server` re-exports its `/ssr` contract.
+- [`@lunora/react`](/docs/packages/react), [`@lunora/solid`](/docs/packages/solid), [`@lunora/svelte`](/docs/packages/svelte), [`@lunora/vue`](/docs/packages/vue): island adapters that ship `hydratePreloaded`.

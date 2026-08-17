@@ -1,0 +1,275 @@
+/**
+ * Site theme layer — the one file you swap to re-skin the whole site.
+ *
+ * Every visual decision the marketing + docs chrome makes reads a `--site-*`
+ * custom property from here. Nothing below this file hard-codes a colour, a
+ * font size, or a gutter. To take this app to another project, replace the
+ * `:root` block and leave the rest of `src/kit/` untouched.
+ *
+ * The `@theme inline` block republishes each token as a Tailwind v4 theme
+ * value, so `bg-canvas`, `border-hairline`, `text-h2` etc. all resolve to
+ * `var(--site-*)` at runtime rather than being inlined at build time — that is
+ * what makes a runtime theme swap (or a `[data-site-theme]` override) work.
+ *
+ * Scale note: the type scale is *capped* and the layout gutters are *fluid*.
+ * Headings stop growing at ~1200px so long-form measure stays readable on wide
+ * monitors, while gutters and section rhythm keep breathing to the viewport.
+ */
+
+@theme inline {
+    /* ── Surfaces & ink ── */
+    --color-canvas: var(--site-canvas);
+    --color-canvas-deep: var(--site-canvas-deep);
+    --color-surface: var(--site-surface);
+    --color-surface-raised: var(--site-surface-raised);
+    --color-hairline: var(--site-hairline);
+    --color-hairline-strong: var(--site-hairline-strong);
+    --color-wash: var(--site-wash);
+    --color-ink: var(--site-ink);
+    --color-ink-muted: var(--site-ink-muted);
+    --color-ink-faint: var(--site-ink-faint);
+
+    /* ── Accents ── */
+    --color-accent: var(--site-accent);
+    --color-accent-2: var(--site-accent-2);
+    --color-accent-3: var(--site-accent-3);
+    --color-on-accent: var(--site-on-accent);
+    --color-positive: var(--site-positive);
+
+    /* Emphasis is the *achromatic* accent: the primary button, the strongest
+       interactive state. Colour is reserved for the few chromatic moments, so
+       the loudest element on the page is bright, not saturated. */
+    --color-emphasis: var(--site-emphasis);
+    --color-on-emphasis: var(--site-on-emphasis);
+
+    /* Inverted surface — the mega-menu panel and anything else that flips
+       against the page. Named rather than `white`/`black` so it inverts with
+       the theme instead of staying light when the brand goes light. */
+    --color-panel: var(--site-panel);
+    --color-on-panel: var(--site-on-panel);
+
+    /* ── Type scale ──
+       Sizes carry their own line-height and tracking so a heading is one
+       utility (`text-h2`) instead of three that can drift apart. */
+    --text-display: var(--site-text-display);
+    --text-display--line-height: 0.95;
+    --text-display--letter-spacing: -0.04em;
+
+    --text-h1: var(--site-text-h1);
+    --text-h1--line-height: 1.05;
+    --text-h1--letter-spacing: -0.04em;
+
+    --text-h2: var(--site-text-h2);
+    --text-h2--line-height: 1.05;
+    --text-h2--letter-spacing: -0.035em;
+
+    --text-h3: var(--site-text-h3);
+    --text-h3--line-height: 1.08;
+    --text-h3--letter-spacing: -0.028em;
+
+    --text-body: var(--site-text-body);
+    --text-body--line-height: 1.55;
+    --text-body--letter-spacing: -0.01em;
+
+    --text-blurb: var(--site-text-blurb);
+    --text-blurb--line-height: 1.5;
+    --text-blurb--letter-spacing: -0.01em;
+
+    /* Mono micro-labels. `kicker` sits above headings, `micro` is the smallest
+       legible label (section indices, meta rows, table headers). */
+    --text-kicker: var(--site-text-kicker);
+    --text-kicker--line-height: 1.2;
+    --text-kicker--letter-spacing: 0.12em;
+
+    --text-micro: var(--site-text-micro);
+    --text-micro--line-height: 1.5;
+    --text-micro--letter-spacing: 0.18em;
+
+    /* ── Layout rhythm ── */
+    --spacing-gutter: var(--site-gutter);
+    --spacing-section: var(--site-section-gap);
+    --spacing-section-end: var(--site-section-gap-end);
+    --spacing-col-gap: var(--site-col-gap);
+    --container-shell: var(--site-shell);
+}
+
+/* `[data-site-theme="dark"]` matches the same values so the palette can be
+   re-entered: a light band may still contain a dark object (a code console),
+   and without this the tokens only ever flip one way. */
+:root,
+[data-site-theme="dark"] {
+    /* ─────────────────────────────────────────────────────────────────────
+       SWAP EVERYTHING BELOW TO RE-BRAND.
+       Defaults are Lunora "Luna + Aurora" on a night canvas.
+       ───────────────────────────────────────────────────────────────────── */
+
+    /* Surfaces — a near-black canvas with two lifts above it and one below. */
+    --site-canvas: #0e0e11;
+    --site-canvas-deep: #08080a;
+    --site-surface: hsl(240 14% 8%);
+    --site-surface-raised: hsl(240 14% 11%);
+
+    /* Structure is drawn with 1px hairlines, never shadows or radii. */
+    --site-hairline: rgb(255 255 255 / 0.08);
+    --site-hairline-strong: rgb(255 255 255 / 0.16);
+    /* Barely-there fill that lifts a panel off the canvas without reading as
+       a distinct surface. Too faint to be a border; too subtle to be `surface`. */
+    --site-wash: rgb(255 255 255 / 0.03);
+
+    /* The diagonal ruling in the band spacer. Its own token because the spacer
+       sits between two bands and has to work on either ground — it was a fixed
+       dark grey, which vanished the moment a light band appeared under it. */
+    --site-hatch: rgb(46 48 56 / 0.45);
+
+    /* Code console surface. A token rather than a literal so a console can sit
+       on either ground: on the dark half it is the deepest surface on the page,
+       on the light half it becomes paper and the listing is printed on it. */
+    --site-console: hsl(240 22% 4%);
+
+    /* Ink — three steps is enough; a fourth always ends up unreadable.
+       The faint step is pinned to the WCAG AA floor rather than to taste: at
+       0.35 it composited to ~3.1:1 on the canvas and failed 4.5:1 across every
+       label, manifest key and filename on the site. 0.47 clears it on every surface, including the darker code panels. Lowering it
+       again re-breaks 70-odd elements at once. */
+    --site-ink: hsl(228 30% 96%);
+    --site-ink-muted: rgb(255 255 255 / 0.55);
+    --site-ink-faint: rgb(255 255 255 / 0.47);
+
+    /* Emphasis — achromatic. See --color-emphasis above. */
+    --site-emphasis: hsl(228 30% 96%);
+    --site-on-emphasis: #0e0e11;
+
+    /* Accents — the aurora ribbon, used as light rather than paint.
+       Budget: the page header field, numeric indices, one highlighted cell per
+       grid, and focus states. Everything else is grey. If more than roughly a
+       tenth of a view is chromatic, something has taken accent that should
+       have taken `emphasis` or `ink`. */
+    --site-accent: hsl(186 84% 56%);
+    --site-accent-2: hsl(256 72% 68%);
+    --site-accent-3: hsl(330 80% 64%);
+    --site-on-accent: #0e0e11;
+    --site-ribbon: linear-gradient(100deg, var(--site-accent), var(--site-accent-2) 55%, var(--site-accent-3));
+
+    /* Accents lifted toward white, for the one band that carries dark ink on a
+       full accent fill. Measured against `--site-on-accent` at 80%: the raw
+       accents run 7.5 / 4.2 / 4.7, so violet fails AA outright and rose clears
+       it by 0.2. At this tint all three sit at 5.0 or better, which is what
+       lets the band cycle hue without the text dropping out on one phase.
+       Mixed in sRGB, not oklch — oklch lightens far less per percent here, and
+       the tint is chosen by measured contrast rather than by appearance. */
+    --site-accent-tint: color-mix(in srgb, var(--site-accent) 80%, white);
+    --site-accent-2-tint: color-mix(in srgb, var(--site-accent-2) 80%, white);
+    --site-accent-3-tint: color-mix(in srgb, var(--site-accent-3) 80%, white);
+
+    /* "Healthy / live" status. Its own role rather than an accent alias — a
+       brand may want a cool accent and still need green to read as green. */
+    --site-positive: hsl(152 62% 52%);
+
+    /* Inverted surface (see --color-panel above). */
+    --site-panel: hsl(228 32% 97%);
+    --site-on-panel: hsl(240 14% 10%);
+
+    /* Type scale — capped so headings stop growing on wide monitors. */
+    --site-text-display: clamp(2.25rem, 1.5rem + 3.2vw, 3.3rem);
+    --site-text-h1: clamp(2rem, 1.25rem + 2.4vw, 2.75rem);
+    --site-text-h2: clamp(1.75rem, 1.15rem + 1.9vw, 2.5rem);
+    --site-text-h3: clamp(1.125rem, 0.95rem + 0.55vw, 1.4375rem);
+    --site-text-body: 0.9375rem;
+    --site-text-blurb: 0.8125rem;
+    --site-text-kicker: 0.6875rem;
+    --site-text-micro: 0.625rem;
+
+    /* Layout rhythm — fluid, unlike the type scale.
+       `section-gap` is the padding ONE section applies to each of its edges,
+       so the space between two stacked sections is twice this. Sized so that
+       sum lands at ~130–150px, not the ~300px a full-gap reading would give. */
+    --site-gutter: 1.25rem;
+    --site-section-gap: 6rem;
+    /* Smaller than the top gap on purpose. A band was flush to its lower edge
+       for a while, on the theory that the hatched spacer was itself the
+       separation — but a button or a caption landing hard against that divider
+       reads as a layout bug, and it did in four different bands. Matching the
+       6rem top instead would restore the ~300px trough between bands that the
+       asymmetry exists to avoid. */
+    --site-section-gap-end: 3.5rem;
+    --site-col-gap: clamp(1rem, 0.3rem + 1.7vw, 2.5rem);
+    /* 72rem matches `max-w-6xl`, the width the rest of the site and the navbar
+       already use. Sections wider than the bar they sit under read as
+       misaligned rather than generous. */
+    --site-shell: 72rem;
+
+    /*
+     * The navbar row height, and therefore the offset of everything that docks
+     * under it: the page header's clearance, the mega-menu, and every sticky
+     * filter bar. It was written out in six files as `h-28` / `top-28` / `pt-28`
+     * and drifted twice when the bar was resized — a sidebar sat 32px under the
+     * nav, and the hero panel 16px beneath it.
+     */
+    --site-nav-height: 72px;
+
+    /* Corners are square. Kept as a token so a softer brand can opt out in one
+       line instead of hunting `rounded-*` across the component layer. */
+    --site-radius: 0px;
+}
+
+/**
+ * The light band.
+ *
+ * White and quiet, with the air doing the work rather than the drawing. Two
+ * earlier attempts are worth recording because both failed for reasons that
+ * are easy to repeat:
+ *
+ * 1. A cool near-white with every other value mirrored — that is an inversion,
+ *    not a surface, and it read exactly like the dark theme flipped.
+ * 2. Ivory with near-black rules, to stop the hairline grid evaporating. It
+ *    solved the structure but made every band heavy: a 0.82 rule is a bar, not
+ *    a line, and `bg-hairline` is used as a *fill* in ten places, so hover
+ *    states and icon tiles all turned into black slabs.
+ *
+ * What actually works on a light ground is fewer dark objects, not stronger
+ * lines. The rules go back to a whisper; the density comes down instead (see
+ * `GridCell`'s `chips`, which replace most of the code panels in a light band).
+ * A dark console is then an accent — one or two per band, deliberately placed —
+ * rather than half the band's surface area.
+ *
+ * Set `data-site-theme="light"` on any subtree to enter it; `Section tone="light"`
+ * does this for a band.
+ */
+[data-site-theme="light"] {
+    --site-canvas: #ffffff;
+    --site-canvas-deep: #fafafa;
+    --site-surface: #f5f5f6;
+    --site-surface-raised: #ffffff;
+
+    /* A whisper, matching the dark half's 8% white. Structure is present but
+       never the loudest thing in the band. */
+    --site-hairline: rgb(17 17 19 / 0.1);
+    --site-hairline-strong: rgb(17 17 19 / 0.2);
+    --site-wash: rgb(17 17 19 / 0.04);
+    --site-hatch: rgb(17 17 19 / 0.1);
+    /* The console stays dark on this ground on purpose — it is the one black
+       object in the band and it earns its weight by being rare. `CodeView`
+       re-enters the dark palette so its type stays light on it. */
+    --site-console: hsl(240 22% 4%);
+
+    --site-ink: #111112;
+    --site-ink-muted: rgb(17 17 19 / 0.64);
+    /* Faint ink carries kickers and meta at 10–11px where AA wants 4.5:1. On
+       pure white the alpha that clears it solves to 0.573, so this is that
+       with margin — the 0.42 this palette shipped with measured 2.7:1 and had
+       never been checked against anything. */
+    --site-ink-faint: rgb(17 17 19 / 0.62);
+
+    /* Darker than mirroring the dark theme would suggest. These carry text —
+       section labels, the status value in the manifest — and at 32% lightness
+       cyan measured 3.9:1 on this ground, under the 4.5:1 those sizes need. */
+    --site-accent: hsl(186 84% 24%);
+    --site-accent-2: hsl(256 62% 33%);
+    --site-accent-3: hsl(330 70% 27%);
+    --site-on-accent: #ffffff;
+    --site-emphasis: #111112;
+    --site-on-emphasis: #ffffff;
+    --site-positive: hsl(152 58% 28%);
+    --site-panel: #111112;
+    --site-on-panel: #ffffff;
+}

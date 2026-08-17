@@ -1,6 +1,9 @@
 ---
 title: Limits
 description: Cloudflare ceilings you should keep in your head.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/deployment
 ---
 
 Lunora's design choices are driven by Cloudflare's per-primitive limits.
@@ -25,7 +28,7 @@ or `.global()`.
 These are the ones that surprise people, because they are set by the Workers
 runtime rather than by SQLite, and they are **far** below SQLite's own defaults.
 D1 runs the same build, so both engines share them. Cross one and the statement
-fails at runtime with `SQLITE_ERROR` — it does not merely run slower.
+fails at runtime with `SQLITE_ERROR`; it does not merely run slower.
 
 | Limit                        | Value        | Stock SQLite | What it bounds                                        |
 | ---------------------------- | ------------ | ------------ | ----------------------------------------------------- |
@@ -41,7 +44,7 @@ fails at runtime with `SQLITE_ERROR` — it does not merely run slower.
 **Lunora handles most of these for you.** Its generated SQL nests compound
 `SELECT`s five at a time, binds a long `in` list as a single JSON parameter,
 chunks multi-row `INSERT`s, and compiles `contains` to a position function
-rather than a `LIKE` pattern — so an id probe, a wide `where … in`, or a
+rather than a `LIKE` pattern, so an id probe, a wide `where … in`, or a
 50-character search term does not hit a wall as your schema grows.
 
 Two are yours to respect, because no rewrite can absorb them:
@@ -65,21 +68,21 @@ Two are yours to respect, because no rewrite can absorb them:
 
 ## R2
 
-| Limit       | Value    | Implication                               |
-| ----------- | -------- | ----------------------------------------- |
-| Object size | **5 TB** | Practically unlimited                     |
-| Egress      | **Free** | Critical — design around direct downloads |
-| Class A ops | metered  | Bulk-list judiciously                     |
+| Limit       | Value    | Implication                              |
+| ----------- | -------- | ---------------------------------------- |
+| Object size | **5 TB** | Practically unlimited                    |
+| Egress      | **Free** | Critical: design around direct downloads |
+| Class A ops | metered  | Bulk-list judiciously                    |
 
 ## Workers
 
-| Limit                 | Value                                                    | Implication                                                           |
-| --------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
-| Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                   |
-| CPU per request       | **30 s**                                                 | Same envelope as DO                                                   |
-| Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                             |
-| Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1 — a cross-shard read spends one per shard |
-| Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                    |
+| Limit                 | Value                                                    | Implication                                                          |
+| --------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| Bundle size           | **10 MB**                                                | Lazy-load big deps; avoid bundling unused providers                  |
+| CPU per request       | **30 s**                                                 | Same envelope as DO                                                  |
+| Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                            |
+| Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1; a cross-shard read spends one per shard |
+| Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                   |
 
 ## Queues
 
@@ -96,18 +99,18 @@ Two are yours to respect, because no rewrite can absorb them:
 
 ## Pipelines
 
-| Limit                 | Value      | Implication                                                        |
-| --------------------- | ---------- | ------------------------------------------------------------------ |
-| Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call — chunk a large batch |
-| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                            |
-| Streams / account     | **20**     | Open-beta ceiling, raisable by request                             |
-| Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                             |
-| Sinks / account       | **20**     | Open-beta ceiling, raisable by request                             |
+| Limit                 | Value      | Implication                                                       |
+| --------------------- | ---------- | ----------------------------------------------------------------- |
+| Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call; chunk a large batch |
+| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                           |
+| Streams / account     | **20**     | Open-beta ceiling, raisable by request                            |
+| Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                            |
+| Sinks / account       | **20**     | Open-beta ceiling, raisable by request                            |
 
 `send` accepts one record or an array and forwards the array as a single
 ingestion call, so the 5 MB ceiling is a property of what you pass it. Nothing
-measures it locally — the byte count would mean serializing every record twice
-on an egress path — so a batch past the limit is rejected by Cloudflare rather
+measures it locally (the byte count would mean serializing every record twice
+on an egress path), so a batch past the limit is rejected by Cloudflare rather
 than by Lunora. Split large batches across calls.
 
 ## Workers AI + Vectorize
@@ -118,8 +121,8 @@ than by Lunora. Split large batches across calls.
 | `topK` with full metadata | **50**     | Cloudflare's ceiling; `defineRag` caps at 20, a legacy-V1 holdover |
 | `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata         |
 
-The ceiling covers the **whole** metadata object — chunk text, Lunora's
-bookkeeping keys, and any `metadata` you attach — so `defineRag` checks it in
+The ceiling covers the **whole** metadata object (chunk text, Lunora's
+bookkeeping keys, and any `metadata` you attach), so `defineRag` checks it in
 two places.
 
 At index time it measures the serialized metadata of each chunk and refuses one
@@ -177,23 +180,18 @@ unlike R2, which is free. See the
 The Studio's **Advisors** pages carry the limit warnings, alongside the rest of
 the schema and performance lints:
 
-| Lint                             | Fires when                                                                                                                             |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100                                                                           |
-| `fan_out_breadth`                | A shard group reaches **500** active shards — wide enough that a cross-shard read over it would strain the internal-subrequest ceiling |
-| `hot_shard`                      | One shard takes a dominant share of its group's traffic (a distribution, not a ceiling)                                                |
+| Lint                             | Fires when                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100                                                                          |
+| `fan_out_breadth`                | A shard group reaches **500** active shards, wide enough that a cross-shard read over it would strain the internal-subrequest ceiling |
+| `hot_shard`                      | One shard takes a dominant share of its group's traffic (a distribution, not a ceiling)                                               |
 
-Each fires with runway, because the remediation is a design change — split a
-table, narrow a read, re-key a shard — and that is not something you can act on
+Each fires with runway, because the remediation is a design change (split a
+table, narrow a read, re-key a shard) and that is not something you can act on
 in the request that fails.
 
 The statement limits above are different in kind: there is no warning band,
 because there is no gradual degradation to warn about. A statement either fits
 or it raises `SQLITE_ERROR`. Where Lunora can keep you under one it does so
-silently; where it cannot — the 2 MB document, the 100-column table — it raises
+silently; where it cannot (the 2 MB document, the 100-column table) it raises
 an error naming the limit and what to do instead.
-
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [Deployment](/docs/deployment)

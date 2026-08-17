@@ -1,6 +1,17 @@
 ---
 title: Validation
 description: The v.* validators that type your columns and parse query / mutation / action inputs and outputs end to end.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables and column validators"
+    - to: /docs/concepts/indexes
+      note: "accelerating the reads your handlers run"
+    - to: /docs/concepts/queries-mutations
+      note: "the function kinds and `ctx`"
+    - to: /docs/packages/values
+      note: "the full `v.*` reference, `Infer` and `Id`"
+    - to: /docs/packages/server
+      note: "`query` / `mutation` / `action` builders"
 ---
 
 A **validator** is a single runtime object that does two jobs at once: it
@@ -21,9 +32,9 @@ import { mutation, query, v } from "@/lunora/_generated/server";
 Validators come from [`@lunora/values`](/docs/packages/values); `@lunora/server`
 re-exports the `v` namespace for schema files. Inside `query` / `mutation` /
 `action` files, import `v` (and the builders) from the generated
-`@/lunora/_generated/server` instead — its `v.id(...)` is branded to your tables.
+`@/lunora/_generated/server` instead; its `v.id(...)` is branded to your tables.
 
-## Job 1 — column types in `defineTable`
+## Job 1: column types in `defineTable`
 
 Each key of a `defineTable({...})` shape is a column, and its value is the
 validator for that column. The validator decides the SQL column type, the
@@ -47,10 +58,10 @@ Column validators also carry the [constraint](/docs/concepts/constraints)
 modifiers (`.unique()`, `.nullable()`, `.default(…)`), and `v.id("table")` is
 the foreign-key type used by [relations](/docs/concepts/relations).
 
-## Job 2 — argument and return validation
+## Job 2: argument and return validation
 
 The `query` / `mutation` / `action` builders take their input contract from
-`.input({...})` — a map of field name to validator. The runtime parses the
+`.input({...})`, a map of field name to validator. The runtime parses the
 incoming `args` through it before your handler runs, so a malformed call
 fails with `ValidationError` and never reaches your code. Inside the handler,
 `args` is fully typed from those validators:
@@ -92,7 +103,7 @@ export const getProfile = query
 ```
 
 <Callout type="info">
-    `.output()` does not apply to streaming/subscription chunks — each chunk is yielded as-is. Use it for the single resolved value of a `query` / `mutation` /
+    `.output()` does not apply to streaming/subscription chunks: each chunk is yielded as-is. Use it for the single resolved value of a `query` / `mutation` /
     `action`.
 </Callout>
 
@@ -122,11 +133,11 @@ second schema to keep in sync: the validator is the contract on both ends.
 | `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
 | `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
 | `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
-| `v.any()`              | anything                      | Escape hatch — disables runtime checks   |
+| `v.any()`              | anything                      | Escape hatch; disables runtime checks    |
 
-Compose them freely — `v.array(v.object({ ... }))`, `v.union(v.literal("a"),
-v.literal("b"))`, `v.optional(v.id("users"))` — for both columns and function
-contracts.
+Compose them freely for both columns and function contracts:
+`v.array(v.object({ ... }))`, `v.union(v.literal("a"),
+v.literal("b"))`, `v.optional(v.id("users"))`.
 
 ## ValidationError
 
@@ -135,11 +146,3 @@ carries the `path` to the offending field (rendered via `formatPath` as
 `args.<field>.<sub>`) plus a short `describeValue(value)` summary, so the
 boundary failure points at exactly which input was wrong. See
 [`@lunora/values`](/docs/packages/values#validationerror).
-
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables and column validators
-- [Indexes](/docs/concepts/indexes) — accelerating the reads your handlers run
-- [Queries & mutations](/docs/concepts/queries-mutations) — the function kinds and `ctx`
-- [@lunora/values](/docs/packages/values) — the full `v.*` reference, `Infer` and `Id`
-- [@lunora/server](/docs/packages/server) — `query` / `mutation` / `action` builders

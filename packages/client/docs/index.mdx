@@ -1,6 +1,12 @@
 ---
 title: "@lunora/client"
 description: Framework-agnostic browser/edge client.
+related:
+    - to: /docs/packages/react
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/offline-first
+    - to: /docs/concepts/local-first
+      note: "`subscribeShape` + shapes"
 ---
 
 `@lunora/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
@@ -25,37 +31,37 @@ const unsubscribe = client.subscribe(api.messages.list, { channelId: "general" }
 
 ## Wire protocol
 
-- **Queries / mutations / actions** — `POST /_lunora/rpc`, JSON body
+- **Queries / mutations / actions**: `POST /_lunora/rpc`, JSON body
   `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
-- **Subscriptions** — single multiplexed WebSocket at `/_lunora/ws`. The
+- **Subscriptions**: single multiplexed WebSocket at `/_lunora/ws`. The
   client sends `subscribe` / `unsubscribe` / `connect` / `ack` / `stream`
   frames; the server pushes `delta` (and `resume`) frames back, each tagged
   with the originating subscription `id`.
 
 ### Supported value types
 
-The wire is JSON, but a tagged codec carries the value kinds JSON can't — so args
+The wire is JSON, but a tagged codec carries the value kinds JSON can't, so args
 and results round-trip losslessly across RPC, streams, whispers, and batches:
 
 - `bigint`, `ArrayBuffer` + typed-array views (`v.bytes()`), `Date`,
   `NaN`/`±Infinity`, and `undefined` in array positions.
-- `Map`, `Set`, `URL`, and `Error` (including its `cause` chain) — reachable via a
+- `Map`, `Set`, `URL`, and `Error` (including its `cause` chain), reachable via a
   `v.any()` field, whisper data, an action's return, or a `LunoraError`'s `data`.
 
 A pure-JSON payload encodes byte-identically, so this is transparent and
-back-compatible. A value a stable form can't represent is **rejected with a clear
-`TypeError` at the send site** (never silently corrupted) — `RegExp`, `Headers`, a
+back-compatible. A value a stable form can't represent is **rejected with a
+`TypeError` at the send site** (never silently corrupted): `RegExp`, `Headers`, a
 class instance, an over-long `bigint`, or anything nested deeper than 64 levels.
 
 > **Cache-keyed args included.** A subscription / `useQuery` / shape arg doubles
 > as the reactive **cache key**: it is keyed on its _wire form_
 > (`stableWireKey`), so `bigint`, bytes, `Date`, `Map`, `Set`, and `URL` args
-> subscribe, dedup, and re-execute with their real values — and two
+> subscribe, dedup, and re-execute with their real values, and two
 > subscriptions whose args differ only by such a value get distinct keys. Two
 > caveats: `Map`/`Set` args key by **insertion order** (two equal Maps built in
-> different orders open separate subscriptions — prefer plain objects), and a
+> different orders open separate subscriptions, so prefer plain objects), and a
 > `URL` arg can't survive the server's hibernation attachment (you'll get a
-> structured `SUBSCRIPTION_PERSIST_FAILED` error — pass `url.href` instead).
+> structured `SUBSCRIPTION_PERSIST_FAILED` error; pass `url.href` instead).
 > Values the wire refuses (`RegExp`, class instances, …) still fail loud with a
 > `TypeError` at the call site.
 
@@ -64,21 +70,21 @@ class instance, an over-long `bigint`, or anything nested deeper than 64 levels.
 Reconnect uses decorrelated-jitter backoff (`reconnect` option). The client
 keeps a per-session monotonic bookmark in `BookmarkStorage` (in-memory by
 default), sent on the `x-d1-bookmark` request header of each HTTP RPC and
-refreshed from the response, giving D1 read-your-writes consistency across
+refreshed from the response, so D1 reads are read-your-writes consistent across
 replicas. When a durable `queryCache` is configured, a re-`subscribe` also
 carries the last `sinceSeq` / `sinceEpoch` cursor so the server can resume from
 where the cache left off instead of re-sending a full snapshot.
 
 ## Offline queue
 
-Mutations issued while disconnected land in `OfflineQueue` — a bounded FIFO
+Mutations issued while disconnected land in `OfflineQueue`, a bounded FIFO
 (default `maxItems: 1000`, oldest rejected with `OFFLINE_QUEUE_OVERFLOW` on
 overflow). They replay in submission order once the socket reconnects. Each
 mutation carries a stable idempotency id, so a write that committed before the
 client lost the ack is deduplicated by the server on replay rather than
 applied twice. On reconnect the replay **coalesces** the queued writes for a shard
 into batched round trips (one `/_lunora/rpc-batch` per ≤500-write chunk) instead of
-one request per write — a flaky reconnect with a full outbox flushes in a handful
+one request per write: a flaky reconnect with a full outbox flushes in a handful
 of round trips, not hundreds. The queue lives in memory by default; for durability
 across a reload pass a `persistence` adapter:
 
@@ -93,8 +99,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 new LunoraClient({ url, persistence: createAsyncStoragePersistence({ storage: AsyncStorage }) });
 ```
 
-A queued write that is replayed after a reload — or evicted on overflow, or
-discarded on an identity change — has no live `mutation()` Promise left to
+A queued write that is replayed after a reload (or evicted on overflow, or
+discarded on an identity change) has no live `mutation()` Promise left to
 reject, so its rolled-back optimistic row would vanish silently. Subscribe to
 `onMutationSettled` for a durable, per-write terminal verdict (`committed` /
 `rejected`, with `hadAwaiter: false` for those orphaned replays) and surface the
@@ -117,13 +123,13 @@ matching subscription's cache immediately, then reconciles it **gaplessly**: the
 patch is recorded as a rebaseable layer, so an unrelated server delta that lands
 while the write is still pending is re-folded _under_ it (your change never
 flickers away and back), and the layer is dropped the moment a server frame whose
-`cursor` reaches the write's committed cursor arrives — the server echoes that
+`cursor` reaches the write's committed cursor arrives. The server echoes that
 cursor on the mutation response, so the drop is keyed on confirmed server state,
 not RPC-response timing (which races the WebSocket broadcast). A coded rejection
 rolls the layer back.
 
 To patch several subscribed queries from one mutation, pass `optimisticUpdate`
-instead — it receives an `OptimisticLocalStore` over the live cache, and each
+instead; it receives an `OptimisticLocalStore` over the live cache, and each
 `setQuery` registers a constant-value layer on the same engine, so the whole
 batch rebases and settles together (confirmed on the mutation's commit cursor, or
 rolled back atomically on failure). See
@@ -133,7 +139,7 @@ full reconciliation model.
 ## Shape subscriptions
 
 `subscribeShape` is the [local-first sync engine](/docs/concepts/local-first)'s
-parallel to `subscribe` — it replicates a **partial view** of a table (a
+parallel to `subscribe`: it replicates a **partial view** of a table (a
 [shape](/docs/concepts/local-first#shapes--partial-replication)) over the poke
 diff protocol instead of re-running a query:
 
@@ -147,18 +153,18 @@ You send the shape _name_ + validated `args` (never a `where` the client could
 forge); the server seeds the current membership as an insert-poke and streams
 live membership diffs, materializing the rowset into `callback` on each applied
 poke. Unlike `subscribe`, shape subscriptions are **not** deduped by
-`(name, args)` — the server resolves each under the socket's verified identity,
+`(name, args)`: the server resolves each under the socket's verified identity,
 so every call gets its own view. Pass `{ shardKey }` to route a
 [sharded](/docs/concepts/sharding) shape to its DO.
 
-Most apps don't call this directly — [`@lunora/db`](/docs/packages/db)'s
+Most apps don't call this directly; [`@lunora/db`](/docs/packages/db)'s
 `lunoraCollectionOptions({ shape })` wires it into a TanStack DB collection.
 
 ## Auth
 
 `client.setAuthToken(jwt)` stamps an `Authorization: Bearer <jwt>` header on
 every HTTP RPC and clears the in-memory offline queue's writes from the
-previous identity. It does **not** touch the WebSocket — that token is fixed
+previous identity. It does **not** touch the WebSocket: that token is fixed
 at upgrade time and lives in the URL. To rotate live WS auth call
 `client.setWsToken(token)`, which closes the open shard sockets so they
 reconnect with the new credential.
@@ -175,7 +181,7 @@ to every mounted hook) that the framework adapters consume.
 a serializable `Preloaded` token. Embed the token in the rendered HTML and hand
 it to `usePreloadedQuery` on the client: the first render shows the server value
 with no loading flash, then a live subscription takes over. The SSR client only
-needs a `fetch` that can reach the worker — no in-process Durable Object access.
+needs a `fetch` that can reach the worker, and no in-process Durable Object access.
 
 ```ts
 import { createServerClient, preloadQuery, serializePreloaded } from "lunorash/client/ssr";
@@ -187,10 +193,3 @@ const preloaded = await preloadQuery(client, api.messages.list, { channelId: "ge
 
 // Embed `serializePreloaded(preloaded)` in HTML; rehydrate with usePreloadedQuery on the client.
 ```
-
-## See also
-
-- [@lunora/react](/docs/packages/react)
-- [Concepts: real-time](/docs/concepts/realtime)
-- [Offline-first](/docs/concepts/offline-first)
-- [Local-first sync](/docs/concepts/local-first) — `subscribeShape` + shapes

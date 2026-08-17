@@ -5,7 +5,7 @@ description: Running the Lunora worker as one node in a larger dev graph, deploy
 
 `lunora dev` and `lunora deploy` default to owning the whole show, which is
 right for a standalone app and wrong for a repo that already has seven Workers
-and a task runner. Every piece is separable; this page is the map.
+and a task runner. Every piece is separable, and this page covers how.
 
 ## Running as one node in a dev graph
 
@@ -16,12 +16,12 @@ manages while Lunora keeps the parts only it can do.
 
 | Flag           | Turns off                                              |
 | -------------- | ------------------------------------------------------ |
-| `--no-worker`  | the `wrangler dev` spawn — your runner owns the worker |
+| `--no-worker`  | the `wrangler dev` spawn (your runner owns the worker) |
 | `--no-studio`  | the embedded Studio server                             |
 | `--no-codegen` | the codegen watcher                                    |
 
-The common monorepo shape is **attached mode** — your runner starts the worker,
-Lunora keeps regenerating types and serving Studio:
+The common monorepo shape is **attached mode**, where your runner starts the
+worker and Lunora keeps regenerating types and serving Studio:
 
 ```jsonc
 // package.json — one node in the graph, alongside your other workers
@@ -46,7 +46,7 @@ need to know where the externally-owned worker is listening.
 
 `lunora deploy` is codegen + validate + `wrangler deploy`. Under Terraform,
 Pulumi, Alchemy or any other IaC that wants to be the source of truth for
-bindings, do **not** use it — run the pieces as steps in your graph instead.
+bindings, do **not** use it. Run the pieces as steps in your graph instead.
 
 Every step is exported from `@lunora/cli` as a function, so `alchemy.run.ts`
 (or equivalent) can call them directly rather than shelling out:
@@ -60,7 +60,7 @@ const codegen = runCodegenCommand({ cwd: "./backend", logger });
 ```
 
 `runDeployCommand`, `runResetCommand`, `runRpcCommand`, `runExportCommand` and
-`runAddCommand` are exported the same way — see the package's `index.ts` for the
+`runAddCommand` are exported the same way; see the package's `index.ts` for the
 full set.
 
 Migrations belong **inside** the IaC graph as a post-deploy step, not as a
@@ -103,7 +103,7 @@ reconciled it, so it describes what the bundle actually needs rather than what
 happened to be written down. Three things worth knowing:
 
 - **Every binding is listed, including the ones Lunora cannot provision.** A KV
-  namespace id, a Hyperdrive id, a Vectorize index — Lunora warns about these and
+  namespace id, a Hyperdrive id, a Vectorize index: Lunora warns about these and
   never writes them, which makes them exactly the ones your program has to create.
 - **`vars` contributes names only.** The file is committed and read by CI, and a
   var can hold something you would rather not publish.
@@ -114,7 +114,7 @@ happened to be written down. Three things worth knowing:
 
 <Callout type="warn">
     **`wrangler.jsonc` is declaration-only under external IaC.** Lunora's validator reads it to check that every binding a schema needs is declared, but it
-    never provisions anything. When your IaC owns the real ids, keep the binding *names* accurate and treat the id fields as placeholders — a real id there is a
+    never provisions anything. When your IaC owns the real ids, keep the binding *names* accurate and treat the id fields as placeholders. A real id there is a
     footgun, because nothing keeps it in step with the IaC state and a stale one is indistinguishable from a correct one.
 </Callout>
 
@@ -139,7 +139,7 @@ the backend's `package.json`:
 Consumers then import `@acme/backend/api` rather than reaching across the repo
 by path, which keeps the generated file an implementation detail.
 
-`api.ts` and `dataModel.ts` carry **no server dependency** — `dataModel.ts` has
+`api.ts` and `dataModel.ts` carry **no server dependency**: `dataModel.ts` has
 no imports at all, and the query-DSL bindings that need `@lunora/server` live in
 `server.ts`. So a consumer that only wants `Doc`/`Id` and the typed `api` needs
 `@lunora/client` and nothing else; only a package importing `./server` pulls the
@@ -147,7 +147,7 @@ server surface in.
 
 <Callout type="warn">
     These entries point at **raw TypeScript**, not built output, so every consumer compiles it. That is fine inside one workspace and awkward across published
-    package boundaries — if you publish the backend, build the generated files into your `dist` and point the `exports` there instead.
+    package boundaries. If you publish the backend, build the generated files into your `dist` and point the `exports` there instead.
 </Callout>
 
 ## Calling the backend from a sibling Worker
@@ -185,10 +185,10 @@ array survives the hop, and a thrown `LunoraError` arrives with its `code` and
 `data` intact.
 
 <Callout type="info">
-    Prefer this to calling the backend's public URL. A service binding incurs no request fee, never leaves the edge, and is authenticated by construction — the
+    Prefer this to calling the backend's public URL. A service binding incurs no request fee, never leaves the edge, and is authenticated by construction: the
     binding *is* the capability, so the callee needs no public route and you need no shared secret. Only **public** functions are reachable: an `internal*`
     procedure is absent from `api` and refused by the callee, because a binding is a boundary between deployments rather than the intra-app `ctx.run*` seam.
 </Callout>
 
-Pass `{ shardKey }` as the third argument for a sharded app — without it the
+Pass `{ shardKey }` as the third argument for a sharded app. Without it the
 callee routes to its default shard, exactly as the HTTP path does.

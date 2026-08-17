@@ -1,6 +1,12 @@
 ---
 title: Document IDs
 description: Every row carries an _id and a _creationTime — how they are minted, how v.id types a reference, and what an id does and does not guarantee.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/data-types
+    - to: /docs/concepts/relations
+    - to: /docs/concepts/constraints
+    - to: /docs/concepts/generated-code
 ---
 
 Every document Lunora stores carries two framework-managed fields you never
@@ -16,14 +22,14 @@ identity and birth time never change once written.
 
 ## How ids are minted
 
-An id defaults to `crypto.randomUUID()` — an opaque, unguessable string. Two
-properties follow from that, and both matter:
+An id defaults to `crypto.randomUUID()`, an opaque, unguessable string. Two
+properties follow from that:
 
 - **Ids carry no table tag.** Unlike some systems, a Lunora id does not encode
   which table it belongs to. The table lives in the _type_ (`Id<"users">`), not
   in the string.
 - **Ids are not ordered.** A random UUID says nothing about insertion order. To
-  sort by age, order by `_creationTime` — which is exactly what `.order()` does
+  sort by age, order by `_creationTime`, which is exactly what `.order()` does
   when no index is staged.
 
 ## Typing a reference with `v.id`
@@ -71,7 +77,7 @@ export const byAuthor = query.input({ authorId: v.id("users") }).query(async ({ 
 ## Reading and following ids
 
 `ctx.db.get(id)` resolves a single row, returning `null` when it is absent. The
-id is all it needs — the branded `Id<"table">` type already carries the table, so
+id is all it needs: the branded `Id<"table">` type already carries the table, so
 following a reference is just another `get`:
 
 ```ts
@@ -87,8 +93,8 @@ studio and the advisors understand it, see [Relations](/docs/concepts/relations)
 
 ## Validating an id that came from outside
 
-An id that arrives as a bare string — from a URL segment, a webhook payload, a
-CLI argument — has not been through `v.id`. Because ids carry no table tag, the
+An id that arrives as a bare string (from a URL segment, a webhook payload, a
+CLI argument) has not been through `v.id`. Because ids carry no table tag, the
 strongest check the format admits is structural: a non-empty string with no
 whitespace and no NUL byte. That is what the runtime applies; it never touches
 the database, so a structurally valid id may still name a row that does not
@@ -100,11 +106,3 @@ exist. Confirm existence with a `get` when it matters.
 [NDJSON export](/docs/concepts/backups), which is what makes a restore preserve
 identity: references between tables still resolve after a round trip. Import a
 referenced table before the table that points at it.
-
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Data types](/docs/concepts/data-types)
-- [Relations](/docs/concepts/relations)
-- [Constraints](/docs/concepts/constraints)
-- [Generated code](/docs/concepts/generated-code)

@@ -9,9 +9,8 @@ import SiVitest from "@icons-pack/react-simple-icons/icons/SiVitest.mjs";
 import { Check, Sparkles, Workflow } from "lucide-react";
 import type { ComponentType, FC } from "react";
 
-import { SectionHead } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
-import { cn } from "@/lib/utils";
+import { GridCell, HairlineGrid } from "@/kit/grid";
+import { Section, SectionHeader, Shell } from "@/kit/layout";
 
 /**
  * "Batteries included" — a capability grid covering Lunora's opt-in add-on
@@ -95,66 +94,38 @@ const capabilities: Capability[] = [
 ];
 
 const Capabilities: FC = () => (
-    <section className="border-t border-white/[0.08] bg-[#0e0e11] py-24" data-nav-theme="dark">
-        <div className="mx-auto max-w-6xl px-5 lg:px-0">
-            <SectionHead
-                eyebrow="Batteries included"
-                subtitle="Opt-in packages for auth, payments, email, AI, storage, and jobs — typed onto your ctx, deployed to your own Cloudflare account."
-                title="Everything a real app needs"
-            />
-            <div className="mt-14 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {capabilities.map((cap, index) => (
-                    <Reveal className="h-full" delay={(index % 3) * 0.05} key={cap.title}>
-                        <div
-                            className={cn(
-                                "group relative flex h-full flex-col gap-5 overflow-hidden border border-white/[0.08] bg-[#101014] p-6 transition-[background-color,border-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] hover:border-white/[0.16] hover:bg-[#131318]",
-                                // On lg the section runs edge-to-edge, so the outer cards' side
-                                // borders sit under the page's vertical guide lines — trim them.
-                                index % 3 === 0 && "lg:border-l-0",
-                                index % 3 === 2 && "lg:border-r-0",
-                            )}
-                        >
-                            {/* aurora top rail — brightens on hover */}
-                            <span
-                                aria-hidden="true"
-                                className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[hsl(256_72%_68%)] to-transparent opacity-40 transition-opacity duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:opacity-90"
-                            />
-                            {/* soft violet glow — fades in on hover */}
-                            <span
-                                aria-hidden="true"
-                                className="pointer-events-none absolute -top-16 left-1/2 h-48 w-60 -translate-x-1/2 opacity-0 transition-opacity duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:opacity-100"
-                                style={{ background: "radial-gradient(closest-side, hsl(256 72% 68% / 0.22), transparent 72%)" }}
-                            />
-                            <div className="relative z-10 flex flex-1 flex-col gap-5">
-                                <div className="flex items-center gap-2">
-                                    {cap.icons.map(({ glyph: Glyph, name }) => (
-                                        <span
-                                            className="flex size-10 items-center justify-center border border-[hsl(256_72%_68%)]/30 bg-[hsl(256_72%_68%)]/10 text-[hsl(256_72%_68%)]"
-                                            key={name}
-                                        >
-                                            <Glyph aria-hidden="true" className="size-5" />
-                                        </span>
-                                    ))}
-                                </div>
-                                <div>
-                                    <h3 className="text-lg font-medium tracking-tight text-white">{cap.title}</h3>
-                                    <p className="mt-1.5 text-sm leading-relaxed text-white/50">{cap.desc}</p>
-                                </div>
-                                <ul className="mt-auto flex flex-col gap-2">
-                                    {cap.features.map((feature) => (
-                                        <li className="flex items-center gap-2.5 text-sm text-white/65" key={feature}>
-                                            <Check aria-hidden="true" className="size-4 shrink-0 text-[hsl(256_72%_68%)]" />
-                                            {feature}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        </div>
-                    </Reveal>
+    <Section id="capabilities" tone="light">
+        <Shell>
+            <SectionHeader label="Add-ons" note="Deployed to your own Cloudflare account." title="Everything a real app needs">
+                <p className="text-body text-ink-muted">Opt-in packages for auth, payments, email, AI, storage, and jobs — typed onto your ctx.</p>
+            </SectionHeader>
+
+            {/* No per-cell `Reveal` wrapper here: a transparent wrapper would
+                become the grid item and let the container's hairline show
+                through the whole cell face instead of only at the seams. */}
+            <HairlineGrid className="border border-b-0 border-hairline lg:border-x-0" columns={4}>
+                {capabilities.map((cap) => (
+                    <GridCell
+                        blurb={cap.desc}
+                        icon={cap.icons.map(({ glyph: Glyph, name }) => (
+                            <Glyph aria-hidden="true" key={name} />
+                        ))}
+                        key={cap.title}
+                        title={cap.title}
+                    >
+                        <ul className="flex flex-col gap-2">
+                            {cap.features.map((feature) => (
+                                <li className="flex items-center gap-2.5 text-blurb text-ink-muted" key={feature}>
+                                    <Check aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
+                                    {feature}
+                                </li>
+                            ))}
+                        </ul>
+                    </GridCell>
                 ))}
-            </div>
-        </div>
-    </section>
+            </HairlineGrid>
+        </Shell>
+    </Section>
 );
 
 export default Capabilities;

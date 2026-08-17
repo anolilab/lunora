@@ -1,6 +1,9 @@
 ---
 title: Quickstarts
 description: Every starting point Lunora scaffolds — pick your framework, run one command, and get a live backend wired to it.
+related:
+    - to: /docs/frameworks/bring-your-framework
+    - to: /docs/packages/cli
 ---
 
 `lunora init` scaffolds a complete project: a Lunora worker, a schema, a working
@@ -47,30 +50,30 @@ pick `-t solid-v2` to track the 2.0 release candidate.
 
 ### Server-rendered apps
 
-These pair SSR with live subscriptions — the server render resolves data, and the
+These pair SSR with live subscriptions: the server render resolves data, and the
 client hydrates it into a live query rather than refetching.
 
-| Framework                      | Command                                   | Topology                                 |
-| ------------------------------ | ----------------------------------------- | ---------------------------------------- |
-| Next.js (App Router)           | `lunora init app -t next`                 | Two workers — OpenNext + a Lunora worker |
-| Next.js on Vite (App Router)   | `lunora init app -t vinext`               | SSR composed into the Lunora worker      |
-| Next.js on Vite (Pages Router) | `lunora init app -t vinext-pages`         | SSR composed into the Lunora worker      |
-| TanStack Start (React)         | `lunora init app -t tanstack-start-react` | Single worker                            |
-| TanStack Start (Solid)         | `lunora init app -t tanstack-start-solid` | Single worker                            |
-| React Router v7                | `lunora init app -t react-router`         | SSR composed into the Lunora worker      |
-| SvelteKit                      | `lunora init app -t sveltekit`            | Standalone Lunora worker                 |
-| Astro                          | `lunora init app -t astro`                | Standalone Lunora worker                 |
-| Nuxt                           | `lunora init app -t nuxt`                 | Single worker — Lunora mounted in Nitro  |
-| AnalogJS (Angular)             | `lunora init app -t analog`               | Single worker — Lunora mounted in Nitro  |
+| Framework                      | Command                                   | Topology                                |
+| ------------------------------ | ----------------------------------------- | --------------------------------------- |
+| Next.js (App Router)           | `lunora init app -t next`                 | Two workers: OpenNext + a Lunora worker |
+| Next.js on Vite (App Router)   | `lunora init app -t vinext`               | SSR composed into the Lunora worker     |
+| Next.js on Vite (Pages Router) | `lunora init app -t vinext-pages`         | SSR composed into the Lunora worker     |
+| TanStack Start (React)         | `lunora init app -t tanstack-start-react` | Single worker                           |
+| TanStack Start (Solid)         | `lunora init app -t tanstack-start-solid` | Single worker                           |
+| React Router v7                | `lunora init app -t react-router`         | SSR composed into the Lunora worker     |
+| SvelteKit                      | `lunora init app -t sveltekit`            | Standalone Lunora worker                |
+| Astro                          | `lunora init app -t astro`                | Standalone Lunora worker                |
+| Nuxt                           | `lunora init app -t nuxt`                 | Single worker: Lunora mounted in Nitro  |
+| AnalogJS (Angular)             | `lunora init app -t analog`               | Single worker: Lunora mounted in Nitro  |
 
-The two `vinext` rows run [vinext](https://github.com/cloudflare/vinext) —
+The two `vinext` rows run [vinext](https://github.com/cloudflare/vinext),
 Cloudflare's reimplementation of the Next.js API surface on Vite. It is
 pre-1.0/experimental; Lunora's wiring is the same class-A composition the other
 single-worker templates use.
 
 The topology column matters for deployment. **Single worker** means one
 `wrangler deploy`. **Two workers** means the framework's worker and the Lunora
-worker deploy separately — see [Next.js](/docs/frameworks/nextjs) for why and
+worker deploy separately; see [Next.js](/docs/frameworks/nextjs) for why and
 how.
 
 ### Mobile
@@ -83,9 +86,9 @@ Scaffolds an iOS / Android / web app plus a Lunora worker backend.
 
 ### Backend only
 
-| Target     | Command                         | Use for                                          |
-| ---------- | ------------------------------- | ------------------------------------------------ |
-| Standalone | `lunora init api -t standalone` | A worker with no frontend — an API, a job runner |
+| Target     | Command                         | Use for                                         |
+| ---------- | ------------------------------- | ----------------------------------------------- |
+| Standalone | `lunora init api -t standalone` | A worker with no frontend: an API, a job runner |
 
 Pair it with any client through the [REST API](/docs/concepts/rest-api) or a
 [server-side client](/docs/concepts/server-clients).
@@ -100,18 +103,18 @@ wiring steps:
 npx lunorash@alpha init --here
 ```
 
-For a considered walkthrough — including how to run Lunora next to an existing
-database — see
+For a considered walkthrough, including how to run Lunora next to an existing
+database, see
 [Adopt in an existing app](/docs/concepts/adopt-in-an-existing-app).
 
 ## What you get either way
 
 Whichever starting point you choose, the scaffold includes:
 
-- `lunora/schema.ts` — a schema with one table
+- `lunora/schema.ts`, a schema with one table
 - a query and a mutation, already wired to the UI
-- `lunora/_generated/` — the typed API surface, regenerated on save
-- `wrangler.jsonc` — the `SHARD` Durable Object binding and migration
+- `lunora/_generated/`, the typed API surface, regenerated on save
+- `wrangler.jsonc`, with the `SHARD` Durable Object binding and migration
 - the Studio, served alongside the dev server
 
 Add authentication and transactional email at any point with `lunora add auth`
@@ -120,12 +123,7 @@ and `lunora add email`, and scaffold a CI deploy pipeline with
 
 ## Next steps
 
-- [Getting started](/docs/getting-started) — the guided first run
-- [Realtime chat tutorial](/docs/tutorial/realtime-chat) — build something end to end
-- [Schema](/docs/concepts/schema) — model your data
-- [Deployment](/docs/deployment) — ship it
-
-## See also
-
-- [Bring your framework](/docs/frameworks/bring-your-framework)
-- [@lunora/cli](/docs/packages/cli)
+- [Getting started](/docs/getting-started): the guided first run
+- [Realtime chat tutorial](/docs/tutorial/realtime-chat): build something end to end
+- [Schema](/docs/concepts/schema): model your data
+- [Deployment](/docs/deployment): ship it

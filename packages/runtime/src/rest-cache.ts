@@ -21,6 +21,7 @@
  * credential downgrade. It is the lower-level escape hatch; this is the guarded
  * surface. Do not describe them as equivalent.
  */
+import type { ExecutionContextLike } from "../../../shared/execution-context";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import { cacheControlValue, cacheVaryValue, credentialHeadersFor, mergeVary } from "../../../shared/rest-surface";
 
@@ -29,9 +30,17 @@ import { cacheControlValue, cacheVaryValue, credentialHeadersFor, mergeVary } fr
  * as caller-specific. Checks the built-in identity headers plus anything the
  * policy declares via `credentialHeaders` — an app whose `resolveIdentity` reads
  * a bespoke header must say so, or its callers read as anonymous here.
+ *
+ * A credential does not have to be on the request at all: under a Cloudflare
+ * Access policy attached to the Worker, the caller is authenticated by the edge
+ * and their identity arrives on the `ExecutionContext` as `access`, with no
+ * header this function could see. Its mere presence means Access authorized this
+ * specific caller, so it counts as a credential — otherwise a per-user response
+ * would be labelled `public` and a shared cache could hand it to the next
+ * visitor.
  */
-const requestCarriesCredentials = (request: Request, policy: RestCachePolicy): boolean =>
-    credentialHeadersFor(policy).some((header) => request.headers.has(header));
+const requestCarriesCredentials = (request: Request, policy: RestCachePolicy, context?: ExecutionContextLike): boolean =>
+    context?.access !== undefined || credentialHeadersFor(policy).some((header) => request.headers.has(header));
 
 /**
  * Build the cache headers for one exchange, or `undefined` when the exchange
@@ -41,12 +50,12 @@ const requestCarriesCredentials = (request: Request, policy: RestCachePolicy): b
  * The effective scope is `policy.scope` narrowed by {@link requestCarriesCredentials};
  * `"public"` survives only for a genuinely anonymous request.
  */
-const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: number): Record<string, string> | undefined => {
+const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: number, context?: ExecutionContextLike): Record<string, string> | undefined => {
     if (request.method !== "GET" || status < 200 || status > 299) {
         return undefined;
     }
 
-    const effectiveScope = policy.scope === "public" && !requestCarriesCredentials(request, policy) ? "public" : "private";
+    const effectiveScope = policy.scope === "public" && !requestCarriesCredentials(request, policy, context) ? "public" : "private";
     const headers: Record<string, string> = { "cache-control": cacheControlValue(policy, effectiveScope) };
 
     if (policy.tag !== undefined && policy.tag !== "") {
@@ -68,12 +77,12 @@ const restCacheHeaders = (policy: RestCachePolicy, request: Request, status: num
  * are carried over, the body is streamed through untouched). When the exchange
  * isn't cacheable the original response is returned as-is — no copy.
  */
-const applyRestCache = (response: Response, policy: RestCachePolicy | undefined, request: Request): Response => {
+const applyRestCache = (response: Response, policy: RestCachePolicy | undefined, request: Request, context?: ExecutionContextLike): Response => {
     if (policy === undefined) {
         return response;
     }
 
-    const headers = restCacheHeaders(policy, request, response.status);
+    const headers = restCacheHeaders(policy, request, response.status, context);
 
     if (headers === undefined) {
         return response;

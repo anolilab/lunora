@@ -10,26 +10,29 @@ const listPosts = createServerFn({ method: "GET" }).handler(async () => {
     return listBlogPosts();
 });
 
-const RouteComponent = () => {
-    const posts = Route.useLoaderData();
-    const { page } = Route.useSearch();
+const RouteComponent = () => <BlogOverview posts={Route.useLoaderData()} />;
 
-    return <BlogOverview page={page ?? 1} posts={posts} />;
-};
-
+// No `validateSearch`: the index used to paginate behind `?page=`, and the
+// parsed value outlived the pagination by long enough to sit unused in the
+// component's props. The archive reads in one scroll; a stale `?page=2` link
+// now lands on the same complete list rather than on nothing.
 export const Route = createFileRoute("/blog/")({
     component: RouteComponent,
     // The list is static per deployment; don't refetch on navigation back to /blog.
     staleTime: Number.POSITIVE_INFINITY,
-    validateSearch: (search: Record<string, unknown>): { page?: number } => {
-        const page = Number(search.page);
-
-        return Number.isInteger(page) && page > 0 ? { page } : {};
-    },
     loader: () => listPosts(),
     head: () => {
+        // The index had no card of its own, so every share of /blog showed the
+        // generic site image with no hint of what the link was.
+        const ogParameters = new URLSearchParams({
+            description: "News, insights, and engineering deep dives from the team building Lunora.",
+            eyebrow: "Blog",
+            title: "News & insights",
+        });
+
         const seo = createSeoHead({
             description: "News, insights, and engineering deep dives from the team building Lunora.",
+            ogImage: `${SITE_URL}/api/og?${ogParameters.toString()}`,
             path: "/blog",
             title: "Blog",
         });

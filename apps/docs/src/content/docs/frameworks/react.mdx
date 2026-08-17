@@ -1,6 +1,15 @@
 ---
 title: React
 description: Use Lunora with React — a provider, live useQuery/useMutation hooks, and the SSR-seed → live reactive-loader handoff.
+related:
+    - to: /docs/packages/react
+      note: "the full hook + server reference"
+    - to: /docs/frameworks/bring-your-framework
+      note: "the class-A/B/C composition matrix"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff"
+    - to: /docs/concepts/realtime
+      note: "how subscriptions and deltas work"
 ---
 
 `@lunora/react` is the official React binding. It's a thin layer over
@@ -160,10 +169,3 @@ With **TanStack Start**, Lunora owns the worker entry (a class-A framework in
 plane and your SSR share one worker with no extra wiring. On the Next.js App
 Router, load data through `@lunora/react/server` as above. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
-
-## See also
-
-- [@lunora/react](/docs/packages/react) — the full hook + server reference
-- [Bring your framework](/docs/frameworks/bring-your-framework) — the class-A/B/C composition matrix
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
-- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

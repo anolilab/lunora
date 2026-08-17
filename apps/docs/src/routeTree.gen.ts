@@ -10,10 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AgentSetupDotmdRouteImport } from './routes/agent-setup[.]md'
 import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as CloudRouteImport } from './routes/cloud'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
 import { Route as CompareRouteImport } from './routes/compare'
+import { Route as ExamplesRouteImport } from './routes/examples'
 import { Route as ImprintRouteImport } from './routes/imprint'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
@@ -27,6 +29,7 @@ import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
 import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
+import { Route as DocsIndexRouteImport } from './routes/docs/index'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as PackagesIndexRouteImport } from './routes/packages/index'
 import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
@@ -39,6 +42,11 @@ import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.doc
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentSetupDotmdRoute = AgentSetupDotmdRouteImport.update({
+  id: '/agent-setup.md',
+  path: '/agent-setup.md',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChangelogRoute = ChangelogRouteImport.update({
@@ -59,6 +67,11 @@ const CodeOfConductRoute = CodeOfConductRouteImport.update({
 const CompareRoute = CompareRouteImport.update({
   id: '/compare',
   path: '/compare',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExamplesRoute = ExamplesRouteImport.update({
+  id: '/examples',
+  path: '/examples',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ImprintRoute = ImprintRouteImport.update({
@@ -126,6 +139,11 @@ const BlogRssDotxmlRoute = BlogRssDotxmlRouteImport.update({
   path: '/blog/rss.xml',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/docs/',
+  path: '/docs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DocsSplatRoute = DocsSplatRouteImport.update({
   id: '/docs/$',
   path: '/docs/$',
@@ -169,10 +187,12 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -192,15 +212,18 @@ export interface FileRoutesByFullPath {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -220,16 +243,19 @@ export interface FileRoutesByTo {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog': typeof BlogIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -249,6 +275,7 @@ export interface FileRoutesById {
   '/vs/firebase': typeof VsFirebaseRoute
   '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
@@ -256,10 +283,12 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -279,15 +308,18 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -307,15 +339,18 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog'
+    | '/docs'
     | '/packages'
     | '/llms.mdx/docs/$'
   id:
     | '__root__'
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
     | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -335,16 +370,19 @@ export interface FileRouteTypes {
     | '/vs/firebase'
     | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentSetupDotmdRoute: typeof AgentSetupDotmdRoute
   ChangelogRoute: typeof ChangelogRoute
   CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
   CompareRoute: typeof CompareRoute
+  ExamplesRoute: typeof ExamplesRoute
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
@@ -364,6 +402,7 @@ export interface RootRouteChildren {
   VsFirebaseRoute: typeof VsFirebaseRoute
   VsSupabaseRoute: typeof VsSupabaseRoute
   BlogIndexRoute: typeof BlogIndexRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
 }
@@ -375,6 +414,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agent-setup.md': {
+      id: '/agent-setup.md'
+      path: '/agent-setup.md'
+      fullPath: '/agent-setup.md'
+      preLoaderRoute: typeof AgentSetupDotmdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/changelog': {
@@ -403,6 +449,13 @@ declare module '@tanstack/react-router' {
       path: '/compare'
       fullPath: '/compare'
       preLoaderRoute: typeof CompareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/examples': {
+      id: '/examples'
+      path: '/examples'
+      fullPath: '/examples'
+      preLoaderRoute: typeof ExamplesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/imprint': {
@@ -496,6 +549,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogRssDotxmlRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs/': {
+      id: '/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/docs/$': {
       id: '/docs/$'
       path: '/docs/$'
@@ -557,10 +617,12 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentSetupDotmdRoute: AgentSetupDotmdRoute,
   ChangelogRoute: ChangelogRoute,
   CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,
   CompareRoute: CompareRoute,
+  ExamplesRoute: ExamplesRoute,
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
@@ -580,6 +642,7 @@ const rootRouteChildren: RootRouteChildren = {
   VsFirebaseRoute: VsFirebaseRoute,
   VsSupabaseRoute: VsSupabaseRoute,
   BlogIndexRoute: BlogIndexRoute,
+  DocsIndexRoute: DocsIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
 }

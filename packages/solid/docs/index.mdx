@@ -1,17 +1,31 @@
 ---
 title: "@lunora/solid"
 description: SolidJS bindings built on @lunora/client — live query signals, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/svelte
+      note: "the Svelte adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
-`@lunora/solid` is the SolidJS adapter for Lunora. It's a thin, idiomatic layer
-over the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
+`@lunora/solid` is the SolidJS adapter for Lunora. It's a thin layer over the
+framework-neutral [`@lunora/client`](/docs/packages/client), which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge.
 Solid's fine-grained signals map directly onto Lunora's per-subscription deltas,
 so a live query is a signal the socket writes to: only the components that read
 the accessor re-render.
 
 <Callout type="warn">
-    **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity and not yet proven
     end-to-end against a running app. Solid lands first after React because its signals map most directly onto Lunora deltas. See [Bring your
     framework](/docs/frameworks/bring-your-framework).
 </Callout>
@@ -42,7 +56,7 @@ render(
 | --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
 | `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                |
 | `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.          |
-| `LunoraContext`                                     | context   | The underlying Solid context — for advanced manual `useContext`.                                 |
+| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                  |
 | `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.          |
 | `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                 |
 | `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                        |
@@ -63,7 +77,7 @@ Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 ## `<LunoraProvider client={...}>`
 
 Provides a `LunoraClient` to the Solid tree. Unlike the React provider there is
-no `QueryClient` to detect or lazily create — the adapter's reactive primitives
+no `QueryClient` to detect or lazily create: the adapter's reactive primitives
 own their own signals and read the client straight from context. The provider
 does not own the client's lifecycle, so the same instance survives across route
 navigations.
@@ -82,7 +96,7 @@ accessor reads `undefined` until the first server frame lands, then updates on
 every delta the WebSocket pushes.
 
 `args` may be a plain value or an accessor. Passing an accessor makes the
-subscription reactive — when the args change the previous subscription is torn
+subscription reactive: when the args change the previous subscription is torn
 down (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or
 an accessor returning `"skip"`) to short-circuit: no network call, no socket.
 
@@ -144,7 +158,7 @@ function Composer(props: { channelId: string }) {
 ### Optimistic updates
 
 Optimistic updates stay client-owned and are passed **per call** via `mutate`'s
-options — the `optimistic` / `optimisticUpdate` options pass straight through to
+options: the `optimistic` / `optimisticUpdate` options pass straight through to
 `client.mutation`, which applies and rolls them back against the live Lunora
 subscription cache (the same machinery `createQuery` / `hydratePreloaded`
 subscribe to), so an optimistic write reflects in those accessors immediately and
@@ -171,7 +185,7 @@ client object (only `{ mutation }` is required). It's the internal seam behind
 The client half of "your loaders are live". Run the query on the server with
 `preloadQuery` (from `@lunora/solid/server`) inside a SolidStart route loader,
 hand the serializable `Preloaded` token to the client, and `hydratePreloaded`
-seeds the accessor **synchronously** from `preloaded.value` — so the first read
+seeds the accessor **synchronously** from `preloaded.value`, so the first read
 during hydration returns the server-rendered value with no loading flash and no
 `Suspense` fallback (unlike `createResource`, which always starts pending). After
 mount, a WebSocket subscription attaches in an effect and every subsequent delta
@@ -193,12 +207,12 @@ function Posts(props: { preloaded: Preloaded<Array<{ _id: string; title: string 
 ```
 
 Effects do not run during SSR (Solid runs them only after hydration), so the
-subscription is strictly client-side — the seed is the only value the server
+subscription is strictly client-side; the seed is the only value the server
 render ever sees.
 
 ## `@lunora/solid/server`
 
-Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr`, the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 SolidStart `"use server"` route loader.
@@ -217,13 +231,3 @@ const preloaded = await preloadQuery(client, api.posts.list, {});
 Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
-
-## See also
-
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/vue](/docs/packages/vue) — the Vue adapter
-- [@lunora/svelte](/docs/packages/svelte) — the Svelte adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)

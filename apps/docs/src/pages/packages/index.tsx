@@ -9,6 +9,8 @@ import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill, SectionHead } from "@/components/sections/langbase";
 import type { AccentColor, Category, PackageInfo } from "@/data/packages";
 import { categories, packages } from "@/data/packages";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import { cn, formatNumber } from "@/lib/utils";
 import type { DownloadStats } from "@/server/stats";
 import { getStats } from "@/server/stats";
@@ -26,22 +28,18 @@ const accentBadge: Record<AccentColor, string> = {
 };
 
 const PackageCard: FC<{ pkg: PackageInfo; weeklyDownloads: number }> = ({ pkg, weeklyDownloads }) => (
-    <Link
-        className="group flex h-full flex-col gap-4 bg-white/[0.012] p-6 transition-colors hover:bg-white/[0.03]"
-        params={{ slug: pkg.slug }}
-        to="/packages/$slug"
-    >
+    <Link className="group flex h-full flex-col gap-4 bg-wash p-6 transition-colors hover:bg-wash" params={{ slug: pkg.slug }} to="/packages/$slug">
         <div className="flex items-center justify-between">
             <span className={cn("inline-block px-2.5 py-0.5 font-mono text-[11px] font-medium", accentBadge[pkg.accentColor])}>{pkg.category}</span>
             {weeklyDownloads > 0 ? (
-                <span className="flex items-center gap-1.5 font-mono text-xs text-white/30">
+                <span className="flex items-center gap-1.5 font-mono text-xs text-ink-faint">
                     <Download className="size-3" />
                     {formatNumber(weeklyDownloads)}/wk
                 </span>
             ) : null}
         </div>
-        <h3 className="text-lg font-semibold tracking-tight text-white">{pkg.name}</h3>
-        <p className="line-clamp-2 text-sm leading-relaxed text-white/45 transition-colors group-hover:text-white/60">{pkg.description}</p>
+        <h3 className="text-lg font-semibold tracking-tight text-ink">{pkg.name}</h3>
+        <p className="line-clamp-2 text-sm leading-relaxed text-ink-faint transition-colors group-hover:text-ink-muted">{pkg.description}</p>
         <div className="mt-auto flex items-center gap-2 pt-2">
             <span className={cn("text-sm font-medium", accentText[pkg.accentColor])}>Learn more</span>
             <ArrowRight className={cn("size-3.5 transition-transform group-hover:translate-x-1", accentText[pkg.accentColor])} />
@@ -55,7 +53,9 @@ const CategoryFilter: FC<{ active: Category; onChange: (category: Category) => v
             <button
                 className={cn(
                     "border px-4 py-1.5 font-mono text-xs font-medium transition-colors",
-                    active === cat ? "border-white/20 bg-white/10 text-white" : "border-white/[0.1] text-white/45 hover:border-white/20 hover:text-white",
+                    active === cat
+                        ? "border-hairline-strong bg-hairline text-ink"
+                        : "border-hairline text-ink-faint hover:border-hairline-strong hover:text-ink",
                 )}
                 key={cat}
                 onClick={() => {
@@ -109,27 +109,39 @@ const PackagesListing: FC = () => {
     }, [activeCategory, search]);
 
     return (
-        <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
-            {/* vertical guide lines */}
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Packages" }]}
+                lead="From the schema-first server to the live client and framework adapters — explore the full collection of Lunora packages, built to work together."
+                meta={`${String(packages.length)} packages`}
+                title="The complete toolkit"
             />
 
-            {/* hero + filters */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 pt-32 pb-10 lg:px-0">
-                    <SectionHead
-                        eyebrow="Open source"
-                        subtitle="From the schema-first server to the live client and framework adapters — explore the full collection of Lunora packages, built to work together."
-                        title="The complete toolkit"
-                    />
-                    <div className="mt-12 flex flex-col gap-4 border-t border-white/[0.08] pt-8 sm:flex-row sm:items-center sm:justify-between">
+            {/* The filters and the grid share one section, because that section is
+                what bounds the sticky bar: a sticky element travels only within its
+                own parent, so the bar rides down the list and stops at the last row
+                instead of following the reader into the CTA and the footer.
+
+                The bar is inset to the shell, not full-bleed — it is a control
+                attached to the grid, and a full-width band reads as page chrome. It
+                still needs its own opaque ground and frame, since 55 cards scroll
+                underneath it. */}
+            <section className="pt-10" data-nav-theme="dark">
+                {/* No padding on the sticky element itself: `top` docks its border
+                    box, so any padding here would be a transparent strip with cards
+                    scrolling through it. The spacing lives on the section above and
+                    on the grid below. */}
+                <Shell className="sticky top-[var(--site-nav-height)] z-40">
+                    <div className="flex flex-col gap-4 border border-hairline bg-canvas px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
                         <CategoryFilter active={activeCategory} onChange={setActiveCategory} />
                         <div className="relative">
-                            <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-white/30" />
+                            <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
                             <input
-                                className="w-full border border-white/[0.1] bg-white/[0.02] py-2 pr-4 pl-9 font-mono text-sm text-white outline-none transition-colors placeholder:text-white/30 focus:border-white/25 sm:w-64"
+                                autoComplete="off"
+                                className="w-full border border-hairline bg-wash py-2 pr-4 pl-9 font-mono text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-hairline-strong sm:w-64"
+                                data-1p-ignore=""
+                                data-form-type="other"
+                                data-lpignore="true"
                                 onChange={(event) => {
                                     setSearch(event.target.value);
                                 }}
@@ -139,14 +151,9 @@ const PackagesListing: FC = () => {
                             />
                         </div>
                     </div>
-                </div>
-            </section>
+                </Shell>
 
-            <HatchSpacer />
-
-            {/* grid */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 lg:px-0">
+                <Shell className="pt-6">
                     {filteredPackages.length > 0 ? (
                         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
                             {filteredPackages.map((pkg) => (
@@ -155,9 +162,9 @@ const PackagesListing: FC = () => {
                         </div>
                     ) : (
                         <div className="flex flex-col items-center gap-4 py-20">
-                            <p className="text-lg text-white/40">No packages found matching your criteria.</p>
+                            <p className="text-lg text-ink-faint">No packages found matching your criteria.</p>
                             <button
-                                className="text-sm text-white/60 underline underline-offset-4 transition-colors hover:text-white"
+                                className="text-sm text-ink-muted underline underline-offset-4 transition-colors hover:text-ink"
                                 onClick={() => {
                                     setActiveCategory("All");
                                     setSearch("");
@@ -168,13 +175,13 @@ const PackagesListing: FC = () => {
                             </button>
                         </div>
                     )}
-                </div>
+                </Shell>
             </section>
 
             <HatchSpacer />
 
             {/* CTA */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+            <section className="border-t border-hairline" data-nav-theme="dark">
                 <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
                     <SectionHead
                         eyebrow="Get started"

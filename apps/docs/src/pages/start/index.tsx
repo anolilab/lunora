@@ -1,202 +1,253 @@
+import SiAngular from "@icons-pack/react-simple-icons/icons/SiAngular.mjs";
+import SiAstro from "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
+import SiExpo from "@icons-pack/react-simple-icons/icons/SiExpo.mjs";
+import SiNextdotjs from "@icons-pack/react-simple-icons/icons/SiNextdotjs.mjs";
+import SiNuxt from "@icons-pack/react-simple-icons/icons/SiNuxt.mjs";
 import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
+import SiReactrouter from "@icons-pack/react-simple-icons/icons/SiReactrouter.mjs";
 import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiTypescript from "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
-import { ArrowRight } from "lucide-react";
+import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
+import { ArrowRight, ExternalLink } from "lucide-react";
 import type { ComponentType, FC } from "react";
 
-import AnalogLogo from "@/assets/frameworks/analog.svg?react";
-import AstroLogo from "@/assets/frameworks/astro.svg?react";
-import NuxtLogo from "@/assets/frameworks/nuxt.svg?react";
 import TanstackLogo from "@/assets/frameworks/tanstack.svg?react";
 import HatchSpacer from "@/components/sections/hatch-spacer";
-import { ClosingCta, Pill, SectionHead } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
+import { ClosingCta } from "@/components/sections/langbase";
+import { Action } from "@/kit/action";
+import { Kicker, Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
 import InstallCommand from "@/pages/start/install-command";
 
 /**
- * `/start` — the Lunora starter-kits gallery. One install scaffolds a typed,
- * real-time Lunora backend wired into the framework you pick; only the frontend
- * changes between kits. Brand-consistent with the home page (Geist + aurora,
- * hairline grid, Reveal). Cards link to each template's source on GitHub.
+ * `/start` — every way `lunora init` can start a project.
+ *
+ * The list mirrors `FRAMEWORK_CHOICES` in
+ * `packages/cli/src/commands/init/handler.ts`, which is what the CLI validates
+ * against. Keep the two in step: this page listed eight kits when the binary
+ * offered sixteen, and told every reader to pass `--template`, which is wrong
+ * for the create-vite overlays — those take `--vite` and have no template
+ * directory at all. A starter page printing a flag the CLI rejects is worse
+ * than no starter page.
+ *
+ * The overlay list comes from `ADAPTERS` in `init/overlay/adapters.ts`, not from
+ * `FRAMEWORK_CHOICES`: the picker omits `vanilla`, but `--vite vanilla` is valid
+ * and was missing here.
  */
 
-interface Template {
-    /** Brand simple-icons render their hex via `color="default"`; framework SVGs carry their own fills. */
+interface Kit {
+    /** Brand simple-icons need `color="default"` to render their own hex. */
     brand?: boolean;
-    category: string;
-    description: string;
     Icon: ComponentType<{ className?: string; color?: string }>;
+    /** The `-t` / `--vite` value. Bespoke ids are also the `templates/` directory name. */
+    id: string;
     name: string;
-    /** The init --template value (also the templates directory name). */
-    slug: string;
+    /** What you get, not what the framework is. */
+    note: string;
     stack: string;
 }
 
-const templates: Template[] = [
-    {
-        category: "Full-stack",
-        description: "Full-stack React on TanStack Router, Start, and Query — typed loaders and live data from the edge to the component.",
-        Icon: TanstackLogo,
-        name: "TanStack Start",
-        slug: "tanstack-start-react",
-        stack: "React",
-    },
-    {
-        category: "Full-stack",
-        description: "The same TanStack Start power on SolidJS — fine-grained reactivity, no virtual DOM, instant updates.",
-        Icon: TanstackLogo,
-        name: "TanStack Start",
-        slug: "tanstack-start-solid",
-        stack: "Solid",
-    },
+/** `lunora init <name> -t <id>` — a whole project, checked into `templates/`. */
+const templates: Kit[] = [
+    { Icon: TanstackLogo, id: "tanstack-start-react", name: "TanStack Start", note: "SSR with live-loader routes, typed end to end.", stack: "React" },
+    { Icon: TanstackLogo, id: "tanstack-start-solid", name: "TanStack Start", note: "The same live loaders on fine-grained Solid reactivity.", stack: "Solid" },
+    { brand: true, Icon: SiNextdotjs, id: "next", name: "Next.js", note: "App Router on OpenNext, plus a standalone Lunora worker.", stack: "React" },
     {
         brand: true,
-        category: "SPA",
-        description: "Solid 2.0 on Vite — the new signals core, @solidjs/web renderer, and Lunora live queries as plain accessors.",
         Icon: SiSolid,
+        id: "solid-v2",
         name: "Solid 2",
-        slug: "solid-v2",
+        note: "The new signals core and @solidjs/web renderer, live queries as plain accessors.",
         stack: "Solid",
     },
     {
         brand: true,
-        category: "SPA",
-        description: "A React Router v7 SPA with file-based routes and Lunora's live queries wired straight into your loaders.",
-        Icon: SiReact,
+        Icon: SiReactrouter,
+        id: "react-router",
         name: "React Router",
-        slug: "react-router",
+        note: "v7 framework mode, SSR composed into the Lunora worker.",
         stack: "React",
     },
-    {
-        category: "Meta-framework",
-        description: "Vue + Nuxt with Lunora mounted inside Nitro — one worker serving RPC, WebSockets, and your pages.",
-        Icon: NuxtLogo,
-        name: "Nuxt",
-        slug: "nuxt",
-        stack: "Vue",
-    },
-    {
-        brand: true,
-        category: "Meta-framework",
-        description: "SvelteKit on Cloudflare with live stores, optimistic mutations, and reactive loaders out of the box.",
-        Icon: SiSvelte,
-        name: "SvelteKit",
-        slug: "sveltekit",
-        stack: "Svelte",
-    },
-    {
-        category: "Meta-framework",
-        description: "Astro islands with a React island bound to Lunora's reactive loaders — ship mostly-static, live where it counts.",
-        Icon: AstroLogo,
-        name: "Astro",
-        slug: "astro",
-        stack: "Islands",
-    },
-    {
-        category: "Meta-framework",
-        description: "Angular + AnalogJS, fully typed against your Lunora schema with RxJS-friendly live data.",
-        Icon: AnalogLogo,
-        name: "Analog",
-        slug: "analog",
-        stack: "Angular",
-    },
-    {
-        brand: true,
-        category: "Backend",
-        description: "No UI framework — just a typed, real-time backend you can call from any client, mobile app, or service.",
-        Icon: SiTypescript,
-        name: "Standalone",
-        slug: "standalone",
-        stack: "TypeScript",
-    },
+    { brand: true, Icon: SiNuxt, id: "nuxt", name: "Nuxt", note: "One worker: Lunora mounts inside Nitro beside your pages.", stack: "Vue" },
+    { brand: true, Icon: SiSvelte, id: "sveltekit", name: "SvelteKit", note: "Live stores and reactive loaders, plus a Lunora worker.", stack: "Svelte" },
+    { brand: true, Icon: SiAstro, id: "astro", name: "Astro", note: "Mostly-static islands, live where it counts.", stack: "Islands" },
+    { brand: true, Icon: SiAngular, id: "analog", name: "Analog", note: "Angular on Nitro, single worker, RxJS-friendly live data.", stack: "Angular" },
+    { brand: true, Icon: SiExpo, id: "expo", name: "Expo", note: "iOS, Android and web against one Lunora backend.", stack: "React Native" },
+    { brand: true, Icon: SiNextdotjs, id: "vinext", name: "vinext", note: "Next App Router on Vite, composed into one worker. Experimental.", stack: "React" },
+    { brand: true, Icon: SiNextdotjs, id: "vinext-pages", name: "vinext", note: "The same, for the Pages Router. Experimental.", stack: "Pages Router" },
+    { brand: true, Icon: SiTypescript, id: "standalone", name: "Standalone", note: "No frontend — a typed backend any client can call.", stack: "Worker only" },
 ];
 
-const Start: FC = () => (
-    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
-        {/* vertical guide lines at the container edges, full page height */}
-        <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
-        />
+/** `lunora init <name> --vite <id>` — the official create-vite base, with the Lunora layer on top. */
+const overlays: Kit[] = [
+    { brand: true, Icon: SiReact, id: "react", name: "React", note: "The default when init runs without a framework flag.", stack: "SPA" },
+    { brand: true, Icon: SiVuedotjs, id: "vue", name: "Vue", note: "create-vite's Vue base plus Lunora.", stack: "SPA" },
+    { brand: true, Icon: SiSolid, id: "solid", name: "Solid", note: "create-vite's Solid base plus Lunora.", stack: "SPA" },
+    { brand: true, Icon: SiSvelte, id: "svelte", name: "Svelte", note: "create-vite's Svelte base plus Lunora.", stack: "SPA" },
+    { brand: true, Icon: SiTypescript, id: "vanilla", name: "Vanilla", note: "No framework — create-vite's plain base plus Lunora.", stack: "SPA" },
+];
 
-        {/* hero */}
-        <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-            <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-80 opacity-60"
-                style={{ background: "radial-gradient(60% 100% at 50% -10%, hsl(256 72% 68% / 0.18), transparent 70%)" }}
-            />
-            <Reveal className="relative z-10 mx-auto flex max-w-3xl flex-col items-center gap-6 px-5 pt-36 pb-16 text-center sm:pt-44">
-                <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
-                    <span className="size-1.5 bg-sky-sapphire" />
-                    Starter kits
-                </span>
-                <h1 className="text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">
-                    Start with your{" "}
-                    <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">stack.</span>
-                </h1>
-                <p className="max-w-xl text-base leading-relaxed text-white/55">
-                    Pick a framework and <code className="font-mono text-white/70">lunora init</code> scaffolds a typed, real-time Lunora backend wired into it
-                    — schema, functions, live data, and a one-command Cloudflare deploy. Then build.
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-2.5">
-                    <Pill primary to="/docs/getting-started">
+/** The `--add` feature list, verbatim from the CLI's own option description. */
+const addons = [
+    "ai",
+    "auth",
+    "backup",
+    "browser",
+    "cloudflare-access",
+    "crons",
+    "email",
+    "flags",
+    "hyperdrive",
+    "payment",
+    "presence",
+    "queue",
+    "storage",
+    "workflow",
+];
+
+const KitCell: FC<{ flag: string; kit: Kit; source?: boolean }> = ({ flag, kit, source = false }) => {
+    const body = (
+        <>
+            <div className="flex items-center gap-3">
+                <kit.Icon className="size-6 shrink-0" color={kit.brand ? "default" : undefined} />
+                <div className="min-w-0">
+                    <h3 className="truncate text-base font-medium tracking-tight text-ink">{kit.name}</h3>
+                    <p className="font-mono text-xs text-ink-faint">{kit.stack}</p>
+                </div>
+                {source ? <ExternalLink className="ml-auto size-3.5 shrink-0 text-ink-faint transition-colors group-hover:text-ink" /> : null}
+            </div>
+            <p className="text-sm leading-relaxed text-ink-muted">{kit.note}</p>
+            <code className="mt-auto border-t border-hairline pt-3.5 font-mono text-xs text-ink-faint">
+                {flag} {kit.id}
+            </code>
+        </>
+    );
+
+    // Only bespoke templates have somewhere to link: the overlays are generated
+    // from create-vite at init time and have no directory to browse.
+    return source ? (
+        <a
+            className="group flex h-full flex-col gap-4 bg-canvas p-6 transition-colors hover:bg-wash"
+            href={`https://github.com/anolilab/lunora/tree/alpha/templates/${kit.id}`}
+            rel="noreferrer"
+            target="_blank"
+        >
+            {body}
+        </a>
+    ) : (
+        <div className="flex h-full flex-col gap-4 bg-canvas p-6">{body}</div>
+    );
+};
+
+const Start: FC = () => (
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+        <ArticleHeader
+            actions={
+                <>
+                    <Action to="/docs/getting-started" variant="primary">
                         Read the guide
                         <ArrowRight className="size-4" />
-                    </Pill>
-                    <Pill href="https://github.com/anolilab/lunora/tree/alpha/templates">Browse on GitHub</Pill>
-                </div>
+                    </Action>
+                    <Action href="https://github.com/anolilab/lunora/tree/alpha/templates">Browse on GitHub</Action>
+                </>
+            }
+            breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Start" }]}
+            lead="Pick a framework and `lunora init` scaffolds a typed, real-time Lunora backend wired into it — schema, functions, live data, and a one-command Cloudflare deploy. Then build."
+            meta="Starter kits"
+            title="Start with your stack."
+        />
+
+        <section data-nav-theme="dark">
+            <Shell className="flex justify-center py-12">
                 <InstallCommand />
-            </Reveal>
+            </Shell>
         </section>
 
         <HatchSpacer />
 
-        {/* template gallery */}
-        <section className="border-t border-white/[0.08] bg-[#0e0e11] py-20" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 lg:px-0">
-                <SectionHead
-                    eyebrow="Templates"
-                    subtitle="Every kit ships the same typed, live-syncing Lunora backend — only the frontend changes. One command and you're running on the edge."
-                    title="Eight ways to start"
-                />
-                <div className="mt-14 grid grid-cols-1 gap-px border border-white/[0.08] bg-white/[0.08] sm:grid-cols-2 lg:grid-cols-3 lg:border-x-0">
-                    {templates.map((template, index) => (
-                        <Reveal className="bg-[#0e0e11]" delay={(index % 3) * 0.05} key={template.slug}>
-                            <a
-                                className="group flex h-full flex-col gap-4 p-6 transition-colors hover:bg-white/[0.025]"
-                                href={`https://github.com/anolilab/lunora/tree/alpha/templates/${template.slug}`}
-                                rel="noreferrer"
-                                target="_blank"
-                            >
-                                <div className="flex items-center gap-3">
-                                    <template.Icon className="size-7 shrink-0" color={template.brand ? "default" : undefined} />
-                                    <div className="min-w-0">
-                                        <h3 className="truncate text-base font-medium tracking-tight text-white">{template.name}</h3>
-                                        <p className="font-mono text-xs text-white/40">{template.stack}</p>
-                                    </div>
-                                    <span className="ml-auto shrink-0 border border-white/10 px-2 py-0.5 font-mono text-[10px] tracking-wider text-white/35 uppercase">
-                                        {template.category}
-                                    </span>
-                                </div>
-                                <p className="text-sm leading-relaxed text-white/50">{template.description}</p>
-                                <div className="mt-auto flex items-center justify-between border-t border-white/[0.08] pt-3.5">
-                                    <code className="font-mono text-xs text-white/40">--template {template.slug}</code>
-                                    <span className="inline-flex items-center gap-1 text-xs font-medium text-white/70 transition-colors group-hover:text-white">
-                                        Use
-                                        <ArrowRight className="size-3.5" />
-                                    </span>
-                                </div>
-                            </a>
-                        </Reveal>
+        {/* Templates and overlays are two different flags, so they are two bands
+            rather than one grid with a badge on each cell. The flag is the thing
+            a reader has to get right, and a badge is easy to skim past. */}
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
+                <div className="flex flex-col gap-3">
+                    <Kicker size="micro">Templates · -t</Kicker>
+                    <h2 className="text-h2 font-semibold tracking-tight text-ink">Thirteen whole projects</h2>
+                    <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
+                        Each one is a complete app in <code className="font-mono text-ink-muted">templates/</code>, fetched at init and wired to the same typed,
+                        live-syncing backend. Only the frontend changes.
+                    </p>
+                </div>
+
+                <div className="mt-12 grid grid-cols-1 gap-px border border-hairline bg-hairline sm:grid-cols-2 lg:grid-cols-3 lg:border-x-0">
+                    {templates.map((kit) => (
+                        <KitCell flag="-t" key={kit.id} kit={kit} source />
                     ))}
                 </div>
-                <p className="mt-8 text-center font-mono text-xs text-white/35">
-                    Pass <code className="text-white/60">--template &lt;name&gt;</code> to <code className="text-white/60">lunora init</code>, or browse each
-                    kit&apos;s source on GitHub.
-                </p>
-            </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
+                <div className="flex flex-col gap-3">
+                    <Kicker size="micro">SPA · --vite</Kicker>
+                    <h2 className="text-h2 font-semibold tracking-tight text-ink">Or start from create-vite</h2>
+                    <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
+                        No bespoke template — the official create-vite base for your framework, with the Lunora layer added on top.
+                    </p>
+                </div>
+
+                <div className="mt-12 grid grid-cols-1 gap-px border border-hairline bg-hairline sm:grid-cols-2 lg:grid-cols-4 lg:border-x-0">
+                    {overlays.map((kit) => (
+                        <KitCell flag="--vite" key={kit.id} kit={kit} />
+                    ))}
+                </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        <section data-nav-theme="dark">
+            <Shell className="py-20">
+                <div className="grid grid-cols-1 gap-px bg-hairline lg:grid-cols-3">
+                    <div className="flex flex-col gap-3 bg-canvas p-8 lg:col-span-2">
+                        <Kicker size="micro" tone="accent">
+                            --add
+                        </Kicker>
+                        <h3 className="text-h3 font-semibold text-ink">Add the rest at scaffold time</h3>
+                        <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
+                            Pass a comma-separated list and init wires the packages, config and example code for each one, instead of leaving you to follow a
+                            setup page per feature.
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                            {addons.map((addon) => (
+                                <code className="border border-hairline px-2 py-1 font-mono text-xs text-ink-muted" key={addon}>
+                                    {addon}
+                                </code>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-8 bg-canvas p-8">
+                        <div className="flex flex-col gap-2">
+                            <Kicker size="micro">--here</Kicker>
+                            <p className="text-sm leading-relaxed text-ink-muted">
+                                Already have an app? Init detects the framework, patches the config and scaffolds <code className="font-mono">lunora/</code> in
+                                place.
+                            </p>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <Kicker size="micro">--ci github | gitlab</Kicker>
+                            <p className="text-sm leading-relaxed text-ink-muted">Scaffold the deploy pipeline with it, so the first push ships.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <p className="mt-8 font-mono text-xs text-ink-faint">lunora init my-app -t nuxt --add auth,email --ci github</p>
+            </Shell>
         </section>
 
         <HatchSpacer />

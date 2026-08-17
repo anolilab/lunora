@@ -38,13 +38,13 @@ const InstallCommand: FC = () => {
 
     return (
         <button
-            className="group flex w-fit items-center gap-3 border border-white/12 px-4 py-2 font-mono text-sm text-white/60 transition-colors hover:border-white/25 hover:text-white"
+            className="group flex w-fit items-center gap-3 border border-hairline px-4 py-2 font-mono text-sm text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
             onClick={copy}
             type="button"
         >
-            <span className="text-white/30 select-none">$</span>
+            <span className="text-ink-faint select-none">$</span>
             {COMMAND}
-            {copied ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-3.5 text-white/35 transition-colors group-hover:text-white/60" />}
+            {copied ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-3.5 text-ink-faint transition-colors group-hover:text-ink-muted" />}
         </button>
     );
 };

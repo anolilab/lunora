@@ -6,7 +6,7 @@ description: The full picture — topology, request lifecycle, the data tiers, t
 This page is the map of how Lunora works and _why it works that way_. The first
 half is the **architecture**: the Cloudflare primitives, how a request flows
 through them, and the consistency guarantees you get. The second half is the
-**design decisions** — the forks in the road and why we took the branch we did.
+**design decisions**: the forks in the road and why we took the branch we did.
 
 If you only read one section, read [The mental model](#the-mental-model). If
 you're evaluating Lunora against Convex or a hand-rolled Workers stack, jump to
@@ -14,26 +14,25 @@ you're evaluating Lunora against Convex or a hand-rolled Workers stack, jump to
 
 ## Vocabulary
 
-The rest of the page leans on these terms. Skim them once and the diagrams read
-themselves:
+The rest of the page leans on these terms:
 
-- **Shard** — one Durable Object instance owning a slice of state. The default
+- **Shard**: one Durable Object instance owning a slice of state. The default
   app has a single shard addressed as `__root__`; `.shardBy(field)` creates one
   shard per value of `field`.
-- **Op-log (`__cdc_log`)** — the append-only change log every shard keeps. Each
+- **Op-log (`__cdc_log`)**: the append-only change log every shard keeps. Each
   committed write lands here in order; it's the source for deltas, pokes, and
   resume-after-reconnect.
-- **Delta** — a row change broadcast to subscribers of the legacy `subscribe`
+- **Delta**: a row change broadcast to subscribers of the legacy `subscribe`
   path (the DO re-runs the query and diffs).
-- **Poke** — the leaner local-first signal: a _membership diff_ for a shape,
+- **Poke**: the leaner local-first signal, a _membership diff_ for a shape,
   computed from the op-log without re-running the query.
-- **Shape** — a named, parameterized partial replication of a table (a predicate
-    - optional column projection) the client subscribes to by name.
-- **Watermark** — the last mutation id the server has applied for a given client;
+- **Shape**: a named, parameterized partial replication of a table (a predicate
+  plus an optional column projection) the client subscribes to by name.
+- **Watermark**: the last mutation id the server has applied for a given client;
   it makes optimistic writes idempotent and gap-detected.
-- **Fan-out** — a read that touches every shard of a `.shardBy()` table because
+- **Fan-out**: a read that touches every shard of a `.shardBy()` table because
   it didn't pin one. Coordinated by the Worker; a cold path, not a hot one.
-- **Hibernation** — a DO with no traffic suspends, keeping its WebSocket
+- **Hibernation**: a DO with no traffic suspends, keeping its WebSocket
   subscriptions on the socket attachment. Idle subscribers cost storage, not CPU.
 
 ## The mental model
@@ -70,29 +69,29 @@ Three ideas carry the whole design:
 
 1. **The Durable Object is the database.** Non-global state lives in per-DO
    SQLite. Because a DO runs single-threaded and serializes its writes, you get
-   a strong-consistency cut _for free_ — no lock manager, no MVCC, no
+   a strong-consistency cut _for free_: no lock manager, no MVCC, and no
    replication stream to tail.
 2. **Real-time is a property of the store, not a bolt-on.** The DO that wrote a
    row is also the one holding the WebSocket subscriptions for it, so a delta
    never crosses a process boundary to fan out.
 3. **You scale by addressing, not rewriting.** One DO by default; `.shardBy()`
    partitions across many; `.global()` promotes a table to D1. Your call sites
-   don't change — codegen learns the new address.
+   don't change, because codegen learns the new address.
 
 ## The components
 
-| Component        | Package                     | Responsibility                                                                                                                                                                                         |
-| ---------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Worker**       | `@lunora/runtime`           | Entry point. Parses the RPC envelope, authenticates, resolves the target shard, runs the query coordinator for fan-out, terminates WebSockets. Stateless — scales horizontally on Cloudflare's edge.   |
-| **ShardDO**      | `@lunora/do`                | The workhorse. SQLite-backed state, OCC, serialized mutations, hibernatable WebSocket subscriptions, and the op-log (`__cdc_log`) that powers live sync. One per shard.                                |
-| **SessionDO**    | `@lunora/do`                | Per-session coordination state (presence, auth session, transient fan-in).                                                                                                                             |
-| **SchedulerDO**  | `@lunora/scheduler`         | Alarm-driven `runAfter` / `runAt` and Cron Triggers.                                                                                                                                                   |
-| **Container DO** | `@lunora/container`         | A Docker workload running as a Durable Object — for jobs that don't fit the Workers runtime (ffmpeg, headless Chrome, an ML model, a long-running process). Reached from actions via `ctx.containers`. |
-| **D1**           | `@lunora/d1`                | Backs `.global()` tables. Wraps the Sessions API (`withSession(bookmark)`) for read-your-writes across regional replicas.                                                                              |
-| **R2**           | `@lunora/storage`           | Typed buckets and signed URLs; the browser uploads/downloads directly, never proxied through the Worker.                                                                                               |
-| **Queues**       | `@lunora/queue`             | Fire-and-forget background work via a typed `ctx.queues.<name>` producer and a generated `queue()` consumer.                                                                                           |
-| **Client**       | `@lunora/client` + adapters | Browser SDK: multiplexed WebSocket, optimistic writes, offline queue, reconnect-by-bookmark. Framework adapters expose `useQuery` / `useMutation` / `useSubscription`.                                 |
-| **Codegen**      | `@lunora/codegen`           | Reads `schema.ts` + your functions, emits `_generated/{api,server,dataModel}.ts` so the address of every shard and the type of every result is known at build time.                                    |
+| Component        | Package                     | Responsibility                                                                                                                                                                                            |
+| ---------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Worker**       | `@lunora/runtime`           | Entry point. Parses the RPC envelope, authenticates, resolves the target shard, runs the query coordinator for fan-out, terminates WebSockets. Stateless, so it scales horizontally on Cloudflare's edge. |
+| **ShardDO**      | `@lunora/do`                | The workhorse. SQLite-backed state, OCC, serialized mutations, hibernatable WebSocket subscriptions, and the op-log (`__cdc_log`) that powers live sync. One per shard.                                   |
+| **SessionDO**    | `@lunora/do`                | Per-session coordination state (presence, auth session, transient fan-in).                                                                                                                                |
+| **SchedulerDO**  | `@lunora/scheduler`         | Alarm-driven `runAfter` / `runAt` and Cron Triggers.                                                                                                                                                      |
+| **Container DO** | `@lunora/container`         | A Docker workload running as a Durable Object, for jobs that don't fit the Workers runtime (ffmpeg, headless Chrome, an ML model, a long-running process). Reached from actions via `ctx.containers`.     |
+| **D1**           | `@lunora/d1`                | Backs `.global()` tables. Wraps the Sessions API (`withSession(bookmark)`) for read-your-writes across regional replicas.                                                                                 |
+| **R2**           | `@lunora/storage`           | Typed buckets and signed URLs; the browser uploads/downloads directly, never proxied through the Worker.                                                                                                  |
+| **Queues**       | `@lunora/queue`             | Fire-and-forget background work via a typed `ctx.queues.<name>` producer and a generated `queue()` consumer.                                                                                              |
+| **Client**       | `@lunora/client` + adapters | Browser SDK: multiplexed WebSocket, optimistic writes, offline queue, reconnect-by-bookmark. Framework adapters expose `useQuery` / `useMutation` / `useSubscription`.                                    |
+| **Codegen**      | `@lunora/codegen`           | Reads `schema.ts` + your functions, emits `_generated/{api,server,dataModel}.ts` so the address of every shard and the type of every result is known at build time.                                       |
 
 ## Request lifecycle
 
@@ -107,7 +106,7 @@ The four function kinds take four different paths through the topology.
 The client calls `api.messages.list`. The Worker authenticates the RPC, asks the
 shard resolver for the DO that owns the data (the `__root__` DO, or the one
 keyed by `.shardBy()`), and forwards the call. The DO runs the handler against
-its local SQLite — **no network hop inside the read** — applies the table's RLS
+its local SQLite (**no network hop inside the read**), applies the table's RLS
 read-`where`, and returns rows. If the query targets a `.shardBy()` table
 without pinning a shard, it becomes a **fan-out**: the Query Coordinator in the
 Worker dispatches to every shard and merges results.
@@ -123,7 +122,7 @@ against the resolving DO. The DO registers the subscription on the socket via
 `state.serializeAttachment(...)`, so it survives **hibernation**. When a
 mutation later writes a matching row, the DO computes a delta and pokes only the
 sockets whose registered predicate matches. Idle subscribers pay for storage,
-not compute — which is why the bill drops to near-zero between bursts.
+not compute, which is why the bill drops to near-zero between bursts.
 
 </Step>
 
@@ -132,8 +131,8 @@ not compute — which is why the bill drops to near-zero between bursts.
 ### A mutation (`ctx.db.insert/patch/...`)
 
 The Worker routes to the owning DO, which runs the handler inside
-`blockConcurrencyWhile` + a storage transaction. Writes are **serialized** —
-there is no concurrent writer to race, so there is no OCC-retry loop. Each write
+`blockConcurrencyWhile` + a storage transaction. Writes are **serialized**, so
+there is no concurrent writer to race and no OCC-retry loop. Each write
 appends to the op-log (`__cdc_log`); on transaction commit the DO broadcasts
 deltas (legacy `subscribe`) and/or pokes (the local-first shape protocol) to its
 subscribers.
@@ -161,13 +160,13 @@ single message from keypress to every other client's screen, in a chat sharded
 `.shardBy("channelId")`:
 
 1. **Optimistic write.** Alice hits send. `useMutation(api.messages.send)` applies
-   an optimistic row locally — it renders instantly — and pushes the mutation
+   an optimistic row locally, which renders instantly, and pushes the mutation
    over the multiplexed WebSocket, tagged with her `clientId` + next `clientSeq`.
 2. **Route.** The Worker authenticates the envelope and asks the shard resolver
    for the DO owning `channelId: "general"`. One DO, one destination.
 3. **Linearize.** That `ShardDO` runs `send` inside `blockConcurrencyWhile` + a
    storage transaction. It checks the per-client watermark (replays are acked
-   without re-running), inserts the row, and **appends to the op-log** — all in
+   without re-running), inserts the row, and **appends to the op-log**, all in
    one serialized commit. This commit _is_ the ordering everyone else will see.
 4. **Poke.** On commit, the DO reads the new op page once and, for each subscribed
    shape, computes membership with a single `… IN (<changedIds>) AND <where>`
@@ -186,25 +185,25 @@ state (1, 3, 6).
 ## The data tiers
 
 State lives in one of three tiers. The schema modifier on a table picks the
-tier; everything else — addressing, codegen, the client API — follows.
+tier, and everything else (addressing, codegen, the client API) follows.
 
-### Tier 1 — Shard-local (`ShardDO`)
+### Tier 1: Shard-local (`ShardDO`)
 
 The default. Every table without a tier modifier lives in the `__root__` DO.
 `.shardBy(field)` partitions the namespace so each value of `field` gets its own
 DO with its own SQLite, CPU budget, and hibernation timer.
 
-- **Real-time stays in-process** — the writer is the broadcaster.
-- **Strongly consistent within a region** — a DO is pinned near its creator.
-- **Account-unlimited** — millions of `ShardDO`s per account, zero admin.
+- **Real-time stays in-process**: the writer is the broadcaster.
+- **Strongly consistent within a region**: a DO is pinned near its creator.
+- **Account-unlimited**: millions of `ShardDO`s per account, zero admin.
 
 The ceiling is **10 GB SQLite and ~1 000 req/s per DO**. The runtime warns at
 1 GB (10% of the ceiling) so a `.shardBy()` migration has runway. See
 [Sharding](/docs/concepts/sharding) and [Limits](/docs/limits).
 
-### Tier 2 — Global (D1)
+### Tier 2: Global (D1)
 
-`.global()` moves a table to Cloudflare D1 — for identities, billing,
+`.global()` moves a table to Cloudflare D1, for identities, billing,
 cross-tenant audit logs, anything that must be queryable _across_ shards. Reads
 can be served by regional replicas; writes route to the primary. `@lunora/d1`
 threads the `withSession(bookmark)` API so the client gets read-your-writes
@@ -212,14 +211,14 @@ without a sticky-session router.
 
 <Callout type="info">
     The price of `.global()` is the live-sync downgrade: a `.global()`-backed shape reads from D1 and is coordinator/poll-refreshed (latency-tiered), **not**
-    poke-live — D1 has no per-DO op-log to diff. Keep hot, reactive data in Tier 1.
+    poke-live, because D1 has no per-DO op-log to diff. Keep hot, reactive data in Tier 1.
 </Callout>
 
-### Tier 3 — Blob & async
+### Tier 3: Blob & async
 
-- **R2** (`@lunora/storage`) — signed URLs; the browser transfers directly. Egress is free, so design around direct downloads.
-- **Queues** (`@lunora/queue`) — `ctx.queues.<name>.send(...)` from a mutation or action for fire-and-forget work. A generated `queue()` consumer drains it. Idempotency is on you.
-- **KV** — edge-cached config and feature flags via `@lunora/bindings/kv` (`ctx.kv`).
+- **R2** (`@lunora/storage`): signed URLs; the browser transfers directly. Egress is free, so design around direct downloads.
+- **Queues** (`@lunora/queue`): `ctx.queues.<name>.send(...)` from a mutation or action for fire-and-forget work. A generated `queue()` consumer drains it. Idempotency is on you.
+- **KV**: edge-cached config and feature flags via `@lunora/bindings/kv` (`ctx.kv`).
 
 ## Compute tiers
 
@@ -229,31 +228,31 @@ that can do the job, and you escalate only when the work demands it.
 | Tier          | Where                  | Good for                                                           | Bounded by                               |
 | ------------- | ---------------------- | ------------------------------------------------------------------ | ---------------------------------------- |
 | **Worker**    | Stateless edge         | RPC routing, auth, fan-out coordination, actions (external I/O)    | 30 s CPU, 10 MB bundle, no state         |
-| **ShardDO**   | Stateful, serialized   | Reads, writes, live subscriptions — the deterministic core         | 30 s CPU, 10 GB SQLite, ~1 000 req/s     |
+| **ShardDO**   | Stateful, serialized   | Reads, writes, live subscriptions: the deterministic core          | 30 s CPU, 10 GB SQLite, ~1 000 req/s     |
 | **Container** | Full Linux VM (Docker) | Native binaries, full filesystem, long-running or heavyweight work | Paid plan, `linux/amd64`, ephemeral disk |
 
-### Containers — escaping the Workers runtime
+### Containers: escaping the Workers runtime
 
-Some jobs simply don't fit a Worker: an existing binary (ffmpeg, headless
-Chrome), a Python ML model, anything that wants a real filesystem or runs longer
-than the request envelope. `@lunora/container` runs those as
-[Cloudflare Containers](https://developers.cloudflare.com/containers/), and the
-key architectural point is **how they connect back to the rest of the system**.
+Some jobs don't fit a Worker: an existing binary (ffmpeg, headless Chrome), a
+Python ML model, anything that wants a real filesystem or runs longer than the
+request envelope. `@lunora/container` runs those as
+[Cloudflare Containers](https://developers.cloudflare.com/containers/). What
+matters architecturally is **how they connect back to the rest of the system**.
 
 - **A container is a Durable Object.** `defineContainer(...)` makes codegen emit
   a container-enabled DO class; `lunora dev` / `deploy` reconcile the
   `wrangler.jsonc` binding, image build, and SQLite migration. It sits alongside
   `ShardDO` in the same topology, not on a separate platform.
 - **Reached only from actions.** Like `ctx.fetch` and `ctx.ai`, `ctx.containers`
-  is external I/O, so it lives on **actions**, never queries or mutations —
-  keeping the deterministic core deterministic. Routing mirrors the data tiers:
+  is external I/O, so it lives on **actions**, never queries or mutations, which
+  keeps the deterministic core deterministic. Routing mirrors the data tiers:
   `.get(name)` pins one instance per entity (stateful), `.any()` load-balances a
   fixed pool (stateless), and `.pool()` adds retry/backoff over a cold instance.
 - **It reads data through RPC, not the database.** Container code calls back into
   your app with the bridge client (`@lunora/container/bridge`), over the Worker's
   HTTP RPC endpoint (`/_lunora/rpc`), authenticated by a bearer your
   `resolveIdentity` validates. So a container reads and writes app state through
-  the _same queries and mutations the browser uses_ — it never reaches into
+  the _same queries and mutations the browser uses_, and never reaches into
   SQLite or D1 directly. The serialized DO stays the single linearization point,
   even for a heavyweight sidecar.
 - **Idle is free, disk is not durable.** Instances scale to zero on `sleepAfter`
@@ -272,14 +271,14 @@ See [`@lunora/container`](/docs/packages/container) for the full surface, and
 
 ## The consistency model
 
-This is the part worth internalizing before you design a schema. Each scope below
-shows its guarantee (the badge) and the mechanism that provides it:
+Read this before you design a schema. Each scope below shows its guarantee (the
+badge) and the mechanism that provides it:
 
 <TypeTable
     type={{
         "Within one DO": {
             type: "Strong, serializable",
-            description: "Single-threaded DO + storage transaction — commit order is the consistency cut.",
+            description: "Single-threaded DO + storage transaction; commit order is the consistency cut.",
         },
         "Across shards": {
             type: "No cross-shard transaction",
@@ -298,7 +297,8 @@ shows its guarantee (the badge) and the mechanism that provides it:
 
 The hard edge: **there is no cross-shard transaction and no cross-shard live
 join.** A shape whose `where()` joins two `.shardBy()` tables on _different_ DOs
-is rejected at registration — there's no single serialized cut to diff across.
+is rejected at registration, because there is no single serialized cut to diff
+across.
 The two supported answers are **denormalize** into the shard, or **promote** the
 joined table to `.global()`. See [Local-first sync](/docs/concepts/local-first).
 
@@ -306,9 +306,9 @@ joined table to `.global()`. See [Local-first sync](/docs/concepts/local-first).
 
 Two protocols ride the same hibernatable WebSocket.
 
-- **Legacy `subscribe`** — re-runs the query and diffs the result. Simple,
+- **Legacy `subscribe`**: re-runs the query and diffs the result. Simple,
   always correct, heavier on the DO.
-- **The poke diff protocol** (local-first) — the DO reads the op-log page once
+- **The poke diff protocol** (local-first): the DO reads the op-log page once
   per write flush, computes per-shape membership with a single
   `… IN (<changedIds>) AND <effectiveWhere>` query, and pokes each socket the
   membership _diff_. The client maintains the live views through
@@ -327,7 +327,7 @@ The happy path is above; here is what the architecture does when things break.
 The theme is **fail closed and re-derive**, never silently diverge.
 
 - **DO evicted mid-request.** A mutation is one storage transaction, so an
-  eviction either commits the whole thing or none of it — there is no half-written
+  eviction either commits the whole thing or none of it; there is no half-written
   row. The Worker surfaces the error to the caller; the client's optimistic
   overlay stays pending and re-pushes (idempotently, by watermark) on reconnect.
 - **WebSocket drops mid-poke.** Pokes apply atomically at `pokeEnd`, so a socket
@@ -336,7 +336,7 @@ The theme is **fail closed and re-derive**, never silently diverge.
   rather than stitching a partial diff.
 - **Subscriber falls behind op-log retention.** If a client's `sinceCheckpoint`
   is older than the shard's `minCdcSeq`, the diff it needs is gone. The DO refuses
-  to guess and forces a full re-seed — a fallen-behind client never silently
+  to guess and forces a full re-seed, so a fallen-behind client never silently
   misses rows.
 - **Duplicate / out-of-order client push.** The watermark is the guard:
   `seq <= watermark` is acked without re-running (safe replay after a flaky ack);
@@ -349,7 +349,7 @@ The theme is **fail closed and re-derive**, never silently diverge.
 - **Container crash / cold start.** `.get(name)` surfaces the error to the action;
   `.pool()` rides over it by retrying on a freshly-picked instance with backoff.
   Because containers reach data only through RPC, a crashed container can never
-  leave storage half-written — the DO transaction is still the only writer.
+  leave storage half-written; the DO transaction is still the only writer.
 - **Hot shard (approaching the ceiling).** Not a crash but a capacity wall: the
   runtime warns at 1 GB / sustained >700 req/s well before the hard limit, so a
   `.shardBy()` migration has runway. See [Limits](/docs/limits).
@@ -359,7 +359,6 @@ The theme is **fail closed and re-derive**, never silently diverge.
 ## Design decisions
 
 Each decision below is the same shape: what we chose, why, and what it costs.
-These are the trade-offs that distinguish Lunora from the alternatives.
 
 ### Durable Objects as the database, not D1-as-truth
 
@@ -367,12 +366,12 @@ These are the trade-offs that distinguish Lunora from the alternatives.
 database with the DO as a cache.
 
 **Why.** A DO is single-threaded and serializes its writes, so the order of
-commits _is_ the consistency cut — for free. That single property buys three
+commits _is_ the consistency cut, for free. That single property buys three
 things at once: strong consistency without a lock manager, an authoritative
 op-log (`__cdc_log`) without a logical-replication stream to tail, and real-time
 fan-out without a process hop (the writer holds the sockets). Hibernation makes
 idle cost ≈ $0. A D1-as-truth design needs a version-counter for OCC and a
-version-snapshot engine to rebuild reactive state — machinery the DO topology
+version-snapshot engine to rebuild reactive state, machinery the DO topology
 makes unnecessary.
 
 **Cost.** No cross-shard transactions; cross-shard reads are fan-out; the 10 GB
@@ -385,13 +384,12 @@ than a bigger central database.
 out is a per-table `.shardBy(field)` edit, not an architecture.
 
 **Why.** The first 80% of an app's life fits in one DO, and a single serialized
-store is the easiest thing in the world to reason about. Sharding should be a
-decision you make when the data tells you to (the 1 GB warning), against the same
-call sites — codegen re-addresses `ctx.db.messages.*`, your handler doesn't
-change.
+store is the easiest thing to reason about. Sharding should be a decision you
+make when the data tells you to (the 1 GB warning), against the same call sites:
+codegen re-addresses `ctx.db.messages.*`, your handler doesn't change.
 
 **Cost.** Codegen has to know how to address shards, and fan-out reads across an
-unpinned `.shardBy()` table are expensive — a Paid-plan, cold-path operation,
+unpinned `.shardBy()` table are expensive: a Paid-plan, cold-path operation,
 not a hot one. The single-DO start also means Lunora's default throughput
 ceiling looks lower than a sharded-from-day-one system until you opt in.
 
@@ -405,7 +403,7 @@ transaction. We deliberately do **not** ship an optimistic-retry loop.
 trigger or cascade contradicting its own write), which a retry would hit again
 identically. Retrying it is useless at best and an infinite loop at worst.
 
-**Cost.** Throughput per DO is bounded by serial execution — another reason the
+**Cost.** Throughput per DO is bounded by serial execution, another reason the
 escape valve is sharding, not concurrency within a shard.
 
 ### Hibernated WebSockets, no external broker
@@ -416,13 +414,13 @@ no external message broker.
 
 **Why.** The subscriptions live exactly where the writes happen, so a delta
 never leaves the process. Hibernation drops idle compute to zero. And it's
-type-safe end-to-end with your queries — there's no second schema for an
+type-safe end-to-end with your queries, so there is no second schema for an
 external broker to drift from. Cloudflare Pub/Sub adds only native-MQTT device
 ingest over this path, a narrow niche, and is itself beta with no Worker binding.
 
 **Cost.** Fan-out is bounded by the per-DO WebSocket ceiling (~32 000
 hibernated). Truly account-wide broadcast (every user, one event) is not the
-sweet spot — that's a `.global()` + poll-refresh shape, not a poke.
+sweet spot; that's a `.global()` + poll-refresh shape, not a poke.
 
 ### D1 for global tables, with Sessions-API read-your-writes
 
@@ -445,11 +443,11 @@ is generated.
 
 **Why.** End-to-end type safety only holds if there's one source of truth and
 the toolchain enforces it. Generating `_generated/*` at build time means a
-renamed field breaks the build in your editor, not in production — and the shard
-_address_ is resolved at codegen, so the client never guesses.
+renamed field breaks the build in your editor, not in production. The shard
+_address_ is resolved at codegen too, so the client never guesses.
 
 **Cost.** Codegen is a required step in the loop (`dist/` is built on demand, and
-stale `_generated` can bite). The dev server boots `workerd` — the real runtime —
+stale `_generated` can bite). The dev server boots `workerd`, the real runtime,
 rather than a lightweight mock, trading a little startup time for fidelity.
 
 ### Functional procedure builders (query / mutation / action)
@@ -472,13 +470,13 @@ guard.)
 ### Batteries as separate installs, not a bundled framework
 
 **Decision.** Auth, mail, storage, scheduler, payments, AI, containers, queues,
-workflows — each is its own `@lunora/*` package and an opt-in `ctx.*` facade.
+and workflows are each their own `@lunora/*` package and an opt-in `ctx.*` facade.
 The umbrella `lunorash` package bundles only the base.
 
 **Why.** The Worker bundle ceiling is 10 MB; an app shouldn't pay bundle size for
 a provider it never calls. Separate installs also mean no hard dependency on, say,
-a specific auth library — `@lunora/auth` is swappable, the core doesn't know it
-exists. Batteries, not lock-in.
+a specific auth library: `@lunora/auth` is swappable, and the core doesn't know it
+exists.
 
 **Cost.** More packages to discover and wire than a monolith. The `lunorash`
 umbrella and `vis generate` scaffolding exist to smooth that over.
@@ -490,7 +488,7 @@ app over the HTTP RPC bridge, running the same queries and mutations the browser
 does, under an identity the Worker's `resolveIdentity` verifies.
 
 **Why.** If a heavyweight sidecar could write storage directly, it would bypass
-the serialized DO — the one property the whole consistency model rests on — and
+the serialized DO (the one property the whole consistency model rests on) and
 every RLS policy and validator with it. Forcing containers through the same
 front door keeps a single linearization point and one authorization surface, no
 matter how exotic the workload behind it is.
@@ -501,29 +499,29 @@ action's `fetch` body instead of round-tripping per row.
 
 ## Non-goals
 
-Saying no is part of the architecture. Lunora deliberately does **not**:
+Lunora deliberately does **not**:
 
-- run an **external message broker** (MQTT / Pub/Sub / Redis) — see above;
-- offer **cross-shard transactions** or **cross-shard live joins** — denormalize or `.global()` instead;
-- provide an **OCC-retry loop** on mutations — serialized writes make it pointless;
-- enforce **query/mutation determinism at runtime** yet — it's an advisor lint today;
-- ship a **managed control plane** as a hard dependency — self-host is the default; Lunora Cloud is optional and runs the same code.
+- run an **external message broker** (MQTT / Pub/Sub / Redis), for the reasons above;
+- offer **cross-shard transactions** or **cross-shard live joins** (denormalize or `.global()` instead);
+- provide an **OCC-retry loop** on mutations, which serialized writes make pointless;
+- enforce **query/mutation determinism at runtime** yet (it's an advisor lint today);
+- ship a **managed control plane** as a hard dependency (self-host is the default; Lunora Cloud is optional and runs the same code).
 
 ## Where the seams are
 
 Every tier is replaceable, which is the point of keeping them single-purpose:
 
-- **Storage backend** — `ShardDO` is a base class; the SQLite layer is behind `@lunora/do`.
-- **Global adapter** — `@lunora/d1` implements a store interface; other global backends can slot in.
-- **Auth store** — `@lunora/auth` takes any `AuthStore`; D1 is the default, not a requirement.
-- **Framework client** — the `@lunora/client` core is framework-agnostic; react/vue/solid/svelte/astro/nuxt are thin adapters.
-- **Add-on bindings** — `ctx.kv`, `ctx.images`, `ctx.ai`, `ctx.sql`, … are facades you opt into per package.
+- **Storage backend**: `ShardDO` is a base class; the SQLite layer is behind `@lunora/do`.
+- **Global adapter**: `@lunora/d1` implements a store interface; other global backends can slot in.
+- **Auth store**: `@lunora/auth` takes any `AuthStore`; D1 is the default, not a requirement.
+- **Framework client**: the `@lunora/client` core is framework-agnostic; react/vue/solid/svelte/astro/nuxt are thin adapters.
+- **Add-on bindings**: `ctx.kv`, `ctx.images`, `ctx.ai`, `ctx.sql`, … are facades you opt into per package.
 
 ## See also
 
-- [Sharding](/docs/concepts/sharding) — the `__root__` → `.shardBy()` → `.global()` progression
-- [Real-time](/docs/concepts/realtime) and [Local-first sync](/docs/concepts/local-first) — the two live protocols
-- [Function context](/docs/concepts/function-context) — what `ctx` exposes per function kind
-- [@lunora/container](/docs/packages/container) — Docker workloads, `ctx.containers`, and the RPC bridge
-- [Limits](/docs/limits) — the Cloudflare ceilings these decisions are designed around
-- [Deployment](/docs/deployment) — platform configuration and operational non-goals
+- [Sharding](/docs/concepts/sharding): the `__root__` → `.shardBy()` → `.global()` progression
+- [Real-time](/docs/concepts/realtime) and [Local-first sync](/docs/concepts/local-first): the two live protocols
+- [Function context](/docs/concepts/function-context): what `ctx` exposes per function kind
+- [@lunora/container](/docs/packages/container): Docker workloads, `ctx.containers`, and the RPC bridge
+- [Limits](/docs/limits): the Cloudflare ceilings these decisions are designed around
+- [Deployment](/docs/deployment): platform configuration and operational non-goals

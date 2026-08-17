@@ -8,7 +8,7 @@ Cloudflare Workers + Durable Objects account**. You write a schema and some
 TypeScript functions. Lunora turns them into edge Workers with end-to-end types
 and reactive hooks that update live over WebSockets.
 
-It's the developer experience of a managed platform like Convex — without handing
+It's the developer experience of a managed platform like Convex, without handing
 over your data or watching the bill climb with your traffic. You own your data,
 you pay Cloudflare's edge prices, and it's open source.
 
@@ -28,8 +28,9 @@ export const list = query.input({ channelId: v.id("channels") }).query(async ({ 
 );
 ```
 
-That `list` query streams to the browser over WebSocket. Anyone sends a message,
-every open client updates — no cache to invalidate, no endpoint to wire up.
+That `list` query streams to the browser over WebSocket. When anyone sends a
+message, every open client updates; there is no cache to invalidate and no
+endpoint to wire up.
 
 <Callout type="warn">
     Lunora is in **alpha**. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release. You can build something real with it
@@ -40,10 +41,9 @@ every open client updates — no cache to invalidate, no endpoint to wire up.
 
 Every real-time app eventually hits the same fork in the road.
 
-**Managed platforms** like Convex and Firebase are a joy to build on, but your
-data lives on someone else's servers. **Raw Cloudflare** gives you ownership and
-edge prices, but you spend your weekends hand-wiring RPC, types, and
-subscriptions — good bones, no developer experience.
+Managed platforms like Convex and Firebase are pleasant to build on, but your
+data lives on someone else's servers. Raw Cloudflare gives you ownership and edge
+prices, but you hand-wire RPC, types, and subscriptions yourself.
 
 Lunora is the third option: managed-platform DX, on the Cloudflare account you
 already pay for.
@@ -51,7 +51,7 @@ already pay for.
 <Cards>
     <Card
         title="Type-safe, end to end"
-        description="Schema, validators, query results, and hooks share one source of truth. Rename a field and the build breaks — in your editor, not in production."
+        description="Schema, validators, query results, and hooks share one source of truth. Rename a field and the build breaks in your editor, not in production."
         href="/docs/concepts/queries-mutations"
     />
     <Card
@@ -66,7 +66,7 @@ already pay for.
     />
     <Card
         title="Scales when you need it"
-        description="Start with one Durable Object. Opt into sharding per function when you outgrow it — no rewrite, same call sites."
+        description="Start with one Durable Object. Opt into sharding per function when you outgrow it, with no rewrite and the same call sites."
         href="/docs/concepts/sharding"
     />
     <Card
@@ -76,7 +76,7 @@ already pay for.
     />
     <Card
         title="Batteries, not lock-in"
-        description="First-party auth, mail, storage, scheduler, workflows, payments, and AI — each a separate install, never a hard dependency."
+        description="First-party auth, mail, storage, scheduler, workflows, payments, and AI, each a separate install and never a hard dependency."
         href="/docs/packages"
     />
 </Cards>
@@ -87,10 +87,10 @@ The same code runs two ways, and you're never stuck with one:
 
 - **Self-host** on your own Cloudflare account. Free, open source, your data,
   roughly $0 at idle on the free tier.
-- **Lunora Cloud** _(soon)_ — the same code, managed for you, for teams that
+- **Lunora Cloud** _(soon)_: the same code, managed for you, for teams that
   would rather ship than babysit infrastructure.
 
-You can always grab the open source and self-host. That's the whole point.
+You can always grab the open source and self-host.
 
 ## How Lunora compares
 
@@ -111,26 +111,25 @@ Want the full breakdown against Convex, Supabase, Firebase, and Appwrite? See th
 
 Lunora has fewer built-in features than Convex right now, and it's alpha, so
 expect breaking changes before the first stable tag. If you need production-ready
-today, pick something mature. We'd rather say it here than have you find out the
-hard way.
+today, pick something mature.
 
 ## What ships in v1.0.0-alpha.1
 
-- **`@lunora/server`** — `defineSchema`, `defineTable`, `query`, `mutation`, `action`, validators
-- **`@lunora/runtime`** — Worker entrypoint, RPC envelope, shard routing
-- **`@lunora/do`** — `ShardDO` and `SessionDO` base classes
-- **`@lunora/d1`** — D1 Sessions API wrapper for `.global()` tables
-- **`@lunora/client` + `@lunora/react` / `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`** — browser SDK and framework adapters
-- **`@lunora/vite` + `@lunora/cli`** — codegen, dev server, scaffolding
-- **`@lunora/auth` / `@lunora/mail` / `@lunora/storage` / `@lunora/scheduler`** — first-party add-ons
-- **`@lunora/bindings/vectors`** — Cloudflare Vectorize adapter for typed similarity search and RAG
-- **`@lunora/workflow`** — durable, replayable multi-step workflows on Cloudflare Workflows
-- **`@lunora/ratelimit` / `@lunora/payment`** — rate-limiting middleware and provider-agnostic payments
-- **`@lunora/flags`** — OpenFeature feature flags (`ctx.flags`, `useFlag`), Cloudflare Flagship as the default provider
-- **Row-level security + data masking** — opt-in, server-side authorization in `@lunora/server`
-- **`@lunora/advisor`** — schema, performance, and security lints, surfaced in the studio
-- **`@lunora/testing` / `@lunora/mcp`** — an in-memory test harness and an MCP server for AI agents
-- **`@lunora/studio`** — a local admin console for data, functions, logs, and advisors
+- **`@lunora/server`**: `defineSchema`, `defineTable`, `query`, `mutation`, `action`, validators
+- **`@lunora/runtime`**: Worker entrypoint, RPC envelope, shard routing
+- **`@lunora/do`**: `ShardDO` and `SessionDO` base classes
+- **`@lunora/d1`**: D1 Sessions API wrapper for `.global()` tables
+- **`@lunora/client` + `@lunora/react` / `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`**: browser SDK and framework adapters
+- **`@lunora/vite` + `@lunora/cli`**: codegen, dev server, scaffolding
+- **`@lunora/auth` / `@lunora/mail` / `@lunora/storage` / `@lunora/scheduler`**: first-party add-ons
+- **`@lunora/bindings/vectors`**: Cloudflare Vectorize adapter for typed similarity search and RAG
+- **`@lunora/workflow`**: durable, replayable multi-step workflows on Cloudflare Workflows
+- **`@lunora/ratelimit` / `@lunora/payment`**: rate-limiting middleware and provider-agnostic payments
+- **`@lunora/flags`**: OpenFeature feature flags (`ctx.flags`, `useFlag`), Cloudflare Flagship as the default provider
+- **Row-level security + data masking**: opt-in, server-side authorization in `@lunora/server`
+- **`@lunora/advisor`**: schema, performance, and security lints, surfaced in the studio
+- **`@lunora/testing` / `@lunora/mcp`**: an in-memory test harness and an MCP server for AI agents
+- **`@lunora/studio`**: a local admin console for data, functions, logs, and advisors
 
 ## Start building
 
@@ -140,14 +139,14 @@ One command gives you a typed, live-syncing app on your own account:
 pnpm dlx lunorash@alpha init my-app
 ```
 
-`pnpm dev` boots workerd — the real production runtime — generates your types,
+`pnpm dev` boots workerd (the real production runtime), generates your types,
 and starts Vite with a local Studio. No Cloudflare account required: develop
 locally, then `lunora deploy --temporary` pushes a live URL on a short-lived
 account you can claim later. Sign up only when you're ready to keep it.
 
 <Cards>
     <Card title="Getting started" description="Scaffold a project and run the dev loop in under a minute." href="/docs/getting-started" />
-    <Card title="Build a realtime chat" description="A full walkthrough — schema, functions, and a live client." href="/docs/tutorial/realtime-chat" />
+    <Card title="Build a realtime chat" description="A full walkthrough: schema, functions, and a live client." href="/docs/tutorial/realtime-chat" />
     <Card title="Architecture" description="How Worker, ShardDO, D1, R2, and Queues fit together." href="/docs/architecture" />
     <Card title="Star the repo" description="Lunora is open source. Follow along and tell us where it breaks." href="https://github.com/anolilab/lunora" />
 </Cards>

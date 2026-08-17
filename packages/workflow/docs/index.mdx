@@ -5,7 +5,7 @@ description: Durable, multi-step execution that replays deterministically — bu
 
 `@lunora/workflow` gives Lunora durable workflows: chain steps into a single
 unit that **survives Worker restarts and redeploys** and **replays
-deterministically** on failure. Each step's result is persisted and memoized —
+deterministically** on failure. Each step's result is persisted and memoized:
 when a later step throws, only that step retries; the completed ones don't run
 again.
 
@@ -56,8 +56,8 @@ export const channelWelcome = defineWorkflow<
 
 `defineWorkflow<Params, Output>` takes a single config object:
 
-- `handler` — the workflow body; receives the run context (below).
-- `name` (optional) — override the deployed workflow name. Defaults to the
+- `handler`: the workflow body; receives the run context (below).
+- `name` (optional): override the deployed workflow name. Defaults to the
   kebab-cased export name (`orderPipeline` → `order-pipeline`).
 
 ### The run context
@@ -68,7 +68,7 @@ function caller:
 | Member             | What it is                                                                                          |
 | ------------------ | --------------------------------------------------------------------------------------------------- |
 | `context.params`   | The input passed to `.create({ params })`, typed as `Params`.                                       |
-| `context.step`     | The durable-step API — `do` / `sleep` / `sleepUntil` / `waitForEvent`.                              |
+| `context.step`     | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                               |
 | `context.run`      | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
 | `context.runStep`  | Run a reusable, schema-validated `defineStep` as a durable step (see below).                        |
 | `context.parallel` | Fan out branches as isolated child workflow instances and await their outputs (see below).          |
@@ -103,14 +103,14 @@ const approval = await context.step.waitForEvent<{ approved: boolean }>("await-a
 ```
 
 <Callout type="warn">
-    Steps must be **JSON-serialisable and idempotent** — the same determinism contract Cloudflare (and Convex) impose. A step body may run more than once on
+    Steps must be **JSON-serialisable and idempotent**, the same determinism contract Cloudflare (and Convex) impose. A step body may run more than once on
     retry, so don't rely on side effects outside the step's return value.
 </Callout>
 
 ### Reusable steps (`defineStep`)
 
 An inline `context.step.do("name", () => …)` is fine for one-offs, but
-`defineStep` lets you define a step **once** — schema-validated and reusable
+`defineStep` lets you define a step **once**, schema-validated and reusable
 across workflows. Args are validated (with [`@lunora/values`](/docs/packages/values))
 **before** the body runs, and the return value is validated **after** (when you
 declare `returns`), so a bad payload fails fast instead of corrupting later
@@ -140,7 +140,7 @@ export const charge = defineStep("charge", {
 });
 ```
 
-Run it from a workflow body — `context.runStep` wraps it in a durable
+Run it from a workflow body; `context.runStep` wraps it in a durable
 `step.do(...)` for you:
 
 ```ts
@@ -164,13 +164,14 @@ config for a single call.
 A workflow instance is one Durable Object: ~128 MB memory and a 5-minute CPU
 budget, shared across everything it runs. Fanning out heavy work with
 `Promise.all(branches.map((b) => ctx.runStep(b, …)))` therefore crowds every
-branch onto that **one** budget — one OOM or timeout takes the whole batch down.
+branch onto that **one** budget: one OOM or timeout takes the whole batch down.
 
-`ctx.parallel` runs each branch as its **own** child workflow instance — its own
-DO, its own memory / CPU / retry budget — and the parent hibernates (zero cost)
-until the branches report back. Branches reference declared child workflows by
-their `lunora/workflows.ts` export name; `branch<Output>(name, params)` carries
-the result type into the returned tuple, in declaration order:
+`ctx.parallel` runs each branch as its **own** child workflow instance, with its
+own DO and its own memory / CPU / retry budget, and the parent hibernates (zero
+cost) until the branches report back. Branches reference declared child
+workflows by their `lunora/workflows.ts` export name;
+`branch<Output>(name, params)` carries the result type into the returned tuple,
+in declaration order:
 
 ```ts
 import { branch, defineWorkflow } from "@lunora/workflow";
@@ -189,15 +190,15 @@ export const mediaPipeline = defineWorkflow<{ key: string }>({
 });
 ```
 
-- **Isolated resources** — each branch gets a full DO budget; a heavy branch
+- **Isolated resources**: each branch gets a full DO budget; a heavy branch
   can't starve its siblings.
-- **Hibernating join** — the parent consumes nothing while branches run; each
+- **Hibernating join**: the parent consumes nothing while branches run; each
   child signals its result back when it finishes.
-- **Fail-fast** — if any branch fails, `ctx.parallel` rejects with that branch's
-  error (non-retryable — retrying the join can't re-run an already-failed child).
-  Still-running siblings are left to finish (Cloudflare can't cleanly cancel a
-  running instance).
-- **Replay-safe** — child instance ids are derived deterministically from the
+- **Fail-fast**: if any branch fails, `ctx.parallel` rejects with that branch's
+  error (non-retryable, because retrying the join can't re-run an already-failed
+  child). Still-running siblings are left to finish (Cloudflare can't cleanly
+  cancel a running instance).
+- **Replay-safe**: child instance ids are derived deterministically from the
   parent, so a parent replay re-attaches to the existing children instead of
   double-spawning. There is a cap of `MAX_BRANCHES` (100) per call.
 
@@ -209,22 +210,22 @@ await ctx.spawn("sendReceipt", { orderId: ctx.params.orderId });
 ```
 
 Both reach child workflows through the standard `WORKFLOW_*` bindings codegen
-already wires — no extra configuration. A branch/spawn name with no matching
-declared workflow throws a helpful error.
+already wires, so there is nothing extra to configure. A branch/spawn name with
+no matching declared workflow throws an error.
 
 ### Rollback (saga compensation)
 
 A step's optional `rollback` handler is forwarded to Cloudflare's **native**
-step rollback — it runs when a later step in the same instance fails, letting
-you undo a committed side effect (refund a charge, delete an uploaded object).
+step rollback: it runs when a later step in the same instance fails, so you can
+undo a committed side effect (refund a charge, delete an uploaded object).
 The rollback context carries the original `args`, the `error` that triggered it,
 the step's `output` (if it completed), and `env` / `run` / `log`. Cloudflare
 owns rollback ordering and execution; `defineStep` just wires the handler and an
 optional `rollbackConfig`.
 
-That native rollback is **intra-instance** — it undoes steps _within one_
+That native rollback is **intra-instance**: it undoes steps _within one_
 workflow. To compensate across a `ctx.parallel(...)` **group** (each branch is its
-own instance), give a branch a `compensateWith` — the export name of a workflow to
+own instance), give a branch a `compensateWith`, the export name of a workflow to
 run if a **sibling** branch fails after this one already completed:
 
 ```ts
@@ -236,17 +237,17 @@ const [charge, reserve] = await ctx.parallel([
 
 If any branch fails, every already-completed sibling with a `compensateWith` is
 rolled back in **reverse declaration order**: its compensation workflow is spawned
-(durable, replay-safe) with `{ branch, error, index, output }` as its `ctx.params`
-— so `refundCard` receives what `chargeCard` returned plus the failing sibling's
+(durable, replay-safe) with `{ branch, error, index, output }` as its `ctx.params`,
+so `refundCard` receives what `chargeCard` returned plus the failing sibling's
 error, and can `ctx.runStep(...)` its own undo. A group where no branch sets
-`compensateWith` behaves exactly as a plain fail-fast fan-out — zero overhead until
-you opt in. The failing branch itself is not group-compensated (its own per-step
+`compensateWith` behaves exactly as a plain fail-fast fan-out, with zero overhead
+until you opt in. The failing branch itself is not group-compensated (its own per-step
 `rollback`s already ran inside its instance).
 
 ### Failing without retries (`NonRetryableError`)
 
 Throw `NonRetryableError` from a step or the handler to fail the instance
-immediately, skipping retries — the portable, Node-importable mirror of
+immediately, skipping retries. It is the portable, Node-importable mirror of
 `cloudflare:workflows`' native error (so your workflow code stays
 unit-testable). The runtime converts it to the native error at the workflow
 boundary.
@@ -286,11 +287,11 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 
 `ctx.workflows.get("<exportName>")` returns a handle with:
 
-- `create({ id?, params?, retention? })` — start an instance. `create()` resolves
+- `create({ id?, params?, retention? })`: start an instance. `create()` resolves
   once the instance is **queued** (not when it finishes); the workflow runs on
   Cloudflare's infrastructure.
-- `createBatch([...])` — start many in one batch.
-- `get(id)` — a handle to an existing instance.
+- `createBatch([...])`: start many in one batch.
+- `get(id)`: a handle to an existing instance.
 
 An instance handle exposes its lifecycle: `status()` (returns
 `status` + `output`/`error`), `pause()`, `resume()`, `terminate()`, and
@@ -299,7 +300,7 @@ An instance handle exposes its lifecycle: `status()` (returns
 ### Listing instances and step timelines
 
 The `Workflow` binding can only `create`/`get` and read a single instance's
-status — it has no instance list and no per-step detail. To list instances or
+status: it has no instance list and no per-step detail. To list instances or
 read a step timeline (what the Studio renders), use `createWorkflowsRestClient`,
 which talks to Cloudflare's account-scoped Workflows REST API. The API token is
 a secret, so keep this server-side:
@@ -329,8 +330,8 @@ save). It:
 1. Emits a `WorkflowEntrypoint` subclass per export into
    `lunora/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
 2. Wires the typed `ctx.workflows` handle.
-3. Reconciles `wrangler.jsonc`'s `workflows[]` array — `binding`, `class_name`,
-   and `name` — from the same definition.
+3. Reconciles the `binding`, `class_name`, and `name` entries of
+   `wrangler.jsonc`'s `workflows[]` array from the same definition.
 
 Your worker entry must re-export the generated classes so wrangler can find
 them:
@@ -353,9 +354,9 @@ The resulting binding:
 
 Two static [advisors](/docs/concepts/advisors) keep workflow wiring honest:
 
-- **`workflow_unknown_target`** (error) — `ctx.workflows.get("name")` references a
+- **`workflow_unknown_target`** (error): `ctx.workflows.get("name")` references a
   workflow that doesn't exist (typo or removed export).
-- **`workflow_unused`** (info) — a declared workflow is never started by any
+- **`workflow_unused`** (info): a declared workflow is never started by any
   function (dead code that's still billed as a `WorkflowEntrypoint`), unless it's
   triggered externally.
 
@@ -373,7 +374,7 @@ output. See [the Studio guide](/docs/packages/studio#functions).
 
 ## See also
 
-- [Scheduler](/docs/packages/scheduler) — `runAfter` / `runAt` / cron, for
+- [Scheduler](/docs/packages/scheduler): `runAfter` / `runAt` / cron, for
   single-shot deferred work that doesn't need replay.
-- [Studio](/docs/packages/studio) — the Workflows inspector.
-- [Advisors](/docs/concepts/advisors) — the workflow lints.
+- [Studio](/docs/packages/studio): the Workflows inspector.
+- [Advisors](/docs/concepts/advisors): the workflow lints.

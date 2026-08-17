@@ -1,6 +1,12 @@
 ---
 title: Pagination
 description: Keyset pagination with .paginate(options) — page through a query and build an infinite list on the client.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/relations
+    - to: /docs/concepts/advisors
+    - to: /docs/packages/server
 ---
 
 `.paginate(options)` is the terminal that turns any `ctx.db.query(table)` chain
@@ -96,11 +102,3 @@ async function loadMore() {
 Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
-
-## See also
-
-- [Schema](/docs/concepts/schema)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Relations](/docs/concepts/relations)
-- [Advisors](/docs/concepts/advisors)
-- [API: @lunora/server](/docs/packages/server)

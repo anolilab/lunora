@@ -1,6 +1,19 @@
 ---
 title: Relations
 description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables, validators and indexes"
+    - to: /docs/concepts/indexes
+      note: "how `.index(...)` and `withIndex` work"
+    - to: /docs/concepts/queries-mutations
+      note: "reading and writing rows"
+    - to: /docs/concepts/constraints#foreign-key-integrity
+      note: "`onDelete` and FK integrity"
+    - to: /docs/packages/values
+      note: 'the `v.id("table")` validator'
+    - to: /docs/packages/server
+      note: "`defineSchema` / `defineTable`"
 ---
 
 A **relation** wires one table to another. Lunora has no join engine and no
@@ -39,15 +52,15 @@ export default defineSchema({
 `.relations((r) => …)` returns a map of named accessors. Each accessor is
 built with one of two descriptors on the `r` builder:
 
-| Descriptor            | Cardinality | Where the FK lives                                                                                 | Signature                           |
-| --------------------- | ----------- | -------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `r.one(table, opts)`  | many-to-one | on **this** table — `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
-| `r.many(table, opts)` | one-to-many | on the **target** table — `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+| Descriptor            | Cardinality | Where the FK lives                                                                                | Signature                           |
+| --------------------- | ----------- | ------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `r.one(table, opts)`  | many-to-one | on **this** table; `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
+| `r.many(table, opts)` | one-to-many | on the **target** table; `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
 
-- **`field`** (required) — the name of the foreign-key column.
-- **`references`** — the target column the FK points at. Defaults to `_id`;
+- **`field`** (required): the name of the foreign-key column.
+- **`references`**: the target column the FK points at. Defaults to `_id`;
   set it when the FK references a different unique column, such as a `slug`.
-- **`onDelete`** — `one` only; controls what happens to holder rows when the
+- **`onDelete`**: `one` only; controls what happens to holder rows when the
   referenced parent is deleted (`"cascade"`, `"set null"`, `"restrict"`). See
   [Constraints](/docs/concepts/constraints#foreign-key-integrity).
 
@@ -76,7 +89,7 @@ export default defineSchema({
 });
 ```
 
-### `references` — pointing at a non-`_id` column
+### `references`: pointing at a non-`_id` column
 
 When the foreign key references a unique business key instead of the row id,
 set `references`. The FK column then stores that value, not an `_id`:
@@ -92,7 +105,7 @@ orders: defineTable({
 
 ### Self-referential relations
 
-A relation may target its own table — both the `one` (parent) and `many`
+A relation may target its own table. Both the `one` (parent) and `many`
 (children) ends share one FK column:
 
 ```ts
@@ -179,12 +192,3 @@ const userWithPosts = await ctx.db.users.findFirst({
 
 The hydration is driven by the same FK + index, so the same advice applies:
 keep the FK indexed or the loader scans.
-
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables, validators and indexes
-- [Indexes](/docs/concepts/indexes) — how `.index(...)` and `withIndex` work
-- [Queries & mutations](/docs/concepts/queries-mutations) — reading and writing rows
-- [Constraints](/docs/concepts/constraints#foreign-key-integrity) — `onDelete` and FK integrity
-- [@lunora/values](/docs/packages/values) — the `v.id("table")` validator
-- [@lunora/server](/docs/packages/server) — `defineSchema` / `defineTable`

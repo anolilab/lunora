@@ -1,6 +1,11 @@
 ---
 title: System tables
 description: Read pending scheduled jobs and stored file metadata through ctx.db.system — a read-only, eventually consistent view outside the mutation snapshot.
+related:
+    - to: /docs/concepts/scheduling
+    - to: /docs/concepts/file-storage
+    - to: /docs/concepts/function-context
+    - to: /docs/concepts/occ
 ---
 
 `ctx.db.system` is a read-only reader over Lunora's system tables. It lets a
@@ -14,8 +19,8 @@ that state having to live in your schema.
 
 ## The one caveat that matters
 
-Unlike `ctx.db.<table>` — which reads the same transactional SQLite snapshot the
-mutation writes into — the data behind these tables does **not** live in the
+Unlike `ctx.db.<table>`, which reads the same transactional SQLite snapshot the
+mutation writes into, the data behind these tables does **not** live in the
 shard. Scheduled functions live in the `SchedulerDO`; storage objects live in
 R2. Every read reaches across a network boundary.
 
@@ -25,7 +30,7 @@ Three consequences follow, and all three are load-bearing:
   scheduled may not be visible yet; a job that just fired may still look pending.
 - **Not part of the transaction snapshot.** Reading a system table inside a
   mutation does not pin it. There is no OCC guard and no subscription dependency
-  is recorded — so a live query does **not** re-run when a system table changes.
+  is recorded, so a live query does **not** re-run when a system table changes.
 - **Read-only.** There is no `insert`, `patch`, or `delete`. Change scheduled
   jobs through `ctx.scheduler` and stored objects through `ctx.storage`.
 
@@ -35,7 +40,7 @@ same mutation.
 
 ## The read surface
 
-Deliberately minimal — no indexes, no filters, no pagination:
+Deliberately minimal: no indexes, no filters, no pagination.
 
 ```ts
 import { query } from "@/lunora/_generated/server";
@@ -47,7 +52,7 @@ export const pendingJobs = query.query(async ({ ctx }) => {
 });
 ```
 
-`get(table, id)` resolves a single row, returning `null` when absent — the id is
+`get(table, id)` resolves a single row, returning `null` when absent. The id is
 the job id for `_scheduled_functions`, and the object key for `_storage`.
 
 ## `_scheduled_functions`
@@ -80,10 +85,3 @@ One row per stored object:
 `_storage` reads require a storage binding to be configured; without one, they
 report that storage is not configured. The `_scheduled_functions` half is
 independent and keeps working either way.
-
-## See also
-
-- [Scheduling](/docs/concepts/scheduling)
-- [File storage](/docs/concepts/file-storage)
-- [Function context](/docs/concepts/function-context)
-- [OCC & atomicity](/docs/concepts/occ)

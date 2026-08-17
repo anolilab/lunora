@@ -1,20 +1,34 @@
 ---
 title: "@lunora/svelte"
 description: Svelte 5 bindings built on @lunora/client — live query stores, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/solid
+      note: "the SolidJS adapter"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
-`@lunora/svelte` is the Svelte adapter for Lunora. It's a thin, idiomatic layer
-over the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
-WebSocket transport, subscription registry, offline queue, and delta-merge — and
-re-expresses that contract as Svelte stores you read with the `$store` idiom. A
-live query is a readable store that re-emits on every server delta; an optimistic
-mutation is a small bundle of stores plus an awaitable `mutate`.
+`@lunora/svelte` is the Svelte adapter for Lunora. It's a thin layer over the
+framework-neutral [`@lunora/client`](/docs/packages/client), which owns the
+WebSocket transport, subscription registry, offline queue, and delta-merge. The
+adapter re-expresses that contract as Svelte stores you read with the `$store`
+idiom. A live query is a readable store that re-emits on every server delta; an
+optimistic mutation is a small bundle of stores plus an awaitable `mutate`.
 
-The package is plain `.ts` over Svelte stores — no `.svelte` component compiler is
+The package is plain `.ts` over Svelte stores; no `.svelte` component compiler is
 required to build or use it.
 
 <Callout type="warn">
-    **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity and not yet proven
     end-to-end against a running app. The React adapter is the only one verified through the full live-loader path. See [Bring your
     framework](/docs/frameworks/bring-your-framework).
 </Callout>
@@ -48,12 +62,12 @@ stores covered under [Additional stores](#additional-stores): `subscription`,
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
-`ReturnOf` — plus the adapter's own `QueryStore`, `QueryStoreOptions`, and
+`ReturnOf`, plus the adapter's own `QueryStore`, `QueryStoreOptions`, and
 `MutationHandle`.
 
 <Callout type="info">
 Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
-the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component — you
+the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component; you
 publish the client with `setLunoraClient` during component init.
 </Callout>
 
@@ -61,13 +75,13 @@ publish the client with `setLunoraClient` during component init.
 
 `setLunoraClient(client)` publishes the `LunoraClient` on the Svelte component
 context. Call it once, high in the tree (typically your root `+layout.svelte` or
-`App.svelte`), during component initialisation — `setContext` must run while the
+`App.svelte`), during component initialisation: `setContext` must run while the
 component is being constructed. This is the Svelte analogue of mounting React's
 `LunoraProvider`.
 
 `getLunoraClient()` reads it from the nearest ancestor and throws if no provider
 was set, so a missing client fails loudly rather than as a later `undefined`
-dereference. Most code never calls it directly — `query` / `mutation` /
+dereference. Most code never calls it directly; `query` / `mutation` /
 `hydratePreloaded` resolve the ambient client for you.
 
 ## `query(fn, args, options?)`
@@ -75,8 +89,8 @@ dereference. Most code never calls it directly — `query` / `mutation` /
 Opens a live query as a Svelte **readable store**. Read it with the `$store`
 idiom and it stays current: a WS subscription attaches the moment the store
 gains its first subscriber, and the value re-emits on every server delta. The
-store holds `undefined` until the first response lands — the Svelte equivalent of
-React's `useQuery`.
+store holds `undefined` until the first response lands. This is the Svelte
+equivalent of React's `useQuery`.
 
 The subscription is opened lazily (inside `readable`'s start callback, on the
 first `$`-read) and torn down when the last subscriber goes away, so a store
@@ -111,7 +125,7 @@ query(client, api.messages.list, { channelId });
 ```
 
 `options` accepts `{ shardKey }` to route to a specific shard when the target
-function is `.shardBy(...)`-partitioned, and `{ onError }` — a callback invoked
+function is `.shardBy(...)`-partitioned, and `{ onError }`, a callback invoked
 when the underlying subscription reports an error.
 
 ## `mutation(fn)`
@@ -131,7 +145,7 @@ interface MutationHandle<F> {
 
 `pending` is ref-counted across overlapping invocations of the same handle, so
 read `$pending` to disable a button until the last concurrent call settles.
-`mutation` is overloaded the same way as `query` — pass `client` explicitly or
+`mutation` is overloaded the same way as `query`: pass `client` explicitly or
 omit it to use the ambient client.
 
 ```svelte
@@ -151,7 +165,7 @@ omit it to use the ambient client.
 ### Optimistic updates
 
 Optimistic updates stay client-owned and are passed **per call** in `mutate`'s
-options — the `optimistic` / `optimisticUpdate` options are applied and rolled
+options: the `optimistic` / `optimisticUpdate` options are applied and rolled
 back by the client against the live query subscriptions, exactly as in the React
 adapter. Any `query` / `hydratePreloaded` store reading the same data reflects
 the change immediately and reverts on failure.
@@ -170,11 +184,11 @@ await mutate(
 
 ## Reactive loaders — `hydratePreloaded`
 
-The SSR-seed-to-live-store handoff — the Svelte equivalent of React's
+The SSR-seed-to-live-store handoff, the Svelte equivalent of React's
 `usePreloadedQuery`. Run the query on the server with `preloadQuery` (from
 `@lunora/svelte/server`) in a SvelteKit `+page.ts` / `+layout.ts` `load`, hand the
 serializable `Preloaded` token to the client, and `hydratePreloaded` seeds the
-readable store **synchronously** with `preloaded.value` — so the first `$store`
+readable store **synchronously** with `preloaded.value`, so the first `$store`
 read during hydration returns the server value with no loading flash and no
 hydration mismatch. When the store gains its first subscriber on the client, a
 live WS subscription attaches and every subsequent delta re-emits, exactly like a
@@ -199,12 +213,12 @@ plain `query` store.
 
 Pass `client` as a second argument to override the ambient client. On the server
 `readable`'s start callback never runs (no subscriber), so the store only holds
-the seeded value and opens no socket — the token's `value` is the single source
+the seeded value and opens no socket; the token's `value` is the single source
 of truth for the first paint.
 
 ## `@lunora/svelte/server`
 
-Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr`, the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 SvelteKit `+page.ts` / `+layout.ts` `load`.
@@ -234,7 +248,7 @@ SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`, so
 Lunora cannot own the worker entry; instead it **injects** its realtime plane
 into the worker SvelteKit emits, via `buildFrameworkWorker` on the generated
 app (`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)
-under the hood) — the reserved `/_lunora/*` endpoints hit Lunora and
+under the hood): the reserved `/_lunora/*` endpoints hit Lunora and
 everything else delegates to SvelteKit. One worker, one deploy. See
 [Bring your framework](/docs/frameworks/bring-your-framework) for the full
 composition and a working example.
@@ -244,7 +258,7 @@ composition and a working example.
 Beyond `query` / `mutation`, the package exports the same store-shaped surface
 the React adapter exposes as hooks. Each resolves the ambient client by default
 or takes an explicit `client` as its first argument. Stores that own a timer or
-listener (`presence`, `rateLimit`) return a `teardown()` — call it from
+listener (`presence`, `rateLimit`) return a `teardown()`; call it from
 `onDestroy`.
 
 ### `subscription(fn, args, options?)`
@@ -293,11 +307,11 @@ each loaded page as its own inner array.
 
 ### `presence(roomId, options)`
 
-Collaborative-awareness — the client half of the server `definePresence` preset.
+Collaborative awareness: the client half of the server `definePresence` preset.
 Drives a heartbeat mutation (on call, on an interval, and on tab re-focus) and
 subscribes to the room's `listPresent` query. Options: `{ heartbeat, listPresent,
-sessionId?, data?, intervalMs?, shardKey? }` — `heartbeat` and `listPresent` are
-`api.*` references. The handle is `{ present, sessionId, setData, teardown }`.
+sessionId?, data?, intervalMs?, shardKey? }`, where `heartbeat` and `listPresent`
+are `api.*` references. The handle is `{ present, sessionId, setData, teardown }`.
 
 ```svelte
 <script lang="ts">
@@ -318,10 +332,10 @@ sessionId?, data?, intervalMs?, shardKey? }` — `heartbeat` and `listPresent` a
 
 ### `rateLimit(config, options?)`
 
-A client-side mirror of a server rate limit for instant UX — disable a button or
+A client-side mirror of a server rate limit for instant UX: disable a button or
 show a countdown without a round-trip. It runs the same token-bucket /
 fixed-window math as `@lunora/ratelimit`, but the server stays authoritative. The
-handle is `{ ok, disabled, retryAfter, check, consume, reset, teardown }` —
+handle is `{ ok, disabled, retryAfter, check, consume, reset, teardown }`, where
 `ok` / `disabled` / `retryAfter` are readable stores; `consume(count?)` records a
 local hit. Pass a stable `config` reference (a module constant). Options: `{ now?,
 tickMs? }`.
@@ -357,13 +371,3 @@ for driving a connection indicator.
 {#if $user}Signed in as {$user.name}{/if}
 <span data-status={$status}>{$status}</span>
 ```
-
-## See also
-
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/solid](/docs/packages/solid) — the SolidJS adapter
-- [@lunora/vue](/docs/packages/vue) — the Vue adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)

@@ -1268,7 +1268,7 @@ describe("shardDO subscription delta push", () => {
         expect.assertions(2);
 
         // The behaviour every client had before `pageDelta`, and the one all
-        // seven non-JS SDKs still get — they send `connect` with no `caps`.
+        // eight non-JS SDKs still get — they send `connect` with no `caps`.
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
 

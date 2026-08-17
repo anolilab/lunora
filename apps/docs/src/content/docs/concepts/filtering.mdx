@@ -1,6 +1,12 @@
 ---
 title: Filtering
 description: .filter() is a JavaScript predicate applied after rows are loaded — when to use it, and when to reach for an index instead.
+related:
+    - to: /docs/concepts/indexes
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/pagination
+    - to: /docs/concepts/advisors
+    - to: /docs/concepts/search
 ---
 
 `.filter()` narrows a query with an ordinary JavaScript predicate:
@@ -18,7 +24,7 @@ export const flagged = query.input({ channelId: v.id("channels") }).query(async 
 ```
 
 The predicate receives the fully typed document, so anything you can express in
-TypeScript works — regular expressions, arithmetic, checks across several fields
+TypeScript works: regular expressions, arithmetic, checks across several fields
 at once.
 
 <Callout type="info">
@@ -28,9 +34,9 @@ at once.
 
 ## Where the work happens
 
-This is the part to internalise: **`.filter()` runs after rows are loaded.**
-Every row the query would otherwise return is read out of SQLite and handed to
-your predicate. Rows the predicate rejects were still read.
+**`.filter()` runs after rows are loaded.** Every row the query would otherwise
+return is read out of SQLite and handed to your predicate. Rows the predicate
+rejects were still read.
 
 `.withIndex()` is the opposite. It seeks a range in a B-tree, so rows outside
 the range are never touched.
@@ -53,7 +59,7 @@ Both return the same rows. Only the second one stays fast as the table grows.
 
 ## Choosing between them
 
-Use **`.withIndex()`** for the selective part of the query — the condition that
+Use **`.withIndex()`** for the selective part of the query, the condition that
 eliminates most of the table. That is almost always an equality on a foreign key,
 a tenant, a channel, a user, plus optionally a range on a time column.
 
@@ -66,8 +72,8 @@ eliminating._
 
 ## When a bare filter is fine
 
-Scanning is not always wrong. A table that is bounded and small by construction —
-a settings table, a list of plan tiers, an enum-like lookup table — costs
+Scanning is not always wrong. A table that is bounded and small by construction
+(a settings table, a list of plan tiers, an enum-like lookup table) costs
 nothing to scan, and adding an index buys nothing. The problem is not scanning;
 it is scanning a table that grows without bound.
 
@@ -78,11 +84,11 @@ Ask whether the table has a ceiling. If it does not, the read needs an index.
 The [advisors](/docs/concepts/advisors) flag the failure mode statically and at
 runtime:
 
-- **`filter_without_index`** (warn) — a `query(...).filter(...)` with no
+- **`filter_without_index`** (warn): a `query(...).filter(...)` with no
   `.withIndex()` first, so it loads every row and filters in memory.
-- **`unindexed_foreign_key`** (info) — a foreign-key column with no index leading
+- **`unindexed_foreign_key`** (info): a foreign-key column with no index leading
   with it.
-- **`index_utilization`** (runtime) — a table full-scanned many times with no
+- **`index_utilization`** (runtime): a table full-scanned many times with no
   index, and the converse, an index with zero recorded reads.
 
 `lunora insights` surfaces the same thing from the latency side: a query that
@@ -90,15 +96,7 @@ scans shows up as a latency outlier long before it shows up as an outage.
 
 ## Composing
 
-`.filter()` chains with everything else — `.withIndex()`, `.order()`, and every
+`.filter()` chains with everything else: `.withIndex()`, `.order()`, and every
 terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
 Applying `.take(n)` after a filter still reads whatever the index range
 produced, because the predicate has to run before the limit can be counted.
-
-## See also
-
-- [Indexes](/docs/concepts/indexes)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Pagination](/docs/concepts/pagination)
-- [Advisors](/docs/concepts/advisors)
-- [Search](/docs/concepts/search)

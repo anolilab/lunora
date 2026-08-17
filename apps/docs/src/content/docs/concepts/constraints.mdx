@@ -1,6 +1,13 @@
 ---
 title: Constraints
 description: Unique, non-null and foreign-key integrity declared on the schema and enforced at write time.
+related:
+    - to: /docs/concepts/schema
+      note: "declaring tables, validators, indexes and relations"
+    - to: /docs/concepts/advisors
+      note: "the `constraint_validator` lint that samples existing rows for violations"
+    - to: /docs/concepts/rls
+      note: "server-side authorization over which rows a procedure may read or write"
 ---
 
 A **constraint** is an invariant your data must hold: a column is unique, a
@@ -40,9 +47,9 @@ export default defineSchema({
 
 | Kind                  | Declared with                                       | Enforced                                   | On violation                                     |
 | --------------------- | --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------ |
-| Unique (column)       | `v.string().unique()`                               | Write time — synthesized `UNIQUE` index    | `ConflictError` (`CONFLICT`, 409)                |
-| Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time — `UNIQUE` index                | `ConflictError` (`CONFLICT`, 409)                |
-| Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time — column validator parse        | `ValidationError`                                |
+| Unique (column)       | `v.string().unique()`                               | Write time (synthesized `UNIQUE` index)    | `ConflictError` (`CONFLICT`, 409)                |
+| Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time (`UNIQUE` index)                | `ConflictError` (`CONFLICT`, 409)                |
+| Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time (column validator parse)        | `ValidationError`                                |
 | Foreign-key delete    | `r.one(table, { field, onDelete })`                 | Delete time on the referenced (parent) row | `ConflictError` (`CONFLICT`, 409) for `restrict` |
 
 <Callout type="info">
@@ -142,9 +149,3 @@ finding).
 `ConflictError` is recognized structurally across packages (it declares `code`
 and `status` as own properties), so the runtime maps it to a `409` without an
 `instanceof` check.
-
-## See also
-
-- [Schema](/docs/concepts/schema) — declaring tables, validators, indexes and relations
-- [Advisors](/docs/concepts/advisors) — the `constraint_validator` lint that samples existing rows for violations
-- [Row-level security](/docs/concepts/rls) — server-side authorization over which rows a procedure may read or write
