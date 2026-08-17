@@ -4850,6 +4850,16 @@ abstract class ShardDO {
                 dispatchOutcome = await dedupedDispatch(dedupMutationId);
             }
 
+            // Re-pin for the TAIL, for the same reason the gated closure re-pins
+            // on the way in: the post-dispatch bookkeeping below (the dedup row
+            // for a non-transactional dispatch, the client-watermark advance)
+            // reads `currentRequest*` straight off `this`, and every await
+            // since the prologue — the handler's own, and the gate's queueing
+            // time — is a window for a sibling `fetch()`'s prologue to have
+            // overwritten them. Without this the tail could commit under another
+            // dispatch's identity.
+            this.restoreRequestScope(requestScope);
+
             if (dispatchOutcome.kind === "cached") {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
             }

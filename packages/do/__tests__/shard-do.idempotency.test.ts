@@ -60,11 +60,14 @@ class CountingMutationShard extends ShardDO {
 class ParkingActionShard extends ShardDO {
     public readonly started: string[] = [];
 
+    public runs = 0;
+
     /** Set by the test: the action handler awaits it before returning. */
     public parked: Promise<void> | undefined;
 
     public override async handleRpc(functionPath: string): Promise<unknown> {
         this.started.push(functionPath);
+        this.runs += 1;
 
         if (functionPath === "messages:slowAction" && this.parked !== undefined) {
             await this.parked;
@@ -210,6 +213,49 @@ describe("shardDO mutation-replay dedup (dispatch path)", () => {
             const slowResponse = await slowAction;
 
             await expect(slowResponse.json()).resolves.toEqual({ result: { ran: "messages:slowAction" } });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("records an action's dedup row under ITS OWN identity when a sibling dispatch interleaves", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema);
+
+            const shard = new ParkingActionShard(makeState(database), {});
+
+            let release: () => void = () => {};
+
+            shard.parked = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+
+            // u1's action parks mid-handler. u2's dispatch then runs its whole
+            // prologue, overwriting the shared `currentRequest*` fields. When u1
+            // resumes, its post-dispatch bookkeeping reads those fields off
+            // `this` — so without a re-pin it files u1's dedup row under u2.
+            const slow = shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            await shard.fetch(rpcRequest("messages:otherAction", "m-2", "u2"));
+
+            release();
+            await slow;
+
+            expect(shard.runs).toBe(2);
+
+            // u1 replays its own id. It only short-circuits if the row was
+            // written under u1's namespace.
+            await shard.fetch(rpcRequest("messages:slowAction", "m-1", "u1"));
+
+            expect(shard.runs).toBe(2);
         } finally {
             database.close();
         }
