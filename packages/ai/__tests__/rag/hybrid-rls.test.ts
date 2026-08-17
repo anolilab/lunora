@@ -101,6 +101,30 @@ describe("matchesMetadataFilter", () => {
         expect(matchesMetadataFilter(metadata, { missing: { $lt: 10 } })).toBe(false);
     });
 
+    it("fails closed on a negative predicate over an absent field", () => {
+        expect.assertions(4);
+
+        // `undefined !== "acme"` is true, so an ungated `$ne` ADMITS a chunk
+        // indexed without the field — and `rlsFilter: () => ({ tenant: { $ne:
+        // "acme" } })` then leaks its full text into fusion.
+        expect(matchesMetadataFilter(metadata, { tenant: { $ne: "acme" } })).toBe(false);
+        expect(matchesMetadataFilter(metadata, { tenant: { $nin: ["acme"] } })).toBe(false);
+
+        // A field that IS present and differs still matches.
+        expect(matchesMetadataFilter(metadata, { orgId: { $ne: "org-2" } })).toBe(true);
+        expect(matchesMetadataFilter(metadata, { orgId: { $nin: ["org-2"] } })).toBe(true);
+    });
+
+    it("orders strings by code point rather than locale collation", () => {
+        expect.assertions(2);
+
+        // `localeCompare` puts "a" before "B"; code-point order (Vectorize's,
+        // and the only one that does not vary with the runtime's ICU build)
+        // puts "B" first.
+        expect(matchesMetadataFilter({ name: "B" }, { name: { $lt: "a" } })).toBe(true);
+        expect(matchesMetadataFilter({ name: "a" }, { name: { $lt: "B" } })).toBe(false);
+    });
+
     it("rejects everything but an empty filter when metadata is absent", () => {
         expect.assertions(2);
 
