@@ -166,7 +166,7 @@ const MembersCard = (): JSX.Element => {
                                                 class="lunora-auth-link"
                                                 disabled={state.busy}
                                                 onClick={() => {
-                                                    id();
+                                                    void actions.removeMember(id());
                                                 }}
                                                 type="button"
                                             >
