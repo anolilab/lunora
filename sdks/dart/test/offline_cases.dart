@@ -73,6 +73,64 @@ void caseGoldenOfflineQueueFifo() {
   equals(queue.size, case_['sizeAfterDrain'], 'the queue is empty afterwards');
 }
 
+/// A flush that aborts on a transient failure returns its unreplayed writes to
+/// the FRONT of the queue, in order, without re-persisting them.
+///
+/// Read from the fixture rather than asserted against numbers written here: this
+/// port already drives the behaviour end to end through `setConnected`, but a
+/// port that documents its own expectations is exactly what the shared file
+/// exists to prevent.
+Future<void> caseGoldenOfflineQueueRequeue() async {
+  covers('offline_queue_fifo_replay_order');
+
+  final case_ = _scenario('requeue');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  await Future<void>.delayed(Duration.zero);
+
+  final requeued = _expected(case_, 'requeued');
+
+  queue.requeue(queue.drain().where((item) => requeued.contains(item.id)).toList());
+
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterRequeue']), 'requeued writes return to the front, in order');
+  equals(store.appended.length, case_['persistAppendCalls'], 'and a requeue does not re-persist them');
+}
+
+/// Closing hands every pending write back so no caller hangs — and leaves
+/// durable storage INTACT, because the next session restores from it.
+Future<void> caseGoldenOfflineQueueClear() async {
+  covers('offline_queue_fifo_replay_order');
+
+  final case_ = _scenario('clear');
+  final store = _RecordingPersistence();
+  final rejected = <String, Object?>{};
+  final queue = OfflineQueue(persistence: store, onSettled: (entry, error) => rejected[entry.id] = error);
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  queue.clear();
+
+  equals(canonical(rejected.keys.toList()), canonical(case_['rejected']), 'every pending write is handed back');
+  equals(queue.size, 0, 'and the queue is empty');
+
+  for (final id in _expected(case_, 'rejected')) {
+    final error = rejected[id];
+
+    equals(error is LunoraApiException ? error.code : null, case_['code'], 'each carries the documented code');
+  }
+
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'closing does not purge durable storage');
+  equals(store.records.length, _expected(case_, 'enqueue').length, 'the next session restores them');
+}
+
 /// Bounded FIFO: past capacity the OLDEST entry is evicted, un-persisted and
 /// reported with a coded reason.
 Future<void> caseGoldenOfflineQueueOverflow() async {

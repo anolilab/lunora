@@ -152,6 +152,48 @@ Future<void> caseGoldenOptimisticSettledFrameDrop() async {
   equals(canonical(seen.last), canonical(case_['displayedAfterAtFrame']), 'the settled frame reaching the commit cursor drops the overlay');
 }
 
+/// A transform that declines the value it is handed is SKIPPED by the fold, not
+/// fatal to it: one buggy optimistic update must not blank the query for every
+/// other layer.
+///
+/// The declining layer is registered directly rather than through
+/// [applyOptimisticLayer], which refuses a transform that declines on FIRST
+/// application. This is the other case — one that worked once and declines on a
+/// later rebase.
+void caseGoldenOptimisticDecliningLayerSkipped() {
+  covers('optimistic_layer_rebases_onto_server_frame');
+
+  final case_ = _scenario('throwingLayerSkipped');
+  final target = _Target(case_['base']);
+
+  target.layers.add(OptimisticLayer((_) => throw StateError('buggy optimistic update')));
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the good layer still applies');
+  equals(target.layers.length, case_['layers'], 'the declining layer is kept');
+  equals(canonical(target.lastValue), canonical(case_['displayed']), 'and skipped by the fold');
+}
+
+/// A shard with CDC off echoes no commit cursor. The layer is removed but the
+/// display is NOT re-folded: confirm runs on SUCCESS, so re-folding would
+/// visibly revert a write that just committed until the authoritative frame
+/// lands.
+void caseGoldenOptimisticConfirmWithoutCursor() {
+  covers('optimistic_layer_drops_on_commit_cursor');
+
+  final case_ = _scenario('confirmWithoutCursor');
+  final target = _Target(case_['base']);
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the layer applies');
+  handle!.confirm(null);
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterConfirm']), 'confirming with no cursor does not revert');
+  equals(target.layers.length, case_['layersAfterConfirm'], 'but does drop the layer');
+}
+
 /// Failure re-folds, so the bad value disappears immediately.
 void caseGoldenOptimisticRollback() {
   covers('optimistic_layer_rolls_back_on_failure');
@@ -349,6 +391,46 @@ Future<void> caseOptimisticUpdatePatchesManyQueries() async {
 
   equals(canonical(list.last), canonical(<Object?>['a', 'new']), 'the list query is patched');
   equals(unread.last, 4, 'the count query is patched in the same write');
+}
+
+/// A `setQuery` override is ABSOLUTE while pending: it re-clamps to its
+/// predicted value on every frame, masking a concurrent server change to that
+/// query rather than merging with it. Rolling it back reveals what the server
+/// had said all along.
+Future<void> caseGoldenOptimisticConstantMask() async {
+  covers('optimistic_layer_rolls_back_on_failure');
+
+  final case_ = _scenario('constantMask');
+  final poster = Poster(result: 'null')..transportFailures = 1;
+  final client = LunoraClient(url: 'https://app.example', post: poster.call)
+    ..attachSocket((_) {})
+    ..setConnected(true);
+  final seen = <Object?>[];
+
+  client.subscribe('messages:list', onData: seen.add);
+  pushData(client, 'sub_1', case_['base'], cursor: 1);
+
+  // Offline, so the write queues and its override stays pending across the frame.
+  client.setConnected(false);
+
+  final pending = client.mutation(
+    'messages:send',
+    optimisticUpdate: (store, _) => store.setQuery('messages:list', case_['value']),
+  );
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterApply']), 'the override displays immediately');
+
+  final frame = case_['frame']! as Map<String, Object?>;
+
+  pushData(client, 'sub_1', frame['data'], cursor: frame['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterFrame']), 'and masks the concurrent server change');
+
+  client.close();
+
+  await pending.catchError((Object _) => null);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterRollback']), 'rolling back reveals the server value');
 }
 
 /// A buggy update must not fail the mutation, and must not leave half a patch.

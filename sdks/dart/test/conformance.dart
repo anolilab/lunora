@@ -63,9 +63,14 @@ Future<void> main() async {
   await run(caseGoldenOptimisticRebase);
   await run(caseGoldenOptimisticCommitCursorDrop);
   await run(caseGoldenOptimisticSettledFrameDrop);
+  await run(caseGoldenOptimisticDecliningLayerSkipped);
+  await run(caseGoldenOptimisticConfirmWithoutCursor);
+  await run(caseGoldenOptimisticConstantMask);
   await run(caseGoldenOptimisticRollback);
   await run(caseGoldenOptimisticCursorlessFrame);
   await run(caseGoldenOfflineQueueFifo);
+  await run(caseGoldenOfflineQueueRequeue);
+  await run(caseGoldenOfflineQueueClear);
   await run(caseGoldenOfflineQueueOverflow);
   await run(caseGoldenOfflineQueuePrecondition);
   await run(caseGoldenOfflineQueueHydrate);
