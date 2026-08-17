@@ -62,8 +62,19 @@ const hybridRank = (
         .toSorted((a, b) => {
             const delta = b.scored.score - a.scored.score;
 
-            // Ties: prefer the chunk with better vector rank.
-            return delta === 0 ? a.vectorRank - b.vectorRank : delta;
+            if (delta !== 0) {
+                return delta;
+            }
+
+            // Ties: prefer the chunk with better vector rank. Subtracting two
+            // `Infinity`s is `NaN`, which makes the whole comparator
+            // inconsistent and the sort order arbitrary — reachable whenever two
+            // lexical-only (or later-leg-only) chunks tie on fused score.
+            if (a.vectorRank === b.vectorRank) {
+                return 0;
+            }
+
+            return a.vectorRank < b.vectorRank ? -1 : 1;
         })
         .map((entry) => entry.scored);
 };
