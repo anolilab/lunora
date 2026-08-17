@@ -1174,7 +1174,10 @@ rung) · **334** mutation determinism (global-swap implementation proven unsound
 under concurrency and reverted; a sound version injects per-context) ·
 **137** release-train rehearsal (feeds 135 Phase 3) · **162** crossTabSync relay ·
 **234** node-host findings (spike DONE; the file was re-added by `370994075` and
-is kept as the host's reference) · **237** admin-auth hooks (one-adapter
+is kept as the host's reference) · `rivet-host-findings.md` (the same shape for
+`@lunora/platform-rivet` — what the host implements, what the actor double
+cannot prove without a live engine, and the published Rivet limits it is bounded
+by) · **237** admin-auth hooks (one-adapter
 prototype; remaining adapters open) · **238** vector reader (codegen wiring +
 `define-rag` refactor open) · **241** in-app inbox (D1
 backend open) · **247** event store (not ratified) ·

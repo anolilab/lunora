@@ -133,8 +133,9 @@ const resolveCodegenTarget = (projectRoot: string, explicit?: string): string =>
  * its id and leave the usage set untouched, so an app declaring that target
  * emits the full Cloudflare-shaped surface against a host that cannot serve it.
  * That is the failure mode CLAUDE.md's platform-parity rule is aimed at, and it
- * is invisible until runtime — hence `matrix-registry.test.ts`, which asserts
- * every `*_CAPABILITIES` export in `@lunora/platform` appears here.
+ * is invisible until runtime — hence the registry-coverage leg in
+ * `__tests__/platform-target.test.ts`, which asserts every `*_CAPABILITIES`
+ * export in `@lunora/platform` appears here.
  */
 const PLATFORM_MATRICES: Readonly<Record<string, PlatformCapabilities>> = {
     cloudflare: CLOUDFLARE_CAPABILITIES,
