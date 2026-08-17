@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { defineRag, fixedWindowChunks, hybridRank } from "../src/rag";
-import { concurrentMap } from "../src/rag/concurrent";
+import { concurrentForEach, concurrentMap } from "../src/rag/concurrent";
 import type { RagContext, RagVectors, RagVectorUpsertInput, RetrievedChunk } from "../src/rag/types";
 
 // The defineRag wiring test embeds through the AI SDK — stub `embed` with a
@@ -190,6 +190,153 @@ describe(concurrentMap, () => {
         expect.assertions(2);
         await expect(concurrentMap([1], 0, async () => 0)).rejects.toThrow(RangeError);
         await expect(concurrentMap([1], 1.5, async () => 0)).rejects.toThrow(RangeError);
+    });
+});
+
+describe(concurrentForEach, () => {
+    it("never exceeds the concurrency limit", async () => {
+        expect.assertions(1);
+
+        let inFlight = 0;
+        let peak = 0;
+
+        await concurrentForEach(
+            Array.from({ length: 12 }, (_, index) => index),
+            3,
+            async () => {
+                inFlight += 1;
+                peak = Math.max(peak, inFlight);
+
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 5);
+                });
+
+                inFlight -= 1;
+            },
+        );
+
+        expect(peak).toBe(3);
+    });
+
+    it("pulls from a generator only as capacity frees", async () => {
+        expect.assertions(2);
+
+        const seen: number[] = [];
+        let pulled = 0;
+        let widestGap = 0;
+
+        const listing = function* (): Generator<number> {
+            for (let index = 0; index < 10; index += 1) {
+                pulled += 1;
+                widestGap = Math.max(widestGap, pulled - seen.length);
+
+                yield index;
+            }
+        };
+
+        await concurrentForEach(listing(), 2, async (item) => {
+            await Promise.resolve();
+
+            seen.push(item);
+        });
+
+        // Draining the iterable up front would open the gap to all 10 — the
+        // whole point is that a large source is never materialised.
+        expect(widestGap).toBeLessThanOrEqual(2);
+        expect(seen).toHaveLength(10);
+    });
+
+    it("serializes next() so overlapping pulls never reach the iterator", async () => {
+        expect.assertions(1);
+
+        let inNext = 0;
+        let overlapped = false;
+
+        // A generator throws "already running" on a re-entrant `next()`, but
+        // only for a SYNCHRONOUS overlap. This records any overlap at all,
+        // which is what 8 workers pulling as they free up would produce.
+        const listing = {
+            [Symbol.asyncIterator]: (): AsyncIterator<number> => {
+                let index = 0;
+
+                return {
+                    next: async (): Promise<IteratorResult<number>> => {
+                        inNext += 1;
+                        overlapped ||= inNext > 1;
+
+                        await new Promise((resolve) => {
+                            setTimeout(resolve, 1);
+                        });
+
+                        inNext -= 1;
+                        index += 1;
+
+                        return index > 12 ? { done: true, value: undefined } : { done: false, value: index };
+                    },
+                };
+            },
+        };
+
+        await concurrentForEach(listing, 8, async () => {
+            await Promise.resolve();
+        });
+
+        expect(overlapped).toBe(false);
+    });
+
+    it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
+        expect.assertions(4);
+
+        const started: number[] = [];
+        const processed: number[] = [];
+        let closed = false;
+
+        const listing = async function* (): AsyncGenerator<number> {
+            try {
+                for (let index = 0; index < 6; index += 1) {
+                    yield index;
+                }
+            } finally {
+                closed = true;
+            }
+        };
+
+        const run = concurrentForEach(listing(), 2, async (item) => {
+            started.push(item);
+
+            if (item === 0) {
+                // Fail only once the sibling worker has pulled and started item
+                // 1, so this asserts that in-flight work is quiesced rather
+                // than which pull happened to win the race.
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+
+                throw new Error("boom");
+            }
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 10);
+            });
+
+            processed.push(item);
+        });
+
+        await expect(run).rejects.toThrow("boom");
+
+        // Same contract as `concurrentMap`: item 1 was already in flight when
+        // item 0 rejected, so it settles rather than being cancelled, and
+        // nothing after them starts. `return()` on the way out is what lets a
+        // generator source run its `finally` and release what it holds.
+        expect(started.toSorted((a, b) => a - b)).toStrictEqual([0, 1]);
+        expect(processed).toStrictEqual([1]);
+        expect(closed).toBe(true);
+    });
+
+    it("rejects an invalid limit", async () => {
+        expect.assertions(2);
+        await expect(concurrentForEach([1], 0, async () => {})).rejects.toThrow(RangeError);
+        await expect(concurrentForEach([1], 1.5, async () => {})).rejects.toThrow(RangeError);
     });
 });
 
