@@ -21,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -843,8 +844,18 @@ final class OptimisticOfflineTest {
             wantConflicted.add(id + ":" + testCase.get("code"));
         }
 
+        // The verdicts are computed OUTSIDE the queue, exactly as the client does it:
+        // a precondition is consumer code and never runs where the queue is mid-mutation.
+        Set<String> stale = new LinkedHashSet<>();
+
+        for (QueuedMutation item : queue.items()) {
+            if (item.precondition != null && !item.precondition.get()) {
+                stale.add(item.id);
+            }
+        }
+
         check(
-                discardedPairs(queue.drainConflict()).equals(wantConflicted),
+                discardedPairs(queue.drainConflict(stale)).equals(wantConflicted),
                 "only the write whose precondition failed is dropped, with the documented code");
         check(
                 ids(queue.items()).equals(strings(testCase.get("remaining"))),

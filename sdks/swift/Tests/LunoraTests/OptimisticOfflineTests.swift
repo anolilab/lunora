@@ -501,7 +501,11 @@ extension ConformanceTests {
             queue.enqueue(item)
         }
 
-        let conflicted = queue.drainConflict()
+        // The verdicts are computed OUTSIDE the queue, exactly as the client does
+        // it: a precondition is consumer code and never runs where the queue is
+        // mid-mutation.
+        let stale = Set(queue.items().filter { $0.precondition.map { !$0() } ?? false }.map { $0.id })
+        let conflicted = queue.drainConflict(stale: stale)
 
         XCTAssertEqual(
             conflicted.map { $0.entry.id },

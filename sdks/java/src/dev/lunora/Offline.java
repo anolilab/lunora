@@ -545,12 +545,19 @@ public final class Offline {
         }
 
         /**
-         * Drops and returns the writes whose precondition no longer holds. Run at the start of a
-         * flush to weed out writes whose assumptions died while the client was offline; the
-         * admitted writes keep their FIFO order.
+         * Drops the writes named in {@code stale} and returns them. Run at the start of a flush to
+         * weed out writes whose assumptions died while the client was offline; the admitted writes
+         * keep their FIFO order.
+         *
+         * <p>It takes the VERDICTS, not the predicates: a {@code precondition} is the consumer's
+         * own code and must run with this client's monitor RELEASED, while this call mutates the
+         * queue and so must run with it held. Evaluating them inline here would run consumer code
+         * inside the lock guarding the subscription registry, stalling the socket read loop — and a
+         * predicate that called back into the client would deadlock on the sibling ports whose lock
+         * is not reentrant.
          */
-        public List<Discarded> drainConflict() {
-            return drain(item -> item.precondition != null && !item.precondition.get()).stream()
+        public List<Discarded> drainConflict(Set<String> stale) {
+            return drain(item -> stale.contains(item.id)).stream()
                     .map(
                             item ->
                                     new Discarded(

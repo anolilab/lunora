@@ -381,17 +381,18 @@ public final class LunoraOfflineQueue {
         notifySize()
     }
 
-    /// Drops the writes whose precondition no longer holds and returns them. Run at
-    /// the start of a flush to weed out writes whose assumptions died while the
-    /// client was offline; the admitted writes keep their FIFO order.
+    /// Drops the writes named in `stale` and returns them. Run at the start of a
+    /// flush to weed out writes whose assumptions died while the client was
+    /// offline; the admitted writes keep their FIFO order.
     ///
-    /// The predicate is the CONSUMER's, and this evaluates it inline — safe only
-    /// when you own the queue single-threaded. ``LunoraClient`` cannot use it for
-    /// that reason: it would run consumer code inside the non-recursive lock every
-    /// queue mutation is made under, so it evaluates the preconditions first and
-    /// drains on their verdict.
-    public func drainConflict() -> [LunoraDiscarded] {
-        drain { entry in entry.precondition.map { !$0() } ?? false }
+    /// It takes the VERDICTS, not the predicates: a `precondition` is the
+    /// consumer's own code and must run with the owning client's lock RELEASED,
+    /// while this call mutates the queue and so runs with it held. Evaluating them
+    /// inline would run consumer code inside the non-recursive lock every queue
+    /// mutation is made under — stalling the socket read loop, and deadlocking
+    /// outright on a predicate that reads the client back.
+    public func drainConflict(stale: Set<String>) -> [LunoraDiscarded] {
+        drain { stale.contains($0.id) }
             .map {
                 LunoraDiscarded(
                     entry: $0,
