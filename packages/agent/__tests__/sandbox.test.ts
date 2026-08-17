@@ -12,6 +12,7 @@ const EMPTY_NAME_ERROR = /requires a container `name`/u;
 const MISSING_BROWSER_ERROR = /needs `ctx\.browser`/u;
 const UNKNOWN_CONTAINER_ERROR = /no ctx\.containers\["missing"\]/u;
 const NO_FS_BUCKET_ERROR = /found no R2 bucket/u;
+const RESERVED_ROUTE_ERROR = /reserved for Lunora's own container routes/u;
 
 /** A tool `execute` context whose `run` records the dispatched (ref, args). */
 const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context: AgentToolContext } => {
@@ -115,15 +116,20 @@ describe(containerTool, () => {
         expect((always.needsApproval as (input: { op: string }) => boolean)({ op: "fetch" })).toBe(true);
     });
 
-    it("gates the exec route @lunora/container actually POSTs to", () => {
-        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
+    it("cannot reach the exec route with a fetch at all", async () => {
+        expect.assertions(3);
 
-        // The claim the gate's own comment makes, made true. `CONTAINER_EXEC_ROUTE`
-        // is a second literal of `@lunora/container`'s `CONTAINER_EXEC_PATH`
-        // (the packages can't share a runtime import), and drift between them
-        // does not fail loudly — it silently un-gates model-chosen command
-        // execution, which is the one thing this policy exists to stop.
-        expect(needsApproval({ op: "fetch", path: CONTAINER_EXEC_PATH })).toBe(true);
+        // The gate does not pattern-match the exec route, because a `fetch`
+        // never arrives there: `@lunora/container` reserves `/__lunora/*` at the
+        // handle, which is the only place that resolves the path the same way
+        // the container's router will. Assert the refusal rather than trusting
+        // it — this is what makes a second copy of the route literal (and the
+        // spelling-guessing that came with it) unnecessary here.
+        const accessor: SandboxContainerAccessor = createContainerTestContext({ box: () => new Response("ok") }).box!;
+
+        await expect(accessor.any().fetch(CONTAINER_EXEC_PATH)).rejects.toThrow(RESERVED_ROUTE_ERROR);
+        await expect(accessor.any().fetch("/foo/../__lunora/exec")).rejects.toThrow(RESERVED_ROUTE_ERROR);
+        await expect(accessor.any().fetch("/health")).resolves.toBeInstanceOf(Response);
     });
 
     it("keeps the structural container accessor a subset of the real one", () => {
@@ -139,52 +145,24 @@ describe(containerTool, () => {
         expect(accessor.any().exec).toBeTypeOf("function");
     });
 
-    it("gates a fetch whose path resolves to the privileged exec route", () => {
-        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
-
-        // A fetch to the exec route reaches the same command path as an exec, so it must gate.
-        expect(needsApproval({ op: "fetch", path: "/__lunora/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "__lunora/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "//__lunora//exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/./__lunora/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/foo/../__lunora/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/__lunora/exec?x=1" })).toBe(true);
-        // A GET fetch to any other route stays unattended.
-        expect(needsApproval({ op: "fetch", path: "/health" })).toBe(false);
-        expect(needsApproval({ op: "fetch", path: "/__lunora/execute" })).toBe(false);
-        // The pre-E2 route is no longer privileged — nothing dispatches there now.
-        expect(needsApproval({ op: "fetch", path: "/exec" })).toBe(false);
-    });
-
-    it("gates a percent-encoded or absolute-URL spelling of the exec route", () => {
-        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
-
-        // A container router that decodes before matching routes all of these to
-        // its exec handler, so the gate has to recognise them too.
-        expect(needsApproval({ op: "fetch", path: "/__lunora/%65xec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/%5F%5Flunora/exec" })).toBe(true);
-        // `ContainerHandle.fetch` only prefixes the synthetic origin for a
-        // leading `/`, so an absolute URL passes through to the container verbatim.
-        expect(needsApproval({ op: "fetch", path: "https://container/__lunora/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "https://container/__lunora/exec?x=1" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "https://container/health" })).toBe(false);
-    });
-
-    it("never throws out of the gate on a malformed path", () => {
-        const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
+    it("never throws out of the gate on a malformed or non-string path", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: unknown }) => boolean;
 
         // A gate that throws fails OPEN — the exception escapes the policy and
-        // leaves the caller deciding what an errored approval check means. A
-        // lone `%` is not a valid escape and `decodeURIComponent` rejects it.
+        // leaves the caller deciding what an errored approval check means. Model
+        // tool input reaches here unvalidated (`CONTAINER_TOOL_SCHEMA` carries no
+        // `validate`), so `path` can be anything at all.
         expect(needsApproval({ op: "fetch", path: "/100%" })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: null })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: 42 })).toBe(false);
         expect(needsApproval({ method: "POST", op: "fetch", path: "/%zz" })).toBe(true);
     });
 
-    it("gates a fetch using a non-idempotent method, even off the exec route", () => {
+    it("gates a fetch using a non-idempotent method", () => {
         const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
 
         // A prompt-injected model could otherwise mutate container state
-        // through some OTHER privileged route just by avoiding the exec path.
+        // through some other privileged/mutating route on the container.
         expect(needsApproval({ method: "POST", op: "fetch", path: "/health" })).toBe(true);
         expect(needsApproval({ method: "PUT", op: "fetch", path: "/config" })).toBe(true);
         expect(needsApproval({ method: "PATCH", op: "fetch", path: "/config" })).toBe(true);
@@ -317,6 +295,29 @@ describe("sandboxComponent().invoke", () => {
 
         // "ran, produced nothing" must be distinguishable from "did not run".
         await expect(invokeSandbox({ containers }, { command: "true", kind: "container", name: "sandbox", op: "exec" })).resolves.toBe("exit code: 0");
+    });
+
+    it("renders a thrown exec failure instead of rethrowing it", async () => {
+        const exec = vi.fn<() => Promise<never>>(async () => {
+            throw new Error("ctx.containers.sandbox: exec failed — the container answered 500 for POST /__lunora/exec");
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // A tool call runs inside `step.do`, which RETRIES a step that throws.
+        // `exec` throws on outcomes that occur after the command already ran —
+        // the runner crashing while serialising the result, or output past the
+        // cap — so rethrowing would re-execute an approved `pnpm publish`. The
+        // step has to complete, with the failure as its value.
+        await expect(invokeSandbox({ containers }, { command: "pnpm", kind: "container", name: "sandbox", op: "exec" })).resolves.toBe(
+            "exec failed: ctx.containers.sandbox: exec failed — the container answered 500 for POST /__lunora/exec",
+        );
+        expect(exec).toHaveBeenCalledTimes(1);
     });
 
     it("errors when a container op names an unknown container", async () => {

@@ -102,12 +102,13 @@ interface ContainerToolOptions {
 
     /**
      * Gate a call behind a human approval. Defaults to gating any command
-     * execution: an `exec`, AND a `fetch` whose path resolves to the privileged
-     * exec route (both reach the same command-execution path in the container,
-     * so gating on the `op` name alone would let a `fetch` to that route run a
-     * command unattended). A plain `fetch` to any other route runs unattended.
-     * Pass a boolean or your own predicate to change that. Evaluated from
-     * replay-stable input, so keep it deterministic.
+     * execution — an `exec` — plus any `fetch` using a non-idempotent method
+     * (POST/PUT/PATCH/DELETE), so a prompt-injected model cannot reach some
+     * other mutating route unattended. A read-only `fetch` runs unattended. The
+     * exec route itself needs no special case: `@lunora/container` reserves
+     * `/__lunora/*` and refuses a `fetch` into it. Pass a boolean or your own
+     * predicate to change that. Evaluated from replay-stable input, so keep it
+     * deterministic.
      */
     needsApproval?: ((input: ContainerToolInput) => boolean) | boolean;
 }
@@ -150,104 +151,29 @@ const BROWSER_TOOL_SCHEMA = jsonSchema<BrowserToolInput>({
 });
 
 /**
- * The privileged route the container `exec` op POSTs to. Must stay in lockstep
- * with `CONTAINER_EXEC_PATH` in `@lunora/container` — duplicated as a literal
- * rather than imported because `@lunora/agent` only *optionally* peers on that
- * package, and a wrong value here silently un-gates command execution rather
- * than failing loudly. `sandbox.test.ts` imports the real constant (dev-only)
- * and asserts this gate returns `true` for it, so the two cannot drift.
- */
-const CONTAINER_EXEC_ROUTE = "/__lunora/exec";
-
-/** Splits a container fetch `path` off its query/fragment. Hoisted to avoid per-call recompilation. */
-const CONTAINER_PATH_QUERY_SPLIT = /[?#]/u;
-
-/**
- * Percent-decode one path segment, falling back to the raw text.
- *
- * The fallback is the whole point: `decodeURIComponent` throws on a malformed
- * escape (`"%zz"`), and this runs inside a security gate. A gate that throws
- * fails **open** — the exception escapes `needsApproval` and the caller is left
- * deciding what an errored policy means. Returning the undecoded segment is
- * strictly no worse than not decoding at all.
- */
-const decodeSegment = (segment: string): string => {
-    try {
-        return decodeURIComponent(segment);
-    } catch {
-        return segment;
-    }
-};
-
-/**
- * Normalize a container fetch `path` to its resolved route so the default gate
- * can tell whether a `fetch` reaches the privileged exec route. Strips the
- * query/fragment, percent-decodes each segment, and resolves empty/`.`/`..`
- * segments — `"/__lunora/exec"`, `"__lunora/exec"`, `"//__lunora//exec"`,
- * `"/./__lunora/exec"`, `"/foo/../__lunora/exec"` and `"/__lunora/%65xec"` all
- * normalize to `"/__lunora/exec"`.
- *
- * An absolute URL is reduced to its pathname first. `ContainerHandle.fetch`
- * resolves a string against a synthetic origin only when it starts with `/`, so
- * `"http://container/__lunora/exec"` reaches the container verbatim — treating
- * it as a bare path here would leave the gate matching `"/http:/container/…"`
- * while the request still lands on the exec route.
- */
-const normalizeContainerPath = (path = ""): string => {
-    const [raw = ""] = (URL.canParse(path) ? new URL(path).pathname : path).split(CONTAINER_PATH_QUERY_SPLIT);
-    const segments: string[] = [];
-
-    for (const segment of raw.split("/")) {
-        const decoded = decodeSegment(segment);
-
-        if (decoded === "" || decoded === ".") {
-            continue;
-        }
-
-        if (decoded === "..") {
-            segments.pop();
-
-            continue;
-        }
-
-        segments.push(decoded);
-    }
-
-    return `/${segments.join("/")}`;
-};
-
-/**
  * HTTP methods considered non-idempotent — a `fetch` using one of these is
- * gated by default even off the exec route, since it can mutate container
- * state. An omitted `method` defaults to GET (idempotent, unattended), per
- * `CONTAINER_TOOL_SCHEMA`'s own documented default.
+ * gated by default, since it can mutate container state. An omitted `method`
+ * defaults to GET (idempotent, unattended), per `CONTAINER_TOOL_SCHEMA`'s own
+ * documented default.
  */
 const NON_IDEMPOTENT_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
 
 /**
  * The default human-in-the-loop gate for `containerTool`. Gates command
- * execution — an `exec`, AND a `fetch` whose path resolves to the privileged
- * exec route, since both reach the same command-execution path in the
- * container — AND, more broadly, any `fetch` using a non-idempotent HTTP
- * method (POST/PUT/PATCH/DELETE), since a prompt-injected model could
- * otherwise reach an arbitrary *other* privileged/mutating container route
- * unattended just by avoiding the literal exec path. A GET/HEAD/OPTIONS (or
- * method-omitted, defaulting to GET) `fetch` to any route still runs
- * unattended — scope the container's read routes accordingly.
+ * execution — an `exec` — AND, more broadly, any `fetch` using a
+ * non-idempotent HTTP method (POST/PUT/PATCH/DELETE), since a prompt-injected
+ * model could otherwise reach an arbitrary privileged/mutating container route
+ * unattended. A GET/HEAD/OPTIONS (or method-omitted, defaulting to GET)
+ * `fetch` to any route still runs unattended — scope the container's read
+ * routes accordingly.
+ *
+ * Deliberately *not* pattern-matching the exec route: a `fetch` cannot reach
+ * it at all. `@lunora/container` refuses `/__lunora/*` from `ContainerHandle.fetch`,
+ * which is the only place that sees the same resolved path the container's
+ * router will — so there is no spelling of that route to recognise here, and no
+ * second copy of the route literal to drift out of lockstep.
  */
-const defaultContainerGate = (input: ContainerToolInput): boolean => {
-    if (input.op === "exec") {
-        return true;
-    }
-
-    // Narrowed to the `fetch` variant: gate it iff its path resolves to
-    // the exec route, or its method is non-idempotent.
-    if (normalizeContainerPath(input.path) === CONTAINER_EXEC_ROUTE) {
-        return true;
-    }
-
-    return NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
-};
+const defaultContainerGate = (input: ContainerToolInput): boolean => input.op === "exec" || NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
 
 const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
     properties: {

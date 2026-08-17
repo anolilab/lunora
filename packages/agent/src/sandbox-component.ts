@@ -176,9 +176,18 @@ const runContainerOp = async (accessor: SandboxContainerAccessor, request: Sandb
         // model. The exit code is part of that render: the previous version read
         // the raw body back as output, so a command that failed — or a container
         // with no exec route at all — was indistinguishable from success.
-        const result = await handle.exec(request.command ?? "", { args: request.args ?? [] });
-
-        return renderExecResult(result);
+        try {
+            return renderExecResult(await handle.exec(request.command ?? "", { args: request.args ?? [] }));
+        } catch (error: unknown) {
+            // Rendered, NOT rethrown. A tool call runs inside `step.do`, which
+            // retries a step that throws — and `exec` throws on outcomes that
+            // happen *after* the command has already run (the runner 500s while
+            // serialising, the output overruns the cap). Rethrowing would
+            // re-execute an approved `pnpm publish`. A string keeps the step
+            // exactly-once and still tells the model the command did not report
+            // a result, which is the whole point of the contract.
+            return `exec failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
     }
 
     if (request.op === "fetch") {
