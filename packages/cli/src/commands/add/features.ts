@@ -102,6 +102,12 @@ const isSolid2Project = (dependencies: Readonly<Record<string, string>>): boolea
  * — including for React Native, which has no DOM to render these screens into;
  * callers gate on {@link isReactNativeProject} first so that case gets its own
  * message rather than the generic "couldn't detect your framework".
+ *
+ * This ladder — including {@link isSolid2Project}'s two signals and its position
+ * ahead of the framework matches — is mirrored in an inline node script in
+ * `scripts/template-build-smoke.sh`, which cannot import TypeScript. Adding a
+ * signal here without adding it there makes the smoke test assert the payload
+ * the CLI no longer picks.
  */
 const detectAuthUiItem = (dependencies: Readonly<Record<string, string>>): AuthUiItem | undefined => {
     const has = (name: string): boolean => Object.hasOwn(dependencies, name);
