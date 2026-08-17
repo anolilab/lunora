@@ -32,18 +32,17 @@ export interface PlatformCapabilities {
         analytics?: Capability;
         /** Browser rendering / headless browser. */
         browser?: Capability;
-        /** Container execution (Cloudflare Containers / Fargate). */
-        containers?: Capability;
 
         /**
-         * Running a command inside a container and getting its exit code and
-         * output back — `ctx.containers.<name>.exec`. Rated separately from
-         * `containers` because it needs more than the ability to reach a
-         * container: the container image must serve the exec route, and the host
-         * must be able to carry a structured result back. A host may support
-         * `containers` and not this.
+         * Container execution (Cloudflare Containers / Fargate), including
+         * `ctx.containers.<name>.exec`. Deliberately one rating rather than two:
+         * `exec` is a method on the accessor this key already gates, not a
+         * separate app-imported surface, so there is no usage signal codegen
+         * could gate it on independently and nothing that could act on a second
+         * rating. A host that can reach a container but cannot carry a command
+         * result back should say so in this note.
          */
-        containersExec?: Capability;
+        containers?: Capability;
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -171,8 +170,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: { level: "native", note: "Workers AI" },
         browser: { level: "native", note: "Browser Rendering" },
-        containers: { level: "native", note: "Cloudflare Containers" },
-        containersExec: { level: "native", note: "ctx.containers.<name>.exec over the /__lunora/exec contract; the container image serves the route" },
+        containers: {
+            level: "native",
+            note: "Cloudflare Containers; ctx.containers.<name>.exec rides the same binding over the /__lunora/exec contract, which the container image serves",
+        },
         analytics: { level: "native", note: "Analytics Engine" },
         pipelines: { level: "native", note: "Cloudflare Pipelines" },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
@@ -283,10 +284,9 @@ export const NODE_CAPABILITIES: PlatformCapabilities = {
         vectorStore: { level: "unsupported", note: "No Vectorize-equivalent binding implemented" },
         ai: { level: "unsupported", note: "No Workers AI-equivalent binding implemented" },
         browser: { level: "unsupported", note: "No headless-browser binding implemented" },
-        containers: { level: "unsupported", note: "No container orchestration implemented" },
-        containersExec: {
+        containers: {
             level: "unsupported",
-            note: "Follows `containers` — with no container orchestration there is nothing to exec into. A child_process-backed host could rate this `emulated`",
+            note: "No container orchestration implemented, so there is nothing for ctx.containers.<name>.exec to run a command in either",
         },
         analytics: { level: "unsupported", note: "No Analytics Engine-equivalent binding implemented" },
         pipelines: { level: "unsupported", note: "No Pipelines-equivalent binding implemented" },
