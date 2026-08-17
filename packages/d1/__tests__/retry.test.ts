@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry } from "../src/retry";
+import { D1TimeoutError, isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry } from "../src/retry";
 
 /** No real waiting — the backoff schedule is asserted, not slept through. */
 const noSleep = async (): Promise<void> => {};
@@ -248,5 +248,121 @@ describe("withD1Retry", () => {
         expect.assertions(1);
 
         await expect(withD1Retry(async () => "x", { attempts: 0 })).rejects.toThrow(/`attempts` must be an integer >= 1/u);
+    });
+});
+
+describe("stall handling", () => {
+    /** A promise that never settles — the 30-second D1 stall, without the wait. */
+    const stall = async (): Promise<never> => new Promise<never>(() => {});
+
+    it("abandons an attempt that stalls past timeoutMs", async () => {
+        expect.assertions(2);
+
+        const started = Date.now();
+
+        await expect(withD1Retry(stall, { attempts: 1, timeoutMs: 20 })).rejects.toThrow(D1TimeoutError);
+
+        // The point of the whole feature: the caller stops waiting.
+        expect(Date.now() - started).toBeLessThan(2000);
+    });
+
+    it("names the timeout and warns the underlying call may still run", async () => {
+        expect.assertions(2);
+
+        const error = await withD1Retry(stall, { attempts: 1, timeoutMs: 10 }).catch((error_: unknown) => error_ as D1TimeoutError);
+
+        expect(error.timeoutMs).toBe(10);
+        // The subrequest is not cancelled, only abandoned — say so.
+        expect(error.message).toMatch(/may still be running/u);
+    });
+
+    it("retries after abandoning a stalled attempt", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        const result = await withD1Retry(
+            async () => {
+                calls += 1;
+
+                if (calls === 1) {
+                    return stall();
+                }
+
+                return "recovered";
+            },
+            { sleep: noSleep, timeoutMs: 20 },
+        );
+
+        // A stalled attempt is retryable by definition — nothing came back to
+        // classify, so it cannot be judged permanent.
+        expect(result).toBe("recovered");
+        expect(calls).toBe(2);
+    });
+
+    it("bounds the whole operation with deadlineMs instead of compounding timeouts", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        let clock = 0;
+
+        await expect(
+            withD1Retry(
+                async () => {
+                    calls += 1;
+                    // Each attempt burns the per-attempt timeout.
+                    clock += 30_000;
+
+                    throw new Error("network connection lost");
+                },
+                { attempts: 10, deadlineMs: 45_000, now: () => clock, sleep: noSleep },
+            ),
+        ).rejects.toThrow(/network connection lost/u);
+
+        // Without a deadline this would run all 10 attempts — 300s of stall.
+        // The budget stops it after the second.
+        expect(calls).toBe(2);
+    });
+
+    it("does not apply a deadline when none is set", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        let clock = 0;
+
+        await expect(
+            withD1Retry(
+                async () => {
+                    calls += 1;
+                    clock += 1_000_000;
+
+                    throw new Error("network connection lost");
+                },
+                { attempts: 3, now: () => clock, sleep: noSleep },
+            ),
+        ).rejects.toThrow(/network connection lost/u);
+
+        expect(calls).toBe(3);
+    });
+
+    it("clears its timer on the success path", async () => {
+        expect.assertions(1);
+
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+
+        try {
+            await withD1Retry(async () => "fast", { timeoutMs: 5000 });
+
+            // A Worker leaving a 5s timer armed per query keeps the isolate
+            // alive for no reason.
+            expect(clearSpy.mock.calls.length).toBeGreaterThan(0);
+        } finally {
+            clearSpy.mockRestore();
+        }
+    });
+
+    it("runs without a timeout when none is set", async () => {
+        expect.assertions(1);
+
+        await expect(withD1Retry(async () => "ok", { sleep: noSleep })).resolves.toBe("ok");
     });
 });

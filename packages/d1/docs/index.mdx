@@ -121,6 +121,57 @@ An application that does not retry has adopted that error rate as its own, so
 fleet of Workers that hit the same blip does not re-converge on the recovering
 database as one synchronised wave.
 
+### Retrying without a timeout makes a stall worse
+
+D1's reported failure mode is not only a fast error — it is a **stall**.
+Operators report the storage object hanging for 30+ seconds before resetting,
+several times a day, on databases holding tens of megabytes of data with simple
+queries.
+
+A retry loop wrapped around a stall _amplifies_ it: three attempts at 30 seconds
+each is a 90-second request instead of a 30-second one. **Set `timeoutMs`**:
+
+```ts
+const client = new D1Client(env.DB, {
+    timeoutMs: 2000, // abandon an attempt that has clearly hung
+    deadlineMs: 5000, // and bound the whole operation
+});
+```
+
+`timeoutMs` bounds one attempt; `deadlineMs` bounds the operation, so
+`attempts × timeoutMs` plus backoff cannot compound past what a request handler
+can afford. An abandoned attempt throws `D1TimeoutError` — its own class, so
+"D1 hung" is distinguishable from "D1 returned an error"; those have different
+remedies and collapsing them hides which one you have.
+
+Neither has a default. A legitimate analytical query and a stalled one look
+identical from outside, so the value has to come from what your workload needs.
+
+<strong>A timeout abandons the wait, not the work.</strong> There is no way to cancel an in-flight D1 operation from a Worker, so the subrequest continues and
+still counts against the request's subrequest budget. What you buy is that *your* request stops waiting — the difference between a fast error and a user
+watching a spinner for half a minute.
+
+### Retries are not enough on a critical write path
+
+If a write must not surface a 500 to a user, retrying harder is the wrong lever.
+Cloudflare's own guidance is to **decouple the write from the HTTP response**:
+accept the request, enqueue the write, and let the queue consumer absorb the
+storage event.
+
+```ts
+// The user-facing handler never touches D1.
+export const captureLead = action.input({ email: v.string() }).action(async ({ ctx, args }) => {
+    await ctx.queues.leads.send(args);
+
+    return { accepted: true };
+});
+```
+
+`@lunora/queue` retries the consumer independently of the request, so a D1 stall
+costs a delayed write rather than a failed signup. Use this for anything where
+losing the request is worse than applying it late — lead capture, audit trails,
+webhook side effects.
+
 ### Reads retry; writes do not
 
 Every error above is **ambiguous about whether the statement applied**. "The

@@ -34,5 +34,5 @@ export { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./intr
 export type { Migration, MigrationRunnerResult } from "./migration-runner";
 export { MigrationRunner } from "./migration-runner";
 export type { D1RetryOptions } from "./retry";
-export { isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry } from "./retry";
+export { D1TimeoutError, isTransientD1Error, TRANSIENT_D1_ERRORS, withD1Retry } from "./retry";
 export { default as sqliteDialect } from "./sqlite-dialect";

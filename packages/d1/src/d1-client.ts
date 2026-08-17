@@ -256,5 +256,5 @@ class D1Client {
 
 export { D1Client, D1Session };
 export type { D1RetryOptions } from "./retry";
-export { isTransientD1Error, withD1Retry } from "./retry";
+export { D1TimeoutError, isTransientD1Error, withD1Retry } from "./retry";
 export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";
