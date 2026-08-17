@@ -32,14 +32,12 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { Scorer, ScoreResult, ScorerSample } from "./scorer";
+import { parseJudgeScore } from "./scorer";
 
 /** Metadata key holding the run's ranked retrieved ids (best first). */
 const RETRIEVED_KEY = "retrieved";
 /** Metadata key holding the case's gold relevant ids. */
 const RELEVANT_KEY = "relevant";
-
-/** The verdict number at the start of a judge's reply (`"0.8 - reason"`). */
-const LEADING_SCORE = /^\s*(-?\d+(?:\.\d+)?)/u;
 
 /** Where a retrieval scorer reads its two id lists from. */
 interface RetrievalScorerOptions {
@@ -100,15 +98,33 @@ const assertK = (k: number | undefined, label: string): void => {
 /** The first `k` retrieved ids, or all of them when no cutoff is set. */
 const windowOf = (pair: RetrievalPair, k: number | undefined): ReadonlyArray<string> => (k === undefined ? pair.retrieved : pair.retrieved.slice(0, k));
 
-/** Count how many of `ids` are in the gold set. */
-const countHits = (ids: ReadonlyArray<string>, relevant: ReadonlySet<string>): number => ids.filter((id) => relevant.has(id)).length;
+/**
+ * Count how many DISTINCT gold ids appear in `ids`.
+ *
+ * Distinct because a retrieval that returns the same gold chunk twice has found
+ * one passage, not two — counting the repeat lets recall exceed 1 and precision
+ * report hits the run never made.
+ */
+const countHits = (ids: ReadonlyArray<string>, relevant: ReadonlySet<string>): number => {
+    const found = new Set<string>();
 
-/** Discounted cumulative gain over a ranked window, under binary relevance. */
+    for (const id of ids) {
+        if (relevant.has(id)) {
+            found.add(id);
+        }
+    }
+
+    return found.size;
+};
+
+/** Discounted cumulative gain over a ranked window, under binary relevance. Each gold id is credited once, at its best rank. */
 const discountedGain = (ids: ReadonlyArray<string>, relevant: ReadonlySet<string>): number => {
+    const credited = new Set<string>();
     let gain = 0;
 
     for (const [index, id] of ids.entries()) {
-        if (relevant.has(id)) {
+        if (relevant.has(id) && !credited.has(id)) {
+            credited.add(id);
             gain += 1 / Math.log2(index + 2);
         }
     }
@@ -244,9 +260,14 @@ const ndcgAtK = (k?: number, options?: RetrievalScorerOptions): Scorer => {
 
             const gain = discountedGain(window, pair.relevant);
 
-            // The ideal is bounded by the window, so a gold set larger than `k`
-            // does not drag a perfect ranking below 1.
-            const idealGain = idealGainOf(Math.min(pair.relevant.size, window.length));
+            // The ideal is what `k` slots COULD have held, not what the run
+            // happened to return. Normalising against the retrieved window
+            // instead scored `retrieved: [a]` against `relevant: [a, b, c]` as a
+            // perfect 1.0 — rewarding a strategy for returning less, in the one
+            // metric this module says to gate on. A gold set larger than `k`
+            // still cannot drag a perfect ranking below 1, which is what the
+            // `min` is for.
+            const idealGain = idealGainOf(k === undefined ? pair.relevant.size : Math.min(pair.relevant.size, k));
 
             return { reason: `dcg ${gain.toFixed(3)} / ideal ${idealGain.toFixed(3)}`, score: idealGain === 0 ? 0 : gain / idealGain };
         },
@@ -296,10 +317,7 @@ const groundednessScorer = (options: { contextKey?: string; judge: (prompt: stri
                 ].join("\n"),
             );
 
-            const match = LEADING_SCORE.exec(verdict);
-            const parsed = match ? Number(match[1]) : 0;
-
-            return { reason: verdict.trim(), score: Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : 0 };
+            return parseJudgeScore(verdict);
         },
     };
 };

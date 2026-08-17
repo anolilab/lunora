@@ -132,6 +132,32 @@ describe("ndcgAtK", () => {
 
         expect(empty).toMatchObject({ score: 0 });
     });
+
+    it("does not reward retrieving less than `k`", async () => {
+        expect.assertions(2);
+
+        // One of three gold ids inside a cutoff of 5. Normalising against the
+        // RETRIEVED window instead of `k` made this a perfect 1.0 — the metric
+        // this module says to gate on, rewarding a strategy for returning
+        // fewer results. `recallAtK(5)` correctly says 1/3.
+        const result = (await ndcgAtK(5).score(sample(["a"], ["a", "b", "c"]))) as { score: number };
+        const recall = (await recallAtK(5).score(sample(["a"], ["a", "b", "c"]))) as { score: number };
+
+        expect(result.score).toBeCloseTo(1 / (1 + 1 / Math.log2(3) + 0.5), 10);
+        expect(recall.score).toBeCloseTo(1 / 3, 10);
+    });
+
+    it("credits a repeated gold id once", async () => {
+        expect.assertions(2);
+
+        // A duplicate is one passage found, not two: counting it let recall
+        // exceed 1 and gave DCG a rank it never earned.
+        const recall = (await recallAtK(4).score(sample(["a", "a", "a"], ["a"]))) as { score: number };
+        const ndcg = (await ndcgAtK(4).score(sample(["a", "a", "a"], ["a"]))) as { score: number };
+
+        expect(recall.score).toBe(1);
+        expect(ndcg.score).toBeCloseTo(1, 10);
+    });
 });
 
 describe("groundednessScorer", () => {
