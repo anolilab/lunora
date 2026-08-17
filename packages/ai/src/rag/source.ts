@@ -21,7 +21,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { concurrentMap } from "./concurrent";
+import { concurrentForEach, concurrentMap } from "./concurrent";
 import { guessMimeTypeFromExtension } from "./helpers";
 import type { Rag } from "./types";
 
@@ -188,15 +188,19 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
     }
 
     const sync = async (source: RagObjectSource, passOptions: RagSyncPassOptions = {}): Promise<RagSyncReport> => {
-        const objects: RagSourceObject[] = [];
-
-        for await (const object of source.list()) {
-            objects.push(object);
-        }
-
         const report: RagSyncReport = { indexed: [], pruned: [], skipped: [], unchanged: [] };
 
-        await concurrentMap(objects, concurrency, async (object) => {
+        // The listing is consumed as capacity frees rather than drained into an
+        // array first: a bucket large enough to be worth paging would otherwise
+        // hold every entry's key and metadata for the whole pass, and no object
+        // would be indexed until the last one had been listed. The KEY is the
+        // only thing that has to outlive its object — pruning needs the full
+        // current key set to work out what disappeared.
+        const currentKeys = new Set<string>();
+
+        await concurrentForEach(source.list(), concurrency, async (object) => {
+            currentKeys.add(object.key);
+
             const raw = await source.get(object);
 
             if (raw === undefined) {
@@ -243,7 +247,6 @@ const defineRagSource = (rag: Rag, options: RagSourceOptions = {}): RagSourceSyn
         // listing to, and deleting everything absent from this pass would wipe
         // an index this call has no record of.
         if (passOptions.knownKeys !== undefined) {
-            const currentKeys = new Set(objects.map((object) => object.key));
             const gone = [...passOptions.knownKeys].filter((key) => !currentKeys.has(key));
 
             await concurrentMap(gone, concurrency, async (key) => {

@@ -236,6 +236,44 @@ describe("defineRagSource", () => {
         expect(seen.toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["a.txt:indexed", "b.pdf:skipped"]);
     });
 
+    it("pulls the listing lazily rather than draining it first", async () => {
+        expect.assertions(2);
+
+        const concurrency = 2;
+        const total = 20;
+        const { rag } = fakeRag();
+
+        let pulled = 0;
+        let completed = 0;
+        let widestGap = 0;
+
+        // Records how far the listing runs ahead of finished work. Draining the
+        // listing into an array first pulls all 20 before indexing anything, so
+        // the gap opens to `total`; consuming it as capacity frees keeps at most
+        // `concurrency` objects outstanding at any moment.
+        const list = async function* () {
+            for (let index = 0; index < total; index += 1) {
+                pulled += 1;
+                widestGap = Math.max(widestGap, pulled - completed);
+
+                yield { key: `k${String(index)}.txt` };
+            }
+        };
+
+        const report = await defineRagSource(rag, {
+            concurrency,
+            onObject: () => {
+                completed += 1;
+            },
+        }).sync({
+            get: async () => await Promise.resolve("text"),
+            list,
+        });
+
+        expect(report.indexed).toHaveLength(total);
+        expect(widestGap).toBeLessThanOrEqual(concurrency);
+    });
+
     it("rejects a non-positive concurrency", () => {
         expect.assertions(1);
 
