@@ -32,7 +32,7 @@ import struct
 import threading
 import time
 from collections.abc import Sequence
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol, Union
 
 #: The oldest write was dropped because the queue is at capacity.
 OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
@@ -64,7 +64,11 @@ class _AbsentIdentity:
 
 ABSENT_IDENTITY = _AbsentIdentity()
 
-Identity = Any  # str | None | ABSENT_IDENTITY
+#: The three-case identity stamp: a subject, ``None`` (signed out), or
+#: :data:`ABSENT_IDENTITY` (an unstamped legacy record). Spelled as the union
+#: rather than ``Any`` — the alias for a three-case sum must not type-check
+#: against every argument in the language.
+Identity = Union[str, None, _AbsentIdentity]
 
 
 class OfflineError(Exception):

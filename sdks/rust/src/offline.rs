@@ -61,13 +61,25 @@ pub const DEFAULT_MAX_ITEMS: usize = 1000;
 
 /// Who made a queued write.
 ///
-/// Three states, not two, and the third is load-bearing. `None` is a record that
+/// Three cases, not two, and the third is load-bearing. `Absent` is a record that
 /// carries no stamp at all — written before stamping existed — and replays
-/// ambiently under whatever identity is current. `Some(None)` is a write made
-/// while signed out, which must replay signed out. `Some(Some(subject))` names
-/// the subject. Collapsing the first two would either strand every old record or
-/// silently push one user's queued writes as another.
-pub type Identity = Option<Option<String>>;
+/// ambiently under whatever identity is current. `SignedOut` is a write made with
+/// nobody signed in, which must replay signed out. `Subject` names who made it.
+/// Collapsing the first two would either strand every old record or silently push
+/// one user's queued writes as another.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Identity {
+    Absent,
+    SignedOut,
+    Subject(String),
+}
+
+impl Identity {
+    /// The identity a live write is stamped with; `None` means signed out.
+    pub fn stamp(subject: Option<String>) -> Self {
+        subject.map_or(Self::SignedOut, Self::Subject)
+    }
+}
 
 /// Notified with a queued write's terminal verdict.
 pub type SettledHandler = Box<dyn Fn(&crate::client::MutationSettled) + Send>;
@@ -95,9 +107,9 @@ pub fn same_shard(left: Option<&str>, right: Option<&str>) -> bool {
 /// Whether a write stamped `stamped` may replay under `current`.
 pub fn identity_allows_replay(stamped: &Identity, current: Option<&str>) -> bool {
     match stamped {
-        None => true,
-        Some(None) => current.is_none(),
-        Some(Some(subject)) => current == Some(subject.as_str()),
+        Identity::Absent => true,
+        Identity::SignedOut => current.is_none(),
+        Identity::Subject(subject) => current == Some(subject.as_str()),
     }
 }
 
@@ -153,7 +165,7 @@ impl QueuedMutation {
             client_id: None,
             function_path: function_path.into(),
             id: id.into(),
-            identity: None,
+            identity: Identity::Absent,
             layers: Vec::new(),
             live_awaiter: false,
             on_settled: None,
@@ -174,8 +186,14 @@ impl QueuedMutation {
             record.insert("clientId".into(), json!(client_id));
         }
 
-        if let Some(stamp) = &self.identity {
-            record.insert("identity".into(), stamp.as_ref().map_or(Value::Null, |subject| json!(subject)));
+        if self.identity != Identity::Absent {
+            record.insert(
+                "identity".into(),
+                match &self.identity {
+                    Identity::Subject(subject) => json!(subject),
+                    _ => Value::Null,
+                },
+            );
         }
 
         if let Some(shard_key) = &self.shard_key {
@@ -200,7 +218,9 @@ impl QueuedMutation {
             client_id: record.get("clientId").and_then(Value::as_str).map(str::to_string),
             function_path: record.get("functionPath").and_then(Value::as_str).unwrap_or_default().to_string(),
             id: record.get("id").and_then(Value::as_str).unwrap_or_default().to_string(),
-            identity: record.get("identity").map(|stamp| stamp.as_str().map(str::to_string)),
+            identity: record
+                .get("identity")
+                .map_or(Identity::Absent, |stamp| Identity::stamp(stamp.as_str().map(str::to_string))),
             layers: Vec::new(),
             live_awaiter: false,
             on_settled: None,

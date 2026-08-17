@@ -692,10 +692,10 @@ pub fn offline_queue_identity_gate_rejects_replay() {
     let case = queue_case("identityGate");
 
     for spec in case["cases"].as_array().expect("cases") {
-        let stamped: Identity = match &spec["stamped"] {
-            Value::String(subject) if subject == "absent" => None,
-            Value::String(subject) => Some(Some(subject.clone())),
-            _ => Some(None),
+        let stamped = match &spec["stamped"] {
+            Value::String(subject) if subject == "absent" => Identity::Absent,
+            Value::String(subject) => Identity::Subject(subject.clone()),
+            _ => Identity::SignedOut,
         };
         let current = spec["current"].as_str();
 
@@ -724,7 +724,7 @@ pub fn offline_queue_identity_gate_rejects_replay() {
 
     let mut queued = entry("m1", None);
 
-    queued.identity = Some(Some("user-a".to_string()));
+    queued.identity = Identity::Subject("user-a".to_string());
     client.offline_queue.enqueue(queued, Ok(json!({})));
 
     let settled = Arc::new(Mutex::new(Vec::new()));

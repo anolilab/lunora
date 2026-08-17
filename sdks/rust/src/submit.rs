@@ -478,7 +478,7 @@ impl Client {
     fn enqueue_write(&mut self, options: SubmitOptions, write_id: String, layers: Vec<(String, u64)>) {
         // Bound at enqueue time, so the write can only ever replay as whoever
         // made it.
-        let identity: Identity = Some(self.identity.clone());
+        let identity = Identity::stamp(self.identity.clone());
         // Never a substitute value: a record persisted as `args: null` hydrates
         // after a restart as a write that replays SUCCESSFULLY with empty args,
         // which is corruption rather than failure. The queue reports the failed
