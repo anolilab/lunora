@@ -19,6 +19,12 @@ interface BuildImageSource {
 }
 ```
 
+### `CONTAINER_EXEC_PATH` (const)
+
+```ts
+const CONTAINER_EXEC_PATH = "/__lunora/exec";
+```
+
 ### `ContainerAccessor` (interface)
 
 ```ts
@@ -95,6 +101,7 @@ interface ContainerExecOptions {
     args?: ReadonlyArray<string>;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
+    maxOutputBytes?: number;
     signal?: AbortSignal;
     timeoutMs?: number;
 }

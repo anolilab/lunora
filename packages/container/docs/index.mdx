@@ -206,9 +206,29 @@ point of the contract — the convention it replaced read the response body back
 as output, so a container with no exec route handed you its 404 page as though
 the command had succeeded.
 
+### Output is capped, and so is the clock
+
+`stdout` and `stderr` come back as one JSON document, which has to be held whole
+to be parsed. A build box that emits 150MB would take the isolate — and every
+other request sharing it — down with it, so the response body is capped at
+**1MB** by default and a runner that overruns it fails the call rather than the
+shard. Raise it per call with `maxOutputBytes` when a command legitimately
+produces more, or have the runner cap its own output.
+
+`timeoutMs` covers the whole call, request _and_ response body. That is not a
+detail: `fetch` resolves on headers, so a runner that answers `200` when the
+command _starts_ and then stalls would otherwise sit past the deadline.
+
+<Callout type="warn">
+    Abort propagation to a container is best-effort. The request travels through a Durable Object stub, and Cloudflare does not guarantee that cancelling the
+    outer call cancels the inner one — the deadline reliably frees _your_ handler, but the command may keep running inside the container. Send `timeoutMs` (the
+    client always does) and have the runner enforce it too.
+</Callout>
+
 <Callout type="warn">
     On `.pool()`, each attempt re-picks an instance, exactly like a pooled `fetch` — so a pooled `exec` must be safe to run more than once. Use `.get(name)` for
-    anything that isn't idempotent.
+    anything that isn't idempotent. A pooled `exec` retries only the platform's cold-start transients (which mean the request never reached the container), not
+    the any-5xx default a pooled `fetch` uses — a runner that ran the command and _then_ failed must not have it run again.
 </Callout>
 
 ### The container side of the contract

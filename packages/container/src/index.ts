@@ -24,7 +24,7 @@ export type {
     InstanceRetryOptions,
     PoolOptions,
 } from "./client";
-export { createContainerContext, createContainerTestContext } from "./client";
+export { CONTAINER_EXEC_PATH, createContainerContext, createContainerTestContext } from "./client";
 export {
     containerBindingName,
     containerBuildTag,
