@@ -41,11 +41,9 @@ interface RivetActorHandleLike {
 
 ```ts
 interface RivetActorLike {
-    readonly actorId: string;
     readonly cron: RivetCronLike;
     readonly db: RivetRawDatabaseLike;
     readonly key: ReadonlyArray<string>;
-    readonly name: string;
     readonly schedule: RivetScheduleLike;
     waitUntil: (promise: Promise<unknown>) => void;
 }
@@ -63,7 +61,6 @@ interface RivetActorNamespaceLike {
 
 ```ts
 interface RivetCronLike {
-    delete: (name: string) => Promise<boolean>;
     set: (options: RivetCronSetOptions) => Promise<void>;
 }
 ```
@@ -93,17 +90,18 @@ interface RivetGetOrCreateOptions {
 
 ```ts
 interface RivetPlatform {
+    attachSocket: (id: string, socket: unknown) => SocketHandle | undefined;
     capabilities: PlatformCapabilities;
     close: () => Promise<void>;
     deliverAlarm: () => Promise<void>;
     deliverCronTick: (functionPath: string, args: Record<string, unknown>) => Promise<void>;
     deliverScheduledJob: (id: string) => Promise<boolean>;
     drain: () => Promise<void>;
+    flush: () => Promise<void>;
     kv: ShardKvStore;
     scheduler: SchedulerHost;
     shard: ShardHost;
     sockets: SocketHost;
-    state: RivetShardState;
 }
 ```
 
@@ -118,9 +116,6 @@ type RivetPlatformOptions = RivetSchedulerHostOptions & RivetShardHostOptions;
 ```ts
 interface RivetRawDatabaseLike {
     execute: <Row extends Record<string, unknown> = Record<string, unknown>>(query: string, ...args: unknown[]) => Promise<Row[]>;
-    transaction: <T>(callback: (tx: RivetRawDatabaseLike) => Promise<T> | T, options?: {
-        timeout?: number;
-    }) => Promise<T>;
 }
 ```
 
@@ -128,10 +123,8 @@ interface RivetRawDatabaseLike {
 
 ```ts
 interface RivetScheduleLike {
-    after: (duration: number, action: string, ...args: unknown[]) => Promise<string>;
     at: (timestamp: number, action: string, ...args: unknown[]) => Promise<string>;
     cancel: (id: string) => Promise<boolean>;
-    get: (id: string) => Promise<RivetScheduledEventLike | undefined>;
     list: () => Promise<RivetScheduledEventLike[]>;
 }
 ```
@@ -154,6 +147,7 @@ interface RivetSchedulerHost {
     deliverCronTick: (functionPath: string, args: Record<string, unknown>) => Promise<void>;
     deliverScheduledJob: (id: string) => Promise<boolean>;
     parkJob: (id: string) => Promise<boolean>;
+    ready: Promise<void>;
     scheduler: SchedulerHost;
 }
 ```
@@ -164,12 +158,6 @@ interface RivetSchedulerHost {
 interface RivetSchedulerHostOptions {
     onDispatch?: (functionPath: string, args: Record<string, unknown>, job: ScheduledJob) => Promise<void> | void;
 }
-```
-
-### `RivetShardDatabase` (type)
-
-```ts
-type RivetShardDatabase = Database.Database;
 ```
 
 ### `RivetShardDirectoryOptions` (interface)
@@ -198,23 +186,13 @@ interface RivetShardHostOptions {
 }
 ```
 
-### `RivetShardState` (interface)
-
-```ts
-interface RivetShardState {
-    close: () => void;
-    readonly database: Database.Database;
-    flush: () => Promise<void>;
-    readonly isDirty: boolean;
-    markDirty: () => void;
-}
-```
-
 ### `RivetSocketHost` (interface)
 
 ```ts
 interface RivetSocketHost {
+    attachSocket: (id: string, raw: unknown) => SocketHandle | undefined;
     restoreSocket: (id: string, attachment: unknown) => SocketHandle;
+    restoreSockets: () => SocketHandle[];
     simulateRecycle: () => void;
     socket: SocketHost;
 }
@@ -273,12 +251,6 @@ const createRivetShardKvStore: (database: RivetRawDatabaseLike) => {
 
 ```ts
 const createRivetSocketHost: (state: RivetShardState) => RivetSocketHost;
-```
-
-### `openRivetShardState` (const)
-
-```ts
-const openRivetShardState: (actor: Pick<RivetActorLike, "db">) => Promise<RivetShardState>;
 ```
 
 ### `restoreRivetAlarm` (const)

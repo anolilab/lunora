@@ -25,7 +25,6 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
-import type Database from "better-sqlite3";
 
 import type { RivetActorLike } from "./rivet-context";
 import type { RivetShardState } from "./rivet-shard-state";
@@ -396,8 +395,5 @@ const restoreRivetAlarm = async (actor: Pick<RivetActorLike, "schedule">, host: 
     return alarm.runAt;
 };
 
-/** Re-exported for tests that need to reach the working copy's driver type. */
-type RivetShardDatabase = Database.Database;
-
-export type { RivetShardDatabase, RivetShardHost, RivetShardHostOptions };
+export type { RivetShardHost, RivetShardHostOptions };
 export { createRivetShardHost, restoreRivetAlarm, RIVET_ALARM_ACTION };

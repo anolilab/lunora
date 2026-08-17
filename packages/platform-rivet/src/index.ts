@@ -54,7 +54,7 @@ export type { RivetSchedulerHost, RivetSchedulerHostOptions } from "./rivet-sche
 export { createRivetSchedulerHost, RIVET_CRON_ACTION, RIVET_SCHEDULER_ACTION } from "./rivet-scheduler-host";
 export type { RivetShardDirectoryOptions } from "./rivet-shard-directory";
 export { createRivetShardDirectory } from "./rivet-shard-directory";
-export type { RivetShardDatabase, RivetShardHost, RivetShardHostOptions } from "./rivet-shard-host";
+export type { RivetShardHost, RivetShardHostOptions } from "./rivet-shard-host";
 export { createRivetShardHost, restoreRivetAlarm, RIVET_ALARM_ACTION } from "./rivet-shard-host";
 // `RivetShardState` and `openRivetShardState` are deliberately NOT exported:
 // the working copy is a `better-sqlite3` connection, and publishing it makes the

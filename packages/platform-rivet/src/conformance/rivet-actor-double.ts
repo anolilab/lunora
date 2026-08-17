@@ -93,23 +93,7 @@ const createDatabaseFacade = (database: Database.Database): RivetRawDatabaseLike
         return statement.all(...(bindings as never[])) as Row[];
     };
 
-    return {
-        execute,
-        transaction: async <T>(callback: (tx: RivetRawDatabaseLike) => Promise<T> | T): Promise<T> => {
-            database.exec("BEGIN");
-
-            try {
-                const result = await callback({ execute, transaction: () => Promise.reject(new Error("nested transaction")) } as RivetRawDatabaseLike);
-
-                database.exec("COMMIT");
-
-                return result;
-            } catch (error) {
-                database.exec("ROLLBACK");
-                throw error;
-            }
-        },
-    };
+    return { execute };
 };
 
 /**
@@ -178,7 +162,6 @@ const createRivetActorDouble = (options: RivetActorDoubleOptions = {}): RivetAct
 
     return {
         actions,
-        actorId: `actor-${crypto.randomUUID()}`,
         cleanup: () => {
             closed = true;
 
@@ -193,7 +176,6 @@ const createRivetActorDouble = (options: RivetActorDoubleOptions = {}): RivetAct
             }
         },
         cron: {
-            delete: async (name) => crons.delete(name),
             set: async (job: RivetCronSetOptions) => {
                 crons.set(job.name, { action: job.action, args: [...(job.args ?? [])], expression: job.expression, name: job.name });
             },
@@ -201,9 +183,7 @@ const createRivetActorDouble = (options: RivetActorDoubleOptions = {}): RivetAct
         crons,
         db,
         key: options.key ?? ["conformance"],
-        name: "conformanceShard",
         schedule: {
-            after: async (duration, action, ...args) => at(Date.now() + duration, action, ...args),
             at,
             cancel: async (id) => {
                 const record = pending.get(id);
@@ -217,7 +197,6 @@ const createRivetActorDouble = (options: RivetActorDoubleOptions = {}): RivetAct
 
                 return true;
             },
-            get: async (id) => pending.get(id)?.entry,
             list: async () => [...pending.values()].map((record) => record.entry),
         },
         settle: async () => {

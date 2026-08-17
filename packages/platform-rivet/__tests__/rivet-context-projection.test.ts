@@ -43,6 +43,12 @@ import type {
  * faithfully, that signature would satisfy *any* member this projection claims
  * — including a misspelled one — and the check would pass unconditionally. The
  * signatures are dropped so the structural comparison means something.
+ *
+ * The copies stay FULL — every member upstream declares — while the projections
+ * they are checked against carry only the members this host calls. That
+ * asymmetry is the point: assignability proves the narrowing is a real subset
+ * of the real type, and it keeps working as members are added to or removed
+ * from the projection.
  */
 
 // --- Copied from rivetkit@2.3.10 src/common/database/config.ts -------------

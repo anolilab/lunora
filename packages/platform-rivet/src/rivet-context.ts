@@ -22,6 +22,13 @@
  * connection lifecycle. Lunora's engine owns its own state, fan-out and
  * subscription bookkeeping; an adapter that also reached for Rivet's would give
  * one shard two sources of truth.
+ *
+ * Also absent, and for the reason this file exists at all: anything with no
+ * consumer in `src/`. `actorId`, `name`, `schedule.after`, `schedule.get`,
+ * `cron.delete` and `db.transaction` all read plausibly and were all dead —
+ * and a projection member nothing calls is exactly what drifts from upstream
+ * unnoticed, because assignability keeps passing forever. Add a member when
+ * the call site that needs it lands, not before.
  */
 
 /**
@@ -41,16 +48,6 @@ export interface RivetRawDatabaseLike {
      * (`:name`) when passed as a single object.
      */
     execute: <Row extends Record<string, unknown> = Record<string, unknown>>(query: string, ...args: unknown[]) => Promise<Row[]>;
-
-    /**
-     * Run `callback` inside a SQLite transaction, committing when it resolves
-     * and rolling back when it throws.
-     *
-     * Rivet queues other actor SQL behind an open transaction and applies a
-     * 60-second safety timeout, so the callback must not reach for the outer
-     * `c.db` — this host only ever uses the `tx` it is handed.
-     */
-    transaction: <T>(callback: (tx: RivetRawDatabaseLike) => Promise<T> | T, options?: { timeout?: number }) => Promise<T>;
 }
 
 /** One pending Rivet schedule — `ScheduledEventInfo`. */
@@ -70,14 +67,10 @@ export interface RivetScheduledEventLike {
  * through a well-known action name rather than a callback.
  */
 export interface RivetScheduleLike {
-    /** Run `action` once after `duration` ms. Resolves to the schedule id. */
-    after: (duration: number, action: string, ...args: unknown[]) => Promise<string>;
     /** Run `action` once at an absolute epoch-ms `timestamp`. Resolves to the schedule id. */
     at: (timestamp: number, action: string, ...args: unknown[]) => Promise<string>;
     /** Cancel a pending schedule; `false` when it already fired or never existed. */
     cancel: (id: string) => Promise<boolean>;
-    /** Read one pending schedule. */
-    get: (id: string) => Promise<RivetScheduledEventLike | undefined>;
     /** Every pending schedule on this actor. */
     list: () => Promise<RivetScheduledEventLike[]>;
 }
@@ -102,8 +95,6 @@ export interface RivetCronSetOptions {
  * `wrangler.jsonc` and reconciled at build time.
  */
 export interface RivetCronLike {
-    /** Remove a recurring job; `false` when no job carried that name. */
-    delete: (name: string) => Promise<boolean>;
     /** Register (or, on a repeated name, update) a cron-expression job. */
     set: (options: RivetCronSetOptions) => Promise<void>;
 }
@@ -117,16 +108,12 @@ export interface RivetCronLike {
  * then lose every write on sleep.
  */
 export interface RivetActorLike {
-    /** Stable per-instance id, used for telemetry attribution. */
-    readonly actorId: string;
     /** Recurring schedules — see {@link RivetCronLike}. */
     readonly cron: RivetCronLike;
     /** The actor's own SQLite database — see {@link RivetRawDatabaseLike}. */
     readonly db: RivetRawDatabaseLike;
     /** The actor's key, as passed to `getOrCreate`. Joined to form `ShardHost.shardKey`. */
     readonly key: ReadonlyArray<string>;
-    /** The actor type name from the registry. */
-    readonly name: string;
     /** One-shot schedules — see {@link RivetScheduleLike}. */
     readonly schedule: RivetScheduleLike;
 
