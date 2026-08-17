@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import defineRag from "../../src/rag/define-rag";
 import type { RagSqlExec } from "../../src/rag/sql";
-import sqliteVectorStore from "../../src/rag/sqlite-vector-store";
+import { sqliteVectorStore } from "../../src/rag/sqlite-vector-store";
 
 /**
  * A token-bag embedder: text sharing words embeds to a nearby vector, so
@@ -83,11 +83,71 @@ describe("sqliteVectorStore", () => {
         expect(vectorStore.capabilities.maxMetadataBytes).toBe(false);
     });
 
+    it("publishes a result-count ceiling, not its corpus-scan bound", () => {
+        expect.assertions(3);
+
+        // `maxScan` (default 50 000) bounds how much of a namespace may be READ.
+        // Publishing it as `maxTopK` let `retrieve(q, { topK: 50000 })` through,
+        // and `assembleContext` concatenates every one of those into one prompt.
+        const vectorStore = store({ maxScan: 50_000 });
+
+        expect(vectorStore.capabilities.maxTopK).toBe(100);
+        expect(vectorStore.capabilities.maxTopKWithMetadata).toBe(100);
+        expect(vectorStore.capabilities.maxIdBytes).toBe(false);
+    });
+
+    it("bounds the namespace scan in SQL rather than after materialising it", async () => {
+        expect.assertions(2);
+
+        const statements: string[] = [];
+        const { close, exec } = open();
+
+        databases.push(close);
+
+        const vectorStore = sqliteVectorStore({
+            exec: (sql, parameters) => {
+                statements.push(sql);
+
+                return exec(sql, parameters);
+            },
+            maxScan: 3,
+        });
+
+        await vectorStore.upsert({ embed: () => [1, 0, 0], id: "doc#0", input: "alpha" });
+        await vectorStore.query({ embed: () => [1, 0, 0], input: "alpha", topK: 1 });
+
+        const scan = statements.find((sql) => sql.startsWith("SELECT id, vector"));
+
+        // Without the LIMIT the guard runs AFTER reading every row — at 50 000
+        // × ~8 KB of JSON vector that is ~400 MB into a 128 MB isolate, so the
+        // explanatory RangeError never gets to throw.
+        expect(scan).toContain("LIMIT ?");
+        expect(scan).not.toMatch(/LIMIT \d/u);
+    });
+
+    it("refuses a chunk id over the store's own id ceiling", async () => {
+        expect.assertions(1);
+
+        const shared = store();
+        const capped = { ...shared, capabilities: { ...shared.capabilities, maxIdBytes: 64 } };
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => capped });
+
+        // A bucket key under a uuid namespace: the caller never chose this
+        // length, and Vectorize rejects it remotely with nothing naming why.
+        await expect(
+            docs({}).index({
+                id: "handbook/engineering/onboarding/day-one-and-the-week-after.md",
+                namespace: "6f1c9c9e-6f2f-4a3a-9a5e-2b7c8d9e0f11",
+                text: "hello world",
+            }),
+        ).rejects.toThrow(/over the store's 64-byte per-vector id ceiling/u);
+    });
+
     it("round-trips an index and retrieve against a real SQLite engine", async () => {
         expect.assertions(2);
 
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => store() });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "weather", metadata: { title: "Weather" }, text: "rain storm cloud thunder" });
         await rag.index({ id: "cooking", metadata: { title: "Cooking" }, text: "pasta tomato basil dinner" });
@@ -103,7 +163,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store();
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "doc", namespace: "org-a", text: "alpha secret document" });
         await rag.index({ id: "doc", namespace: "org-b", text: "beta secret document" });
@@ -120,7 +180,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store();
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         // The excluded doc is the better semantic match, so a post-ranking
         // filter would return nothing at topK 1 instead of the permitted doc.
@@ -138,7 +198,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store();
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "doc", text: "storm cloud thunder" });
 
@@ -158,7 +218,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store();
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "doc", text: "storm cloud" });
         await rag.index({ id: "doc", text: "storm cloud" });
@@ -173,7 +233,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store({ maxScan: 2 });
         const docs = defineRag({ allowSharedNamespace: true, chunkOverlap: 0, chunkSize: 6, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "doc", text: "alphaa bravoo charli deltaa" });
 
@@ -204,7 +264,7 @@ describe("sqliteVectorStore", () => {
 
         const shared = store();
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: model, index: "docs", store: () => shared });
-        const rag = docs({ vectors: undefined as never });
+        const rag = docs({});
 
         await rag.index({ id: "doc", namespace: "org-a", text: "alpha secret" });
         await rag.index({ id: "doc", namespace: "org-b", text: "beta secret" });
@@ -245,6 +305,6 @@ describe("sqliteVectorStore", () => {
         const docs = defineRag({ allowSharedNamespace: true, embeddingModel: wide, index: "docs", store: () => shared });
 
         // maxDimensions is false, so no ceiling check runs at all.
-        await expect(docs({ vectors: undefined as never }).index({ id: "a", text: "hello world" })).resolves.toMatchObject({ chunks: 1 });
+        await expect(docs({}).index({ id: "a", text: "hello world" })).resolves.toMatchObject({ chunks: 1 });
     });
 });

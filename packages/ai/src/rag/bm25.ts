@@ -8,17 +8,40 @@
  * @experimental
  */
 
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { createSearchAnalyzer } from "@lunora/search-core";
+
 /** Term-saturation constant. 1.5 is the standard default — higher rewards repeated terms more. */
 const BM25_K1 = 1.5;
 
 /** Length-normalization constant (0 = off, 1 = full). 0.75 is the standard default. */
 const BM25_B = 0.75;
 
-/** Lowercase and split into `[a-z0-9]+` tokens — dependency-free, adequate for keyword recall. */
-const TOKEN_PATTERN = /[a-z0-9]+/g;
+/**
+ * The analysis both lexical stores index and search through — the same one
+ * `.global()` and Durable Object full-text search already use.
+ *
+ * Not hand-rolled here, and specifically not `/[a-z0-9]+/`: that splitter
+ * produces ZERO tokens for German, French, Japanese or Cyrillic text, both
+ * stores skip token-less chunks, and hybrid retrieval then degrades to
+ * vector-only with nothing logged. `createSearchAnalyzer` splits on
+ * `[\p{L}\p{N}]+`, NFD-folds diacritics so `Grüße` and `Grusse` meet, and caps
+ * token length.
+ *
+ * `undefined` selects the language-neutral profile: no stopword list, because a
+ * RAG corpus is not declared to be in one language and dropping English
+ * function words from a French index would be worse than dropping none.
+ *
+ * Analysis is PERSISTED by the durable store, so changing what a token is here
+ * means re-indexing every deployed lexical store.
+ */
+const analyzer = createSearchAnalyzer(undefined);
 
-/** Split text into lowercase alphanumeric tokens. */
-const tokenize = (text: string): string[] => text.toLowerCase().match(TOKEN_PATTERN) ?? [];
+/** Split document text into index tokens, repeats intact (term frequency is the score). */
+const tokenize = (text: string): string[] => analyzer.document(text);
+
+/** Split a query into its distinct terms, in order. */
+const tokenizeQuery = (query: string): string[] => analyzer.query(query);
 
 /**
  * BM25 "plus" inverse document frequency — always non-negative, so a term
@@ -35,4 +58,4 @@ const bm25TermScore = (idf: number, frequency: number, documentLength: number, a
     return idf * ((frequency * (BM25_K1 + 1)) / denominator);
 };
 
-export { BM25_B, BM25_K1, bm25Idf, bm25TermScore, tokenize };
+export { BM25_B, BM25_K1, bm25Idf, bm25TermScore, tokenize, tokenizeQuery };

@@ -11,10 +11,10 @@
  * store, so swapping one for the other does not move the ranking.
  * @experimental
  */
-import { bm25Idf, bm25TermScore, tokenize } from "./bm25";
+import { bm25Idf, bm25TermScore, tokenize, tokenizeQuery } from "./bm25";
 import matchesMetadataFilter from "./metadata-filter";
 import type { RagSqlExec } from "./sql";
-import { assertSafeIdentifier, placeholder, placeholderList, readJsonColumn } from "./sql";
+import { assertSafeIdentifier, IN_LIST_BUDGET, inListBatches, placeholderList, readJsonColumn } from "./sql";
 import type { LexicalMatch, RagLexicalStore } from "./types";
 
 /** Options for {@link sqlLexicalStore}. */
@@ -74,24 +74,55 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             // is the one thing a durable inverted index exists to avoid.
             await exec(`CREATE INDEX IF NOT EXISTS ${terms}_lookup ON ${terms} (namespace, term)`, []);
             await exec(`CREATE INDEX IF NOT EXISTS ${documents}_namespace ON ${documents} (namespace)`, []);
-        })();
+        })().catch((error: unknown) => {
+            // Clear the memo on failure. The promise is stored before it
+            // settles, so caching a rejection would poison the store for the
+            // isolate's lifetime over one transient error.
+            ready = undefined;
+
+            throw error;
+        });
 
         await ready;
     };
 
     const removeIds = async (ids: ReadonlyArray<string>, namespace: string): Promise<void> => {
-        if (ids.length === 0) {
-            return;
+        // Batched because the placeholder count of an `IN (…)` list is
+        // caller-sized: re-indexing a 125-chunk document would otherwise bind
+        // 126 parameters, over workerd's per-statement cap of 100.
+        for (const batch of inListBatches(ids)) {
+            const list = placeholderList(batch.length);
+
+            // Postings first: a crash between the two leaves orphaned postings,
+            // which score nothing because the join to `documents` drops them. The
+            // reverse order would leave documents with no postings — findable by
+            // nothing, but still counted in the corpus statistics.
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement pair per batch, ordered on purpose
+            await exec(`DELETE FROM ${terms} WHERE namespace = ? AND id IN (${list})`, [namespace, ...batch]);
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await exec(`DELETE FROM ${documents} WHERE namespace = ? AND id IN (${list})`, [namespace, ...batch]);
         }
+    };
 
-        const list = placeholderList("sqlite", ids.length, 1);
+    /**
+     * Insert `rows` through as few statements as the placeholder cap allows.
+     *
+     * One statement per row is what this replaces: a 100-chunk document with
+     * ~150 distinct terms per chunk is ~15 000 sequential `exec` calls, and on
+     * D1 each of those is a round trip against a Worker's subrequest budget.
+     * Multi-row `VALUES` collapses them, batched so a statement never binds
+     * more than {@link IN_LIST_BUDGET} parameters.
+     */
+    const insertRows = async (into: string, columns: number, rows: ReadonlyArray<ReadonlyArray<unknown>>): Promise<void> => {
+        const tuple = `(${placeholderList(columns)})`;
 
-        // Postings first: a crash between the two leaves orphaned postings,
-        // which score nothing because the join to `documents` drops them. The
-        // reverse order would leave documents with no postings — findable by
-        // nothing, but still counted in the corpus statistics.
-        await exec(`DELETE FROM ${terms} WHERE namespace = ${placeholder("sqlite", 0)} AND id IN (${list})`, [namespace, ...ids]);
-        await exec(`DELETE FROM ${documents} WHERE namespace = ${placeholder("sqlite", 0)} AND id IN (${list})`, [namespace, ...ids]);
+        for (const batch of inListBatches(rows, IN_LIST_BUDGET / columns)) {
+            // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; concurrent fan-out would multiply the subrequest budget
+            await exec(
+                `${into} VALUES ${Array.from({ length: batch.length }).fill(tuple).join(", ")}`,
+                batch.flatMap((row) => [...row]),
+            );
+        }
     };
 
     return {
@@ -106,6 +137,9 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
                 chunks.map((chunk) => chunk.id),
                 namespace,
             );
+
+            const documentRows: unknown[][] = [];
+            const termRows: unknown[][] = [];
 
             for (const chunk of chunks) {
                 const tokens = tokenize(chunk.text);
@@ -122,25 +156,19 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
                     frequencies.set(token, (frequencies.get(token) ?? 0) + 1);
                 }
 
-                // eslint-disable-next-line no-await-in-loop -- sequential per chunk: batching would need a driver-specific multi-row form
-                await exec(`INSERT INTO ${documents} (id, namespace, text, length, metadata) VALUES (${placeholderList("sqlite", 5)})`, [
-                    chunk.id,
-                    namespace,
-                    chunk.text,
-                    tokens.length,
-                    chunk.metadata === undefined ? SQL_NULL : JSON.stringify(chunk.metadata),
-                ]);
+                documentRows.push([chunk.id, namespace, chunk.text, tokens.length, chunk.metadata === undefined ? SQL_NULL : JSON.stringify(chunk.metadata)]);
 
                 for (const [term, frequency] of frequencies) {
-                    // eslint-disable-next-line no-await-in-loop -- one statement per distinct term; see above
-                    await exec(`INSERT INTO ${terms} (term, id, namespace, frequency) VALUES (${placeholderList("sqlite", 4)})`, [
-                        term,
-                        chunk.id,
-                        namespace,
-                        frequency,
-                    ]);
+                    termRows.push([term, chunk.id, namespace, frequency]);
                 }
             }
+
+            // Postings before documents, the inverse of `removeIds` and for the
+            // same reason: a crash between the two leaves orphaned postings,
+            // which the join to `documents` drops. The reverse order would leave
+            // documents nothing can find but the corpus statistics still count.
+            await insertRows(`INSERT INTO ${terms} (term, id, namespace, frequency)`, 4, termRows);
+            await insertRows(`INSERT INTO ${documents} (id, namespace, text, length, metadata)`, 5, documentRows);
         },
         remove: async (ids, removeOptions) => {
             await ensureTables();
@@ -150,7 +178,7 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             await ensureTables();
 
             const namespace = namespaceKey(searchOptions.namespace);
-            const queryTerms = [...new Set(tokenize(query))];
+            const queryTerms = tokenizeQuery(query);
 
             if (queryTerms.length === 0) {
                 return [];
@@ -159,10 +187,9 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
             // Corpus statistics for this namespace. BM25's length normalisation
             // is relative to the average, so both are needed before any term
             // can be scored.
-            const [stats] = await exec(
-                `SELECT COUNT(*) AS document_count, COALESCE(SUM(length), 0) AS total_length FROM ${documents} WHERE namespace = ${placeholder("sqlite", 0)}`,
-                [namespace],
-            );
+            const [stats] = await exec(`SELECT COUNT(*) AS document_count, COALESCE(SUM(length), 0) AS total_length FROM ${documents} WHERE namespace = ?`, [
+                namespace,
+            ]);
             const documentCount = readCount(stats?.["document_count"]);
 
             if (documentCount === 0) {
@@ -173,13 +200,22 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
 
             // One join fetches the postings for every query term together with
             // the document row each needs for scoring and filtering — rather
-            // than a query per term plus a hydration round-trip per hit.
-            const rows = await exec(
-                `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length, d.text AS text, d.metadata AS metadata ` +
-                    `FROM ${terms} t JOIN ${documents} d ON d.id = t.id AND d.namespace = t.namespace ` +
-                    `WHERE t.namespace = ${placeholder("sqlite", 0)} AND t.term IN (${placeholderList("sqlite", queryTerms.length, 1)})`,
-                [namespace, ...queryTerms],
-            );
+            // than a query per term plus a hydration round-trip per hit. Split
+            // across statements only when the query has more distinct terms
+            // than one statement may bind placeholders for.
+            const rows: Record<string, unknown>[] = [];
+
+            for (const batch of inListBatches(queryTerms)) {
+                // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; a query rarely has more than 64 distinct terms
+                const batchRows = await exec(
+                    `SELECT t.term AS term, t.id AS id, t.frequency AS frequency, d.length AS length, d.text AS text, d.metadata AS metadata ` +
+                        `FROM ${terms} t JOIN ${documents} d ON d.id = t.id AND d.namespace = t.namespace ` +
+                        `WHERE t.namespace = ? AND t.term IN (${placeholderList(batch.length)})`,
+                    [namespace, ...batch],
+                );
+
+                rows.push(...batchRows);
+            }
 
             // Document frequency per term, needed for IDF before any score is
             // accumulated — hence the two passes over `rows`.
@@ -225,4 +261,4 @@ const sqlLexicalStore = (options: SqlLexicalStoreOptions): RagLexicalStore => {
 };
 
 export type { SqlLexicalStoreOptions };
-export default sqlLexicalStore;
+export { sqlLexicalStore };
