@@ -12,8 +12,6 @@ export type {
     ContainerAccessor,
     ContainerBindingSpec,
     ContainerEgressControls,
-    ContainerExecOptions,
-    ContainerExecResult,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,
@@ -24,7 +22,7 @@ export type {
     InstanceRetryOptions,
     PoolOptions,
 } from "./client";
-export { CONTAINER_EXEC_PATH, createContainerContext, createContainerTestContext } from "./client";
+export { createContainerContext, createContainerTestContext } from "./client";
 export {
     containerBindingName,
     containerBuildTag,
@@ -34,6 +32,8 @@ export {
     normalizeContainerImage,
     resolveContainerEnvVars,
 } from "./define-container";
+export type { ContainerExecOptions, ContainerExecResult } from "./exec";
+export { CONTAINER_EXEC_PATH } from "./exec";
 export type {
     BuildImageSource,
     ContainerConfig,

@@ -10,8 +10,11 @@
 import { LunoraError } from "@lunora/errors";
 
 import { containerBindingName } from "./define-container";
+import type { ContainerExecOptions, ContainerExecResult } from "./exec";
+import { execViaFetch } from "./exec";
 import type { DurableObjectJurisdiction } from "./jurisdiction";
 import { applyJurisdiction } from "./jurisdiction";
+import { readCapped } from "./read-capped";
 
 /**
  * Options for explicitly starting an instance (mirrors `@cloudflare/containers`).
@@ -71,65 +74,6 @@ interface ContainerNamespaceLike {
 }
 
 /**
- * Per-call options for {@link ContainerHandle.exec}.
- */
-interface ContainerExecOptions {
-    /** Arguments passed to `command`, unshelled — the container must not concatenate them into a shell string. */
-    args?: ReadonlyArray<string>;
-    /** Working directory for the command, relative to the container's own root. */
-    cwd?: string;
-    /** Extra environment for this command only, merged over the container's env. */
-    env?: Readonly<Record<string, string>>;
-
-    /**
-     * Cap on the response body, in bytes. The whole `{code,stdout,stderr}`
-     * document has to be held in memory to be parsed, and a build box or job
-     * runner routinely writes tens of megabytes — a single unbounded `exec`
-     * that returns more than the isolate's memory limit kills the isolate and
-     * every other in-flight request sharing it, not just this call. So a
-     * runner that overruns the cap fails the call loudly rather than taking
-     * the shard down with it; raise this (or have the runner cap its own
-     * output) when a command legitimately produces more.
-     *
-     * Default {@link DEFAULT_EXEC_MAX_OUTPUT_BYTES} (1MB).
-     */
-    maxOutputBytes?: number;
-
-    /**
-     * Abort the call. Composed with {@link ContainerExecOptions.timeoutMs} when
-     * both are given — whichever fires first wins.
-     */
-    signal?: AbortSignal;
-
-    /**
-     * Give up after this many ms. Covers the whole call — the request *and*
-     * reading the response body, since `fetch` resolves on headers and a
-     * runner that answers `200` and then stalls mid-body would otherwise sit
-     * past the deadline. Sent to the container as well, so a well-behaved
-     * runner can kill the process rather than leak it when the caller walks
-     * away.
-     */
-    timeoutMs?: number;
-}
-
-/**
- * The outcome of a {@link ContainerHandle.exec} call.
- *
- * A non-zero `code` is **not** an error: a command that ran and failed is a
- * result, and the caller decides what to do with it. Only a failure to *run*
- * the command — transport, a non-2xx from the runner, an unparseable body —
- * throws.
- */
-interface ContainerExecResult {
-    /** Process exit code. Non-zero means the command ran and failed. */
-    code: number;
-    /** Everything the command wrote to stderr. */
-    stderr: string;
-    /** Everything the command wrote to stdout. */
-    stdout: string;
-}
-
-/**
  * A handle on one container instance (one Durable Object).
  */
 interface ContainerHandle {
@@ -137,7 +81,7 @@ interface ContainerHandle {
      * Run a command inside the container and return its exit code and output.
      *
      * A container is an HTTP server, so there is no platform-level exec to call:
-     * the command is POSTed to {@link CONTAINER_EXEC_PATH} and the container app
+     * the command is POSTed to `/__lunora/exec` and the container app
      * serves that route. What this method adds over hand-rolling that fetch is
      * the **contract** — a pinned path, a typed request and response, and the
      * distinction between "the command failed" (a `code`) and "the command could
@@ -405,75 +349,6 @@ const COLD_START_START_FAILURE_BODY = "Failed to start container:";
  */
 const COLD_START_SENTINEL_SCAN_BYTES = 1024;
 
-/** The outcome of a bounded body read: the decoded text, and whether the cap cut it short. */
-interface CappedBody {
-    /** `true` when the body still had bytes left when the limit was reached. */
-    overflowed: boolean;
-    /** The decoded prefix, at most `limit` bytes' worth. */
-    text: string;
-}
-
-/**
- * Read at most `limit` bytes off `stream`, then cancel the reader so the rest is
- * never pulled. `text()`-then-slice cannot substitute: it buffers the WHOLE body
- * first, so the cap protects the string's length and nothing about the memory
- * that produced it. Inside a 128MB isolate that distinction is the difference
- * between a failed call and a terminated isolate.
- *
- * `signal` is what keeps a bounded read from becoming an unbounded *wait*. An
- * abort does not interrupt a pending `read()` on its own once `fetch` has handed
- * the body over, so the listener cancels the reader — that is what unblocks it —
- * and the signal's reason is re-thrown afterwards, so a caller sees the deadline
- * that fired rather than a silently short body.
- */
-const readCapped = async (stream: Response["body"], limit: number, signal?: AbortSignal): Promise<CappedBody> => {
-    if (stream === null) {
-        return { overflowed: false, text: "" };
-    }
-
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    const onAbort = (): void => {
-        reader.cancel().catch(() => undefined);
-    };
-
-    signal?.addEventListener("abort", onAbort);
-
-    let text = "";
-    let bytes = 0;
-    let overflowed = false;
-
-    try {
-        while (signal?.aborted !== true) {
-            // eslint-disable-next-line no-await-in-loop -- sequentially accumulate a bounded prefix, then stop.
-            const { done, value } = await reader.read();
-
-            if (done) {
-                break;
-            }
-
-            bytes += value.byteLength;
-
-            if (bytes > limit) {
-                overflowed = true;
-
-                break;
-            }
-
-            text += decoder.decode(value, { stream: true });
-        }
-    } finally {
-        signal?.removeEventListener("abort", onAbort);
-        await reader.cancel();
-    }
-
-    if (signal?.aborted === true) {
-        throw signal.reason as Error;
-    }
-
-    return { overflowed, text };
-};
-
 /**
  * Read at most {@link COLD_START_SENTINEL_SCAN_BYTES} of a response body off a
  * clone, so the caller's `response` stays untouched.
@@ -517,209 +392,6 @@ const isColdStartTransient = async (response: Response): Promise<boolean> => {
 
 /** Error-message prefix naming the accessor a handle came from. */
 const handleLabel = (spec: ContainerBindingSpec): string => `ctx.containers.${spec.exportName}`;
-
-/**
- * The route {@link ContainerHandle.exec} POSTs to. Namespaced under
- * `/__lunora/` so it cannot collide with an application route the container
- * already serves — the previous ad-hoc convention was a bare `/exec`, which an
- * app could plausibly own for its own purposes.
- *
- * Exported because it is a *contract*, not an implementation detail: a
- * container image has to serve exactly this route, and `@lunora/agent`'s
- * human-in-the-loop gate has to recognise it. Both had it hard-coded as a
- * second literal, which drifts silently — and on the gate's side, drift
- * un-gates model-chosen command execution.
- */
-const CONTAINER_EXEC_PATH = "/__lunora/exec";
-
-/** How much of a failed exec response body is quoted back in the thrown error. */
-const EXEC_ERROR_BODY_LIMIT = 512;
-
-/** Default cap on an exec response body. See {@link ContainerExecOptions.maxOutputBytes}. */
-const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1_000_000;
-
-/** Replacement for a per-call env value quoted back out of a container's error body. */
-const REDACTED_ENV_VALUE = "<redacted>";
-
-/**
- * Strip the per-call `env` values out of text quoted back from the container.
- *
- * `exec` sends `env` — documented as "extra environment for this command only",
- * i.e. where a caller puts a token — in the request body, and a runner whose
- * error handler echoes the payload it received (the default shape of an
- * Express/Fastify 400) puts those values in its response. `toErrorBody` redacts
- * `INTERNAL` before it reaches a client, but `redacted: true` still means the
- * raw message is *logged*, landing in the durable log store and Studio Issues.
- */
-const redactEnvValues = (text: string, environment: Readonly<Record<string, string>> | undefined): string => {
-    if (environment === undefined) {
-        return text;
-    }
-
-    let redacted = text;
-
-    for (const value of Object.values(environment)) {
-        if (value.length > 0) {
-            redacted = redacted.split(value).join(REDACTED_ENV_VALUE);
-        }
-    }
-
-    return redacted;
-};
-
-/**
- * Narrow an unknown parsed body to {@link ContainerExecResult}. `stdout`/`stderr`
- * default to `""` when absent — a command that wrote nothing to a stream is
- * normal, and a runner is entitled to omit the empty string. `code` has no
- * sensible default: a missing exit code means the runner did not report whether
- * the command succeeded, which is exactly the ambiguity this contract exists to
- * remove.
- */
-const toExecResult = (parsed: unknown): ContainerExecResult | undefined => {
-    if (parsed === null || typeof parsed !== "object") {
-        return undefined;
-    }
-
-    const { code, stderr, stdout } = parsed as Record<string, unknown>;
-
-    if (typeof code !== "number") {
-        return undefined;
-    }
-
-    return {
-        code,
-        stderr: typeof stderr === "string" ? stderr : "",
-        stdout: typeof stdout === "string" ? stdout : "",
-    };
-};
-
-/** A resolved exec deadline: the signal to send, plus the timer teardown. */
-interface ExecDeadline {
-    /** Clear the deadline timer. Always call it, or a fast response leaves a pending timer behind. */
-    dispose: () => void;
-    /** The signal to hand `fetch`, or `undefined` when the call is unbounded. */
-    signal: AbortSignal | undefined;
-}
-
-/**
- * Combine a caller's `signal` with a `timeoutMs` deadline.
- *
- * Deliberately an explicit `AbortController` + `setTimeout` rather than
- * `AbortSignal.timeout(ms)`. The built-in is **weakly held**: nothing in the
- * platform keeps the returned signal alive, so once the only strong reference
- * goes out of scope the signal can be collected and the deadline **silently
- * never fires** — a caller's `timeoutMs` becomes an unbounded call. That is not
- * theoretical: written with `AbortSignal.timeout` this failed roughly three runs
- * in eight, hanging until the test runner's own timeout. A controller captured
- * by the timer callback is strongly reachable for exactly as long as the timer
- * is pending, which is the lifetime we actually want.
- *
- * `dispose` is the other half: without it a call that answers in 5ms leaves a
- * 120s timer pending.
- */
-const execDeadline = (signal: AbortSignal | undefined, timeoutMs: number | undefined): ExecDeadline => {
-    if (timeoutMs === undefined) {
-        return { dispose: () => {}, signal };
-    }
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-        controller.abort(new LunoraError("INTERNAL", `ctx.containers: exec timed out after ${String(timeoutMs)}ms`));
-    }, timeoutMs);
-
-    return {
-        dispose: () => {
-            clearTimeout(timer);
-        },
-        signal: signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]),
-    };
-};
-
-/**
- * Build {@link ContainerHandle.exec} over a handle's own `fetch`, so the exec
- * contract inherits every behaviour that `fetch` already has — cold-start
- * retry, `.port()` routing, pool re-picking, trace propagation. Defining it once
- * here is what stops the two handle factories drifting apart.
- */
-const execViaFetch =
-    (fetchFunction: ContainerHandle["fetch"], label: string): ContainerHandle["exec"] =>
-    async (command, options = {}) => {
-        if (typeof command !== "string" || command.length === 0) {
-            throw new LunoraError("BAD_REQUEST", `${label}: exec requires a non-empty \`command\``);
-        }
-
-        const deadline = execDeadline(options.signal, options.timeoutMs);
-
-        // The whole call, not just the fetch: `fetch` resolves on HEADERS, so
-        // disposing the deadline around the request alone clears the timer
-        // before the body — the half of the call most likely to stall — is even
-        // read. A runner that answers `200 application/json` when it *starts*
-        // the command (the natural shape for a streaming runner, and what any
-        // wedged container degrades into) would then hold the shard DO open
-        // indefinitely with `timeoutMs` already expired.
-        try {
-            const response = await fetchFunction(CONTAINER_EXEC_PATH, {
-                body: JSON.stringify({
-                    args: options.args ?? [],
-                    command,
-                    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-                    ...(options.env === undefined ? {} : { env: options.env }),
-                    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-                }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-                ...(deadline.signal === undefined ? {} : { signal: deadline.signal }),
-            });
-
-            if (!response.ok) {
-                const quoted = await readCapped(response.body, EXEC_ERROR_BODY_LIMIT, deadline.signal).then(
-                    (body) => redactEnvValues(body.text, options.env),
-                    () => "<unreadable body>",
-                );
-
-                throw new LunoraError(
-                    "INTERNAL",
-                    `${label}: exec failed — the container answered ${String(response.status)} for POST ${CONTAINER_EXEC_PATH}. ` +
-                        `Does it serve that route? Body: ${quoted}`,
-                );
-            }
-
-            const limit = options.maxOutputBytes ?? DEFAULT_EXEC_MAX_OUTPUT_BYTES;
-            const body = await readCapped(response.body, limit, deadline.signal);
-
-            if (body.overflowed) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `${label}: exec response exceeded ${String(limit)} bytes and was abandoned — it is buffered whole to be parsed, ` +
-                        `so an unbounded one would exhaust the isolate. Cap the command's output, or raise \`maxOutputBytes\`.`,
-                );
-            }
-
-            let parsed: unknown;
-
-            try {
-                parsed = JSON.parse(body.text);
-            } catch {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `${label}: exec response was not JSON — expected {"code","stdout","stderr"} from POST ${CONTAINER_EXEC_PATH}`,
-                );
-            }
-
-            const result = toExecResult(parsed);
-
-            if (result === undefined) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `${label}: exec response is missing a numeric \`code\` — expected {"code","stdout","stderr"} from POST ${CONTAINER_EXEC_PATH}`,
-                );
-            }
-
-            return result;
-        } finally {
-            deadline.dispose();
-        }
-    };
 
 /**
  * Wrap a per-attempt `send` with the cold-start retry: rebuild the request each
@@ -1045,8 +717,6 @@ export type {
     ContainerAccessor,
     ContainerBindingSpec,
     ContainerEgressControls,
-    ContainerExecOptions,
-    ContainerExecResult,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,
@@ -1056,6 +726,6 @@ export type {
     InstanceRetryOptions,
     PoolOptions,
 };
-export { CONTAINER_EXEC_PATH, createContainerContext, createContainerTestContext };
+export { createContainerContext, createContainerTestContext };
 
 export { type DurableObjectJurisdiction } from "./jurisdiction";
