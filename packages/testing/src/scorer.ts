@@ -237,4 +237,4 @@ const evaluate = async (
 };
 
 export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample };
-export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample };
+export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, parseJudgeScore, regexScorer, scoreSample };
