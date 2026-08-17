@@ -268,13 +268,27 @@ injected executor — a Durable Object's SQLite, D1, or `node:sqlite`. **No
 Vectorize, no extra Cloudflare product.**
 
 ```ts
+import type { RagSqlExec } from "@lunora/ai/rag";
 import { defineRag, sqliteVectorStore } from "@lunora/ai/rag";
+
+// Whatever your engine exposes. On D1:
+const exec: RagSqlExec = async (sql, parameters) =>
+    (
+        await env.DB.prepare(sql)
+            .bind(...parameters)
+            .all()
+    ).results;
+// Inside a Durable Object it is `(sql, parameters) => state.storage.sql.exec(sql, ...parameters).toArray()`.
 
 export const docs = defineRag({
     index: "docs",
-    store: (ctx) => sqliteVectorStore({ exec: (sql, params) => ctx.storage.sql.exec(sql, ...params).toArray() }),
+    store: () => sqliteVectorStore({ exec }),
 });
 ```
+
+`ctx.vectors` is not needed here — with a `store` configured it is never read,
+and `RagContext.vectors` is optional, so an app with no Vectorize index type-
+checks.
 
 When the executor is a shard's own SQLite, the shard **is** the tenant
 boundary — so the account-global-namespace hazard that Vectorize forces you to
@@ -375,9 +389,14 @@ import { defineRag, sqlLexicalStore } from "@lunora/ai/rag";
 
 export const docs = defineRag({
     index: "docs",
-    lexicalStore: sqlLexicalStore({ exec: (sql, params) => ctx.storage.sql.exec(sql, ...params).toArray() }),
+    lexicalStore: sqlLexicalStore({ exec }), // the same `exec` as above
 });
 ```
+
+Attaching a lexical store to a corpus that is **already** indexed needs one pass
+with `index({ …, reindex: true })`: an ordinary re-sync short-circuits on the
+content hash before it reaches the new store, so the keyword leg would stay
+empty.
 
 Both score through the same BM25 kernel, so swapping one for the other does not
 move the ranking — asserted directly in the test suite. Indexing mirrors chunks
@@ -494,32 +513,42 @@ import { defineRagSource } from "@lunora/ai/rag";
 
 const ingest = defineRagSource(docs(ctx), { namespace: ctx.shardKey });
 
-const report = await ingest.sync({
-    list: async function* () {
-        for await (const object of bucket.list()) {
-            yield { key: object.key, contentType: object.httpMetadata?.contentType, metadata: { url: object.key } };
-        }
+const report = await ingest.sync(
+    {
+        list: async function* () {
+            for await (const object of bucket.list()) {
+                yield { key: object.key, contentType: object.httpMetadata?.contentType, metadata: { url: object.key } };
+            }
+        },
+        get: async (object) => (await bucket.get(object.key))?.text(),
     },
-    get: async (object) => (await bucket.get(object.key))?.text(),
-});
+    // Optional. What you already indexed — anything here that this pass does
+    // not list is deleted from the index.
+    { knownKeys: await loadIndexedKeys() },
+);
 // → { indexed: [...], unchanged: [...], skipped: [...], pruned: [...] }
 ```
 
 The object source is **injected**, so this runs over an R2 bucket, S3, a
 filesystem, or a database table without `@lunora/ai` depending on any of them.
-`list` may be an async generator, so a bucket with a million keys pages through
-without materialising every key first.
+`list` may be an async generator, so the caller decides how to page a large
+bucket. One pass collects the keys it yields — it needs the full current set to
+work out what disappeared — but never more than one object's body at a time.
 
 **Re-syncing is free.** `rag.index` short-circuits on a content hash, so an
 unchanged object costs one `get` and no embedding — which makes running this on
 a cron the normal way to use it.
 
-**Pruning keeps the index a mirror.** Objects that disappeared from the source
-are removed, because a document deleted upstream but left indexed keeps being
-retrieved and cited. The tracking set is per-isolate, so the _first_ pass after
-a restart prunes nothing rather than wiping an index it has no record of
-building — a stale entry is recoverable, a wrongly-pruned one costs a full
-re-embed. Set `prune: false` to disable.
+**Pruning keeps the index a mirror**, and it is the caller's set. Pass
+`knownKeys` — the keys you believe the index holds — and anything missing from
+this pass's `list()` is removed, because a document deleted upstream but left
+indexed keeps being retrieved and cited. Omit it and nothing is pruned.
+
+It is explicit because nothing else can hold that set honestly: the shape above
+builds the source per request, from a per-request `docs(ctx)`, so a set
+remembered inside the instance would be empty every time — a prune that
+defaulted on would in practice never run and never say so. Persist the keys (a
+table, a KV entry, the bucket listing itself) and hand them in.
 
 **Extractors are injected too**, keyed by content type with `"*"` as a fallback.
 Parsing PDF is a large dependency, and pulling one in for everybody to serve the
