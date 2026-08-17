@@ -5,6 +5,8 @@ import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import type { D1RetryOptions } from "./retry";
+import { withD1Retry } from "./retry";
 
 /**
  * D1 client wrapping the workers `env.DB` binding. The recommended path is
@@ -67,19 +69,31 @@ const D1_FIRST_UNCONSTRAINED = "first-unconstrained";
 
 /** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
 class D1Session {
+    /**
+     * Retry policy for this session's reads. See {@link D1Client} for why reads
+     * retry and writes do not.
+     */
+    private readonly retry: D1RetryOptions | undefined;
+
     private readonly session: D1SessionLike;
 
     /** See {@link D1Client.stmtCache}. Scoped per session. */
     private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
 
-    public constructor(session: D1SessionLike) {
+    public constructor(session: D1SessionLike, retry?: D1RetryOptions) {
         this.session = session;
+        this.retry = retry;
     }
 
     public prepare(sql: string): D1PreparedStatementLike {
         return prepareCached(this.stmtCache, (text) => this.session.prepare(text), sql);
     }
 
+    /**
+     * Execute a statement. **Not retried** — `run` is the write path, and a
+     * transient D1 error does not say whether the write applied. See
+     * {@link D1Client}.
+     */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
         return this.prepare(sql)
@@ -87,17 +101,27 @@ class D1Session {
             .run<T>();
     }
 
+    /** Read all rows, retrying D1's transient failures. */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .all<T>();
+        return withD1Retry(
+            async () =>
+                this.prepare(sql)
+                    .bind(...binds)
+                    .all<T>(),
+            this.retry,
+        );
     }
 
+    /** Read the first row, retrying D1's transient failures. */
     public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .first<T>();
+        return withD1Retry(
+            async () =>
+                this.prepare(sql)
+                    .bind(...binds)
+                    .first<T>(),
+            this.retry,
+        );
     }
 
     /**
@@ -109,8 +133,25 @@ class D1Session {
     }
 }
 
+/**
+ * A D1 handle that retries the platform's expected transient failures.
+ *
+ * D1 produces a documented baseline of infrastructural errors even when
+ * healthy — Cloudflare's team calls a handful every few hours "not
+ * unexpected" — and their guidance is to retry. A client that does not has
+ * adopted that error rate as the application's own.
+ *
+ * **Reads retry; writes do not.** Every transient D1 error is ambiguous about
+ * whether the statement applied, and D1 has no interactive transactions to
+ * resolve it. Silently re-running a non-idempotent write after a lost response
+ * double-applies it. Wrap genuinely idempotent writes in {@link withD1Retry}
+ * yourself, per call.
+ */
 class D1Client {
     private readonly db: D1DatabaseLike;
+
+    /** Retry policy applied to reads, and inherited by sessions this client mints. */
+    private readonly retry: D1RetryOptions | undefined;
 
     /**
      * SQL string -> prepared statement. Prepared statements are reusable in
@@ -126,8 +167,9 @@ class D1Client {
      */
     private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
 
-    public constructor(database: D1DatabaseLike) {
+    public constructor(database: D1DatabaseLike, retry?: D1RetryOptions) {
         this.db = database;
+        this.retry = retry;
     }
 
     /**
@@ -144,7 +186,7 @@ class D1Client {
     public withSession(bookmark?: string): D1Session {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
-        return new D1Session(session);
+        return new D1Session(session, this.retry);
     }
 
     /**
@@ -213,5 +255,6 @@ class D1Client {
 }
 
 export { D1Client, D1Session };
-
+export type { D1RetryOptions } from "./retry";
+export { isTransientD1Error, withD1Retry } from "./retry";
 export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";

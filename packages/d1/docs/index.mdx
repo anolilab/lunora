@@ -101,6 +101,62 @@ A migration must be a single SQL statement (a trailing `;` is allowed). The
 runner parses with a quote- and comment-aware lexer and throws if it finds a
 second statement; split multi-statement DDL across separate `Migration` entries.
 
+## Transient failures and retries
+
+**D1 has a documented, expected, non-zero baseline error rate.** Cloudflare's own
+team describes a handful of errors every few hours as "not unexpected" even on a
+healthy database, and their guidance is to "retry their query and unless there is
+an underlying issue with the database, it should eventually work". The failures
+are infrastructural, not query-shaped:
+
+| Error                                                                      | Cause                                       |
+| -------------------------------------------------------------------------- | ------------------------------------------- |
+| `D1 DB storage operation exceeded timeout which caused object to be reset` | Storage object recycled mid-operation       |
+| `D1_ERROR: Network connection lost`                                        | Dropped connection — the most common        |
+| `Internal error while starting up D1 DB storage caused object to be reset` | Storage object failed to come up            |
+| `D1 DB's isolate exceeded its memory limit and was reset`                  | Isolate evicted; no query rewrite avoids it |
+
+An application that does not retry has adopted that error rate as its own, so
+`D1Client` retries for you — with exponential backoff and full jitter, so a
+fleet of Workers that hit the same blip does not re-converge on the recovering
+database as one synchronised wave.
+
+### Reads retry; writes do not
+
+Every error above is **ambiguous about whether the statement applied**. "The
+connection dropped" does not say whether it dropped before or after the write
+committed, and D1 has no interactive transactions to resolve it.
+
+So `all()` and `first()` retry automatically, and `run()` and `batch()` do not.
+Silently re-running `UPDATE accounts SET balance = balance - 10` because the
+response was lost is how a retry layer turns a transient blip into a corrupted
+balance.
+
+Writes that are genuinely idempotent — an upsert keyed on a primary key, a
+delete by id, an `INSERT OR IGNORE` — can opt in per call:
+
+```ts
+import { withD1Retry } from "@lunora/d1";
+
+await withD1Retry(() => client.run("INSERT OR IGNORE INTO seen (id) VALUES (?)", id));
+```
+
+Tune the policy per client, or narrow it:
+
+```ts
+const client = new D1Client(env.DB, {
+    attempts: 5,
+    baseDelayMs: 25,
+    onRetry: ({ attempt, error }) => console.warn(`d1 retry ${attempt}`, error),
+});
+```
+
+`isTransientD1Error` is exported if you are classifying errors yourself. It is
+deliberately conservative: an unrecognised error is treated as **permanent** and
+surfaces immediately, and deterministic failures (constraint violations, syntax
+errors, missing tables) are never retried — re-running one turns a single fast
+failure into three slow ones and hides the cause.
+
 ## Atomicity
 
 Each migration's body and its tracking-table INSERT run together in one
