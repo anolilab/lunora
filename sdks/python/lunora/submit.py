@@ -195,9 +195,6 @@ async def submit_write(client: Any, options: SubmitOptions) -> MutationOutcome:
     write.
     """
 
-    if client._closed:
-        raise OfflineError(CLIENT_CLOSED, "client is closed")
-
     write_id = options.mutation_id if options.mutation_id is not None else random_id()
     # The consumer's callback runs FIRST and unlocked: what comes back is data.
     overrides = _record_optimistic(client, options)
@@ -210,6 +207,13 @@ async def submit_write(client: Any, options: SubmitOptions) -> MutationOutcome:
     # write in a queue nothing will drain until the next disconnect — after
     # `submit` has already answered "queued".
     with client._lock:
+        # Checked HERE rather than on the way in, so a close cannot land between
+        # the check and the enqueue and strand the write in a queue that was just
+        # emptied: nothing flushes a closed client, so the caller would be told
+        # "queued", never settled, and its overlay never rolled back.
+        if client._closed:
+            raise OfflineError(CLIENT_CLOSED, "client is closed")
+
         confirms, rollbacks = _install_layers(client, options, overrides, deferred)
         queue_it = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
 

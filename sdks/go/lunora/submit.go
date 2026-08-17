@@ -171,6 +171,19 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	// them, and the write lands in a queue nothing will drain until the next
 	// disconnect — after Submit has already answered "queued".
 	c.mu.Lock()
+
+	// Re-checked HERE, not just on the way in: a Close landing in between takes
+	// the lock, drains the queue and clears the sender, so this write would enqueue
+	// into a queue that was just emptied and nothing will ever flush a closed
+	// client — the caller is told "queued", the settle never fires, and the overlay
+	// never rolls back.
+	if c.closed {
+		c.mu.Unlock()
+		c.settleLayers(nil, rollbacks, nil)
+
+		return MutationOutcome{}, ErrClientClosed
+	}
+
 	queue := c.offline
 	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
 

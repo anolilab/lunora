@@ -1075,3 +1075,38 @@ func TestOptimisticUpdateMayReEnterTheClient(t *testing.T) {
 		t.Fatal("Submit deadlocked: the consumer's OptimisticUpdate ran inside the client's critical section")
 	}
 }
+
+// A Close racing a Submit must never leave a write in the queue it just emptied:
+// nothing flushes a closed client, so such a write is never sent, never settled,
+// and its optimistic overlay never rolls back — while Submit reported "queued".
+func TestCloseRacingSubmitStrandsNoWrite(t *testing.T) {
+	for attempt := range 200 {
+		client := NewClient("https://app.example", nil)
+
+		client.AttachSocket(func(map[string]any) error { return nil })
+		client.DetachSocket()
+
+		var wait sync.WaitGroup
+
+		wait.Add(2)
+
+		go func() {
+			defer wait.Done()
+
+			//nolint:errcheck // a closed client legitimately refuses the write; only the queue state is under test.
+			_, _ = client.Submit(SubmitOptions{FunctionPath: "messages:send"})
+		}()
+
+		go func() {
+			defer wait.Done()
+
+			client.Close()
+		}()
+
+		wait.Wait()
+
+		if pending := client.PendingMutationCount(); pending != 0 {
+			t.Fatalf("attempt %d: %d write(s) stranded in a closed client's queue", attempt, pending)
+		}
+	}
+}

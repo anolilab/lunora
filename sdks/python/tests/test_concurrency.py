@@ -53,7 +53,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import LunoraClient
-from lunora.offline import OfflineQueue
+from lunora.offline import CLIENT_CLOSED, OfflineError, OfflineQueue
 from lunora.submit import SubmitOptions
 
 THREADS = 4
@@ -172,6 +172,29 @@ class TestConsumerCallbacksAreNotHeldUnderTheLock(unittest.TestCase):
 
         self.assertTrue(_finishes(lambda: asyncio.run(client.flush_offline_queue())), "a precondition must run with the client's lock released")
         self.assertEqual(seen, [1])
+
+    def test_a_close_landing_mid_submit_strands_no_write(self):
+        """A close racing a submit must not leave the write in the queue it emptied.
+
+        Driven through ``optimistic_update`` because that callback runs in exactly
+        the window the race needs — after the write was accepted, with the lock
+        released, before the enqueue. Nothing flushes a closed client, so a write
+        landing there is never sent, never settled and never rolled back, while
+        ``submit`` reported it durably queued.
+        """
+
+        client = self._client()
+
+        def update(_store, _args):
+            client.close()
+
+        submit = client.submit(SubmitOptions(args={}, function_path="messages:send", optimistic_update=update))
+
+        with self.assertRaises(OfflineError) as raised:
+            asyncio.run(submit)
+
+        self.assertEqual(raised.exception.code, CLIENT_CLOSED)
+        self.assertEqual(client.pending_mutation_count, 0)
 
 
 if __name__ == "__main__":
