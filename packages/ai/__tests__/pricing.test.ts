@@ -6,7 +6,7 @@ describe("lookupModelPrice", () => {
     it("finds a Workers AI model by its exact id", () => {
         expect.assertions(1);
 
-        expect(lookupModelPrice("@cf/baai/bge-base-en-v1.5")).toStrictEqual({ input: 0.02 });
+        expect(lookupModelPrice("@cf/baai/bge-base-en-v1.5")).toStrictEqual({ input: 0.067 });
     });
 
     it("strips a provider prefix", () => {
@@ -25,7 +25,7 @@ describe("lookupModelPrice", () => {
         expect.assertions(1);
 
         // Reducing "@cf/baai/bge-m3" to "bge-m3" would miss its entry.
-        expect(lookupModelPrice("@cf/baai/bge-m3")).toStrictEqual({ input: 0.02 });
+        expect(lookupModelPrice("@cf/baai/bge-m3")).toStrictEqual({ input: 0.012 });
     });
 
     it("returns undefined for a model it does not cover", () => {
