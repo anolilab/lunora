@@ -137,13 +137,24 @@ export interface RagContext {
      * untraced when it is absent (a hand-built context / test).
      */
     trace?: unknown;
-    vectors: RagVectors;
+
+    /**
+     * The Vectorize facade backing the default store — an `ActionCtx`'s
+     * `ctx.vectors` satisfies it.
+     *
+     * OPTIONAL, because it is never read when {@link RagConfig.store} is set,
+     * and codegen only emits `ctx.vectors` for a schema that declares a vector
+     * index. Requiring it made "the store that needs no Vectorize" impossible
+     * to type-check in an app with no Vectorize index. Absent with no `store`
+     * configured throws a directed error when the RAG is bound.
+     */
+    vectors?: RagVectors;
 }
 
 /**
  * Pluggable chunk-text storage. By default chunk text is stored in vector
  * metadata (`__ragText`), which forces `returnMetadata: "all"` on retrieval and
- * caps `topK` at 20 (the Vectorize full-metadata ceiling) — and each vector's
+ * caps `topK` at 50 (the Vectorize full-metadata ceiling) — and each vector's
  * metadata must stay under the ~10 KiB Vectorize cap. Supplying a text store
  * (a DO table, KV, …) moves the text out of metadata: retrieval queries with
  * `returnMetadata: "indexed"` (topK up to 100) and hydrates text by chunk id.
@@ -279,8 +290,9 @@ export interface RagConfig {
      * repeated `retrieve()` of the same question does not re-embed it.
      *
      * Default 0 (retain nothing beyond one call). Indexing always batches its
-     * embeds regardless of this setting — the batch is request-scoped and does
-     * not consume the budget.
+     * embeds regardless of this setting — the batch lives in its own
+     * request-scoped map, released when `index()` returns, so it neither needs
+     * this budget nor evicts what is held in it.
      *
      * Sized in entries, not bytes, but budget in bytes: one 1536-dimension
      * embedding is ~12 KB, so 100 entries is over a megabyte held in the
@@ -396,7 +408,7 @@ export interface RagConfig {
      * two topically-similar passages actually answers *this* question. A
      * cross-encoder sees both at once and orders them accordingly.
      *
-     * Retrieval fetches {@link RagConfig.rerankCandidates} chunks, hands them
+     * Retrieval fetches {@link RagConfig.candidates} chunks, hands them
      * here, and keeps the first `topK` of whatever comes back — so the hook may
      * reorder and drop, but its output order is final. Runs after hybrid fusion
      * and before `chunkContext` expansion.
@@ -439,7 +451,7 @@ export interface RagConfig {
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
 
-    /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */
+    /** Default retrieval depth. Default 5. Capped by the store: 50 (metadata mode) / 100 (text-store mode) on Vectorize. */
     topK?: number;
 
     /**
@@ -493,6 +505,19 @@ export interface IndexInput {
      * bar or logging per-chunk status.
      */
     onChunk?: (info: { chunkIndex: number; id: string; text: string; total: number }) => void;
+
+    /**
+     * Index this source even when its content hash is unchanged.
+     *
+     * The hash short-circuit skips chunking, embedding and every write — which
+     * is what makes a cron re-sync cheap, and also what makes attaching a
+     * `textStore` or `lexicalStore` to an ALREADY-indexed corpus a silent no-op:
+     * the new store is never written, so the keyword leg returns nothing
+     * forever with no error. Set this for the one pass that backfills it.
+     *
+     * It re-embeds, so it is not a setting to leave on.
+     */
+    reindex?: boolean;
     /** The document body to chunk + embed + upsert. */
     text: string;
 }
