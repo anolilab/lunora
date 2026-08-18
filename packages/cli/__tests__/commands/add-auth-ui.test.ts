@@ -84,7 +84,7 @@ describe("detectAuthUiItem", () => {
     });
 
     it("routes Solid 2 to its own payload, not the Solid 1.x one", () => {
-        expect.assertions(6);
+        expect.assertions(9);
 
         // A Solid 2 project still depends on `solid-js` and `@lunora/solid`, both
         // of which would otherwise match `auth-ui-solid` — whose screens are 1.x
@@ -93,6 +93,12 @@ describe("detectAuthUiItem", () => {
         expect(detectAuthUiItem({ "solid-js": "^2.0.0-rc.0" })).toBe("auth-ui-solid-v2");
         expect(isSolid2Project({ "solid-js": "^2.0.0-rc.0" })).toBe(true);
         expect(isSolid2Project({ "@solidjs/web": "^2.0.0-rc.0" })).toBe(true);
+
+        // npm accepts partial ranges, so a major on its own is a legal way to
+        // pin Solid 2 and has no dot for the parser to anchor on.
+        expect(isSolid2Project({ "solid-js": "2" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": "^2" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": "1" })).toBe(false);
 
         // Solid 1.x is untouched — it still resolves to the 1.x payload.
         expect(isSolid2Project({ "solid-js": "^1.9.14" })).toBe(false);

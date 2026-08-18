@@ -1,28 +1,53 @@
 {
+    // No `ignore.files` here, deliberately. React Doctor 0.7.6 treats that key as a
+    // whole-project lint kill switch — any value, even a glob matching nothing, drops
+    // *every* lint diagnostic in the package, not just the listed paths. The entry
+    // that once named the two Solid ports was silently switching off the React scan
+    // for `src/react/**` too. Everything below is scoped per rule instead.
     "ignore": {
-        // This package holds six framework ports of the same screens. Only `src/react/**`
-        // is React; `src/solid/**` (Solid 1.x) and `src/solid-v2/**` (Solid 2.0) are
-        // SolidJS, which React Doctor's file globs pick up because Solid also compiles
-        // `.tsx`. Solid's semantics are not React's, so the React rules reported against
-        // them are false by construction:
-        //
-        //   - `react-doctor/rules-of-hooks` — Solid has no hook order to preserve.
-        //     `useAuthUI()` is a context read, safe from any call site, which is exactly
-        //     what `themeStyle()` does.
-        //   - `react-hooks-js/static-components` — Solid components run once, not per
-        //     render, so a component value produced inside one resets no state.
-        //   - `react-doctor/only-export-components` — scoped to React Fast Refresh.
-        //
-        // Both Solid ports have their own gates: `tsc -p tsconfig.solid.json` and
-        // `tsc -p tsconfig.solid-v2.json` (a program holds one jsx/jsxImportSource pair,
-        // so neither can share React's) plus render tests — `__tests__/solid/` for 1.x
-        // and `tests/auth-ui-solid-v2/` for 2.0, which runs against a real Solid 2.
-        //
-        // `src/vue/**`, `src/svelte/**`, and `src/angular/**` need no entry — React Doctor
-        // does not scan `.vue`/`.svelte`, and the Angular port is plain `.ts`.
-        "files": ["src/solid/**", "src/solid-v2/**"],
-
         "overrides": [
+            {
+                // This package holds six framework ports of the same screens. Only
+                // `src/react/**` is React; `src/solid/**` (Solid 1.x) and `src/solid-v2/**`
+                // (Solid 2.0) are SolidJS, which React Doctor's file globs pick up because
+                // Solid also compiles `.tsx`. The Svelte, Vue, and Angular ports keep their
+                // markup in files React Doctor does not read, but their `.ts` seams
+                // (`controller-store.ts` and friends) are scanned the same way.
+                //
+                // Solid's and Svelte's semantics are not React's, so every React-runtime and
+                // React-Compiler rule reported against these files is false by construction:
+                //
+                //   - `react-doctor/rules-of-hooks`, `react-hooks-js/hooks` — neither
+                //     framework has a hook order to preserve. `useAuthUI()` is a context
+                //     read, safe from any call site, which is exactly what `themeStyle()`,
+                //     `createController()`, and `controllerStore()` do with it.
+                //   - `react-hooks-js/static-components` — Solid components run once, not
+                //     per render, so a component value produced inside one resets no state.
+                //   - `react-hooks-js/immutability`, `react-hooks-js/todo` — React Compiler's
+                //     "no writes after render" model. A Solid component body *is* the setup
+                //     pass; assigning a `ref` local there is the documented way to reach an
+                //     element.
+                //   - `react-doctor/only-export-components` — scoped to React Fast Refresh.
+                //
+                // Scoped per rule rather than by ignoring the files: everything React Doctor
+                // checks that is not React-shaped — accessibility, dead code, complexity,
+                // security — is as true of a Solid `.tsx` as of a React one.
+                //
+                // Both Solid ports have their own gates on top: `tsc -p tsconfig.solid.json`
+                // and `tsc -p tsconfig.solid-v2.json` (a program holds one jsx/jsxImportSource
+                // pair, so neither can share React's) plus render tests — `__tests__/solid/`
+                // for 1.x and `tests/auth-ui-solid-v2/` for 2.0, which runs against a real
+                // Solid 2.
+                "files": ["src/solid/**", "src/solid-v2/**", "src/svelte/**", "src/vue/**", "src/angular/**"],
+                "rules": [
+                    "react-doctor/only-export-components",
+                    "react-doctor/rules-of-hooks",
+                    "react-hooks-js/hooks",
+                    "react-hooks-js/immutability",
+                    "react-hooks-js/static-components",
+                    "react-hooks-js/todo",
+                ],
+            },
             {
                 // Every framework view here is an entry point of the *registry payload*
                 // (`scripts/sync-auth-ui-registry.mjs` mirrors `src/<fw>/**` into
@@ -31,6 +56,15 @@
                 // views read as unreachable. They are reachable, from a user's project.
                 "files": ["src/angular/**", "src/svelte/**", "src/vue/**", "src/solid/**", "src/solid-v2/**"],
                 "rules": ["deslop/unused-file"],
+            },
+            {
+                // `factory` is left out of the memo deps on purpose. Every card passes an
+                // inline arrow, so its identity changes on every render; adding it would
+                // rebuild the controller each pass and blank the form mid-typing. That is
+                // what the explicit `deps` parameter is for — callers list the values their
+                // factory actually closes over.
+                "files": ["src/react/use-controller.ts"],
+                "rules": ["react-doctor/exhaustive-deps", "react-hooks-js/use-memo"],
             },
             {
                 // The two `useMemo`s here are not the compiler's job. `AuthUIProvider`

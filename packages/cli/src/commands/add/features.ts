@@ -69,8 +69,13 @@ const DEFAULT_AUTH_UI_ITEM: AuthUiItem = "auth-ui-react";
 const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): boolean =>
     Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
 
-/** Matches the leading major of a semver range (`^2.0.0-rc.0` → `2`). Hoisted so it isn't recompiled per call. */
-const LEADING_MAJOR = /^\D*(\d+)\./;
+/**
+ * Matches the leading major of a semver range (`^2.0.0-rc.0` → `2`). Nothing follows
+ * the digits: npm accepts partial ranges, so `2`, `^2`, and `2 || 1` are all valid
+ * ways to ask for Solid 2 and none of them has a dot after the major. Hoisted so
+ * it isn't recompiled per call.
+ */
+const LEADING_MAJOR = /^\D*(\d+)/;
 
 /** Leading major of a semver range like `^2.0.0-rc.0`, or `undefined` when it can't be read. */
 const leadingMajor = (range: string | undefined): number | undefined => {

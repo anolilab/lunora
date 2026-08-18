@@ -30,7 +30,7 @@ const onResend = (): void => {
         <FormBanner :error="state.error" />
         <p v-if="state.status === 'submitting' || state.status === 'idle'" class="lunora-auth-note">{{ t.verifyEmailVerifying }}</p>
         <button v-if="state.status === 'error'" class="lunora-auth-button lunora-auth-button--secondary" type="button" @click="onResend">
-            {{ t.verifyEmailResend }}
+            {{ t.verifyEmailRetry }}
         </button>
     </AuthCard>
 </template>

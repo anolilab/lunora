@@ -180,6 +180,8 @@ interface Localization {
     verifyEmailFailed: string;
     verifyEmailNoToken: string;
     verifyEmailResend: string;
+    /** The failed-verification button, which retries the same token — not a new link. */
+    verifyEmailRetry: string;
     verifyEmailSent: string;
     verifyEmailVerifying: string;
 }
@@ -355,6 +357,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     verifyEmailFailed: "We couldn't verify that link. Request a new one.",
     verifyEmailNoToken: "This page needs a verification link to work.",
     verifyEmailResend: "Send a new link",
+    verifyEmailRetry: "Try again",
     verifyEmailSent: "Check your email for a verification link.",
     verifyEmailVerifying: "Verifying your email…",
 };

@@ -53,7 +53,7 @@ import { UserViewComponent } from "./user-button";
                                     <button
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         type="button"
-                                        [disabled]="state().busy"
+                                        [disabled]="state().busy || entry.session?.token === undefined"
                                         (click)="setActive(entry.session?.token ?? '')"
                                     >
                                         {{ t.switchAccount }}
@@ -61,7 +61,7 @@ import { UserViewComponent } from "./user-button";
                                     <button
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         type="button"
-                                        [disabled]="state().busy"
+                                        [disabled]="state().busy || entry.session?.token === undefined"
                                         (click)="revoke(entry.session?.token ?? '')"
                                     >
                                         {{ t.signOut }}
@@ -136,7 +136,7 @@ class MultiSessionCardComponent {
                                     <select
                                         class="lunora-auth-select"
                                         [attr.aria-label]="t.roleLabel"
-                                        [disabled]="state().busy"
+                                        [disabled]="state().busy || user.id === undefined"
                                         [value]="user.role ?? 'user'"
                                         (change)="setRole(user.id ?? '', $any($event.target).value)"
                                     >
@@ -147,7 +147,7 @@ class MultiSessionCardComponent {
                                     <button
                                         class="lunora-auth-button lunora-auth-button--secondary"
                                         type="button"
-                                        [disabled]="state().busy"
+                                        [disabled]="state().busy || user.id === undefined"
                                         (click)="impersonate(user.id ?? '')"
                                     >
                                         {{ t.adminImpersonate }}
@@ -155,7 +155,7 @@ class MultiSessionCardComponent {
                                     <button
                                         class="lunora-auth-button lunora-auth-button--danger"
                                         type="button"
-                                        [disabled]="state().busy"
+                                        [disabled]="state().busy || user.id === undefined"
                                         (click)="toggleBan(user.id ?? '', user.banned === true)"
                                     >
                                         {{ user.banned === true ? t.adminUnban : t.adminBan }}

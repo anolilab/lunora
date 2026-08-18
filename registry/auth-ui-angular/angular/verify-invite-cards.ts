@@ -35,7 +35,7 @@ import { injectAuthUIContext } from "./provider";
                 <p class="lunora-auth-note">{{ t.verifyEmailVerifying }}</p>
             }
             @if (state().status === "error") {
-                <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="verify()">{{ t.verifyEmailResend }}</button>
+                <button class="lunora-auth-button lunora-auth-button--secondary" type="button" (click)="verify()">{{ t.verifyEmailRetry }}</button>
             }
         </lunora-auth-card>
     `,

@@ -35,7 +35,7 @@
             }}
             type="button"
         >
-            {t.verifyEmailResend}
+            {t.verifyEmailRetry}
         </button>
     {/if}
 </AuthCard>

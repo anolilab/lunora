@@ -46,12 +46,17 @@ const onRevoke = (token?: string): void => {
                     <button
                         class="lunora-auth-button lunora-auth-button--secondary"
                         type="button"
-                        :disabled="state.busy"
+                        :disabled="state.busy || entry.session?.token === undefined"
                         @click="onSetActive(entry.session?.token)"
                     >
                         {{ t.switchAccount }}
                     </button>
-                    <button class="lunora-auth-button lunora-auth-button--danger" type="button" :disabled="state.busy" @click="onRevoke(entry.session?.token)">
+                    <button
+                        class="lunora-auth-button lunora-auth-button--danger"
+                        type="button"
+                        :disabled="state.busy || entry.session?.token === undefined"
+                        @click="onRevoke(entry.session?.token)"
+                    >
                         {{ t.signOut }}
                     </button>
                 </span>

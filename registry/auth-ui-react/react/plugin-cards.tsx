@@ -47,7 +47,7 @@ const MultiSessionCard = (): ReactElement | null => {
                             <span className="lunora-auth-list__actions">
                                 <button
                                     className="lunora-auth-button lunora-auth-button--secondary"
-                                    disabled={state.busy}
+                                    disabled={state.busy || entry.session?.token === undefined}
                                     onClick={() => {
                                         void actions.setActive(entry.session?.token ?? "");
                                     }}
@@ -57,7 +57,7 @@ const MultiSessionCard = (): ReactElement | null => {
                                 </button>
                                 <button
                                     className="lunora-auth-button lunora-auth-button--danger"
-                                    disabled={state.busy}
+                                    disabled={state.busy || entry.session?.token === undefined}
                                     onClick={() => {
                                         void actions.revoke(entry.session?.token ?? "");
                                     }}
@@ -120,7 +120,7 @@ const AdminUsersCard = (): ReactElement | null => {
                                 <select
                                     aria-label={t.roleLabel}
                                     className="lunora-auth-select"
-                                    disabled={state.busy}
+                                    disabled={state.busy || user.id === undefined}
                                     onChange={(event) => {
                                         void actions.setRole(user.id ?? "", event.target.value);
                                     }}
@@ -134,7 +134,7 @@ const AdminUsersCard = (): ReactElement | null => {
                                 </select>
                                 <button
                                     className="lunora-auth-button lunora-auth-button--secondary"
-                                    disabled={state.busy}
+                                    disabled={state.busy || user.id === undefined}
                                     onClick={() => {
                                         void actions.impersonate(user.id ?? "");
                                     }}
@@ -144,7 +144,7 @@ const AdminUsersCard = (): ReactElement | null => {
                                 </button>
                                 <button
                                     className="lunora-auth-button lunora-auth-button--danger"
-                                    disabled={state.busy}
+                                    disabled={state.busy || user.id === undefined}
                                     onClick={() => {
                                         void (user.banned === true ? actions.unban(user.id ?? "") : actions.ban(user.id ?? ""));
                                     }}
