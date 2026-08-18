@@ -55,6 +55,15 @@ const addWidget = (title: string, sql: string, kind?: string): void => {
     fireEvent.click(screen.getByTestId("dashboards-form-save"));
 };
 
+/** Add a tile of a given widget kind. `text` fills the body; every other kind fills the query. */
+const addTile = (widgetKind: string, title: string, body: string): void => {
+    fireEvent.click(screen.getByTestId("dashboards-add"));
+    fireEvent.change(screen.getByTestId("dashboards-form-widget-kind"), { target: { value: widgetKind } });
+    fireEvent.change(screen.getByTestId("dashboards-form-title"), { target: { value: title } });
+    fireEvent.change(screen.getByTestId(widgetKind === "text" ? "dashboards-form-text" : "dashboards-form-sql"), { target: { value: body } });
+    fireEvent.click(screen.getByTestId("dashboards-form-save"));
+};
+
 const SQL = "SELECT author, COUNT(*) AS messages FROM messages GROUP BY author;";
 
 describe("dashboardsPanel", () => {
@@ -154,6 +163,73 @@ describe("dashboardsPanel", () => {
         const [stored] = JSON.parse(localStorage.getItem("lunora-studio-dashboards") ?? "[]") as { chartKind?: string }[];
 
         expect(stored?.chartKind).toBe("line");
+    });
+
+    it("renders all four tile kinds and round-trips them through localStorage", async () => {
+        expect.assertions(6);
+
+        const view = render(renderPanel(numericMock()));
+
+        addTile("chart", "As a chart", SQL);
+        addTile("kpi", "As a value", SQL);
+        addTile("table", "As a table", SQL);
+        addTile("text", "A note", "read me");
+
+        await screen.findByTestId("dashboards-kpi");
+
+        expect(screen.getByTestId("sql-chart")).toBeDefined();
+        // The first cell of the first row — a KPI query returns one value, and
+        // asking the operator to also name the column would be a second field
+        // that can only disagree with the query they just wrote.
+        expect(screen.getByTestId("dashboards-kpi").textContent).toContain("ada");
+        expect(screen.getByTestId("sql-rows")).toBeDefined();
+        expect(screen.getByTestId("dashboards-text").textContent).toBe("read me");
+
+        view.unmount();
+        render(renderPanel(numericMock()));
+
+        await screen.findByTestId("dashboards-kpi");
+
+        expect(screen.getByTestId("dashboards-text").textContent).toBe("read me");
+        expect(screen.getByTestId("sql-rows")).toBeDefined();
+    });
+
+    it("never runs a query for a text tile", async () => {
+        expect.assertions(1);
+
+        const mock = numericMock();
+
+        render(renderPanel(mock));
+
+        addTile("text", "A note", "read me");
+        await screen.findByTestId("dashboards-text");
+
+        // A text tile must not mount the query hook at all — which is why the two
+        // card components are separate rather than one with a branch.
+        expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toHaveLength(0);
+    });
+
+    it("reorders tiles by drag and persists the new order", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(numericMock()));
+
+        addTile("text", "First", "one");
+        addTile("text", "Second", "two");
+
+        const grid = await screen.findByTestId("dashboards-grid");
+        // The tile cards, not the per-tile controls that share the prefix. Ids are
+        // `crypto.randomUUID()` in jsdom, so there is no stable id to match on.
+        const [first, second] = within(grid).getAllByTestId(/^dashboards-widget-(?!edit-|error-|loading-|remove-|suggest-)/u);
+
+        fireEvent.dragStart(second as HTMLElement);
+        fireEvent.drop(first as HTMLElement);
+
+        await waitFor(() => {
+            const stored = JSON.parse(localStorage.getItem("lunora-studio-dashboards") ?? "[]") as { title: string }[];
+
+            expect(stored.map((widget) => widget.title)).toStrictEqual(["Second", "First"]);
+        });
     });
 
     it("surfaces a per-widget query error inline", async () => {
