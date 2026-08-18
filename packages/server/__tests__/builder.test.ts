@@ -83,6 +83,54 @@ describe(".meta()", () => {
         await expect(guarded.handler({}, {})).resolves.toBe("ok");
         expect(seen).toStrictEqual({ rateLimit: "pins/create" });
     });
+
+    // `.stream()` builds its own handler shell (makeStreamHandler), separate from
+    // the query/mutation/action one above — meta must reach both the same way.
+    it("stamps merged metadata onto a streaming registration", () => {
+        expect.assertions(3);
+
+        const gen = async function* watchPins() {
+            yield 1;
+        };
+
+        const watch = c.query.meta({ rateLimit: "pins/watch" }).stream(gen);
+
+        expect(watch.meta).toStrictEqual({ rateLimit: "pins/watch" });
+
+        // Merges on the stream terminal too.
+        const audited = c.query.meta({ audit: true, rateLimit: "base" }).meta({ rateLimit: "pins/watch" }).stream(gen);
+
+        expect(audited.meta).toStrictEqual({ audit: true, rateLimit: "pins/watch" });
+
+        // Absent when never declared, same as the non-stream terminal.
+        expect(c.query.stream(gen).meta).toBeUndefined();
+    });
+
+    it("exposes the metadata to middleware as ctx.meta inside a streaming procedure", async () => {
+        expect.assertions(1);
+
+        let seen: unknown;
+
+        const guarded = c.query
+            .meta({ rateLimit: "pins/watch" })
+            .use(async ({ ctx, next }) => {
+                seen = ctx.meta;
+
+                return await next({ ctx: ctx as unknown as Record<string, unknown> });
+            })
+            .stream(async function* watchPins() {
+                yield "ok";
+            });
+
+        const { signal } = new AbortController();
+        const iterator = guarded.handler({}, {}, signal)[Symbol.asyncIterator]();
+
+        // The middleware chain is deferred to the first pump (see the `drive()`
+        // comment in builder/index.ts) — drive one step to observe ctx.meta.
+        await iterator.next();
+
+        expect(seen).toStrictEqual({ rateLimit: "pins/watch" });
+    });
 });
 
 describe("compiled-args integration (the codegen AOT seam)", () => {

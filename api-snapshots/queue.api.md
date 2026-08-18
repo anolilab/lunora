@@ -138,7 +138,7 @@ type QueueEnv = Record<string, unknown>;
 ### `QueueHandler` (type)
 
 ```ts
-type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: MessageBatchLike<Body>) => Promise<void> | void;
+type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: QueueMessageBatch<Body>) => Promise<void> | void;
 ```
 
 ### `QueueLogger` (interface)
@@ -149,6 +149,22 @@ interface DispatchLogger {
     error: (message: unknown, ...rest: unknown[]) => void;
     info: (message: unknown, ...rest: unknown[]) => void;
     warn: (message: unknown, ...rest: unknown[]) => void;
+}
+```
+
+### `QueueMessage` (interface)
+
+```ts
+interface QueueMessage<Body = unknown> extends MessageLike<Body> {
+    readonly run: DispatchRunFunction;
+}
+```
+
+### `QueueMessageBatch` (interface)
+
+```ts
+interface QueueMessageBatch<Body = unknown> extends Omit<MessageBatchLike<Body>, "messages"> {
+    readonly messages: ReadonlyArray<QueueMessage<Body>>;
 }
 ```
 
@@ -216,6 +232,7 @@ interface Queues {
 
 ```ts
 interface RunFunctionOptions {
+    messageId?: string;
     shardKey?: string;
     timeoutMs?: number;
 }

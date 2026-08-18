@@ -6,6 +6,8 @@
  * any action is taken.
  */
 
+import { sqlIdentifier } from "../../lib/internal";
+
 /** Metadata shape of an `unindexed_foreign_key` finding that carries enough info to compose DDL. */
 interface IndexFindingMetadata {
     /** The suggested index: name + covering fields (single-column for FK lints). */
@@ -51,9 +53,9 @@ const hasIndexMetadata = (metadata: Record<string, unknown>): metadata is IndexF
  * `[column]` quoting; double-quotes is the SQL standard).
  */
 const composeCreateIndex = (table: string, indexName: string, fields: ReadonlyArray<string>): string => {
-    const quotedTable = `"${table}"`;
-    const quotedIndex = `"${indexName}"`;
-    const quotedColumns = fields.map((f) => `"${f}"`).join(", ");
+    const quotedTable = sqlIdentifier(table);
+    const quotedIndex = sqlIdentifier(indexName);
+    const quotedColumns = fields.map((f) => sqlIdentifier(f)).join(", ");
 
     return `CREATE INDEX IF NOT EXISTS ${quotedIndex} ON ${quotedTable} (${quotedColumns});`;
 };

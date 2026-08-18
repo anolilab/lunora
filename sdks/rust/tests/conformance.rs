@@ -72,6 +72,7 @@ fn conformance_manifest_is_covered() {
             "wire_codec_round_trip" => wire_codec_round_trip(),
             "undefined_is_distinct_from_null" => undefined_is_distinct_from_null(),
             "over_long_bigint_rejected" => over_long_bigint_rejected(),
+            "malformed_bytes_rejected" => malformed_bytes_rejected(),
             "depth_cap_enforced" => depth_cap_enforced(),
             "stable_wire_key_fixtures" => stable_wire_key_fixtures(),
             "format_number_matches_ecmascript" => format_number_matches_ecmascript(),
@@ -130,6 +131,14 @@ fn over_long_bigint_rejected() {
     assert!(decode_wire(&json!([TAG, "bigint", over_long])).is_err());
     assert!(decode_wire(&json!([TAG, "bigint", "12x4"])).is_err());
     assert_eq!(decode_wire(&json!([TAG, "bigint", "-42"])).expect("decode"), WireValue::BigInt("-42".into()));
+}
+
+fn malformed_bytes_rejected() {
+    assert!(
+        decode_wire(&json!([TAG, "bytes", "not@@base64!!"])).is_err(),
+        "malformed base64 in a bytes tag must be rejected"
+    );
+    assert_eq!(decode_wire(&json!([TAG, "bytes", "AQID"])).expect("decode"), WireValue::Bytes(vec![1, 2, 3]));
 }
 
 fn depth_cap_enforced() {

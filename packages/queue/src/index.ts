@@ -22,6 +22,8 @@ export type {
     QueueDefinition,
     QueueHandler,
     QueueLogger,
+    QueueMessage,
+    QueueMessageBatch,
     QueueProducer,
     QueueRetryOptions,
     QueueRunContext,

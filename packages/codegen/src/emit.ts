@@ -4368,8 +4368,14 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // arrives via an optional `d1` config thunk; when omitted (or for projects
     // with no global tables), reads/writes to a global table hit `globalDbStub`
     // and throw a descriptive error.
+    // `bookmark`/`onBookmark` are declared here, not just passed: the DO hands
+    // every D1 thunk the widened `globalRequest` so a factory can pin reads to the
+    // caller's prior writes (D1 Sessions) and report the bookmark a write produced.
+    // Undeclared, a direct `createShardDO({ d1 })` integration cannot read either
+    // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
+    // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional
@@ -4540,8 +4546,17 @@ ${vectorNamespaceField}
     // one global backend (mixed is rejected above), so this is a single writer —
     // D1 by default, or Hyperdrive when `.global({ backend: "hyperdrive" })`.
     const globalDatabaseThunk = hasHyperdriveGlobal ? "config.hyperdriveGlobal" : "config.d1";
+    // Widen the per-request context handed to the global-database thunk with the
+    // D1 Sessions API bookmark: `bookmark` lets a D1-backed factory pin reads to
+    // the caller's own prior writes (read-your-writes across replicas), and
+    // `onBookmark` lets it report back the bookmark a write produced so this DO
+    // can record it via `setOutboundBookmark` and echo it on the response.
+    // Assigned to a named local (not passed as an inline object literal) so
+    // handing it to the narrower Hyperdrive thunk's `request` parameter type —
+    // which does not declare these fields — doesn't trip an excess-property
+    // error; the Hyperdrive factory simply never reads the extra properties.
     const globalDatabaseLine = hasGlobalTables
-        ? `            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { identity, userId }) ?? globalDbStub;\n`
+        ? `            const globalRequest = { bookmark: this.getInboundBookmark(), identity, onBookmark: (bookmarkValue: string | undefined) => { this.setOutboundBookmark(bookmarkValue); }, userId };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
     // Local-first sync engine, global tier: when a project has shapes AND
@@ -4557,7 +4572,11 @@ ${vectorNamespaceField}
             ? `
         protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
             const env = this.env as Record<string, unknown>;
-            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, identity) ?? globalDbStub;
+            // A shape read performs no writes, so the widened request only needs
+            // the inbound bookmark (pin the membership drain to the caller's own
+            // prior writes) — no \`onBookmark\` here.
+            const globalRequest = { ...identity, bookmark: this.getInboundBookmark() };
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
             let cursor: null | string = null;
@@ -4981,6 +5000,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             }
 
             return registered.handler(ctx, args);
+        }
+
+        // Only a \`mutation\` may enter the base class's single-writer gate for
+        // mutation-replay dedup — it is \`blockConcurrencyWhile\`, so gating an
+        // action would stall every other dispatch on the shard for the length of
+        // its outbound I/O, on nothing but a caller-supplied header. Unregistered
+        // paths answer \`false\`; \`handleRpc\` above rejects them anyway.
+        protected override isMutationFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
         }
 ${relationFanout.override}
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {

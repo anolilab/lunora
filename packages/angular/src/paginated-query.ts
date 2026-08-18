@@ -1,4 +1,4 @@
-import type { Signal } from "@angular/core";
+import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
@@ -6,7 +6,7 @@ import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "
 
 import { stableWireKey } from "../../../shared/wire-key";
 import { resolveLunoraClient } from "./client";
-import { shouldOpenSubscription } from "./platform";
+import { attachReactiveArgs, shouldOpenSubscription } from "./platform";
 
 // ── Shared types ────────────────────────────────────────────────────────────
 
@@ -38,23 +38,30 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
 
 // ── Core pagination engine ──────────────────────────────────────────────────
 
+/** The signal-backed handle {@link usePaginatedCore} returns. */
+interface PaginatedCore<F extends FunctionReference> {
+    loadMore: (numberItems: number) => void;
+    pageResults: Signal<(PaginationResult<PageItemOf<F>> | undefined)[]>;
+    status: Signal<PaginationStatus>;
+}
+
 /**
  * Angular-native pagination engine shared by `paginatedQuery` and `infiniteQuery`.
  * Owns the page boundary list, per-page `client.subscribe()` calls, split/join
- * maintenance, and `loadMore`.
+ * maintenance, and `loadMore`. `baseArgs` is always a resolved, static value
+ * here — the reactive (function/`Signal`) form is handled one layer up, by
+ * {@link useReactivePaginatedCore}, which disposes and rebuilds a whole core
+ * per args generation rather than re-keying this function's internal
+ * bookkeeping in place.
  */
 const usePaginatedCore = <F extends FunctionReference>(
     reference: F,
     baseArgs: Record<string, unknown> | "skip",
     options: PaginatedQueryOptions,
-): {
-    loadMore: (numberItems: number) => void;
-    pageResults: Signal<(PaginationResult<PageItemOf<F>> | undefined)[]>;
-    status: Signal<PaginationStatus>;
-} => {
+    registerTeardown?: (teardown: () => void) => void,
+): PaginatedCore<F> => {
     const client = resolveLunoraClient(options.client);
-    const fromInjectionContext = options.destroyRef === undefined;
-    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+    const fromInjectionContext = options.destroyRef === undefined && registerTeardown === undefined;
     const { initialNumItems, shardKey } = options;
 
     const functionPath = (reference as Record<string, unknown>)["__lunoraRef"] as string;
@@ -238,15 +245,23 @@ const usePaginatedCore = <F extends FunctionReference>(
 
     doRebuildPageResults();
 
-    // Teardown all subscriptions on destroy.
-    destroyRef.onDestroy(() => {
+    const teardown = (): void => {
         for (const entry of activeSubs.values()) {
             entry.unsub();
         }
 
         activeSubs.clear();
         resultsByKey.clear();
-    });
+    };
+
+    // A reactive generation registers with its own collector so the wrapper can
+    // dispose it on an args change; the DI path registers with the owning
+    // component's `DestroyRef`.
+    if (registerTeardown === undefined) {
+        (options.destroyRef ?? inject(DestroyRef)).onDestroy(teardown);
+    } else {
+        registerTeardown(teardown);
+    }
 
     const loadMore = (numberItems: number): void => {
         if (baseArgs === "skip") {
@@ -298,6 +313,65 @@ const usePaginatedCore = <F extends FunctionReference>(
     return { loadMore, pageResults, status };
 };
 
+/**
+ * Reactive wrapper around {@link usePaginatedCore}. A static `baseArgs` value
+ * delegates straight through — today's behaviour, unchanged, no `effect()`
+ * created. A reactive (function/`Signal`) `baseArgs` opens the resubscribe
+ * boundary: on each args change, the effect's cleanup callback disposes the
+ * previous generation's core (whose teardown was collected per generation)
+ * BEFORE the next run builds a fresh one — the ordering `liveQuery`/
+ * `subscription` rely on. `usePaginatedCore`'s own internal split/join
+ * bookkeeping is never re-keyed in place; each generation gets a brand new,
+ * independent core instance.
+ *
+ * Building the core runs UNTRACKED (see {@link attachReactiveArgs}). It reads
+ * its own `pages` signal while opening the first round of subscriptions, so a
+ * tracked build would make `loadMore` — and the subscribe callback's rebalance
+ * — dependencies of this effect: every page appended would dispose the
+ * generation that appended it and rebuild from page one.
+ */
+const useReactivePaginatedCore = <F extends FunctionReference>(
+    reference: F,
+    baseArgs: (Record<string, unknown> | "skip") | (() => Record<string, unknown> | "skip"),
+    options: PaginatedQueryOptions,
+): PaginatedCore<F> => {
+    if (typeof baseArgs !== "function") {
+        return usePaginatedCore<F>(reference, baseArgs, options);
+    }
+
+    // Resolve the client once, in the ambient injection context — `effect()`
+    // callbacks are NOT an injection context, so `usePaginatedCore`'s own
+    // `resolveLunoraClient(options.client)` must not have to call `inject(...)`
+    // when it runs per-generation below.
+    const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
+    const destroyRef = options.destroyRef ?? inject(DestroyRef);
+
+    const active = signal<PaginatedCore<F> | undefined>(undefined);
+
+    if (shouldOpenSubscription(fromInjectionContext)) {
+        attachReactiveArgs(baseArgs, { destroyRef, injector: options.injector }, (resolvedArgs, onCleanup) => {
+            const teardowns: (() => void)[] = [];
+
+            active.set(usePaginatedCore<F>(reference, resolvedArgs, { ...options, client }, (teardown) => teardowns.push(teardown)));
+
+            onCleanup(() => {
+                for (const teardown of teardowns) {
+                    teardown();
+                }
+            });
+        });
+    }
+
+    return {
+        loadMore: (numberItems: number) => {
+            active()?.loadMore(numberItems);
+        },
+        pageResults: computed(() => active()?.pageResults() ?? []),
+        status: computed(() => active()?.status() ?? "LoadingFirstPage"),
+    };
+};
+
 // ── Paginated query options & result ────────────────────────────────────────
 
 /**
@@ -313,6 +387,14 @@ export interface PaginatedQueryOptions {
 
     /** Page size for the first page (and the default for `loadMore`). */
     initialNumItems: number;
+
+    /**
+     * `Injector` to create the reactive-args `effect()` from. Only needed when
+     * `args` is a function/`Signal` AND the call is outside an injection context
+     * (an explicit `destroyRef` is also being passed). Defaults to the ambient
+     * injection context. Unused for the static `args` form.
+     */
+    injector?: Injector;
 
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
     shardKey?: string;
@@ -377,14 +459,18 @@ export interface InfiniteQueryResult<T> {
  * ```ts
  * readonly messages = paginatedQuery(api.messages.list, {}, { initialNumItems: 20 });
  * ```
+ *
+ * `args` also accepts a function/`Signal` to make the query reactive — an args
+ * change disposes the current pagination engine and builds a fresh one for the
+ * new args. A static (plain object) `args` resolves once and never re-runs.
  * @experimental
  */
 export const paginatedQuery = <F extends FunctionReference>(
     reference: F,
-    args: PaginatedArgs<F> | "skip",
+    args: PaginatedArgs<F> | "skip" | (() => PaginatedArgs<F> | "skip"),
     options: PaginatedQueryOptions,
 ): PaginatedQueryResult<PageItemOf<F>> => {
-    const core = usePaginatedCore<F>(reference, args, options);
+    const core = useReactivePaginatedCore<F>(reference, args, options);
 
     const results = computed<PageItemOf<F>[]>(() => core.pageResults().flatMap((result) => result?.page ?? []));
 
@@ -413,15 +499,18 @@ export const paginatedQuery = <F extends FunctionReference>(
  * ```ts
  * readonly feed = infiniteQuery(api.messages.list, {}, { initialNumItems: 20 });
  * ```
+ *
+ * `args` also accepts a function/`Signal` to make the query reactive — see
+ * `paginatedQuery`'s equivalent note.
  * @experimental
  */
 export const infiniteQuery = <F extends FunctionReference>(
     reference: F,
-    args: PaginatedArgs<F> | "skip",
+    args: PaginatedArgs<F> | "skip" | (() => PaginatedArgs<F> | "skip"),
     options: PaginatedQueryOptions,
 ): InfiniteQueryResult<PageItemOf<F>> => {
     const { initialNumItems } = options;
-    const core = usePaginatedCore<F>(reference, args, options);
+    const core = useReactivePaginatedCore<F>(reference, args, options);
 
     const pages = computed<PageItemOf<F>[][]>(() => core.pageResults().flatMap((page) => (page ? [page.page] : [])));
 

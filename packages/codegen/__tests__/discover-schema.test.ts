@@ -1628,4 +1628,160 @@ describe("discoverSchema", () => {
 
         expect(() => discoverSchema(project, schemaPath)).toThrow(/unknown rls mode/);
     });
+
+    // `await`/`yield` are reserved only in a module context and `eval`/`arguments` are
+    // not reserved words at all, yet `const <name> = sqliteTable(...)` is a SyntaxError
+    // for every one of them in the ES module codegen emits.
+    it.each(["class", "await", "yield", "eval", "arguments"])("throws a diagnostic when a table name is the reserved JS word %s", (name) => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                ${name}: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(new RegExp(`table name "${name}" is a reserved JavaScript word`, "u"));
+        expect(() => discoverSchema(project, schemaPath)).toThrow(new RegExp(`const ${name} = sqliteTable`, "u"));
+    });
+
+    it("throws a diagnostic when a base table key is declared more than once", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+                messages: defineTable({ body: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "messages" is declared more than once/u);
+    });
+
+    it("throws a pinpointed diagnostic (not a generic INTERNAL error) for an extension table named after a reserved keyword", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        class: defineTable({ text: v.string() }),
+                    },
+                }),
+            );
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).not.toThrow(/INTERNAL/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "class" is a reserved JavaScript word/u);
+    });
+
+    it("throws a pinpointed diagnostic (not a generic INTERNAL error) for an extension table whose bare name is not a valid identifier", () => {
+        expect.assertions(3);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        "user profiles": defineTable({ text: v.string() }),
+                    },
+                }),
+            );
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).not.toThrow(/INTERNAL/u);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/user profiles/u);
+    });
+
+    it("throws when v.id(...)'s target table is not a string literal", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const targetTable = "users";
+
+            export const schema = defineSchema({
+                posts: defineTable({ authorId: v.id(targetTable) }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/v\.id\(\.\.\.\) target table must be a string literal/u);
+    });
+
+    it("throws when a .relations() target table is not a string literal", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const targetTable = "users";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+                posts: defineTable({ authorId: v.id("users") }).relations((r) => ({
+                    author: r.one(targetTable, { field: "authorId" }),
+                })),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/relation target table must be a string literal/u);
+    });
+
+    it("still generates unchanged output for a valid schema exercising every new-validation shape correctly (regression guard against over-rejection)", () => {
+        expect.assertions(4);
+
+        // Every shape the new checks touch, used the way a real, valid schema
+        // would: non-reserved, non-keyword, non-duplicate table names; a valid
+        // extension table name; and literal `v.id()` / `.relations()` targets.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                users: defineTable({ email: v.string() }),
+                posts: defineTable({ authorId: v.id("users"), body: v.string() }).relations((r) => ({
+                    author: r.one("users", { field: "authorId" }),
+                })),
+            }).extend(
+                defineSchemaExtension("ext", {
+                    tables: {
+                        buckets: defineTable({ key: v.string() }),
+                    },
+                }),
+            );
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "posts", "users"]);
+
+        const posts = schema.tables.find((table) => table.name === "posts");
+
+        expect(posts?.shape.authorId).toMatchObject({ kind: "id", tableName: "users" });
+        expect(posts?.relations).toEqual([{ field: "authorId", kind: "one", name: "author", onDelete: undefined, references: "_id", table: "users" }]);
+
+        // Emission still succeeds and never surfaces the `_unknown_` sentinel
+        // this plan removed — a rejected-in-error schema would either throw
+        // before reaching here or leak the sentinel into the generated types.
+        const dataModel = emitDataModel(schema);
+
+        expect(dataModel).not.toContain("_unknown_");
+    });
 });

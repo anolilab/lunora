@@ -29,6 +29,19 @@
  * `stableWireKey` instead, which tokenizes exactly the types the wire supports
  * and stays byte-identical to this encoder for pure JSON.
  *
+ * Non-finite numbers are tagged, not thrown: `JSON.stringify` maps `NaN`,
+ * `Infinity`, and `-Infinity` all to the literal `"null"`, which would otherwise
+ * collide with real `null` and with each other. Callers (the flags memo key, the
+ * metric-series key) need a key even for these inputs, so each encodes as its own
+ * bare, unquoted token — `nan` / `inf` / `-inf`, reusing {@link file://./wire-codec.ts}'s
+ * `encodeWire` vocabulary for the same three cases — rather than throwing. A bare
+ * token can never collide with `JSON.stringify` output: every JSON string is
+ * quoted, and these tokens don't match `null`/`true`/`false`. `-0` is tagged the
+ * same way, as `-0`, distinct from `0`'s `"0"`. `undefined` is the one collapse
+ * that remains: at the top level and inside arrays it still encodes as `null`
+ * (see below — deliberate, unrelated to this), and object fields set to
+ * `undefined` are still skipped, not nulled.
+ *
  * NOTE: `@lunora/seed`'s `copycat/hash.ts` carries its own, intentionally
  * forked, `stableStringify`. Do **not** fold it into this one: its hash domain
  * depends on an exact encoding (e.g. it must never emit `U+0000` at the start and
@@ -58,6 +71,31 @@ const stableStringify = (value: unknown): string => {
     // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
     if (typeof value === "bigint") {
         throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
+    }
+
+    // Tag non-finite numbers (and `-0`) as distinct, unquoted tokens instead of
+    // letting the generic `JSON.stringify` fallback below collapse `NaN`/
+    // `Infinity`/`-Infinity` all into the literal string `"null"` — colliding with
+    // real `null` and with each other. A bare unquoted token can never collide
+    // with any `JSON.stringify` output: every JSON string is quoted, and none of
+    // these tokens match `null`/`true`/`false`. Tokens match wire-codec.ts's
+    // `encodeWire` vocabulary for the same three non-finite cases.
+    if (typeof value === "number") {
+        if (Number.isNaN(value)) {
+            return "nan";
+        }
+
+        if (value === Infinity) {
+            return "inf";
+        }
+
+        if (value === -Infinity) {
+            return "-inf";
+        }
+
+        if (Object.is(value, -0)) {
+            return "-0";
+        }
     }
 
     if (value === null || typeof value !== "object") {

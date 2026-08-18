@@ -195,7 +195,11 @@ module Lunora
   end
 
   def decode_bytes(value)
-    data = Base64.decode64(value[2])
+    begin
+      data = Base64.strict_decode64(value[2])
+    rescue ::ArgumentError => e
+      raise WireFormatError, "wire-codec: invalid base64 in bytes tag: #{e.message}"
+    end
     ctor = value.length > 3 ? value[3] : "Uint8Array"
     # A plain Uint8Array is a binary Ruby String and re-encodes to the
     # 2-element form; every other view keeps its constructor name.

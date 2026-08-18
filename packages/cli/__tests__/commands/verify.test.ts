@@ -38,6 +38,7 @@ const VALID_WRANGLER = `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "y" }]
 }
 `;

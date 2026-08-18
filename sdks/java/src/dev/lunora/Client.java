@@ -473,7 +473,34 @@ public final class Client {
         switch (kind) {
             case "data", "delta" -> {
                 Object payload = frame.get("data") != null ? frame.get("data") : frame.get("delta");
-                Object value = Wire.decode(payload);
+                Object value;
+
+                try {
+                    value = Wire.decode(payload);
+                } catch (RuntimeException error) {
+                    // Same shape as the Json.parse guard above: Wire.decode can throw a
+                    // Wire.WireFormatException OR an unwrapped RuntimeException from a
+                    // nested decoder (e.g. Base64's IllegalArgumentException on a
+                    // malformed bytes tag), and either must reach the consumer's error
+                    // callback rather than vanish or escape handleFrame — silently
+                    // dropping the frame trades a crash for a subscription that goes
+                    // quietly stale.
+                    Consumer<SubscriptionError> onError;
+
+                    synchronized (lock) {
+                        Subscription entry = subscriptions.get(id);
+                        onError = entry != null ? entry.onError : null;
+                    }
+
+                    if (onError != null) {
+                        onError.accept(
+                                new SubscriptionError(
+                                        null, "malformed wire value: " + error.getMessage()));
+                    }
+
+                    return kind;
+                }
+
                 Consumer<Object> onData;
 
                 synchronized (lock) {
@@ -598,12 +625,16 @@ public final class Client {
     /** One `onRows` callback plus the rows it is to be handed, snapshotted. */
     private record Delivery(Consumer<List<Object>> onRows, List<Object> rows) {}
 
+    /** One `onError` callback plus the error it is to be handed. */
+    private record ErrorDelivery(Consumer<SubscriptionError> onError, SubscriptionError error) {}
+
     private void applyPoke(Map<String, Object> frame) {
         List<Delivery> deliveries = new ArrayList<>();
+        List<ErrorDelivery> errorDeliveries = new ArrayList<>();
 
-        // The view is mutated under the lock; `onRows` fires after it is released,
-        // with the row snapshot taken while still holding it — so a callback sees
-        // one consistent poke even if the next one lands mid-delivery.
+        // The view is mutated under the lock; `onRows`/`onError` fire after it is
+        // released, with the row snapshot taken while still holding it — so a
+        // callback sees one consistent poke even if the next one lands mid-delivery.
         synchronized (lock) {
             Map<String, List<Map<String, Object>>> buffer =
                     pokes.remove(String.valueOf(frame.get("pokeId")));
@@ -638,11 +669,34 @@ public final class Client {
                         continue;
                     }
 
+                    Object decoded;
+
+                    try {
+                        decoded = Wire.decode(value);
+                    } catch (RuntimeException error) {
+                        // Same rationale as the "data"/"delta" guard above: catch
+                        // broadly, not just Wire.WireFormatException. A malformed row
+                        // must reach the shape's error callback, not vanish or corrupt
+                        // the view — skip only this row rather than dropping the whole
+                        // poke or throwing out of handleFrame.
+                        if (shape.onError != null) {
+                            errorDeliveries.add(
+                                    new ErrorDelivery(
+                                            shape.onError,
+                                            new SubscriptionError(
+                                                    null,
+                                                    "malformed wire value: "
+                                                            + error.getMessage())));
+                        }
+
+                        continue;
+                    }
+
                     if (!shape.rows.containsKey(key)) {
                         shape.order.add(key);
                     }
 
-                    shape.rows.put(key, Wire.decode(value));
+                    shape.rows.put(key, decoded);
                 }
 
                 if (frame.containsKey("checkpoint")) {
@@ -667,6 +721,10 @@ public final class Client {
 
         for (Delivery delivery : deliveries) {
             delivery.onRows().accept(delivery.rows());
+        }
+
+        for (ErrorDelivery errorDelivery : errorDeliveries) {
+            errorDelivery.onError().accept(errorDelivery.error());
         }
     }
 

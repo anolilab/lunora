@@ -1,4 +1,5 @@
-import { inject, NgZone, PLATFORM_ID } from "@angular/core";
+import type { DestroyRef, Injector } from "@angular/core";
+import { effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
 
 /**
  * Whether a reactive primitive should open its live WebSocket subscription (and
@@ -47,4 +48,63 @@ export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: ()
     const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
 
     return zone ? zone.runOutsideAngular(register) : register();
+};
+
+/**
+ * Wire the reactive-args form of a primitive: re-run `open` whenever the tracked
+ * `args` thunk produces a new value, tearing the previous generation down first
+ * (via the `onCleanup` handed to `open`), and stop the whole effect when the
+ * owner is destroyed.
+ *
+ * `args` is read TRACKED — it is the only dependency the effect exists for.
+ * `open` runs UNTRACKED, which is load-bearing rather than an optimisation: a
+ * primitive that reads its own signals while building a generation (the
+ * paginated engine reads its page list) would otherwise take a dependency on
+ * them, so its very next write would re-run the effect, dispose the generation
+ * it just built, and reset the primitive to its initial state.
+ *
+ * `manualCleanup: true` keeps teardown unified through the owner's `DestroyRef`
+ * rather than also relying on whichever ambient `DestroyRef` the injector
+ * happens to resolve.
+ *
+ * `effect()` needs an `Injector`, from `owner.injector` or from an ambient
+ * injection context. The manual-lifetime combination — an explicit `destroyRef`,
+ * no `injector`, called outside DI — is the one that has neither, and Angular's
+ * own NG0203 for it never mentions the `injector` option that fixes it, so the
+ * throw is re-raised with that named (the original kept as `cause`). Detected by
+ * catching rather than by `isInInjectionContext`, which Angular 22 dropped and
+ * this package's peer range still spans 19–22.
+ */
+export const attachReactiveArgs = <A>(
+    args: () => A,
+    owner: { destroyRef: DestroyRef; injector?: Injector },
+    open: (resolved: A, onCleanup: (teardown: () => void) => void) => void,
+): void => {
+    let effectRef;
+
+    try {
+        effectRef = effect(
+            (onCleanup) => {
+                const resolved = args();
+
+                untracked(() => {
+                    open(resolved, onCleanup);
+                });
+            },
+            { injector: owner.injector, manualCleanup: true },
+        );
+    } catch (error: unknown) {
+        if (owner.injector !== undefined) {
+            throw error;
+        }
+
+        throw new Error(
+            "reactive `args` need an injection context: call this primitive from a component/service field or constructor, or pass `injector` alongside `destroyRef`.",
+            { cause: error },
+        );
+    }
+
+    owner.destroyRef.onDestroy(() => {
+        effectRef.destroy();
+    });
 };

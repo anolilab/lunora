@@ -7,6 +7,7 @@ import { SANDBOX_INVOKE_PATH } from "../src/paths";
 import { browserTool, containerTool } from "../src/sandbox";
 import type { SandboxContainerAccessor } from "../src/sandbox-component";
 import type { AgentToolContext } from "../src/types";
+import { passthroughStep } from "./loop-harness";
 
 const EMPTY_NAME_ERROR = /requires a container `name`/u;
 const MISSING_BROWSER_ERROR = /needs `ctx\.browser`/u;
@@ -31,6 +32,7 @@ const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context
                 return "ok";
             },
             setState: async () => {},
+            step: passthroughStep,
             threadKey: "t-1",
             toolCallId: "call-1",
         },

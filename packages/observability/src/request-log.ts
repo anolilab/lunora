@@ -664,6 +664,26 @@ const decodeTables = (text: string): string[] => {
     }
 };
 
+/** Parse a stored `identity` JSON blob back into an object, tolerating a malformed value rather than throwing on a read — the field is simply omitted, not replaced with a placeholder. */
+const decodeIdentity = (raw: string): Record<string, unknown> | undefined => {
+    try {
+        const value = JSON.parse(raw) as unknown;
+
+        return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/** Parse a stored `args` JSON blob back into the redacted-args value, tolerating a malformed value rather than throwing on a read — the field is simply omitted, not replaced with a placeholder. */
+const decodeRedactedArgs = (raw: string): unknown => {
+    try {
+        return JSON.parse(raw) as unknown;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
  * Read request-log entries newest-first, AND-combining the supplied filters
  * (function-path prefix, exact userId/shardKey/outcome, and a table-touched
@@ -727,11 +747,19 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
         }
 
         if (row.identity !== null) {
-            base.identity = JSON.parse(row.identity) as Record<string, unknown>;
+            const identity = decodeIdentity(row.identity);
+
+            if (identity !== undefined) {
+                base.identity = identity;
+            }
         }
 
         if (row.args !== null) {
-            base.redactedArgs = JSON.parse(row.args) as unknown;
+            const redactedArgs = decodeRedactedArgs(row.args);
+
+            if (redactedArgs !== undefined) {
+                base.redactedArgs = redactedArgs;
+            }
         }
 
         if (row.error_message !== null) {

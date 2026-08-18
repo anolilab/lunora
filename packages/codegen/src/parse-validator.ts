@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
+import { diagnosticAt } from "./diagnostics";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
 /**
@@ -299,8 +300,14 @@ const parseFrom = (schemaArgument: Node | undefined): ValidatorIR => {
     return tsType === undefined ? { kind: "from" } : { kind: "from", tsType };
 };
 
-/** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
-const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {
+/**
+ * Parse a single `v.NAME(...)` builder call, dispatching on the member name.
+ * `call` anchors a `diagnosticAt` when a member requires a static argument it
+ * did not get (e.g. `v.id(...)`'s table-name literal) — it is the whole call
+ * expression, used as a fallback pinpoint when the offending argument itself
+ * is absent.
+ */
+const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: CallExpression): ValidatorIR => {
     if (SCALAR_KINDS.has(member)) {
         return { kind: member };
     }
@@ -317,7 +324,18 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
         }
 
         case "id": {
-            return { kind: "id", tableName: first && Node.isStringLiteral(first) ? first.getLiteralText() : "_unknown_" };
+            // The table name feeds straight into the generated `Id<"...">` type
+            // (see `emit.ts`), so codegen must resolve it statically — a
+            // non-literal (or missing) argument must fail loudly rather than
+            // degrade to a placeholder that still compiles.
+            if (!first || !Node.isStringLiteral(first)) {
+                throw diagnosticAt(
+                    first ?? call,
+                    `v.id(...) target table must be a string literal — codegen resolves foreign-key targets statically. Got ${first ? first.getText() : "no argument"}.`,
+                );
+            }
+
+            return { kind: "id", tableName: first.getLiteralText() };
         }
 
         case "literal": {
@@ -392,7 +410,7 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
         return member === "check" ? { ...base, hasRefinement: true } : base;
     }
 
-    return parseBuilderMember(member, args);
+    return parseBuilderMember(member, args, call);
 };
 
 export { parseObjectShape, parseValidator, setStandardTypeResolver };

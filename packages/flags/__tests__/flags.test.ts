@@ -164,6 +164,22 @@ describe("createFlags", () => {
         expect(provider.counts["dark-mode"]).toBe(2);
     });
 
+    it("does not share memo across a NaN vs null context value (plan 355 regression)", async () => {
+        expect.assertions(1);
+
+        // Before plan 355, `stableStringify` encoded every non-finite number the
+        // same as `null` (`JSON.stringify(NaN) === "null"`), so these two
+        // semantically different contexts collapsed to one memo key and the
+        // second read silently served the first's cached decision.
+        const provider = makeProvider({ "dark-mode": true });
+        const flags = createFlags({ provider: () => provider });
+
+        await flags.boolean("dark-mode", false, { score: Number.NaN });
+        await flags.boolean("dark-mode", false, { score: null });
+
+        expect(provider.counts["dark-mode"]).toBe(2);
+    });
+
     it("returns the same in-flight promise for identical calls (memo hit, not just equal values)", async () => {
         expect.assertions(2);
 

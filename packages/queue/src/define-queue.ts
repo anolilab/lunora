@@ -37,7 +37,7 @@ const queueDefaultName = (exportName: string): string => exportName.replaceAll(/
  * export const emailQueue = defineQueue<{ to: string }>({
  *     handler: async (ctx, batch) => {
  *         for (const message of batch.messages) {
- *             await ctx.run(api.email.send, { to: message.body.to });
+ *             await message.run(api.email.send, { to: message.body.to });
  *             message.ack();
  *         }
  *     },
@@ -45,6 +45,12 @@ const queueDefaultName = (exportName: string): string => exportName.replaceAll(/
  * ```
  *
  * Enqueue from a mutation or action: `await ctx.queues.emailQueue.send({ to })`.
+ *
+ * `message.run(...)` is `ctx.run(...)` pinned to that message — prefer it inside
+ * the batch loop. A deterministic failure (400/403/404/422) from a pinned call
+ * is attributed to its message: that one is acked and the rest are retried,
+ * instead of one poison message re-delivering (and eventually dead-lettering)
+ * the whole batch.
  *
  * ⚠️ **Privileged dispatch.** A push handler's `ctx.run(...)` calls back into
  * Lunora functions over the admin-authenticated dispatch endpoint (the same

@@ -5,17 +5,23 @@
  * this with the project's queue registry. Node-safe so it's unit-testable with
  * plain-object batches.
  *
- * When an `options.capture` sink is supplied (the codegen worker wires the dev
- * queue catcher's sink), the batch is instrumented so the final disposition of
- * every message — ack / retry / error — is recorded and handed to the sink after
- * the handler runs, WITHOUT changing delivery semantics: the wrappers call the
- * real `ack`/`retry`/`ackAll`/`retryAll`, and a thrown handler error is re-thrown
- * so workerd still retries the batch.
+ * The batch is always instrumented: each message is wrapped so it carries a
+ * `run` pinned to its own id (that pin is what makes poison-message isolation
+ * work — see {@link resolveAttributedFailure}) and so its final disposition —
+ * ack / retry / error — is observed. Delivery semantics are unchanged by the
+ * instrumentation: the wrappers call the real `ack`/`retry`/`ackAll`/`retryAll`,
+ * and an unattributed handler error is re-thrown so workerd still retries the
+ * batch. When an `options.capture` sink is supplied (the codegen worker wires
+ * the dev queue catcher's sink), the observed dispositions are turned into
+ * records and handed to the sink after the handler runs.
  */
+import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "@lunora/dispatch";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { getDispatchMessageId, isDeterministicDispatchFailure } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
 
 import { createQueueRunContext } from "./run-context";
-import type { MessageBatchLike, MessageLike, QueueDefinition, QueueRetryOptions } from "./types";
+import type { MessageBatchLike, MessageLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
 
 /** One declared queue, keyed for batch routing by its stable wrangler name. */
 interface QueueRegistryEntry {
@@ -76,10 +82,11 @@ type QueueCaptureSink = (messages: CapturedQueueMessage[]) => Promise<void> | vo
 
 interface DispatchOptions {
     /**
-     * Optional capture sink. When set, the batch is instrumented and every
-     * message's final disposition is recorded and handed to this sink after the
-     * handler runs. Omitted in production unless queue capture is enabled, so a
-     * consumer pays no instrumentation cost by default.
+     * Optional capture sink. When set, every message's final disposition is
+     * turned into a record and handed to this sink after the handler runs.
+     * Omitted in production unless queue capture is enabled, so a consumer pays
+     * no record-building or sink cost by default. Delivery semantics — including
+     * poison-message isolation — do not depend on it.
      */
     capture?: QueueCaptureSink;
     /** Worker `env`, forwarded to the queue run context. */
@@ -111,8 +118,20 @@ const timestampToMs = (value: unknown): number => {
 interface CaptureHarness {
     dispositions: Map<MessageLike, QueueMessageOutcome>;
     originals: ReadonlyArray<MessageLike>;
-    wrappedBatch: MessageBatchLike;
+    wrappedBatch: QueueMessageBatch;
 }
+
+/**
+ * A `ctx.run` pinned to one message: every call it makes carries that message's
+ * id, so a deterministic dispatch failure comes back attributed to it (see
+ * {@link resolveAttributedFailure}) and only that message is taken out of the
+ * batch. The pin wins over a caller-supplied `messageId` — the whole point of
+ * `message.run` is that a handler never has to know the option exists.
+ */
+const pinRunToMessage =
+    (run: DispatchRunFunction, messageId: string): DispatchRunFunction =>
+    <F extends FunctionReference>(function_: F, arguments_?: ArgsOf<F>, options?: RunFunctionOptions): Promise<unknown> =>
+        run(function_, arguments_, { ...options, messageId });
 
 /**
  * Wrap one message so `ack`/`retry` record their disposition (keyed by the
@@ -132,9 +151,15 @@ interface CaptureHarness {
  * a workerd `Message` is a host object, and an accessor invoked with a
  * non-genuine `this` can throw ("illegal invocation") — so every forwarded
  * read runs against the real instance, never the proxy.
+ *
+ * The wrapper also ADDS `run` — {@link pinRunToMessage} over the run context's
+ * dispatcher — which is what a handler calls instead of `ctx.run` to get
+ * per-message failure attribution for free.
  */
-const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueMessageOutcome>): MessageLike =>
-    new Proxy(message, {
+const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueMessageOutcome>, run: DispatchRunFunction): QueueMessage => {
+    const pinnedRun = pinRunToMessage(run, message.id);
+
+    return new Proxy(message, {
         get: (target, property): unknown => {
             if (property === "ack") {
                 return (): void => {
@@ -150,9 +175,14 @@ const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueM
                 };
             }
 
+            if (property === "run") {
+                return pinnedRun;
+            }
+
             return Reflect.get(target, property, target);
         },
-    });
+    }) as QueueMessage;
+};
 
 /**
  * Wrap the batch itself, same rationale as {@link wrapMessage}: `ackAll` /
@@ -163,9 +193,9 @@ const wrapMessage = (message: MessageLike, dispositions: Map<MessageLike, QueueM
  */
 const wrapBatch = (
     batch: MessageBatchLike,
-    wrappedMessages: ReadonlyArray<MessageLike>,
+    wrappedMessages: ReadonlyArray<QueueMessage>,
     fillUndecided: (outcome: QueueMessageOutcome) => void,
-): MessageBatchLike =>
+): QueueMessageBatch =>
     new Proxy(batch, {
         get: (target, property): unknown => {
             if (property === "ackAll") {
@@ -188,18 +218,18 @@ const wrapBatch = (
 
             return Reflect.get(target, property, target);
         },
-    });
+    }) as QueueMessageBatch;
 
 /**
  * Build a {@link CaptureHarness} over `batch`. Message and batch objects are
  * wrapped (not mutated) because a real workerd `Message`/`MessageBatch` is a
  * non-extensible host object — reassigning `message.ack` would throw.
  */
-const instrumentBatch = (batch: MessageBatchLike): CaptureHarness => {
+const instrumentBatch = (batch: MessageBatchLike, run: DispatchRunFunction): CaptureHarness => {
     const dispositions = new Map<MessageLike, QueueMessageOutcome>();
     const originals = batch.messages;
 
-    const wrappedMessages = originals.map((message) => wrapMessage(message, dispositions));
+    const wrappedMessages = originals.map((message) => wrapMessage(message, dispositions, run));
 
     /** Fill the disposition for every message the handler didn't explicitly decide. */
     const fillUndecided = (outcome: QueueMessageOutcome): void => {
@@ -243,10 +273,16 @@ const describeThrownError = (handlerError: unknown): string => {
 
 /**
  * Resolve each message's final {@link QueueMessageOutcome} and build the capture
- * records. An explicit `ack`/`retry` wins; an undecided message is an implicit
- * `ack` on a clean return, or `error` when the handler threw (workerd retries the
- * whole batch). `deadLettered` flags a non-ack disposition that exhausted the
- * queue's `maxRetries`.
+ * records — the ONE place an outcome is decided, so nothing downstream has to
+ * patch a record after the fact. `attributed`, when set, is the single message a
+ * deterministic dispatch failure was scoped to: it was physically acked (see
+ * {@link resolveAttributedBatch}) but it FAILED, so it records `error` — that is
+ * what tells an operator about it now that it no longer lands in the DLQ — and
+ * it is never `deadLettered`, since an acked message is not redelivered at all.
+ * For every other message an explicit `ack`/`retry` wins; an undecided message
+ * is an implicit `ack` on a clean return, or `error` when the handler threw
+ * (workerd retries the whole batch). `deadLettered` flags a non-ack disposition
+ * that exhausted the queue's `maxRetries`.
  */
 const buildCaptureRecords = (
     harness: CaptureHarness,
@@ -254,22 +290,25 @@ const buildCaptureRecords = (
     queue: string,
     threw: boolean,
     handlerError: unknown,
+    attributed: MessageLike | undefined,
 ): CapturedQueueMessage[] => {
     const errorMessage = threw ? describeThrownError(handlerError) : undefined;
     const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
+    // What a message the handler never decided settles as: `error` when the
+    // handler threw (the batch is retried by workerd, but the handler signalled
+    // failure), else workerd's implicit ack-on-success.
+    const undecided: QueueMessageOutcome = threw ? "error" : "ack";
 
     return harness.originals.map((message): CapturedQueueMessage => {
+        const isAttributed = message === attributed;
         const decided = harness.dispositions.get(message);
-        // Undecided + throw ⇒ the batch is retried by workerd but the handler
-        // signalled failure, so surface it as `error`; undecided + clean return
-        // ⇒ workerd's implicit ack-on-success.
-        const outcome: QueueMessageOutcome = decided ?? (threw ? "error" : "ack");
+        const outcome: QueueMessageOutcome = isAttributed ? "error" : (decided ?? undecided);
         const attempts = typeof message.attempts === "number" ? message.attempts : 1;
 
         return {
             attempts,
             body: message.body,
-            deadLettered: outcome !== "ack" && attempts > maxRetries,
+            deadLettered: !isAttributed && outcome !== "ack" && attempts > maxRetries,
             error: outcome === "error" ? errorMessage : undefined,
             exportName: entry.exportName,
             messageId: message.id,
@@ -278,6 +317,64 @@ const buildCaptureRecords = (
             timestamp: timestampToMs(message.timestamp),
         };
     });
+};
+
+/**
+ * When the handler threw a deterministic dispatch failure (400/403/404/422 —
+ * see `isDeterministicDispatchFailure`) that is scoped to one message, resolve
+ * which message it belongs to — so the caller can ack just that one instead of
+ * retrying the whole batch. A call made through `message.run(...)` is scoped
+ * automatically ({@link pinRunToMessage}); a bare `ctx.run(fn, args)` is not,
+ * unless the handler passes `{ messageId }` itself.
+ * Returns `undefined` for every other case: a non-deterministic failure, a
+ * deterministic failure with no `messageId` (the handler didn't scope its
+ * call — guessing which message it belongs to is unsafe, see plan 338 §1a),
+ * an unrecognized `messageId`, or a message the handler already explicitly
+ * acked/retried (never override a decision it actually made).
+ */
+const resolveAttributedFailure = (harness: CaptureHarness, threw: boolean, handlerError: unknown): MessageLike | undefined => {
+    if (!threw || !isDeterministicDispatchFailure(handlerError)) {
+        return undefined;
+    }
+
+    const dispatchMessageId = getDispatchMessageId(handlerError);
+
+    if (dispatchMessageId === undefined) {
+        return undefined;
+    }
+
+    const message = harness.originals.find((candidate) => candidate.id === dispatchMessageId);
+
+    if (message === undefined || harness.dispositions.has(message)) {
+        return undefined;
+    }
+
+    return message;
+};
+
+/**
+ * Ack `attributed` (the one message the failure belongs to) and explicitly
+ * retry every OTHER still-undecided message in `harness.originals`. The
+ * handler's throw cut its loop short before it necessarily reached every
+ * message (see §1a's "adjacent read and call" shape) — a message it never
+ * got to is not "successful", so it must be redelivered, not implicitly acked
+ * once `dispatchQueueBatch` stops rethrowing. A message the handler already
+ * explicitly acked/retried keeps that decision untouched.
+ *
+ * This settles PHYSICAL delivery only; what each message RECORDS is decided in
+ * {@link buildCaptureRecords}, which is why the ack here leaves no disposition
+ * behind: the attributed message is acked but records `error`, and that
+ * divergence lives in one place rather than being patched onto a built record.
+ */
+const resolveAttributedBatch = (harness: CaptureHarness, attributed: MessageLike): void => {
+    attributed.ack();
+
+    for (const candidate of harness.originals) {
+        if (candidate !== attributed && !harness.dispositions.has(candidate)) {
+            harness.dispositions.set(candidate, "retry");
+            candidate.retry();
+        }
+    }
 };
 
 /**
@@ -309,15 +406,11 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     }
 
     const context = createQueueRunContext({ env: options.env, exportName: entry.exportName, fetchImpl: options.fetchImpl });
-
-    // Fast path: no capture sink ⇒ no instrumentation, unchanged behavior.
-    if (options.capture === undefined) {
-        await handler(context, batch);
-
-        return;
-    }
-
-    const harness = instrumentBatch(batch);
+    // Always instrumented, capture sink or not: the wrapper is what gives each
+    // message its pinned `run`, and poison-message isolation is a DELIVERY
+    // property — gating it on the dev capture sink left it inert in production,
+    // where a single bad message still took its whole batch down with it.
+    const harness = instrumentBatch(batch, context.run);
     // A separate flag, not `handlerError !== undefined`: a handler can throw a
     // falsy/undefined value (`throw undefined`, `Promise.reject()`), which must
     // still record `error` and re-throw — testing the captured value would
@@ -332,29 +425,48 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         handlerError = error;
     }
 
-    // Best-effort by contract: build the records AND run the sink inside one guard
-    // so nothing on the capture path can change delivery semantics. If reading a
-    // host message or encoding a record throws, a clean batch must still resolve
-    // (else workerd re-delivers an already-acked batch) and a failed batch must
-    // still re-throw the handler's ORIGINAL value below — never the capture error.
-    try {
-        const records = buildCaptureRecords(harness, entry, batch.queue, threw, handlerError);
+    // A failure attributed to one message is that message's problem, not the
+    // rest of the batch's: ack JUST it (and retry every other undecided
+    // message, so an unprocessed one is redelivered rather than lost — see
+    // resolveAttributedBatch) instead of the whole-batch rethrow below. Every
+    // other case (see resolveAttributedFailure) stays unattributed and falls
+    // through unchanged.
+    const attributed = resolveAttributedFailure(harness, threw, handlerError);
 
-        await options.capture(records);
-    } catch (captureError) {
-        // Best-effort by contract: never let a capture failure change delivery
-        // semantics (see above). But silent-by-contract for the observability
-        // feature itself is a DX bug — a stale admin token or shard error would
-        // leave the studio Queues panel empty with no diagnostic anywhere — so
-        // log it (delivery is unaffected: the handler-error re-throw is below).
-        // eslint-disable-next-line no-console -- last-resort diagnostic for a swallowed capture-sink failure; no injected logger on the dispatch path
-        console.warn("@lunora/queue: capture sink failed (delivery unaffected):", captureError);
+    if (attributed !== undefined) {
+        resolveAttributedBatch(harness, attributed);
+    }
+
+    // `threw` stays truthful (the handler DID fail, and the records say so);
+    // whether the failure propagates is a separate question, and an attributed
+    // one does not — the attributed message is acked and every other message
+    // has an explicit disposition, so there is nothing left for workerd to
+    // redeliver the batch for.
+    const rethrow = threw && attributed === undefined;
+
+    if (options.capture !== undefined) {
+        // Best-effort by contract: build the records AND run the sink inside one guard
+        // so nothing on the capture path can change delivery semantics. If reading a
+        // host message or encoding a record throws, a clean batch must still resolve
+        // (else workerd re-delivers an already-acked batch) and a failed batch must
+        // still re-throw the handler's ORIGINAL value below — never the capture error.
+        try {
+            await options.capture(buildCaptureRecords(harness, entry, batch.queue, threw, handlerError, attributed));
+        } catch (captureError) {
+            // Best-effort by contract: never let a capture failure change delivery
+            // semantics (see above). But silent-by-contract for the observability
+            // feature itself is a DX bug — a stale admin token or shard error would
+            // leave the studio Queues panel empty with no diagnostic anywhere — so
+            // log it (delivery is unaffected: the handler-error re-throw is below).
+            // eslint-disable-next-line no-console -- last-resort diagnostic for a swallowed capture-sink failure; no injected logger on the dispatch path
+            console.warn("@lunora/queue: capture sink failed (delivery unaffected):", captureError);
+        }
     }
 
     // Preserve workerd's retry-on-throw: re-throw the handler's original value
     // verbatim after capturing. (`handlerError` is `unknown`, which `only-throw-error`
     // permits, so no disable directive is needed.)
-    if (threw) {
+    if (rethrow) {
         throw handlerError;
     }
 };

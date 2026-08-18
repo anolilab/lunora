@@ -5,7 +5,6 @@ import type {
     ScheduledJobStatus,
     ScheduleOptions,
     SchedulerHost,
-    ShardAsyncSqlExec,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -51,6 +50,23 @@ interface ConformanceHost {
     createSocket?: () => unknown;
     /** The shard directory under test. */
     directory: ShardDirectory;
+
+    /**
+     * Terminally dispose this host instance, as opposed to {@link
+     * ConformanceHost.cleanup}, which some hosts (Cloudflare's DO-backed
+     * `cleanup`) use as a per-test reset rather than a true teardown — the DO's
+     * storage has no explicit close a test can drive, so `cleanup` there just
+     * disarms the pending alarm and drops socket references for the next run.
+     *
+     * Optional: only a host with a real terminal dispose implements it. Where
+     * it exists, the suite calls it once and then asserts every surface that
+     * documents a post-close behaviour (`ShardHost.alarms`,
+     * `SchedulerHost.schedule`, `SocketHost.accept`/`setTag`/`removeTag`) fails
+     * closed with a `"platform closed: …"` error — the same "report the gap
+     * instead of asserting a false close" pattern `scheduler`/`kv` already use
+     * for hosts that don't implement a surface at all.
+     */
+    disposeTerminally?: () => void;
 
     /**
      * The durable key-value store under test. Optional: a host that implements
@@ -197,6 +213,21 @@ const createReferenceHost = (): ReferenceHost => {
     // key per host, so a single DB is sufficient.
     const database = new DatabaseSync(":memory:");
 
+    /**
+     * Terminal-teardown state for {@link ConformanceHost.disposeTerminally}.
+     * The reference implementation has to satisfy the same fail-closed contract
+     * the suite asserts of real hosts, or that leg would only ever be exercised
+     * downstream in `platform-node` and the reference host would sit as the one
+     * implementation nothing checks.
+     */
+    let closed = false;
+
+    const assertOpen = (action: string): void => {
+        if (closed) {
+            throw new Error(`platform closed: cannot ${action}`);
+        }
+    };
+
     const shardState: ReferenceShardState = {
         alarmAt: null,
         alarmTimeout: null,
@@ -241,20 +272,6 @@ const createReferenceHost = (): ReferenceHost => {
                 },
                 toArray: () => [...rows],
             } as never;
-        },
-    };
-
-    const asyncSql: ShardAsyncSqlExec = {
-        all: async (query_, params) => {
-            const statement = database.prepare(query_);
-
-            return statement.all(...(params as import("node:sqlite").SQLInputValue[]));
-        },
-        run: async (query_, params) => {
-            const statement = database.prepare(query_);
-            const result = statement.run(...(params as import("node:sqlite").SQLInputValue[]));
-
-            return { rowsAffected: Number(result.changes) };
         },
     };
 
@@ -349,19 +366,24 @@ const createReferenceHost = (): ReferenceHost => {
 
     const alarms: ShardHost["alarms"] = {
         delete: () => {
+            assertOpen("delete an alarm");
             shardState.alarmAt = null;
             if (shardState.alarmTimeout !== null) {
                 clearTimeout(shardState.alarmTimeout);
                 shardState.alarmTimeout = null;
             }
         },
+        // No `assertOpen`: a read has an honest post-close answer, and the suite's
+        // terminal-disposal leg does not assert one — see its comment there.
         get: () => shardState.alarmAt,
-        set: setAlarm,
+        set: (ms) => {
+            assertOpen("set an alarm");
+            setAlarm(ms);
+        },
     };
 
     const shard: ShardHost = {
         alarms,
-        asyncSql,
         runSerialized,
         sql,
         transaction,
@@ -404,6 +426,8 @@ const createReferenceHost = (): ReferenceHost => {
 
     const socket: SocketHost = {
         accept: (rawSocket, attachment, tags) => {
+            assertOpen("accept a socket");
+
             const id = nextSocketId();
             const socketState: ReferenceSocket = {
                 attachment,
@@ -444,6 +468,8 @@ const createReferenceHost = (): ReferenceHost => {
             return id;
         },
         removeTag: (handle, tag) => {
+            assertOpen("remove a socket tag");
+
             const id = handleIds.get(handle) ?? "";
             const socketState = runtimeSockets.get(id);
 
@@ -460,6 +486,8 @@ const createReferenceHost = (): ReferenceHost => {
             durableTags.set(id, new Set(socketState.tags));
         },
         setTag: (handle, tag) => {
+            assertOpen("set a socket tag");
+
             const id = handleIds.get(handle) ?? "";
             const socketState = runtimeSockets.get(id);
 
@@ -587,6 +615,8 @@ const createReferenceHost = (): ReferenceHost => {
         },
         list: async () => [...scheduledJobs].map(([id, job]) => toStatus(id, job)),
         schedule: async (functionPath, args, options) => {
+            assertOpen("schedule a job");
+
             const id = nextJobId();
             let scheduledFor: number;
 
@@ -617,6 +647,28 @@ const createReferenceHost = (): ReferenceHost => {
         },
     };
 
+    /**
+     * Idempotent: the suite calls `disposeTerminally()` inside a test and
+     * `cleanup()` in the `finally` that follows, so a second `database.close()`
+     * would throw over whatever the test was actually asserting.
+     */
+    const teardown = (): void => {
+        if (closed) {
+            return;
+        }
+
+        closed = true;
+        database.close();
+
+        if (shardState.alarmTimeout !== null) {
+            clearTimeout(shardState.alarmTimeout);
+        }
+
+        for (const job of scheduledJobs.values()) {
+            clearTimeout(job.timer);
+        }
+    };
+
     return {
         awaitAlarmFired: async (target) => {
             // The reference host clears `alarmAt` from a real timer, so waiting
@@ -641,18 +693,9 @@ const createReferenceHost = (): ReferenceHost => {
 
             return dispatchedJobs.has(id);
         },
-        cleanup: () => {
-            database.close();
-
-            if (shardState.alarmTimeout !== null) {
-                clearTimeout(shardState.alarmTimeout);
-            }
-
-            for (const job of scheduledJobs.values()) {
-                clearTimeout(job.timer);
-            }
-        },
+        cleanup: teardown,
         directory,
+        disposeTerminally: teardown,
         kv,
         // Text frames only: every Lunora wire frame is JSON, and returning
         // binary as a lossy string would let a corrupted frame read as a

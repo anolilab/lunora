@@ -75,7 +75,9 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         // Every `.global()` read runs through this exec, not through a
         // `D1Client` — so an unwrapped exec means the app eats D1's documented
         // baseline error rate on every read no matter what the client offers.
-        expect(output).toContain("const buildExec = (database: D1DatabaseLike): D1Exec => {");
+        expect(output).toContain(
+            "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
+        );
         expect(output).toContain("return retryingExec({");
     });
 

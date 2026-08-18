@@ -109,6 +109,23 @@ func TestOverLongBigIntRejected(t *testing.T) {
 	}
 }
 
+func TestMalformedBytesRejected(t *testing.T) {
+	covers("malformed_bytes_rejected")
+
+	if _, err := DecodeWire([]any{Tag, "bytes", "not@@base64!!"}); err == nil {
+		t.Error("malformed base64 in a bytes tag must be rejected")
+	}
+
+	decoded, err := DecodeWire([]any{Tag, "bytes", "AQID"})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if data, ok := decoded.([]byte); !ok || string(data) != "\x01\x02\x03" {
+		t.Errorf("decoded = %#v, want []byte{1,2,3}", decoded)
+	}
+}
+
 func TestDepthCapIsEnforced(t *testing.T) {
 	covers("depth_cap_enforced")
 

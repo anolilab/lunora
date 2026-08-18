@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { collectAgenticMemoryTools, toSearchResults } from "../src/agentic-memory";
 import type { AgentMemoryOptions, AgentToolContext } from "../src/types";
+import { passthroughStep } from "./loop-harness";
 
 /** A minimal `AgentToolContext` whose `run` records the dispatched args and returns a canned result. */
 const captureContext = (calls: { args: Record<string, unknown> | undefined }[], retrieved: unknown): AgentToolContext => {
@@ -16,6 +17,7 @@ const captureContext = (calls: { args: Record<string, unknown> | undefined }[], 
             return retrieved;
         },
         setState: async () => {},
+        step: passthroughStep,
         threadKey: "thread-1",
         toolCallId: "call_1",
     };

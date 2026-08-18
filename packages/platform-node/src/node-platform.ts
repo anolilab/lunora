@@ -53,8 +53,10 @@ export interface NodePlatform<Queues extends Record<string, { isLunoraQueue: tru
      * benign); `shard.alarms.set()`/`delete()` throw before mutating any
      * in-memory state (checked against the connection's own open/closed state,
      * the single source of truth); `shard.alarms.get()` keeps answering
-     * whatever it last held. A no-op instead of a throw would be
-     * indistinguishable from a working call — exactly the silent-vanishing
+     * whatever it last held; `sockets.accept()`/`setTag()`/`removeTag()` throw
+     * the same way, checked against the same connection state, before touching
+     * any runtime socket map or durable row. A no-op instead of a throw would
+     * be indistinguishable from a working call — exactly the silent-vanishing
      * this lifecycle exists to end.
      */
     close: () => void;

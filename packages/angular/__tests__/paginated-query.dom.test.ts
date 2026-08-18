@@ -1,6 +1,8 @@
+import { Injector, provideZonelessChangeDetection, signal } from "@angular/core";
+import { TestBed } from "@angular/core/testing";
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import type { PaginationResult } from "@lunora/client/pagination";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { infiniteQuery, paginatedQuery } from "../src/paginated-query";
 import type { FakeClient } from "./fake-client";
@@ -318,5 +320,220 @@ describe(infiniteQuery, () => {
         );
 
         expect(pages()).toStrictEqual([firstPageItems, secondPageItems]);
+    });
+});
+
+/**
+ * Wraps `client.subscribe` with an order log of `subscribe:<args>` /
+ * `unsubscribe:<args>` entries, in call order — the direct way to prove
+ * teardown-before-reopen (not just "eventually true after the fact"), without
+ * touching the shared `fake-client.ts` helper.
+ */
+const trackSubscribeOrder = (client: LunoraClient): string[] => {
+    const events: string[] = [];
+    const original = client.subscribe.bind(client);
+
+    vi.spyOn(client, "subscribe").mockImplementation((...callArgs: Parameters<typeof original>) => {
+        const argsKey = JSON.stringify(callArgs[1]);
+
+        events.push(`subscribe:${argsKey}`);
+
+        const unsubscribe = original(...callArgs);
+
+        return () => {
+            events.push(`unsubscribe:${argsKey}`);
+            unsubscribe();
+        };
+    });
+
+    return events;
+};
+
+// `fn` is untyped (`FunctionReference` with no generic args), so its
+// `PaginatedArgs<F>` resolves to an empty object — every other describe block
+// in this file only ever passes `{}`. The reactive-args tests need an actual
+// arg field to vary, so they use this typed reference instead.
+const roomFn = { __lunoraRef: "messages:list" } as FunctionReference<"query", { roomId: string }>;
+
+describe("paginatedQuery — reactive args (plan 340)", () => {
+    beforeEach(() => {
+        TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    });
+
+    afterEach(() => {
+        TestBed.resetTestingModule();
+    });
+
+    it("disposes the current pagination engine and builds a fresh one when the args source changes — teardown BEFORE the new page subscription opens", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const events = trackSubscribeOrder(fake.asClient);
+        const injector = TestBed.inject(Injector);
+        const roomId = signal("room-a");
+
+        const firstArgs = { roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } };
+        const secondArgs = { roomId: "room-b", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } };
+
+        const { results, status } = paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            {
+                client: fake.asClient,
+                destroyRef: destroy.asDestroyRef,
+                initialNumItems: NUM_ITEMS,
+                injector,
+            },
+        );
+
+        // The effect's first run is scheduled, not synchronous with creation —
+        // flush it before asserting the initial engine/page subscription opened.
+        TestBed.tick();
+
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(fake.subscriptions[0]?.args).toStrictEqual(firstArgs);
+
+        fake.subscriptions[0]?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+
+        expect(results()).toStrictEqual(firstPageItems);
+
+        roomId.set("room-b");
+        TestBed.tick();
+
+        // The precise ordering proof: the old page subscription's `unsubscribe`
+        // fires BEFORE the new one is opened for the new args — not just
+        // "both eventually happened".
+        expect(events).toStrictEqual([
+            `subscribe:${JSON.stringify(firstArgs)}`,
+            `unsubscribe:${JSON.stringify(firstArgs)}`,
+            `subscribe:${JSON.stringify(secondArgs)}`,
+        ]);
+
+        // A whole fresh engine, not a re-keyed one: back to `LoadingFirstPage`
+        // with empty results, not the old room's carried-over data.
+        expect(status()).toBe("LoadingFirstPage");
+        expect(results()).toStrictEqual([]);
+
+        expect(fake.subscriptions).toHaveLength(2);
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
+        expect(fake.subscriptions[1]?.unsubscribed).toBe(false);
+        expect(fake.subscriptions[1]?.args).toStrictEqual(secondArgs);
+
+        fake.subscriptions[1]?.push({ continueCursor: "cur-2", isDone: false, page: secondPageItems });
+
+        expect(results()).toStrictEqual(secondPageItems);
+    });
+
+    it("a static args value builds the pagination engine exactly once and never rebuilds it, even as unrelated signals tick", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const unrelated = signal(0);
+
+        paginatedQuery(fn, {}, { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector });
+
+        expect(fake.subscriptions).toHaveLength(1);
+
+        unrelated.set(1);
+        TestBed.tick();
+        unrelated.set(2);
+        TestBed.tick();
+
+        // If the static form were accidentally routed through the reactive
+        // dispose-and-rebuild path, ticks would eventually rebuild the engine;
+        // it must be a no-op here.
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
+    });
+
+    it("'skip' opens nothing; switching from 'skip' to real args builds exactly one engine", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const args = signal<{ roomId: string } | "skip">("skip");
+
+        const { status } = paginatedQuery(roomFn, () => args(), {
+            client: fake.asClient,
+            destroyRef: destroy.asDestroyRef,
+            initialNumItems: NUM_ITEMS,
+            injector,
+        });
+
+        expect(status()).toBe("LoadingFirstPage");
+        expect(fake.subscriptions).toHaveLength(0);
+
+        args.set({ roomId: "room-a" });
+        TestBed.tick();
+
+        expect(fake.subscriptions).toHaveLength(1);
+        expect(fake.subscriptions[0]?.args).toStrictEqual({ roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } });
+    });
+
+    it("loadMore on the reactive form appends a page and survives the next effect flush", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const roomId = signal("room-a");
+
+        const { loadMore, results, status } = paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector },
+        );
+
+        TestBed.tick();
+
+        pushByArgs(
+            fake,
+            { roomId: "room-a", paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-1", isDone: false, page: firstPageItems },
+        );
+
+        expect(status()).toBe("CanLoadMore");
+
+        loadMore(NUM_ITEMS);
+
+        pushByArgs(
+            fake,
+            { roomId: "room-a", paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: null, isDone: true, page: secondPageItems },
+        );
+
+        expect(results()).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        // The regression: `loadMore` writes the engine's `pages` signal. If the
+        // engine were built INSIDE the tracked part of the reactive effect, that
+        // write would be one of the effect's dependencies — so the next flush
+        // would dispose the generation and rebuild it from `initialNumItems`,
+        // silently snapping the feed back to page one.
+        TestBed.tick();
+
+        expect(status()).toBe("Exhausted");
+        expect(results()).toStrictEqual([...firstPageItems, ...secondPageItems]);
+    });
+
+    it("destroy tears down the reactive-form engine's subscriptions", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const roomId = signal("room-a");
+
+        paginatedQuery(
+            roomFn,
+            () => {
+                return { roomId: roomId() };
+            },
+            { client: fake.asClient, destroyRef: destroy.asDestroyRef, initialNumItems: NUM_ITEMS, injector },
+        );
+        TestBed.tick();
+
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(false);
+
+        destroy.destroy();
+
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
     });
 });

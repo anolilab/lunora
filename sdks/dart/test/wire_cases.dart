@@ -46,6 +46,17 @@ void caseOverLongBigIntRejected() {
   equals(decodeWire(<Object?>[wireTag, 'bigint', '-42']), BigInt.from(-42), 'a legitimate bigint must decode');
 }
 
+void caseMalformedBytesRejected() {
+  covers('malformed_bytes_rejected');
+
+  throws(() => decodeWire(<Object?>[wireTag, 'bytes', 'not@@base64!!']), 'malformed base64 in a bytes tag must be rejected');
+
+  final decoded = decodeWire(<Object?>[wireTag, 'bytes', 'AQID']);
+
+  check(
+      decoded is List<int> && decoded.length == 3 && decoded[0] == 1 && decoded[1] == 2 && decoded[2] == 3, 'well-formed bytes must still decode to [1, 2, 3]');
+}
+
 void caseDepthCapEnforced() {
   covers('depth_cap_enforced');
 

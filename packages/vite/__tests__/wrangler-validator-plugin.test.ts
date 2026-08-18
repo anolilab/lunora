@@ -45,6 +45,7 @@ const VALID_WRANGLER = `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "x" }]
 }
 `;
@@ -169,7 +170,8 @@ describe("wrangler-validator-plugin", () => {
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `,
                 "utf8",
@@ -220,7 +222,8 @@ describe("wrangler-validator-plugin", () => {
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
-    }
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }]
 }
 `,
                 "utf8",
@@ -247,6 +250,7 @@ describe("wrangler-validator-plugin", () => {
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }
 `,
                 "utf8",

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
-import { MetricBuffer } from "../src/metric-buffer";
+import { MetricBuffer, metricSeriesKey } from "../src/metric-buffer";
 
 /** Build a MetricEvent with sensible defaults so each test states only what it exercises. */
 const event = (over: Partial<MetricEvent> & Pick<MetricEvent, "kind" | "name" | "value">): MetricEvent => {
@@ -137,6 +137,18 @@ describe("metricBuffer", () => {
         buffer.push(event({ kind: "counter", name: "a", value: 1 }));
 
         expect(buffer.entries()[0]?.sum).toBe(2);
+    });
+
+    it("keys two events differing only by a NaN vs null attribute distinctly (plan 355 regression)", () => {
+        expect.assertions(1);
+
+        // Before plan 355, `stableStringify` encoded every non-finite number the
+        // same as `null`, so these two distinct metric dimensions collapsed into
+        // one series key and silently corrupted aggregation.
+        const nanKey = metricSeriesKey(event({ attributes: { region: Number.NaN }, kind: "gauge", name: "queue.depth", value: 1 }));
+        const nullKey = metricSeriesKey(event({ attributes: { region: null }, kind: "gauge", name: "queue.depth", value: 1 }));
+
+        expect(nanKey).not.toBe(nullKey);
     });
 
     it("clear() drops every series", () => {
