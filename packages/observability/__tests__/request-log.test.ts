@@ -328,6 +328,94 @@ describe("request-log module", () => {
     });
 });
 
+describe("readRequestLog tolerates a malformed identity/args JSON blob", () => {
+    it("omits identity when its column holds invalid JSON, while keeping every other field intact", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ functionPath: "messages:list", identity: { email: "alice@example.com" }, userId: "u1" }));
+
+            // appendRequestLogEntry always writes valid JSON, so corrupt the column
+            // directly to reproduce a row that got malformed some other way.
+            database.raw(`UPDATE "${REQUEST_LOG_TABLE}" SET identity = ? WHERE function_path = ?`, "{not valid json", "messages:list");
+
+            const [row] = readRequestLog(database.sql);
+
+            expect(row!.identity).toBeUndefined();
+            expect(row!.functionPath).toBe("messages:list");
+            expect(row!.userId).toBe("u1");
+            expect(row!.outcome).toBe("ok");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("omits redactedArgs when its column holds invalid JSON, while keeping every other field intact", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ functionPath: "messages:send", redactedArgs: { message: "hi" }, userId: "u2" }));
+
+            database.raw(`UPDATE "${REQUEST_LOG_TABLE}" SET args = ? WHERE function_path = ?`, "{not valid json", "messages:send");
+
+            const [row] = readRequestLog(database.sql);
+
+            expect(row!.redactedArgs).toBeUndefined();
+            expect(row!.functionPath).toBe("messages:send");
+            expect(row!.userId).toBe("u2");
+            expect(row!.outcome).toBe("ok");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("a read spanning one malformed and two well-formed rows returns all three entries", () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ functionPath: "a:one", identity: { email: "a@example.com" }, ts: 1000 }));
+            appendRequestLogEntry(database.sql, entry({ functionPath: "b:two", identity: { email: "b@example.com" }, ts: 2000 }));
+            appendRequestLogEntry(database.sql, entry({ functionPath: "c:three", identity: { email: "c@example.com" }, ts: 3000 }));
+
+            database.raw(`UPDATE "${REQUEST_LOG_TABLE}" SET identity = ? WHERE function_path = ?`, "{not valid json", "b:two");
+
+            const rows = readRequestLog(database.sql);
+
+            // The regression this plan exists for: one bad row must not blank the read.
+            expect(rows).toHaveLength(3);
+            expect(rows.find((r) => r.functionPath === "a:one")!.identity).toBeDefined();
+            expect(rows.find((r) => r.functionPath === "b:two")!.identity).toBeUndefined();
+            expect(rows.find((r) => r.functionPath === "c:three")!.identity).toBeDefined();
+        } finally {
+            database.close();
+        }
+    });
+
+    it("decodes well-formed identity/args rows identically to before", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            appendRequestLogEntry(database.sql, entry({ identity: { email: "alice@example.com", roles: ["admin"] }, redactedArgs: { count: 3 } }));
+
+            const [row] = readRequestLog(database.sql);
+
+            expect(Object.keys(row!.identity as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toEqual(["email", "roles"]);
+            expect((row!.redactedArgs as Record<string, unknown>).count).toBe(3);
+            expect(row!.functionPath).toBe("messages:list");
+        } finally {
+            database.close();
+        }
+    });
+});
+
 describe("readErrorIssues (grouped Issues over the bounded readout)", () => {
     it("folds error rows sharing a fingerprint into one Issue with count + first/last seen", () => {
         expect.assertions(7);

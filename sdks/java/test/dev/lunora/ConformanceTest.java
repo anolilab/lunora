@@ -36,6 +36,7 @@ public final class ConformanceTest {
         wireCodecRoundTrip();
         undefinedIsDistinctFromNull();
         overLongBigIntRejected();
+        malformedBytesRejected();
         depthCapEnforced();
         stableWireKeyFixtures();
         formatNumberMatchesEcmaScript();
@@ -195,12 +196,56 @@ public final class ConformanceTest {
                 "-42 should decode");
     }
 
+    /**
+     * A malformed {@code bytes} tag must be rejected at decode, and the rejection must reach a live
+     * subscription's error callback rather than escape {@link Client#handleFrame} — a bare {@code
+     * Wire.decode} throw out of the frame dispatcher would crash whatever thread runs the caller's
+     * socket read loop instead of surfacing a recoverable error.
+     */
+    private static void malformedBytesRejected() throws IOException {
+        covers("malformed_bytes_rejected");
+
+        check(
+                throwsWireError(List.of(Wire.TAG, "bytes", "not@@base64!!")),
+                "malformed base64 in a bytes tag must be rejected");
+
+        Object decoded = Wire.decode(List.of(Wire.TAG, "bytes", "AQID"));
+
+        check(
+                decoded instanceof byte[] bytes && bytes.length == 3,
+                "well-formed bytes must still decode");
+
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<Object> seen = new ArrayList<>();
+        List<Client.SubscriptionError> errors = new ArrayList<>();
+
+        client.subscribe("messages:list", null, seen::add, errors::add, null);
+
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("type", "data");
+        frame.put("id", "sub_1");
+        frame.put("data", List.of(Wire.TAG, "bytes", "not@@base64!!"));
+
+        String kind = client.handleFrame(Json.write(frame));
+
+        check("data".equals(kind), "handleFrame must return normally rather than throw");
+        check(seen.isEmpty(), "a malformed value must not reach onData");
+        check(errors.size() == 1, "a malformed value must surface via onError");
+    }
+
     private static boolean throwsWireError(Object value) {
         try {
             Wire.decode(value);
 
             return false;
-        } catch (Wire.WireFormatException error) {
+        } catch (RuntimeException error) {
+            // Wire.decode's own bounds (bigint length, depth) throw its typed
+            // WireFormatException; a nested decoder (Base64 on a malformed bytes
+            // tag) throws its own unwrapped RuntimeException. Both are a rejection.
             return true;
         }
     }

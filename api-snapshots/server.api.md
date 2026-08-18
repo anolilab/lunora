@@ -45,7 +45,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: RunAction;
@@ -1189,7 +1189,7 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: RunMutation;
@@ -1444,7 +1444,7 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: RunQuery;
@@ -1521,7 +1521,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1584,6 +1584,7 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 ```
@@ -2440,6 +2441,16 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
 }
 ```
 
+### `WorkflowEventDefinition` (interface)
+
+```ts
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+```
+
 ### `WorkflowHandle` (interface)
 
 ```ts
@@ -2447,6 +2458,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     get: (id: string) => Promise<WorkflowInstance>;
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 ```
 
@@ -4179,7 +4191,7 @@ interface ActionCtx {
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runAction: RunAction;
@@ -4538,7 +4550,7 @@ interface MutationCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runMutation: RunMutation;
@@ -4589,7 +4601,7 @@ interface QueryCtx {
     readonly env?: Record<string, unknown>;
     readonly ip?: string;
     readonly log: LunoraLogger;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly now: number;
     readonly runQuery: RunQuery;
@@ -4652,7 +4664,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -4686,6 +4698,7 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 ```
@@ -5329,6 +5342,16 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
 }
 ```
 
+### `WorkflowEventDefinition` (interface)
+
+```ts
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+```
+
 ### `WorkflowHandle` (interface)
 
 ```ts
@@ -5336,6 +5359,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     get: (id: string) => Promise<WorkflowInstance>;
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 ```
 

@@ -1,5 +1,7 @@
+import { v } from "@lunora/values";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { defineWorkflowEvent } from "../src/define-event";
 import { createWorkflowRunContext } from "../src/run-context";
 import type { WorkflowEventLike, WorkflowStepLike } from "../src/types";
 
@@ -52,6 +54,21 @@ describe("createWorkflowRunContext", () => {
 
         expect(typeof ctx.parallel).toBe("function");
         expect(typeof ctx.spawn).toBe("function");
+    });
+
+    it("wires ctx.waitForEvent onto the native step API", async () => {
+        expect.assertions(2);
+
+        const step = makeStep();
+        const waitForEvent = step.waitForEvent as unknown as ReturnType<typeof vi.fn>;
+
+        waitForEvent.mockResolvedValue({ payload: { approvedBy: "u1" }, type: "order-approved" });
+
+        const ctx = createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step });
+        const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
+
+        await expect(ctx.waitForEvent(orderApproved)).resolves.toStrictEqual({ approvedBy: "u1" });
+        expect(waitForEvent).toHaveBeenCalledWith("event:order-approved", expect.objectContaining({ type: "order-approved" }));
     });
 
     it("spawning a workflow with no matching WORKFLOW_* binding throws a helpful error", async () => {

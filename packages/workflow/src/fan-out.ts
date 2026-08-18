@@ -25,6 +25,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import { NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
@@ -47,8 +48,13 @@ const AWAIT_STEP_PREFIX = "lunora:await:";
 const SIGNAL_STEP_PREFIX = "lunora:signal:";
 /** Durable-step name prefix for a completed branch's group-saga compensation spawn. */
 const COMPENSATE_STEP_PREFIX = "lunora:compensate:";
-/** Event-type prefix the parent waits on and the child sends. */
-const BRANCH_EVENT_PREFIX = "lunora:branch:";
+
+/**
+ * Event-type prefix the parent waits on and the child sends. Derived from the
+ * reserved namespace rather than re-spelled, so the guard that rejects user events
+ * in that namespace can never stop covering it.
+ */
+const BRANCH_EVENT_PREFIX = `${RESERVED_EVENT_TYPE_PREFIX}branch:`;
 
 /** The completion event a branch child sends to its parent. Discriminated so an `undefined` value is distinguishable from a failure. */
 type BranchOutcome = { error: { message: string; name: string }; status: "error" } | { status: "ok"; value?: unknown };

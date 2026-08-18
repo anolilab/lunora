@@ -7,7 +7,9 @@ import { presence } from "../src/presence";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-const SESS_ID_PATTERN = /^sess-/;
+// `randomSessionId`'s fallback path is unprefixed (shared/random-session-id.ts);
+// this just asserts the no-`crypto` path yields a non-empty id without throwing.
+const SESS_ID_PATTERN = /^[\da-z]+$/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;

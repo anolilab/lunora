@@ -57,6 +57,31 @@ export class MessagesComponent {
 
 Pass `"skip"` as the args to short-circuit (no network call, no socket).
 
+Pass a function/`Signal` instead of a plain object to make the args reactive —
+each change tears the old subscription down and opens a fresh one for the new
+args:
+
+```ts
+export class MessagesComponent {
+    private readonly channelId = input.required<string>();
+
+    readonly messages = liveQuery(api.messages.list, () => ({ channelId: this.channelId() }));
+}
+```
+
+`subscription` and `paginatedQuery`/`infiniteQuery` accept the same reactive
+args form. Calling from outside an injection context (e.g. `ngOnInit`) needs an
+explicit `injector` alongside `client`/`destroyRef` for the reactive form —
+`effect()` can't resolve one on its own there:
+
+```ts
+liveQuery(api.messages.list, () => ({ channelId: this.channelId() }), {
+    client: this.client,
+    destroyRef: this.destroyRef,
+    injector: this.injector,
+});
+```
+
 ## Mutations
 
 ```ts

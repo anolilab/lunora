@@ -9,6 +9,7 @@ export { maxSeq, reconcileOptimistic, RETIRE_AFTER_DURABLE_SEQ_ADVANCE } from ".
 export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
+export { createCallRunner } from "./call-runner";
 export type { ClientQueryRef } from "./client-query-store";
 export { createClientQuery } from "./client-query-store";
 export { TabCoordinator } from "./cross-tab";
@@ -21,6 +22,7 @@ export { httpStream } from "./http-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
+    ActionCallOptions,
     BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,
@@ -32,8 +34,6 @@ export type {
     SyncWatermark,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
-export type { MutationRunnerSinks } from "./mutation-runner";
-export { createMutationRunner } from "./mutation-runner";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
 export { createMutatorRunner } from "./mutator-runner";
 export type { QueuedMutation } from "./offline-queue";

@@ -1,4 +1,4 @@
-import type { ArrowFunction, FunctionExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { ArrowFunction, FunctionExpression, IfStatement, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
@@ -76,8 +76,10 @@ const isEmptyObjectLiteral = (node: TsNode): boolean => Node.isObjectLiteralExpr
  * `undefined` — for a policy `when` that means "opt this policy out", which reads like
  * a denial but isn't one; for a shape `where` it isn't a predicate at all.
  *
- * A non-empty object, a variable, a call (`deny()`), a spread, a conditional — all
- * left alone. The lint's value is catching the near-miss, not second-guessing
+ * A non-empty object, a variable, a call — all left alone. That includes `deny()`
+ * and `allowAll()` from `@lunora/server`: both are calls, so they never match either
+ * form here regardless of which arm they sit on — an explicit `allowAll()` is never
+ * flagged. The lint's value is catching the near-miss, not second-guessing
  * predicates it cannot evaluate.
  */
 const unrestrictedForm = (node: TsNode | undefined): "empty-object" | "undefined" | undefined => {
@@ -85,7 +87,7 @@ const unrestrictedForm = (node: TsNode | undefined): "empty-object" | "undefined
         return undefined;
     }
 
-    // A bare `return;` — `returnedExpressions` hands the statement itself over, since
+    // A bare `return;` — `returnedValue` hands the statement itself over, since
     // there is no expression node to point at.
     if (Node.isReturnStatement(node) && node.getExpression() === undefined) {
         return "undefined";
@@ -147,29 +149,224 @@ const hasBranchingExits = (predicate: PredicateFunction): boolean => {
     return returns.some((statement) => statement.getFirstAncestorByKind(SyntaxKind.IfStatement) !== undefined) || ownConditionals(predicate).length > 0;
 };
 
-/** Every returned expression of `predicate`, including a concise arrow body. */
-const returnedExpressions = (predicate: PredicateFunction): TsNode[] => {
-    const found: TsNode[] = [];
-    const body = predicate.getBody();
+/** `if`-statements belonging to `predicate` itself, not to a nested callback. */
+const ownIfStatements = (predicate: PredicateFunction): IfStatement[] =>
+    predicate.getDescendantsOfKind(SyntaxKind.IfStatement).filter((ifStatement) => enclosingFunction(ifStatement) === predicate);
 
-    // Concise arrow body (`() => ({})`): the body IS the returned expression.
-    if (!Node.isBlock(body)) {
-        found.push(body);
+/**
+ * `true` for the operands that make an equality comparison read as an ABSENCE test:
+ * `null`, `undefined`, and the falsy literals `false` / `0` / `""`.
+ *
+ * `x === undefined` is the same assertion as `!x` for guard purposes — it is true
+ * exactly when the caller has no identity — so it must read `negative`, not the
+ * `positive` every `===` would otherwise get.
+ */
+const isAbsenceOperand = (node: TsNode): boolean => {
+    if (node.getKind() === SyntaxKind.NullKeyword || node.getKind() === SyntaxKind.FalseKeyword) {
+        return true;
     }
 
-    for (const statement of ownReturnStatements(predicate)) {
-        const expression = Node.isReturnStatement(statement) ? statement.getExpression() : undefined;
-
-        // A bare `return;` yields undefined — record the statement so the line is right.
-        found.push(expression ?? statement);
+    if (Node.isIdentifier(node) && node.getText() === "undefined") {
+        return true;
     }
 
-    // A ternary's two arms are each an exit.
+    if (Node.isNumericLiteral(node)) {
+        return node.getLiteralValue() === 0;
+    }
+
+    return Node.isStringLiteral(node) && node.getLiteralValue() === "";
+};
+
+/** `true` when either side of a comparison is an {@link isAbsenceOperand}. */
+const comparesAgainstAbsence = (left: TsNode, right: TsNode): boolean => isAbsenceOperand(left) || isAbsenceOperand(right);
+
+/** How each equality operator reads for an IDENTITY match (`ctx.auth.userId === userId`). */
+const EQUALITY_POLARITY = new Map<SyntaxKind, "negative" | "positive">([
+    [SyntaxKind.EqualsEqualsEqualsToken, "positive"],
+    [SyntaxKind.EqualsEqualsToken, "positive"],
+    [SyntaxKind.ExclamationEqualsEqualsToken, "negative"],
+    [SyntaxKind.ExclamationEqualsToken, "negative"],
+]);
+
+/**
+ * `true` for a literal that is NOT an {@link isAbsenceOperand} — `"admin"`, `42`,
+ * `true`, a template with no substitutions.
+ *
+ * Compared against one of these, an equality operator carries no access meaning:
+ * `ctx.role === "admin"` is an allow check and `ctx.role === "banned"` a deny check,
+ * written identically; `ctx.role !== "guest"` is an allow check written with the
+ * operator that otherwise reads as a denial. This is the operand class that has to
+ * stay unclassified, and it is narrower than "not an identity match" — the ownership
+ * comparison `ctx.auth.userId !== userId` DOES read negative, and is the shape that
+ * prompted this lint in the first place.
+ */
+const isOpaqueLiteralOperand = (node: TsNode): boolean =>
+    !isAbsenceOperand(node) && (Node.isLiteralExpression(node) || node.getKind() === SyntaxKind.TrueKeyword);
+
+/**
+ * Polarity of an equality comparison, or `undefined` when `operator` is not one or
+ * this cannot read a polarity off it.
+ *
+ * An absence operand inverts the base identity reading: `x === y` asserts a match
+ * (positive) but `x === undefined` asserts the caller has none (negative), and
+ * `x !== undefined` is the presence assertion `!x` inverted (positive). An
+ * {@link isOpaqueLiteralOperand} on either side yields no reading at all — which
+ * also leaves `typeof x !== "undefined"` unclassified, as {@link conditionPolarity}
+ * documents.
+ */
+const equalityPolarity = (operator: SyntaxKind, left: TsNode, right: TsNode): "negative" | "positive" | undefined => {
+    const base = EQUALITY_POLARITY.get(operator);
+
+    if (base === undefined) {
+        return undefined;
+    }
+
+    if (comparesAgainstAbsence(left, right)) {
+        return base === "positive" ? "negative" : "positive";
+    }
+
+    return isOpaqueLiteralOperand(left) || isOpaqueLiteralOperand(right) ? undefined : base;
+};
+
+/**
+ * Whether a guard condition reads as testing FOR access ("positive": true means
+ * "this caller is allowed") or testing for its ABSENCE ("negative": true means
+ * "this caller is NOT allowed") — judged purely from syntactic shape (`!` reads
+ * negative; a bare truthy check reads positive; an identity comparison reads off its
+ * operator, `===`/`==` positive and `!==`/`!=` negative; an absence operand — `null`,
+ * `undefined`, `false`, `0`, `""` — flips that, so `x === undefined` reads negative
+ * and `x !== undefined` positive; any OTHER literal operand cancels the reading
+ * entirely, so `x === "admin"` and `x !== "guest"` say nothing; an `&&`/`||` chain
+ * reads as whichever polarity every operand agrees on), never by evaluating what
+ * the condition actually means.
+ *
+ * `"indeterminate"` covers everything this can't classify safely — a compound
+ * condition mixing both polarities, `typeof`, `instanceof`, anything else — and the
+ * caller must leave those alone rather than guess which arm is the deny one.
+ */
+const conditionPolarity = (condition: TsNode): "indeterminate" | "negative" | "positive" => {
+    if (Node.isParenthesizedExpression(condition)) {
+        return conditionPolarity(condition.getExpression());
+    }
+
+    if (Node.isPrefixUnaryExpression(condition) && condition.getOperatorToken() === SyntaxKind.ExclamationToken) {
+        return "negative";
+    }
+
+    if (Node.isBinaryExpression(condition)) {
+        const operator = condition.getOperatorToken().getKind();
+        const equality = equalityPolarity(operator, condition.getLeft(), condition.getRight());
+
+        if (equality !== undefined) {
+            return equality;
+        }
+
+        if (operator === SyntaxKind.AmpersandAmpersandToken || operator === SyntaxKind.BarBarToken) {
+            const left = conditionPolarity(condition.getLeft());
+            const right = conditionPolarity(condition.getRight());
+
+            return left === right ? left : "indeterminate";
+        }
+    }
+
+    // A bare truthy check (`ctx.auth.isAdmin`, `flags.enabled`, a call) — a caller
+    // writing just the identifier is asserting it, not its absence.
+    if (
+        Node.isIdentifier(condition) ||
+        Node.isPropertyAccessExpression(condition) ||
+        Node.isElementAccessExpression(condition) ||
+        Node.isCallExpression(condition)
+    ) {
+        return "positive";
+    }
+
+    return "indeterminate";
+};
+
+/** The direct `return` statement of an `if`'s `then`/`else` clause, or `undefined` if it isn't simply that. */
+const directReturn = (clause: TsNode | undefined): TsNode | undefined => {
+    if (clause === undefined) {
+        return undefined;
+    }
+
+    if (Node.isReturnStatement(clause)) {
+        return clause;
+    }
+
+    if (Node.isBlock(clause)) {
+        const last = clause.getStatements().at(-1);
+
+        return last !== undefined && Node.isReturnStatement(last) ? last : undefined;
+    }
+
+    return undefined;
+};
+
+/**
+ * The `return` reached when `ifStatement` has no `else` and its guard is false — the
+ * single `return` immediately following it in the same block, with nothing else
+ * after that. A second guard clause chained on afterward (`if (a) return x; if (b)
+ * return y; return z;`) breaks that "immediately following" test for the first
+ * `if`: `z` is reached only when BOTH guards are false, not just this one, so
+ * attributing it to a single condition would be a guess rather than a fact the AST
+ * actually gives us.
+ */
+const fallthroughReturn = (ifStatement: IfStatement): TsNode | undefined => {
+    if (ifStatement.getElseStatement() !== undefined) {
+        return undefined;
+    }
+
+    const next = ifStatement.getNextSiblingIfKind(SyntaxKind.ReturnStatement);
+
+    return next !== undefined && next.getNextSibling() === undefined ? next : undefined;
+};
+
+/** The expression an exit `return`s, or the bare `return;` statement itself when it has none. */
+const returnedValue = (statement: TsNode): TsNode => (Node.isReturnStatement(statement) ? (statement.getExpression() ?? statement) : statement);
+
+/**
+ * Every exit of `predicate` that is reached when its guarding condition is NOT
+ * satisfied — the conventional deny position. `cond ? allow : deny` and `if (cond)
+ * return allow; return deny;` are the same shape read two ways: a ternary's
+ * `whenFalse`/`whenTrue` already says which arm that is without needing to
+ * interpret `cond`, but an `if`'s consequent is unconditionally the TRUE arm, so
+ * telling deny from allow there needs {@link conditionPolarity} — a `negative`
+ * guard (`!ctx.auth.userId`) means the early return IS the deny arm; a `positive`
+ * one (`ctx.auth.isAdmin`) means it's the opposite, the intentional "no further
+ * restriction" arm, and the deny side (if there is one) is whatever follows.
+ * `indeterminate` guards are skipped entirely rather than guessed at.
+ */
+const denyArmCandidates = (predicate: PredicateFunction): TsNode[] => {
+    const candidates: TsNode[] = [];
+
     for (const conditional of ownConditionals(predicate)) {
-        found.push(conditional.getWhenTrue(), conditional.getWhenFalse());
+        const polarity = conditionPolarity(conditional.getCondition());
+
+        if (polarity === "positive") {
+            candidates.push(conditional.getWhenFalse());
+        } else if (polarity === "negative") {
+            candidates.push(conditional.getWhenTrue());
+        }
     }
 
-    return found;
+    for (const ifStatement of ownIfStatements(predicate)) {
+        const polarity = conditionPolarity(ifStatement.getExpression());
+
+        if (polarity === "indeterminate") {
+            continue;
+        }
+
+        const denyStatement =
+            polarity === "negative"
+                ? directReturn(ifStatement.getThenStatement())
+                : (directReturn(ifStatement.getElseStatement()) ?? fallthroughReturn(ifStatement));
+
+        if (denyStatement !== undefined) {
+            candidates.push(returnedValue(denyStatement));
+        }
+    }
+
+    return candidates;
 };
 
 /** Resolve the enclosing exported binding name for a node, or `"<anonymous>"`. */
@@ -216,8 +413,8 @@ const branchesInCall = (call: TsNode, owner: string, relativePath: string): Unre
             continue;
         }
 
-        for (const returned of returnedExpressions(initializer)) {
-            const form = unrestrictedForm(returned);
+        for (const candidate of denyArmCandidates(initializer)) {
+            const form = unrestrictedForm(candidate);
 
             if (form !== undefined) {
                 found.push({
@@ -225,7 +422,7 @@ const branchesInCall = (call: TsNode, owner: string, relativePath: string): Unre
                     file: relativePath,
                     form,
                     key: property.getName(),
-                    line: returned.getStartLineNumber(),
+                    line: candidate.getStartLineNumber(),
                     owner,
                 });
             }
@@ -259,6 +456,10 @@ const branchesInSourceFile = (sourceFile: SourceFile, relativePath: string): Unr
  * row, so this is the one mistake in the shape/RLS surface that silently replicates
  * a whole table instead of failing. `deny()` exists to be written; this catches the
  * case where it wasn't.
+ *
+ * Only the deny arm is inspected — see {@link denyArmCandidates} — so the mirror
+ * pattern (`ctx.auth.isAdmin ? {} : {...}`, an intentional "no further restriction"
+ * for the allow side) is left alone instead of flagged alongside the real bug.
  */
 const discoverUnrestrictedWhereBranches = (project: Project, lunoraDirectory: string): UnrestrictedWhereBranchIR[] => {
     const branches: UnrestrictedWhereBranchIR[] = [];

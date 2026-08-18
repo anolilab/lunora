@@ -92,7 +92,7 @@ export type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost }
 export type { DirectShardDirectory, ShardDirectory, ShardJurisdiction, ShardRegionHint, ShardStub, TwoStepShardDirectory } from "./shard-directory";
 export { resolveShard } from "./shard-directory";
 // Shard host
-export type { ShardAlarms, ShardAsyncSqlExec, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "./shard-host";
+export type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "./shard-host";
 
 // Socket host
 export type { SocketHandle, SocketHost } from "./socket-host";

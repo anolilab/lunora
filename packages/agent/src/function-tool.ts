@@ -38,8 +38,14 @@ interface FunctionToolOptions<Input> {
  * ```
  *
  * The function reference may be a typed `api.*` reference or a `"module:name"`
- * path. The model-provided input is passed verbatim as the function's args, so
- * `inputSchema` should mirror the referenced function's argument validator.
+ * path. The model-provided input is passed as the function's args, so
+ * `inputSchema` should mirror the referenced function's argument validator —
+ * PLUS the call's `idempotencyKey`, pinned onto the args after the model
+ * input (so out-of-schema model input can never override it). A function
+ * that wants to dedupe a side-effecting call across an at-least-once step
+ * retry declares `idempotencyKey: v.optional(v.string())` in its own args
+ * and checks it; a function that ignores it is unaffected — an args field
+ * the function's own validator doesn't declare is dropped, not rejected.
  * @experimental
  */
 const functionTool = <Input extends Record<string, unknown> = Record<string, unknown>, Output = unknown>(
@@ -61,7 +67,9 @@ const functionTool = <Input extends Record<string, unknown> = Record<string, unk
 
     return {
         description: options.description,
-        execute: (input, context) => context.run(target, input) as Promise<Output>,
+        // `idempotencyKey` pinned LAST so out-of-schema model input can never
+        // override the call's own durable-step identity.
+        execute: (input, context) => context.run(target, { ...input, idempotencyKey: context.idempotencyKey }) as Promise<Output>,
         inputSchema: options.inputSchema,
         isLunoraAgentTool: true,
     };

@@ -41,10 +41,16 @@ export interface AgentStepLike {
  * `idempotencyKey`.
  *
  * The `idempotencyKey` is the deterministic durable-step name
- * (`tool:<name>:<toolCallId>`). A COMPLETED tool step is never re-run on a
- * workflow replay (native step memoization) — but a step that FAILS mid-body
- * is retried at-least-once, so a side-effecting tool (charge a card, send a
- * mail) must dedupe on this key itself.
+ * (`tool:<name>:<toolCallId>`, further suffixed per script step for a
+ * `codeTool`). A COMPLETED tool step is never re-run on a workflow replay
+ * (native step memoization) — but a step that FAILS mid-body is retried
+ * at-least-once, so a side-effecting tool (charge a card, send a mail) must
+ * dedupe on this key itself. `functionTool` forwards it to the dispatched
+ * function as `args.idempotencyKey` (pinned after the model input, so it
+ * can't be overridden) — a function that wants to dedupe declares
+ * `idempotencyKey: v.optional(v.string())` in its own args and checks it; a
+ * function that ignores it is unaffected (an undeclared arg field is dropped,
+ * not rejected).
  * @experimental
  */
 export interface AgentToolContext {
@@ -104,6 +110,20 @@ export interface AgentToolContext {
      * skip the write when it is already present.
      */
     setState: (state: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * The durable-step handle (`step.do`/`waitForEvent`). ALWAYS present:
+     * `agent-loop.ts` threads it into every tool's context unconditionally, and
+     * it is required rather than optional so a missing handle is a compile
+     * error instead of a silent durability downgrade. `codeTool` uses it to give
+     * each script step its OWN nested durable boundary — see `code-tool.ts` — so
+     * a failure at script step 3 retries only step 3, not steps 1–2's
+     * already-committed side effects. Cloudflare Workflows supports a `step.do`
+     * nested inside another `step.do`'s callback (the codeTool call's own
+     * enclosing step). Most tools never touch this directly; a test driving
+     * `execute`/`runToolScript` by hand passes a pass-through double.
+     */
+    step: AgentStepLike;
     /** The thread this tool call belongs to. */
     threadKey: string;
     /** The provider-issued tool-call id. */
@@ -111,16 +131,26 @@ export interface AgentToolContext {
 }
 
 /**
- * The READ-ONLY view of {@link AgentToolContext} handed to a `needsApproval`
- * gate function — every field except `setState`. A gate that mutates thread
- * state is a side effect inside a decision predicate, which this type makes a
- * compile-time error rather than a documented-but-unenforced rule: `getState`
- * and `run` stay available (reads are legitimate gate inputs, and the
- * function form is resolved inside its own durable step, so they are
- * replay-safe there too).
+ * The view of {@link AgentToolContext} handed to a `needsApproval` gate
+ * function — every field except `setState`, `step`, and `reportProgress`.
+ *
+ * `setState` is dropped because a gate that mutates thread state is a side
+ * effect inside a decision predicate, and `reportProgress` because emitting a
+ * live event is the same thing in observable form — the decision is what the
+ * loop reports, not the deciding. `step` goes because the loop already runs the
+ * gate inside a durable step of its own, so a gate has no business opening
+ * another.
+ *
+ * `getState` and `run` stay: reads are legitimate gate inputs (gate on the
+ * caller's plan tier, on a spend total), and the gate resolves inside its own
+ * durable step, so they are replay-safe there. Note this makes the type a
+ * NARROWING, not a proof of purity — `run` takes any
+ * {@link AgentFunctionReference}, so a gate can still dispatch a mutation
+ * before approval. Nothing in the type system distinguishes a query reference
+ * from a mutation one; keeping the gate side-effect-free is the author's.
  * @experimental
  */
-export type AgentApprovalContext = Omit<AgentToolContext, "setState">;
+export type AgentApprovalContext = Omit<AgentToolContext, "reportProgress" | "setState" | "step">;
 
 /**
  * An agent tool. Unlike a raw AI SDK tool, `execute` is NOT handed to the
@@ -155,9 +185,11 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * from the tool's own step), so it now runs exactly once per call, not once
      * per replay. It must still be otherwise pure: deterministic given its
      * inputs (no `Date.now()`/`Math.random()`) and free of side effects — the
-     * context it receives is {@link AgentApprovalContext}, which has no
-     * `setState`; state writes belong only in `execute`, inside the tool's own
-     * memoized step.
+     * context it receives is {@link AgentApprovalContext}, which has neither
+     * `setState` nor `reportProgress`; state writes and progress events belong
+     * only in `execute`, inside the tool's own memoized step. It still holds
+     * `run`, which the type cannot narrow to reads — see
+     * {@link AgentApprovalContext}.
      */
     needsApproval?: ((input: Input, context: AgentApprovalContext) => boolean | Promise<boolean>) | boolean;
 }

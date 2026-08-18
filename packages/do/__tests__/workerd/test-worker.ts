@@ -22,6 +22,7 @@ import { ShardDO } from "../../src/shard-do";
 import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
+    COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
     SESSION: DurableObjectNamespace<TestSessionDO>;
@@ -84,6 +85,58 @@ class TestShardDO extends DurableObject<Env> {
 
     public broadcast(delta: MutationDelta): void {
         this.shard.broadcastDelta(delta);
+    }
+}
+
+/**
+ * A shard whose handler bumps a counter INSIDE a transaction and commits the
+ * mutation-replay dedup row atomically with it via `commitMutationBookkeeping`
+ * — exactly the pattern generated `handleRpc` mutation branches use
+ * (`packages/codegen/src/emit.ts`, the `registered.kind === "mutation"`
+ * branch), and NOT the post-`handleRpc` `recordPostDispatchBookkeeping`
+ * fallback that exists for actions/queries. Real generated mutations commit
+ * the dedup row inside the handler's own transaction, so this is the shape
+ * that has to be race-free under real `blockConcurrencyWhile` nesting.
+ */
+class ConcreteCountingShard extends ShardDO {
+    public runs = 0;
+
+    private migrated = false;
+
+    public override async handleRpc(): Promise<unknown> {
+        this.ensureMigrated();
+
+        return this.runInTransaction(() => {
+            this.runs += 1;
+
+            const result = { runs: this.runs };
+
+            this.commitMutationBookkeeping(result);
+
+            return result;
+        });
+    }
+
+    protected override ensureMigrated(): void {
+        if (this.migrated) {
+            return;
+        }
+
+        runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema);
+        this.migrated = true;
+    }
+}
+
+class TestCounterDO extends DurableObject<Env> {
+    private readonly shard: ConcreteCountingShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteCountingShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
     }
 }
 
@@ -251,5 +304,5 @@ const handler = {
 };
 
 export default handler;
-export { TestEchoDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { TestCounterDO, TestEchoDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

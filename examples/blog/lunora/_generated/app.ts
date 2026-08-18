@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, Storage } from "@lunora/storage";
@@ -198,7 +198,7 @@ class AppBuilder<Env extends object> {
         const ShardDO = createShardDO({
             ...(this.globalDeclaration
                 ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
+                      d1: (rawEnv: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string | null }) => {
                           const env = rawEnv as Env;
                           const database = this.globalDeclaration?.d1(env);
 
@@ -214,7 +214,7 @@ class AppBuilder<Env extends object> {
                           return createD1CtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
-                              exec: buildExec(database),
+                              exec: buildExec(database, request?.bookmark, request?.onBookmark),
                               schema: schema as unknown as D1CtxDbOptions["schema"],
                           });
                       },
@@ -475,13 +475,35 @@ class AppBuilder<Env extends object> {
     }
 }
 
-/** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec` (reads via `all`, writes via `run`, and — when the binding exposes it — several writes in one round trip via `batch`). */
-const buildExec = (database: D1DatabaseLike): D1Exec => {
-    const batchFn = database.batch;
+/**
+ * Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec` (reads via `all`, writes via `run`, and — when the binding exposes it — several writes in one round trip via `batch`).
+ *
+ * Opens a D1 Sessions API session pinned to `bookmark` (the caller's own
+ * last-known write, when supplied) so reads observe it — read-your-writes
+ * across replicas. `onBookmark`, when supplied, is invoked with the bookmark
+ * produced by each write so the caller (the generated DO) can record it via
+ * `setOutboundBookmark` and echo `x-d1-bookmark` on the response.
+ *
+ * Wrapped in `retryingExec` so D1's documented baseline of transient failures
+ * (storage-object resets, isolate memory evictions, dropped connections) does
+ * not surface on every `.global()` read. Only statements that are provably
+ * read-only retry; writes — including the `UPDATE … RETURNING` the store's
+ * optimistic-concurrency check issues through `all` — pass straight through,
+ * because a transient error never says whether the write applied.
+ */
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    // Real D1 always exposes `withSession`; guarded the same way as `batch`
+    // below so a hand-rolled test double that omits it keeps working via
+    // `prepare()` straight on the raw binding — today's behaviour. With no
+    // inbound bookmark, `"first-unconstrained"` is the documented no-op
+    // equivalent (lowest latency, may read any replica) — see `D1Client.withSession`.
+    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    const target = session ?? database;
+    const batchFn = target.batch;
 
-    return {
+    return retryingExec({
         all: async (sql, parameters) => {
-            const result = await database
+            const result = await target
                 .prepare(sql)
                 .bind(...parameters)
                 .all<Record<string, unknown>>();
@@ -489,32 +511,34 @@ const buildExec = (database: D1DatabaseLike): D1Exec => {
             return result.results;
         },
         // D1's own `batch` runs the whole array as one atomic SQLite
-        // transaction. Guarded because `D1DatabaseLike.batch` is optional in
-        // the structural type (test doubles may omit it) — real D1 always has
-        // it; a double without it still works through the store's sequential
-        // fallback. Invoked via `.call(database, ...)` rather than
-        // `database.batch(...)` directly so TS can narrow the captured
-        // `batchFn` across the closure boundary (a property-access narrowing
-        // like `hasBatch = typeof database.batch === "function"` does not
-        // survive into a nested arrow function); `.call` still binds `this`
-        // to `database`, so the real workerd `D1Database` doesn't throw
+        // transaction. Guarded because `batch` is optional in the structural
+        // type (test doubles may omit it) — real D1 always has it; a double
+        // without it still works through the store's sequential fallback.
+        // Invoked via `.call(target, ...)` rather than `target.batch(...)`
+        // directly so TS can narrow the captured `batchFn` across the closure
+        // boundary (a property-access narrowing like
+        // `hasBatch = typeof target.batch === "function"` does not survive
+        // into a nested arrow function); `.call` still binds `this` to
+        // `target`, so the real workerd `D1Database`/session doesn't throw
         // `TypeError: Illegal invocation` the way a detached
-        // `const fn = database.batch; fn(...)` capture would.
+        // `const fn = target.batch; fn(...)` capture would.
         batch: batchFn
             ? async (statements) => {
                   await batchFn.call(
-                      database,
-                      statements.map(({ params, sql }) => database.prepare(sql).bind(...params)),
+                      target,
+                      statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
                   );
+                  onBookmark?.(session?.getBookmark() ?? undefined);
               }
             : undefined,
         run: async (sql, parameters) => {
-            await database
+            await target
                 .prepare(sql)
                 .bind(...parameters)
                 .run();
+            onBookmark?.(session?.getBookmark() ?? undefined);
         },
-    };
+    });
 };
 
 /** Introspect `.global()` (D1-backed) tables for the studio's global data browser. */

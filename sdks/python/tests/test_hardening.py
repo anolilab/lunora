@@ -35,6 +35,17 @@ class TestDecodeBounds(unittest.TestCase):
 
         self.assertEqual(decode_wire([TAG, "bigint", "-42"]).value, -42)
 
+    def test_malformed_bytes_rejected(self):
+        covers("malformed_bytes_rejected")
+
+        # Lenient base64 discards characters outside the alphabet instead of
+        # raising — a corrupted bytes payload silently became different, wrong
+        # data instead of a loud failure.
+        with self.assertRaises(ValueError):
+            decode_wire([TAG, "bytes", "not@@base64!!"])
+
+        self.assertEqual(decode_wire([TAG, "bytes", "AQID"]), b"\x01\x02\x03")
+
     def test_depth_cap_enforced(self):
         covers("depth_cap_enforced")
 

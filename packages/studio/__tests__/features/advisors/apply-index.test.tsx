@@ -33,6 +33,18 @@ describe("composeCreateIndex", () => {
 
         expect(composeCreateIndex("users", "byEmail", ["email"])).toContain("IF NOT EXISTS");
     });
+
+    it("escapes a double quote embedded in the table name by doubling it", () => {
+        expect.assertions(1);
+
+        expect(composeCreateIndex('po"sts', "byAuthorId", ["authorId"])).toBe(`CREATE INDEX IF NOT EXISTS "byAuthorId" ON "po""sts" ("authorId");`);
+    });
+
+    it("escapes a double quote embedded in a column name by doubling it", () => {
+        expect.assertions(1);
+
+        expect(composeCreateIndex("posts", "byWeird", ['we"ird'])).toBe(`CREATE INDEX IF NOT EXISTS "byWeird" ON "posts" ("we""ird");`);
+    });
 });
 
 // ── unit tests: hasIndexMetadata ────────────────────────────────────────────

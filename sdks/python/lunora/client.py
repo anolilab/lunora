@@ -30,6 +30,12 @@ from .wire import decode_wire, encode_wire, stable_wire_key
 RPC_PATH = "/_lunora/rpc"
 WS_PATH = "/_lunora/ws"
 
+# `urllib.request.urlopen`'s own default is no timeout at all — the socket
+# blocks forever against a server that accepts and never replies. 30s is
+# generous enough for a slow `action` while still being finite; override via
+# `LunoraClient(..., timeout=...)` for a longer-running one.
+DEFAULT_HTTP_TIMEOUT = 30.0
+
 # A WS token provider: a value, a callable returning a value, or an async callable.
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
@@ -195,13 +201,16 @@ class LunoraClient:
         ws_token: WsToken = None,
         client_id: str = "python-client",
         http_post: Optional[Callable[[str, dict, bytes], tuple[int, dict]]] = None,
+        timeout: float = DEFAULT_HTTP_TIMEOUT,
     ) -> None:
         self.url = url
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
         self.auth_token = auth_token
         self.ws_token = ws_token
         self.client_id = client_id
-        self._http_post = http_post if http_post is not None else _urllib_post
+        # `timeout` only applies to the default transport: a caller who injects
+        # their own `http_post` keeps whatever timeout semantics it already has.
+        self._http_post = http_post if http_post is not None else partial(_urllib_post, timeout=timeout)
         self._subs: dict[str, _Subscription] = {}
         self._shapes: dict[str, _ShapeSubscription] = {}
         self._poke_buffers: dict[str, dict] = {}
@@ -557,11 +566,14 @@ def _percent(value: str) -> str:
     return quote(value, safe="")
 
 
-def _urllib_post(url: str, headers: dict, body: bytes) -> tuple[int, dict]:
+def _urllib_post(url: str, headers: dict, body: bytes, timeout: float = DEFAULT_HTTP_TIMEOUT) -> tuple[int, dict]:
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:  # error envelopes still carry a JSON body
         raw = exc.read().decode("utf-8")
         return exc.code, json.loads(raw) if raw else {"error": {"code": "INTERNAL", "message": str(exc)}}
+    # A timeout raises `socket.timeout` (`TimeoutError` from 3.10+), which is not
+    # an `HTTPError` and so is left to propagate — it is not a server response
+    # and must not be dressed up as one.

@@ -56,6 +56,8 @@ export type { HeartbeatReference, ListPresentReference, PresenceOptions, Presenc
 export { presence } from "./presence";
 export type { RateLimitOptions, RateLimitResult } from "./rate-limit";
 export { rateLimit } from "./rate-limit";
+export type { RunActionOptions } from "./run-action";
+export { runAction } from "./run-action";
 export type { StreamOptions, StreamResult, StreamStatus } from "./stream";
 export { stream } from "./stream";
 export type { SubscriptionOptions, SubscriptionResult } from "./subscription";

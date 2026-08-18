@@ -15,6 +15,15 @@ export type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : 
 
 /** Options for a function call made via a dispatch runner. */
 export interface RunFunctionOptions {
+    /**
+     * Correlate this call with a caller-defined message/item id (e.g. a queue
+     * message's `id`). Purely local bookkeeping — never sent to the dispatch
+     * endpoint — carried onto the `LunoraError` a deterministic dispatch
+     * failure throws, so a batching consumer (`@lunora/queue`'s push handler)
+     * can read it back and attribute the failure to the one item that caused
+     * it instead of the whole batch. Optional and inert when omitted.
+     */
+    messageId?: string;
     /** Route the call to a specific shard (defaults to the worker's root shard). */
     shardKey?: string;
     /** Abort the dispatch after this many ms; the abort is retryable. Overrides the runner's default. */

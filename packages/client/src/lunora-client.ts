@@ -24,6 +24,7 @@ import { resolvePersistenceAdapter } from "./persistence";
 import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
+import createSnapshotPrecondition from "./snapshot-precondition";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
@@ -322,6 +323,20 @@ interface MutationSettledEvent {
     readonly shardKey?: string;
     /** Terminal outcome. */
     readonly status: "committed" | "rejected";
+}
+
+/**
+ * Per-call options for {@link LunoraClient.action} — just `shardKey`, since an
+ * action is not a write and carries none of the optimistic machinery. Exported
+ * (at the end of this file) for the same reason {@link MutationCallOptions} is:
+ * so the framework adapters (`@lunora/react`, `/solid`, `/svelte`, `/vue`,
+ * `/angular`) type their `call(args, options?)` against one canonical
+ * definition. Add an option here and every adapter forwards it; re-declare it
+ * per adapter and they silently cannot.
+ */
+interface ActionCallOptions {
+    /** Route the call to a specific shard. */
+    shardKey?: string;
 }
 
 /**
@@ -1778,13 +1793,9 @@ class LunoraClient {
      * produce a `() => boolean` precondition that compares it against the
      * value at replay time (on queue drain / reconnect).
      *
-     * When the precondition is checked it re-reads the query's current value
-     * via `peekActiveQueryValue`. If the value differs from what was
-     * captured at call time the precondition returns `false` and the offline
-     * mutation is dropped as stale.
-     *
-     * This is a method wrapper around `createSnapshotPrecondition` that
-     * binds the client instance for you — no need to pass `client` explicitly.
+     * Delegates to {@link createSnapshotPrecondition} with this client bound —
+     * no need to pass `client` explicitly. The comparison semantics (including
+     * how an absent subscription is treated) live there, in one place.
      * @example
      * ```ts
      * client.mutation(api.todos.update, { id, text }, {
@@ -1793,24 +1804,7 @@ class LunoraClient {
      * ```
      */
     public snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean {
-        const snapshot = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
-        const snapshotKey = snapshot === undefined ? undefined : stableWireKey(snapshot);
-
-        return (): boolean => {
-            const current = this.peekActiveQueryValue(functionRef.__lunoraRef, args, shardKey);
-
-            // Both undefined → no snapshot taken and no value now → no conflict.
-            if (snapshotKey === undefined && current === undefined) {
-                return true;
-            }
-
-            // One is undefined, the other is not → the value appeared or disappeared.
-            if (snapshotKey === undefined || current === undefined) {
-                return false;
-            }
-
-            return stableWireKey(current) === snapshotKey;
-        };
+        return createSnapshotPrecondition(this, functionRef, args, shardKey);
     }
 
     // --- Hydration helpers --------------------------------------------------
@@ -1868,22 +1862,27 @@ class LunoraClient {
     }
 
     /**
-     * Peek at the **current live value** of an active subscription, if one
-     * exists. Returns the subscription's `lastValue` (which includes any
-     * optimistic overlay) or `undefined` if no subscription is active for the
-     * given `(functionPath, args, shardKey)`.
+     * Peek at the **current live value** of an active subscription, reporting
+     * whether one exists at all rather than just its value. `present` is `false`
+     * when no subscription is open for the given `(functionPath, args, shardKey)`;
+     * `value` is the subscription's `lastValue`, which includes any optimistic
+     * overlay.
+     *
+     * The two are separate because a caller like the snapshot precondition has to
+     * tell "no subscription is active, so this read knows nothing" apart from
+     * "the subscription is active and its value is `undefined`" — collapsing both
+     * into a bare `undefined` return makes an unmounted component look like a
+     * changed value, and drops the queued write.
      *
      * Unlike {@link peekHydratedQuery} (which reads from the durable read cache
-     * and is independent of active subscriptions), this method reflects the
-     * current in-memory state of an already-opened subscription — useful for
-     * offline mutation preconditions that need to snapshot the value at call time
-     * and compare it at replay time.
+     * and is independent of active subscriptions), this reflects the current
+     * in-memory state of an already-opened subscription.
      */
-    public peekActiveQueryValue(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown {
+    public peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): { present: boolean; value: unknown } {
         const key = SubscriptionRegistry.key(functionPath, args, shardKey);
         const state = this.subscriptions.get(key);
 
-        return state?.lastValue;
+        return { present: state !== undefined, value: state?.lastValue };
     }
 
     // --- RPC ---------------------------------------------------------------
@@ -2077,7 +2076,7 @@ class LunoraClient {
         }
     }
 
-    public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
         this.assertOpen();
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
@@ -6229,6 +6228,7 @@ class LunoraClient {
 
 export { LunoraClient };
 export type {
+    ActionCallOptions,
     BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,

@@ -1529,7 +1529,7 @@ Re-exported from `better-auth` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
-### `sso` (function)
+### `sso` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

@@ -1734,7 +1734,9 @@ interface WranglerConfig {
     containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
     d1_databases?: ReadonlyArray<{
         binding?: string;
-    }>;
+        database_id?: string;
+        database_name?: string;
+    } | null | undefined>;
     dispatch_namespaces?: ReadonlyArray<{
         binding?: string;
         namespace?: string;
@@ -1769,8 +1771,13 @@ interface WranglerConfig {
     logpush?: boolean;
     main?: string;
     migrations?: ReadonlyArray<{
+        deleted_classes?: ReadonlyArray<string>;
         new_classes?: ReadonlyArray<string>;
         new_sqlite_classes?: ReadonlyArray<string>;
+        renamed_classes?: ReadonlyArray<{
+            from?: string;
+            to?: string;
+        } | null | undefined>;
     } | null | undefined>;
     mtls_certificates?: ReadonlyArray<{
         binding?: string;
@@ -1798,7 +1805,8 @@ interface WranglerConfig {
     };
     r2_buckets?: ReadonlyArray<{
         binding?: string;
-    }>;
+        bucket_name?: string;
+    } | null | undefined>;
     secrets_store_secrets?: ReadonlyArray<{
         binding?: string;
         secret_name?: string;

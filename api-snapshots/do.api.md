@@ -346,6 +346,7 @@ abstract class ShardDO {
     } | undefined;
     protected persistIdempotentResult(result: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
+    protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
     protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
     protected respondFromIdempotencyCache(functionPath: string, dispatchStartedAt: number, mutatorClass: ClientMutationClass | undefined, cachedValue: unknown): Response;

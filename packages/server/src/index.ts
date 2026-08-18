@@ -201,6 +201,7 @@ export type {
     VectorSearchReader,
     VectorUpsertInput,
     WorkflowCreateOptions,
+    WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
     WorkflowInstanceStatus,

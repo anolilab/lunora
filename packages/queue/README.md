@@ -26,12 +26,18 @@ import { api } from "./_generated/api";
 export const emailQueue = defineQueue<{ to: string }>({
     handler: async (ctx, batch) => {
         for (const message of batch.messages) {
-            await ctx.run(api.email.send, { to: message.body.to });
+            await message.run(api.email.send, { to: message.body.to });
             message.ack();
         }
     },
 });
 ```
+
+`message.run(...)` is `ctx.run(...)` pinned to that message. Call it inside the
+batch loop: when the dispatched function fails deterministically (`400`, `403`,
+`404`, `422`), the consumer acks just that message and retries the rest instead
+of letting one poison message retry — and eventually dead-letter — the whole
+batch.
 
 ```ts
 // inside a mutation/action

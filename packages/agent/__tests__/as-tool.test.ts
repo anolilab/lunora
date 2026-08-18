@@ -4,7 +4,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import { agentAsTool } from "../src/as-tool";
 import { defineAgent } from "../src/define-agent";
 import type { AgentMessageRow, AgentToolContext, AgentWorkflowBindingLike, AgentWorkflowInstanceLike } from "../src/types";
-import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, loopDefaults, memoryRuntime, passthroughStep, scriptedGenerate, toolTurn } from "./loop-harness";
 
 /** No-op wait so poll loops run without wall-clock delay in tests. */
 const immediate = async (): Promise<void> => {};
@@ -76,6 +76,7 @@ const context = (env: Record<string, unknown>, run: AgentToolContext["run"], ove
         reportProgress: () => {},
         run,
         setState: async () => {},
+        step: passthroughStep,
         threadKey: "thread-1",
         toolCallId: "call_9",
         ...overrides,

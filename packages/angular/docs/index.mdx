@@ -47,13 +47,15 @@ dependency; the host app supplies the Angular runtime.
 | `LUNORA_CLIENT`      | injection token  | The DI token every reactive primitive resolves the client from. Root-scoped default: a same-origin browser client.                                                                |
 | `liveQuery`          | function         | Live query as an Angular `Signal`. Args are not reactive here; pass `"skip"` to short-circuit.                                                                                    |
 | `mutate`             | function         | Run a mutation and resolve with the server result. Optimistic updates + offline queue pass through to the client.                                                                 |
+| `runAction`          | function         | Run an action and resolve with the server result. No optimistic options — an action is not a write.                                                                               |
 | `connectionStatus`   | function         | `Signal` of the aggregate live-socket status across all shard connections.                                                                                                        |
 
 Re-exported types: `ArgsOf`, `ConnectionStatus`, `FunctionReference`,
 `LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `ReturnOf`,
 `SubscriptionError`, `Unsubscribe`, plus `ProvideLunoraOptions`,
-`LiveQueryOptions`, `ConnectionStatusOptions`, and `MutateOptions`. The `SKIP`
-sentinel (`"skip"`) is re-exported from `@lunora/client/query`.
+`LiveQueryOptions`, `ConnectionStatusOptions`, `MutateOptions`, and
+`RunActionOptions`. The `SKIP` sentinel (`"skip"`) is re-exported from
+`@lunora/client/query`.
 
 ## Wire the client — `provideLunora` / `injectLunoraClient` / `LUNORA_CLIENT`
 
@@ -178,6 +180,36 @@ export class Composer {
 When called from within an injection context you may omit `client` and let it
 resolve from the injector, the same way `liveQuery` and `connectionStatus` do.
 
+## `runAction(fn, args, options?)`
+
+Runs a Lunora action and resolves with the server result (rejects on failure).
+Like `mutate`, it's a plain function rather than a reactive handle: Angular's
+adapter models writes as calls, because they fire from event handlers where a
+signal-returning primitive has nothing to bind to. The other adapters return a
+reactive `{ call, pending, … }` handle because their idioms make that natural;
+this one does not, so track pending state with your own signal if you need it.
+
+```ts
+import { injectLunoraClient, runAction } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({/* … */})
+export class Toolbar {
+    private readonly client = injectLunoraClient();
+
+    verify() {
+        return runAction(api.commands.run, { command: "lunora", args: ["verify"] }, { client: this.client });
+    }
+}
+```
+
+Options are `{ client, shardKey }`. Unlike `mutate` there are no `optimistic` /
+`optimisticUpdate` options: an optimistic update patches the subscription cache
+on the assumption a write will land, and an action is not a write — it runs in
+the Worker, may call a third party, and has no declared effect on any query.
+When called from within an injection context you may omit `client`.
+
 ## `connectionStatus(options?)`
 
 A `signal` of the client's aggregate live-socket status across all shard
@@ -197,7 +229,7 @@ export class ConnectionBadge {
 ## What's not here yet
 
 `@lunora/angular` ships the signal-first core: `liveQuery`, `mutate`,
-`connectionStatus`, and the client provider. It does not (yet) ship the parity
+`runAction`, `connectionStatus`, and the client provider. It does not (yet) ship the parity
 extras some other adapters have: cursor/infinite pagination
 (`createPaginatedQuery` / `createInfiniteQuery` in `@lunora/solid`), a bound
 optimistic-mutation handle, presence, a client-side rate-limit mirror, an

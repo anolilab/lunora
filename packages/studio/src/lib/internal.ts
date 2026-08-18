@@ -254,6 +254,9 @@ export const copyToClipboard = (text: string): boolean => {
     return true;
 };
 
+/** Quote a SQL identifier (table/column) with double quotes, doubling any embedded quote — handles names like `query-result` that aren't bare identifiers. */
+export const sqlIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+
 /**
  * Render an epoch-ms or ISO timestamp as a locale string. Absent values render
  * as `fallback` (blank by default; pass `"—"` for a placeholder); an

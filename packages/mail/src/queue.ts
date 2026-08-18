@@ -9,6 +9,13 @@ export interface QueuedSend {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+
+    /**
+     * Stable dedup key, minted at enqueue time by `createMailer(...).queue()` — see
+     * `SendOptions.idempotencyKey`. Carried through untouched by `consumeQueuedSend`;
+     * a consumer wanting exactly-once delivery dedupes against its own store using it.
+     */
+    idempotencyKey?: string;
     replyTo?: string;
     subject: string;
     text?: string;
@@ -39,6 +46,7 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  *     const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
  *     for (const message of batch.messages) {
  *       await consumeQueuedSend(mailer, message.body);
+ *       message.ack();
  *     }
  *   },
  * };
@@ -125,6 +133,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         from: assertOptionalString("from", candidate.from),
         headers,
         html: assertOptionalString("html", candidate.html),
+        idempotencyKey: assertOptionalString("idempotencyKey", candidate.idempotencyKey),
         replyTo: assertOptionalString("replyTo", candidate.replyTo),
         subject: candidate.subject,
         text: assertOptionalString("text", candidate.text),

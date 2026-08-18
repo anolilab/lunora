@@ -32,6 +32,8 @@ export {
     normalizeContainerImage,
     resolveContainerEnvVars,
 } from "./define-container";
+export type { ContainerExecOptions, ContainerExecResult } from "./exec";
+export { CONTAINER_EXEC_PATH } from "./exec";
 export type {
     BuildImageSource,
     ContainerConfig,

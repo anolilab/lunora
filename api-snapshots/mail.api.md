@@ -111,6 +111,7 @@ interface QueuedSend {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+    idempotencyKey?: string;
     replyTo?: string;
     subject: string;
     text?: string;
@@ -127,6 +128,7 @@ interface SendOptions {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+    idempotencyKey?: string;
     react?: ReactElement;
     replyTo?: string;
     subject: string;

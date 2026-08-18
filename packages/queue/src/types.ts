@@ -11,7 +11,7 @@
  * uses.
  */
 import type { DispatchLogger, DispatchRunFunction } from "@lunora/dispatch";
-import type { MessageBatchLike, MessageSendRequestLike, QueueBindingLike, QueueSendBatchOptions, QueueSendOptions } from "@lunora/platform";
+import type { MessageBatchLike, MessageLike, MessageSendRequestLike, QueueBindingLike, QueueSendBatchOptions, QueueSendOptions } from "@lunora/platform";
 
 /**
  * The typed producer bound to `ctx.queues.<name>`. Sending is a side effect, so
@@ -58,15 +58,44 @@ export interface QueueRunContext {
     readonly env: Record<string, unknown>;
     /** Queue-name-prefixed logger. */
     readonly log: DispatchLogger;
-    /** Invoke a Lunora function (query/mutation/action) by reference. */
+
+    /**
+     * Invoke a Lunora function (query/mutation/action) by reference.
+     *
+     * Batch-unaware: a failure it throws is attributed to nothing, so a
+     * deterministic failure retries the whole batch. Inside the `batch.messages`
+     * loop, prefer {@link QueueMessage.run}, which pins the call to its message.
+     */
     readonly run: DispatchRunFunction;
+}
+
+/**
+ * One delivered message as the push handler sees it: the Cloudflare `Message`
+ * plus `run` — a {@link QueueRunContext.run} pinned to THIS message.
+ *
+ * Prefer `message.run(api.x.y, args)` over `ctx.run(...)` inside the batch
+ * loop. The pin is what lets the dispatcher attribute a deterministic dispatch
+ * failure (400/403/404/422) to the one message that caused it: that message is
+ * acked and every other one is retried, instead of the whole batch being
+ * re-delivered because of a single poison message. A plain `ctx.run` call
+ * carries no message id, so its failure stays unattributed and the whole batch
+ * retries.
+ */
+export interface QueueMessage<Body = unknown> extends MessageLike<Body> {
+    /** {@link QueueRunContext.run}, pinned to this message for failure attribution. */
+    readonly run: DispatchRunFunction;
+}
+
+/** The delivered batch as the push handler sees it — {@link QueueMessage}s rather than bare `Message`s. */
+export interface QueueMessageBatch<Body = unknown> extends Omit<MessageBatchLike<Body>, "messages"> {
+    readonly messages: ReadonlyArray<QueueMessage<Body>>;
 }
 
 /** Whether a declared queue is consumed by this worker (push) or polled externally (pull). */
 export type QueueConsumerMode = "pull" | "push";
 
 /** The handler body run for each delivered batch (push consumers only). */
-export type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: MessageBatchLike<Body>) => Promise<void> | void;
+export type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: QueueMessageBatch<Body>) => Promise<void> | void;
 
 /** Push-consumer batch/retry tuning, mirrored onto the wrangler `queues.consumers[]` entry. */
 export interface QueueConsumerTuning {

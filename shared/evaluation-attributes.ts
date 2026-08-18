@@ -62,15 +62,17 @@ export const sanitizeEvaluationName = (name: string): string => {
  * `.score` (number) always, the `.label` (string) when a label is given. Throws on
  * caller misuse (empty name / non-finite score), since an ill-formed key or a
  * `NaN`/`Infinity` score has no meaningful OTLP encoding and would poison the
- * grade downstream.
+ * grade downstream. Misuse is always a `TypeError`, so a caller re-wrapping it
+ * in its own error contract can tell a validation failure apart from an
+ * unexpected internal one and rethrow the latter untouched.
  */
 export const evaluationAttributes = (input: EvaluationInput): Record<string, EvaluationAttributeValue> => {
     if (typeof input.name !== "string" || input.name.length === 0) {
-        throw new Error("recordEvaluation requires a non-empty `name`");
+        throw new TypeError("recordEvaluation requires a non-empty `name`");
     }
 
     if (typeof input.score !== "number" || !Number.isFinite(input.score)) {
-        throw new Error("recordEvaluation `score` must be a finite number");
+        throw new TypeError("recordEvaluation `score` must be a finite number");
     }
 
     const key = sanitizeEvaluationName(input.name);
