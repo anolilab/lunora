@@ -25,7 +25,7 @@ import inspect
 import json
 import threading
 import urllib.request
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from functools import partial
 from typing import Any, Callable, Optional, Union
 
@@ -503,6 +503,39 @@ class LunoraClient:
                 sender(build_unsubscribe_frame(sub_id))
 
         return unsubscribe
+
+    def stream(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
+        """A live query as an async generator, for ``async for`` and the loops built on it.
+
+        Each call opens its OWN subscription — at CALL time, not at first
+        ``__anext__``, so a frame arriving before the loop starts is not lost —
+        and tears it down when the generator is closed: breaking out of the loop,
+        cancelling the task, or calling ``aclose()``. A consumer never holds an
+        unsubscribe handle. Use :meth:`subscribe` directly when the value
+        outlives one loop.
+
+        A subscription error is raised into the loop rather than delivered as a
+        value, which is what stops a caller from mistaking it for data.
+
+        Frames must be dispatched on the running loop (which :meth:`connect`
+        does): the buffer is an :class:`asyncio.Queue`, filled from
+        :meth:`handle_frame` without a hop.
+        """
+
+        values: asyncio.Queue = asyncio.Queue()
+        unsubscribe = self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key)
+
+        async def iterate() -> AsyncIterator:
+            try:
+                while True:
+                    value = await values.get()
+                    if isinstance(value, SubscriptionError):
+                        raise LunoraError(value.code if value.code is not None else "INTERNAL", value.message)
+                    yield value
+            finally:
+                unsubscribe()
+
+        return iterate()
 
     def subscribe_shape(
         self,

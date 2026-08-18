@@ -4,6 +4,7 @@ tested against)."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import unittest
@@ -138,6 +139,31 @@ class TestWsFrameConsumer(unittest.TestCase):
                     self.assertEqual(descriptor["message"], expect["message"])
                     self.assertEqual(len(errors), 1)
                     self.assertEqual(errors[0].code, expect["code"])
+
+    def test_a_subscription_streams_its_frame_values_in_order(self):
+        covers("subscription_stream_yields_frame_values_in_order")
+
+        case = load("ws-frames.json")["stream"]
+
+        async def collect() -> list:
+            client = LunoraClient("https://app.example")
+            client._send = lambda _frame: None
+            seen: list = []
+            values = client.stream("messages:list", {"channel": "general"})
+
+            for frame in case["frames"]:
+                client.handle_frame(frame)
+                seen.append(await values.__anext__())
+
+            # Closing the generator tears its subscription down, so nothing is
+            # left registered against a client the consumer has finished with.
+            await values.aclose()
+
+            return seen
+
+        seen = asyncio.run(collect())
+
+        self.assertEqual(seen, case["yielded"])
 
     def test_poke_sequence_materialises_rows(self):
         covers("poke_sequence_materialises_rows")

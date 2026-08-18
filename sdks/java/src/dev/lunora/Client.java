@@ -10,9 +10,13 @@ import dev.lunora.Submit.SubmitOptions;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -588,6 +592,104 @@ public final class Client {
                 current.send(buildUnsubscribeFrame(id));
             }
         };
+    }
+
+    /**
+     * One item delivered by {@link #stream}: a value, or the subscription error the server pushed.
+     *
+     * <p>One queue carrying both, rather than a value queue plus an error queue: a consumer polling
+     * two of them can read them out of order, and the whole point of a stream is that what arrived
+     * first is delivered first.
+     */
+    public record StreamEvent(Object value, SubscriptionError error) {}
+
+    /**
+     * A live query as a closeable {@link Iterable}, for {@code for (var event : stream)}.
+     *
+     * <p>{@link #iterator} BLOCKS waiting for the next frame, which is what makes the loop the
+     * whole consumer. {@link #close} unsubscribes and ends the loop, so it belongs in a
+     * try-with-resources — otherwise the subscription outlives the loop and the iterator blocks
+     * forever.
+     */
+    public final class Stream implements Iterable<StreamEvent>, AutoCloseable {
+        // Unbounded, so the frame dispatcher never blocks on a slow consumer; the trade is that one
+        // which stops reading without closing grows the buffer.
+        private final LinkedBlockingQueue<StreamEvent> events = new LinkedBlockingQueue<>();
+        // The sentinel the iterator stops on. A distinct instance rather than a null, because
+        // LinkedBlockingQueue rejects nulls outright.
+        private final StreamEvent end = new StreamEvent(null, null);
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private Runnable unsubscribe = () -> {};
+
+        private Stream() {}
+
+        @Override
+        public Iterator<StreamEvent> iterator() {
+            return new Iterator<>() {
+                private StreamEvent next;
+
+                @Override
+                public boolean hasNext() {
+                    if (next != null) {
+                        return true;
+                    }
+
+                    try {
+                        next = events.take();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+
+                        return false;
+                    }
+
+                    return next != end;
+                }
+
+                @Override
+                public StreamEvent next() {
+                    if (!hasNext()) {
+                        throw new NoSuchElementException("the stream is closed");
+                    }
+
+                    StreamEvent value = next;
+
+                    next = null;
+
+                    return value;
+                }
+            };
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                unsubscribe.run();
+                // Wakes a consumer blocked in `take()` so the loop ends instead of hanging on a
+                // subscription nothing will ever deliver to again.
+                events.add(end);
+            }
+        }
+    }
+
+    /**
+     * Opens a live query as a {@link Stream}.
+     *
+     * <p>Each call opens its OWN subscription — at CALL time, so a frame arriving before the loop
+     * starts is not lost — and {@link Stream#close} tears it down. Use {@link #subscribe} directly
+     * when the value outlives one loop.
+     */
+    public Stream stream(String functionPath, Object args, String shardKey) {
+        Stream stream = new Stream();
+
+        stream.unsubscribe =
+                subscribe(
+                        functionPath,
+                        args,
+                        value -> stream.events.add(new StreamEvent(value, null)),
+                        error -> stream.events.add(new StreamEvent(null, error)),
+                        shardKey);
+
+        return stream;
     }
 
     /**

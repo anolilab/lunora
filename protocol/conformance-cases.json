@@ -46,6 +46,7 @@
         "non_2xx_without_error_envelope_fails",
         "client_frame_builders",
         "server_frame_consumer",
+        "subscription_stream_yields_frame_values_in_order",
         "shape_subscribe_frame",
         "poke_sequence_materialises_rows",
         "poke_parts_do_not_apply_before_poke_end",

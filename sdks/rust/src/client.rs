@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::mpsc::{channel, Receiver};
 
 use serde_json::{json, Map, Value};
 
@@ -96,6 +97,18 @@ pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Resul
 pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 
 /// Receives each result a live query produces.
+/// One item delivered by [`Client::stream`]: a value, or the subscription error
+/// the server pushed.
+///
+/// One channel carrying both, rather than a value channel plus an error channel:
+/// a consumer selecting over two receivers can read them out of order, and the
+/// whole point of a stream is that what arrived first is delivered first.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StreamEvent {
+    Value(WireValue),
+    Error(SubscriptionError),
+}
+
 pub type DataHandler = Option<Box<dyn Fn(&WireValue) + Send>>;
 
 /// Receives a subscription-scoped error the server pushed.
@@ -591,6 +604,41 @@ impl Client {
         );
 
         id
+    }
+
+    /// Opens a live query as a channel [`Receiver`], which is an [`Iterator`] —
+    /// `for event in events` is the whole consumer.
+    ///
+    /// Returns the subscription id beside it: this client hands out ids rather
+    /// than unsubscribe closures (a closure would have to hold `&mut self`), so
+    /// tearing the stream down is [`Client::unsubscribe`] with that id. Dropping
+    /// the receiver alone leaves the subscription open — the sender lives on the
+    /// subscription, and only unsubscribing drops it, which is what ends the
+    /// iteration.
+    ///
+    /// The channel is UNBOUNDED, so the frame dispatcher never blocks on a slow
+    /// consumer; the trade is that one which stops reading without unsubscribing
+    /// grows the buffer. `std::sync::mpsc` is the only channel in the standard
+    /// library, and this crate takes no dependency for one.
+    pub fn stream(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<StreamEvent>, String) {
+        let (sender, receiver) = channel::<StreamEvent>();
+        let errors = sender.clone();
+        let id = self.subscribe_on_shard(
+            function_path,
+            args,
+            Some(Box::new(move |value: &WireValue| {
+                // A closed receiver is a consumer that has gone away, which is
+                // not an error here: the subscription simply has nowhere to
+                // deliver until it is unsubscribed.
+                let _ = sender.send(StreamEvent::Value(value.clone()));
+            })),
+            Some(Box::new(move |error: &SubscriptionError| {
+                let _ = errors.send(StreamEvent::Error(error.clone()));
+            })),
+            shard_key,
+        );
+
+        (receiver, id)
     }
 
     /// Re-subscribes everything after a reconnect, carrying each subscription's

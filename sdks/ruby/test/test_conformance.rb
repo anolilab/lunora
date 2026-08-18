@@ -176,6 +176,30 @@ class TestWsFrames < Minitest::Test
     end
   end
 
+  # The Enumerator form of a live query: same subscription, same decode, same
+  # order as the callback form.
+  def test_a_subscription_streams_its_frame_values_in_order
+    ConformanceManifest.covers("subscription_stream_yields_frame_values_in_order")
+
+    case_data = fixture("ws-frames.json")["stream"]
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+
+    values, stop = client.stream("messages:list", { "channel" => "general" })
+    seen = []
+
+    case_data["frames"].each do |frame|
+      client.handle_frame(JSON.generate(frame))
+      seen << values.next
+    end
+
+    # Stopping tears the subscription down, so nothing is left registered against
+    # a client the consumer has finished with.
+    stop.call
+
+    assert_equal canonical(case_data["yielded"]), canonical(seen)
+  end
+
   def test_shape_subscribe_frame
     ConformanceManifest.covers("shape_subscribe_frame")
 

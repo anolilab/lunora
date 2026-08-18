@@ -300,6 +300,42 @@ module Lunora
       end
     end
 
+    # A live query as an +Enumerator+, for +each+ and everything built on it.
+    #
+    # Each call opens its OWN subscription — at CALL time, so a frame arriving
+    # before the first +next+ is not lost — and tears it down when the enumerator
+    # is finished with: +break+ out of an +each+, or call +stop+ on the returned
+    # unsubscribe. Returns +[enumerator, unsubscribe]+; use +subscribe+ directly
+    # when the value outlives one loop.
+    #
+    # A subscription error is RAISED into the loop rather than yielded, which is
+    # what stops a caller mistaking it for data. Backed by a +Thread::Queue+, so
+    # a consumer on one thread and the frame dispatcher on another is the normal
+    # case rather than a hazard.
+    def stream(function_path, args = nil, shard_key = nil)
+      values = Thread::Queue.new
+      unsubscribe = subscribe(function_path, args, ->(value) { values << [:value, value] },
+                              ->(error) { values << [:error, error] }, shard_key)
+      stop = lambda do
+        unsubscribe.call
+        # Wakes a consumer blocked in `pop` so `each` returns instead of hanging
+        # on a subscription nothing will ever push to again.
+        values.close
+      end
+
+      enumerator = Enumerator.new do |yielder|
+        loop do
+          kind, payload = values.pop
+          break if kind.nil?
+          raise ApiError.new(payload.code || "INTERNAL", payload.message) if kind == :error
+
+          yielder << payload
+        end
+      end
+
+      [enumerator, stop]
+    end
+
     # Open a partially-replicated keyed view. +on_rows+ fires once per applied
     # poke with the view's full contents, in insertion order.
     def subscribe_shape(name, args, on_rows, on_error = nil)

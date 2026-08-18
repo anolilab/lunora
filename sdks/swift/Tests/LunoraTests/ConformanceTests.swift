@@ -67,6 +67,7 @@ final class ConformanceTests: XCTestCase {
             case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
             case "client_frame_builders": try caseClientFrameBuilders()
             case "server_frame_consumer": try caseServerFrameConsumer()
+            case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
@@ -291,6 +292,56 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(errors.first?.code, expect["code"] as? String)
             }
         }
+    }
+
+    /// The `AsyncStream` form of a live query: same subscription, same decode,
+    /// same order as the callback form.
+    func caseSubscriptionStreamYieldsFrameValuesInOrder() throws {
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let frames = try XCTUnwrap(testCase["frames"] as? [Any])
+        let client = LunoraClient(url: "https://app.example")
+        client.attachSocket { _ in }
+
+        let events = client.stream("messages:list", args: ["channel": "general"])
+        var iterator = events.makeAsyncIterator()
+        var seen: [Any] = []
+
+        // Frames are fed from this same thread, so the loop is driven one `next()`
+        // at a time rather than with `for await`.
+        for frame in frames {
+            let raw = try JSONSerialization.data(withJSONObject: frame)
+
+            _ = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+
+            switch runBlocking({ await iterator.next() }) {
+            case .value(let value): seen.append(value)
+            case .failure(let error): XCTFail("stream error: \(error.message)")
+            case nil: XCTFail("the stream ended early")
+            }
+        }
+
+        XCTAssertEqual(canonical(try Wire.encode(seen)), canonical(testCase["yielded"]), "the stream yields the frames' values, in order")
+    }
+
+    /// Runs one `async` step to completion from a synchronous test.
+    ///
+    /// The suite is driven by the manifest through synchronous `case…` methods,
+    /// and this is the only asynchronous surface in it — a semaphore here is
+    /// cheaper than making every dispatch arm `async`.
+    private func runBlocking<T>(_ operation: @escaping () async -> T) -> T {
+        let ready = DispatchSemaphore(value: 0)
+        // `nonisolated(unsafe)`: written once inside the task and read once after
+        // the semaphore, which orders the two.
+        nonisolated(unsafe) var result: T?
+
+        Task {
+            result = await operation()
+            ready.signal()
+        }
+
+        ready.wait()
+
+        return result!
     }
 
     // MARK: - Shapes

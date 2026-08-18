@@ -9,6 +9,7 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
+    StreamEvent,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
@@ -97,6 +98,7 @@ fn conformance_manifest_is_covered() {
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
             "client_frame_builders" => client_frame_builders(),
             "server_frame_consumer" => server_frame_consumer(),
+            "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
@@ -385,6 +387,39 @@ fn server_frame_consumer() {
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
     }
+}
+
+/// The channel form of a live query: same subscription, same decode, same order
+/// as the callback form.
+fn subscription_stream_yields_frame_values_in_order() {
+    let document = fixture("ws-frames.json");
+    let case = &document["stream"];
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let (events, id) = client.stream(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        None,
+    );
+    let mut seen = Vec::new();
+
+    for frame in case["frames"].as_array().expect("frames") {
+        client.handle_frame(&frame.to_string()).expect("handle");
+
+        match events.recv().expect("a streamed event") {
+            StreamEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
+            StreamEvent::Error(error) => panic!("stream error: {}", error.message),
+        }
+    }
+
+    // Unsubscribing drops the sender, which is what ends the iteration — a
+    // consumer that only drops its receiver leaves the subscription open.
+    client.unsubscribe(&id);
+
+    assert_eq!(canonical(&json!(seen)), canonical(&case["yielded"]));
+    assert!(events.recv().is_err(), "the stream ends once the subscription is dropped");
 }
 
 fn shape_subscribe_frame() {

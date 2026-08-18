@@ -694,6 +694,65 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	}
 }
 
+// StreamEvent is one item delivered by [Client.Stream]: a value, or the
+// subscription error that ended it.
+//
+// One channel carrying both, rather than a value channel plus an error channel:
+// a consumer selecting on two channels can read them out of order, and the whole
+// point of a stream is that what arrived first is delivered first.
+type StreamEvent struct {
+	Value any
+	Err   error
+}
+
+// Stream opens a live query as a receive channel, for `for event := range …`.
+//
+// Each call opens its OWN subscription, torn down by the returned [Unsubscribe],
+// which also closes the channel. Call it — a `defer` is the usual place — or the
+// subscription outlives the loop.
+//
+// The channel is BUFFERED and its sends BLOCK when it fills. That is deliberate
+// backpressure: dropping a value would make a live query silently wrong, and the
+// sender is the frame dispatcher, so a consumer that stops reading slows frame
+// handling rather than losing data. A consumer that cannot keep up should read
+// on its own goroutine.
+func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
+	events := make(chan StreamEvent, streamBufferSize)
+	done := make(chan struct{})
+
+	// Guarded by `done` rather than sent to blindly: an unsubscribe closes the
+	// channel, and a frame still in flight would otherwise send on a closed
+	// channel and panic in the caller's socket loop.
+	emit := func(event StreamEvent) {
+		select {
+		case <-done:
+		case events <- event:
+		}
+	}
+
+	unsubscribe := c.Subscribe(
+		functionPath,
+		args,
+		func(value any) { emit(StreamEvent{Value: value}) },
+		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
+		shardKey,
+	)
+	var once sync.Once
+
+	return events, func() {
+		once.Do(func() {
+			unsubscribe()
+			close(done)
+			close(events)
+		})
+	}
+}
+
+// streamBufferSize is how many values [Client.Stream] holds before its sends
+// block. Big enough that an ordinary consumer never sees backpressure, small
+// enough that a stalled one is noticed rather than growing without bound.
+const streamBufferSize = 64
+
 // SubscribeShape opens a partially-replicated keyed view. onRows fires once per
 // applied poke with the view's full contents, in insertion order.
 func (c *Client) SubscribeShape(name string, args any, onRows RowsHandler, onError ErrorHandler) Unsubscribe {

@@ -2,6 +2,8 @@ package dev.lunora
 
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The single endpoint every query/mutation/action posts to. */
 const val RPC_PATH: String = "/_lunora/rpc"
@@ -441,6 +443,90 @@ class Client(
 
             current?.invoke(buildUnsubscribeFrame(id))
         }
+    }
+
+    /**
+     * One item delivered by [stream]: a value, or the subscription error the
+     * server pushed.
+     *
+     * One queue carrying both, rather than a value queue plus an error queue: a
+     * consumer polling two of them can read them out of order, and the whole
+     * point of a stream is that what arrived first is delivered first.
+     */
+    data class StreamEvent(val value: WireValue?, val error: SubscriptionError?)
+
+    /**
+     * A live query as a closeable [Sequence], for `for (event in stream)`.
+     *
+     * Iterating BLOCKS waiting for the next frame, which is what makes the loop
+     * the whole consumer. [close] unsubscribes and ends the loop, so it belongs
+     * in a `use { }` — otherwise the subscription outlives the loop and the
+     * iterator blocks forever.
+     *
+     * A `Sequence` and a `BlockingQueue` rather than a `Flow` and a `Channel`:
+     * `Flow` lives in kotlinx-coroutines, and this transport takes no
+     * dependencies beyond the JDK.
+     */
+    inner class Stream internal constructor() :
+        Sequence<StreamEvent>,
+        AutoCloseable {
+        // Unbounded, so the frame dispatcher never blocks on a slow consumer; the
+        // trade is that one which stops reading without closing grows the buffer.
+        internal val events = LinkedBlockingQueue<StreamEvent>()
+
+        // The sentinel the iterator stops on. A distinct instance rather than a
+        // null, because LinkedBlockingQueue rejects nulls outright.
+        private val end = StreamEvent(null, null)
+        private val closed = AtomicBoolean()
+        internal var unsubscribe: () -> Unit = {}
+
+        override fun iterator(): Iterator<StreamEvent> = object : Iterator<StreamEvent> {
+            private var next: StreamEvent? = null
+
+            override fun hasNext(): Boolean {
+                if (next != null) return true
+
+                next = events.take()
+
+                return next !== end
+            }
+
+            override fun next(): StreamEvent {
+                if (!hasNext()) throw NoSuchElementException("the stream is closed")
+
+                return checkNotNull(next).also { next = null }
+            }
+        }
+
+        override fun close() {
+            if (!closed.compareAndSet(false, true)) return
+
+            unsubscribe()
+            // Wakes a consumer blocked in `take()` so the loop ends instead of
+            // hanging on a subscription nothing will ever deliver to again.
+            events.add(end)
+        }
+    }
+
+    /**
+     * Opens a live query as a [Stream].
+     *
+     * Each call opens its OWN subscription — at CALL time, so a frame arriving
+     * before the loop starts is not lost — and [Stream.close] tears it down. Use
+     * [subscribe] directly when the value outlives one loop.
+     */
+    fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
+        val stream = Stream()
+
+        stream.unsubscribe = subscribe(
+            functionPath,
+            args,
+            { value -> stream.events.add(StreamEvent(value, null)) },
+            { error -> stream.events.add(StreamEvent(null, error)) },
+            shardKey,
+        )
+
+        return stream
     }
 
     /**

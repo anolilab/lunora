@@ -4,7 +4,7 @@ A **protocol-conformant** Swift client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `stream`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.

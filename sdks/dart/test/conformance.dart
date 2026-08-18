@@ -44,6 +44,7 @@ Future<void> main() async {
   await run(caseNon2xxWithoutErrorEnvelopeFails);
   await run(caseClientFrameBuilders);
   await run(caseServerFrameConsumer);
+  await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);

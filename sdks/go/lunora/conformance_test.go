@@ -331,6 +331,53 @@ func TestClientFrameBuilders(t *testing.T) {
 	assertFrame(t, BuildUnsubscribeFrame("sub_1"), "unsubscribe")
 }
 
+// TestSubscriptionStreamYieldsFrameValuesInOrder pins the channel form of a live
+// query: same subscription, same decode, same order as the callback form.
+func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
+	covers("subscription_stream_yields_frame_values_in_order")
+
+	streamCase, ok := loadFixture(t, "ws-frames.json")["stream"].(map[string]any)
+	if !ok {
+		t.Fatal("ws-frames.json has no stream block")
+	}
+
+	frames, _ := streamCase["frames"].([]any)
+	client := NewClient("https://app.example", nil)
+
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	events, unsubscribe := client.Stream("messages:list", map[string]any{"channel": "general"}, "")
+
+	defer unsubscribe()
+
+	var seen []any
+
+	for _, raw := range frames {
+		frame, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("marshal frame: %v", err)
+		}
+
+		if _, err := client.HandleFrame(frame); err != nil {
+			t.Fatalf("handle frame: %v", err)
+		}
+
+		event := <-events
+
+		if event.Err != nil {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+
+		seen = append(seen, event.Value)
+	}
+
+	want, _ := streamCase["yielded"].([]any)
+
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("streamed values: got %v, want %v", seen, want)
+	}
+}
+
 func TestServerFrameConsumer(t *testing.T) {
 	covers("server_frame_consumer")
 

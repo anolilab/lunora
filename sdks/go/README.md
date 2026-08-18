@@ -4,7 +4,7 @@ A **protocol-conformant** Go client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `Query` / `Mutation` / `Action` round-trips over `POST /_lunora/rpc`.
-- Live `Subscribe` over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `Subscribe` — and `Stream`, which hands back a receive channel — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `SubscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.

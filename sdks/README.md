@@ -132,18 +132,25 @@ change that adds or removes a capability.
 | Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Subscription as a Stream      | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Subscription as a stream      | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
 | Unset `v.optional()` omitted  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Required `v.nullable()` sent  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Optimistic updates            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Offline mutation queue        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Durable offline queue         | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
+| Durable offline queue         | ✅²    | ✅² | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 
-¹ Through an injected adapter, like HTTP and the socket — see below.
+¹ Each in the language's own PULL type, not one shape forced onto eight — an
+async generator in Python, a receive channel in Go, an `Enumerator` in Ruby, an
+`mpsc::Receiver` in Rust, an `AsyncStream` in Swift, a closeable `Iterable` in
+Java, a closeable `Sequence` in Kotlin, a `Stream` in Dart. The values and their
+order are the same everywhere, which is what
+`subscription_stream_yields_frame_values_in_order` asserts.
+
+² Through an injected adapter, like HTTP and the socket — see below.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the

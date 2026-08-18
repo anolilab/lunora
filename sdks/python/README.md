@@ -7,7 +7,7 @@ It implements the transport specified in
 [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `stream`, an async generator for `async for` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
