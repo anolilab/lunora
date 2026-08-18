@@ -1,10 +1,11 @@
 import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { openCommandPalette } from "../../src/app/command-palette";
 import { Studio } from "../../src/app/studio";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
+import { resetShortcuts, setShortcut } from "../../src/lib/shortcuts";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
 
@@ -30,6 +31,31 @@ const renderStudio = (mock: MockClientHooks) => (
 );
 
 describe("command palette", () => {
+    afterEach(() => {
+        resetShortcuts();
+    });
+
+    it("opens on the rebound key and no longer on the default", async () => {
+        expect.assertions(2);
+
+        render(renderStudio(createClient()));
+        await screen.findByTestId("lunora-studio");
+
+        act(() => {
+            setShortcut("palette", "j");
+        });
+
+        fireEvent.keyDown(document.body, { key: "k", metaKey: true });
+
+        // A rebinding that leaves the old key working is a rebinding that did not
+        // happen — the effect has to re-subscribe on the new key, not add one.
+        expect(screen.queryByTestId("dash-command-palette")).toBeNull();
+
+        fireEvent.keyDown(document.body, { key: "j", metaKey: true });
+
+        await expect(screen.findByTestId("dash-command-palette")).resolves.toBeDefined();
+    });
+
     it("opens on ⌘K", async () => {
         expect.assertions(1);
 

@@ -1,7 +1,10 @@
 import { useEffect } from "react";
 
+import { useShortcuts } from "../lib/shortcuts";
+
 /**
- * Bind Ctrl+` to a toggle for the operation console.
+ * Bind Ctrl+<key> to a toggle for the operation console — ` unless the operator
+ * has rebound it in Settings.
  *
  * Its own hook because the guard list is the whole point and it deserves to be
  * read on its own: the console is a developer affordance layered over pages that
@@ -11,6 +14,8 @@ import { useEffect } from "react";
  * A `undefined` toggle (the console provider is not mounted) binds nothing.
  */
 const useConsoleShortcut = (toggleConsole: (() => void) | undefined): void => {
+    const { console: consoleKey } = useShortcuts();
+
     useEffect(() => {
         if (toggleConsole === undefined) {
             return undefined;
@@ -21,7 +26,7 @@ const useConsoleShortcut = (toggleConsole: (() => void) | undefined): void => {
             // windows" — with no other modifier, ignoring auto-repeat, and never
             // while the operator is typing (the SQL editor is a full-page
             // textarea, and ` is a legal character in it).
-            if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat || event.key !== "`") {
+            if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.repeat || event.key.toLowerCase() !== consoleKey) {
                 return;
             }
 
@@ -40,7 +45,7 @@ const useConsoleShortcut = (toggleConsole: (() => void) | undefined): void => {
         return () => {
             globalThis.removeEventListener("keydown", onKeyDown);
         };
-    }, [toggleConsole]);
+    }, [consoleKey, toggleConsole]);
 };
 
 export default useConsoleShortcut;

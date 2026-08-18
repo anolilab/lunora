@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import { fireAndForget } from "../lib/internal";
+import { useShortcuts } from "../lib/shortcuts";
 import { cn } from "../lib/utils";
 
 /** A navigable destination shown in the palette. */
@@ -102,16 +103,17 @@ const matchingItems = (items: ReadonlyArray<CommandItem>, query: string): Readon
 const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
+    const { palette: paletteKey } = useShortcuts();
 
     const [open, setOpen] = useState<boolean>(false);
     const [query, setQuery] = useState<string>("");
     const [activeIndex, setActiveIndex] = useState<number>(0);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    // Open on ⌘K / Ctrl-K and on the top-bar button's window event.
+    // Open on ⌘/Ctrl + the bound key (K by default) and on the top-bar button's window event.
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent): void => {
-            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === paletteKey) {
                 event.preventDefault();
                 setOpen(true);
             }
@@ -128,7 +130,7 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
             globalThis.removeEventListener("keydown", onKeyDown);
             globalThis.removeEventListener(OPEN_EVENT, onOpen);
         };
-    }, []);
+    }, [paletteKey]);
 
     const filtered = matchingItems(items, query);
 
