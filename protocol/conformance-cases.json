@@ -55,7 +55,7 @@
         "poke_parts_do_not_apply_before_poke_end",
         "optimistic_layer_rebases_onto_server_frame",
         "optimistic_layer_drops_on_commit_cursor",
-    "optimistic_layer_drops_on_settled_frame",
+        "optimistic_layer_drops_on_settled_frame",
         "optimistic_layer_rolls_back_on_failure",
         "offline_queue_fifo_replay_order",
         "offline_queue_overflow_evicts_oldest",
