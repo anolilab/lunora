@@ -174,10 +174,8 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             runtimeSockets.set(id, state);
 
-            if (database.open) {
-                // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
-                upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
-            }
+            // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+            upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
 
             return createHandle(state);
         },

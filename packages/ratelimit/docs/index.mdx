@@ -90,18 +90,25 @@ consuming. `limiter.reset(name, { key })` clears accounting for a pair (e.g. on 
 successful login).
 
 ```ts
-import { RateLimiter, createDbStore } from "@lunora/ratelimit";
+import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
 export const login = mutation.mutation(async ({ ctx, args }) => {
     const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
     const status = await limiter.limit("login", { key: args.email });
 
     if (!status.ok) {
+        // Stop here. `limit` has already consumed capacity; carrying on would
+        // authenticate the attempt the limiter just rejected.
         // status.retryAfter is milliseconds until the request would succeed.
         // status.reason is "rate" or "deny".
+        throw new RateLimitError(status);
     }
 
-    await limiter.reset("login", { key: args.email }); // clear on success
+    await authenticate(args);
+
+    // Only AFTER a successful login — resetting on the way past a failed one
+    // hands the attacker a fresh budget on every wrong password.
+    await limiter.reset("login", { key: args.email });
 });
 ```
 

@@ -4368,8 +4368,14 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // arrives via an optional `d1` config thunk; when omitted (or for projects
     // with no global tables), reads/writes to a global table hit `globalDbStub`
     // and throw a descriptive error.
+    // `bookmark`/`onBookmark` are declared here, not just passed: the DO hands
+    // every D1 thunk the widened `globalRequest` so a factory can pin reads to the
+    // caller's prior writes (D1 Sessions) and report the bookmark a write produced.
+    // Undeclared, a direct `createShardDO({ d1 })` integration cannot read either
+    // field under `noImplicitAny`. The Hyperdrive thunk below stays narrow on
+    // purpose — it is handed the same object and simply never reads the extras.
     const d1ConfigField = hasD1Global
-        ? `\n    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;`
         : "";
 
     // Hyperdrive-backed `.global()` tables receive their writer via an optional

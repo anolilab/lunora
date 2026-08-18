@@ -821,6 +821,12 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 // existed".
                 const handle = host.socket.accept(rawSocket(host), {});
 
+                // Minted before disposal too: `rawSocket` runs the host's own
+                // `createSocket`, which a disposed host may itself refuse. Built
+                // after the teardown, the `accept` leg below would pass on that
+                // throw without ever reaching `accept` — the surface under test.
+                const postDisposeRaw = rawSocket(host);
+
                 host.disposeTerminally();
 
                 // Wrapping in an async closure normalizes a synchronous throw
@@ -838,9 +844,14 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 // `3 + (setTag === undefined ? 0 : 1) + …` has to be re-derived by
                 // whoever adds the next optional leg, and gets it wrong silently.
                 const legs: (() => unknown)[] = [
+                    // No `alarms.get()` leg: fail-closed governs the surfaces that
+                    // DO something. A read of "is an alarm pending" on a dead
+                    // platform has an honest answer — none — and `platform-node`'s
+                    // lifecycle suite pins that answer, using it to prove a
+                    // rejected `set` mutated nothing on its way out.
                     () => host.shard.alarms.set(Date.now() + 1000),
                     () => host.shard.alarms.delete(),
-                    () => host.socket.accept(rawSocket(host), {}),
+                    () => host.socket.accept(postDisposeRaw, {}),
                     ...(setTag === undefined
                         ? []
                         : [

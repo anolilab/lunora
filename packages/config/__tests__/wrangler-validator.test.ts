@@ -1744,6 +1744,22 @@ describe("wrangler-validator", () => {
             expect(report.errors.join(" ")).not.toContain('declares class "ShardDO" but it is missing from migrations');
         });
 
+        it("reports a config error instead of throwing on hand-written non-array migration fields", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                // A hand-edited `wrangler.jsonc` can hold any of these. An object made
+                // `for…of` throw a raw TypeError out of the validator; the string folded
+                // in one character at a time, so "ShardDO" never became a class.
+                migrations: [{ new_sqlite_classes: {} }, { new_classes: "ShardDO" }, { deleted_classes: 7 }, { renamed_classes: "nope" }] as never,
+            });
+
+            expect(report.errors.join(" ")).toContain('declares class "ShardDO" but it is missing from migrations');
+            expect(report.errors.join(" ")).not.toContain("TypeError");
+        });
+
         it("ignores a binding whose class lives in another script (script_name set)", () => {
             expect.assertions(1);
 

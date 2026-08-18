@@ -180,7 +180,7 @@ const isAbsenceOperand = (node: TsNode): boolean => {
 /** `true` when either side of a comparison is an {@link isAbsenceOperand}. */
 const comparesAgainstAbsence = (left: TsNode, right: TsNode): boolean => isAbsenceOperand(left) || isAbsenceOperand(right);
 
-/** How each equality operator reads when NEITHER side is an absence operand. */
+/** How each equality operator reads for an IDENTITY match (`ctx.auth.userId === userId`). */
 const EQUALITY_POLARITY = new Map<SyntaxKind, "negative" | "positive">([
     [SyntaxKind.EqualsEqualsEqualsToken, "positive"],
     [SyntaxKind.EqualsEqualsToken, "positive"],
@@ -189,31 +189,56 @@ const EQUALITY_POLARITY = new Map<SyntaxKind, "negative" | "positive">([
 ]);
 
 /**
- * Polarity of an equality comparison, or `undefined` when `operator` is not one.
+ * `true` for a literal that is NOT an {@link isAbsenceOperand} — `"admin"`, `42`,
+ * `true`, a template with no substitutions.
  *
- * An absence operand inverts the base reading: `x === y` asserts a match (positive)
- * but `x === undefined` asserts the caller has none (negative), and `x !== undefined`
- * is the presence assertion `!x` inverted (positive).
+ * Compared against one of these, an equality operator carries no access meaning:
+ * `ctx.role === "admin"` is an allow check and `ctx.role === "banned"` a deny check,
+ * written identically; `ctx.role !== "guest"` is an allow check written with the
+ * operator that otherwise reads as a denial. This is the operand class that has to
+ * stay unclassified, and it is narrower than "not an identity match" — the ownership
+ * comparison `ctx.auth.userId !== userId` DOES read negative, and is the shape that
+ * prompted this lint in the first place.
+ */
+const isOpaqueLiteralOperand = (node: TsNode): boolean =>
+    !isAbsenceOperand(node) && (Node.isLiteralExpression(node) || node.getKind() === SyntaxKind.TrueKeyword);
+
+/**
+ * Polarity of an equality comparison, or `undefined` when `operator` is not one or
+ * this cannot read a polarity off it.
+ *
+ * An absence operand inverts the base identity reading: `x === y` asserts a match
+ * (positive) but `x === undefined` asserts the caller has none (negative), and
+ * `x !== undefined` is the presence assertion `!x` inverted (positive). An
+ * {@link isOpaqueLiteralOperand} on either side yields no reading at all — which
+ * also leaves `typeof x !== "undefined"` unclassified, as {@link conditionPolarity}
+ * documents.
  */
 const equalityPolarity = (operator: SyntaxKind, left: TsNode, right: TsNode): "negative" | "positive" | undefined => {
     const base = EQUALITY_POLARITY.get(operator);
 
-    if (base === undefined || !comparesAgainstAbsence(left, right)) {
-        return base;
+    if (base === undefined) {
+        return undefined;
     }
 
-    return base === "positive" ? "negative" : "positive";
+    if (comparesAgainstAbsence(left, right)) {
+        return base === "positive" ? "negative" : "positive";
+    }
+
+    return isOpaqueLiteralOperand(left) || isOpaqueLiteralOperand(right) ? undefined : base;
 };
 
 /**
  * Whether a guard condition reads as testing FOR access ("positive": true means
  * "this caller is allowed") or testing for its ABSENCE ("negative": true means
- * "this caller is NOT allowed") — judged purely from syntactic shape (`!`, `!==`/
- * `!=` read negative; a bare truthy check or `===`/`==` reads positive; comparing
- * either equality operator against an absence operand — `null`, `undefined`,
- * `false`, `0`, `""` — flips it, so `x === undefined` reads negative and
- * `x !== undefined` positive; an `&&`/`||` chain reads as whichever polarity every
- * operand agrees on), never by evaluating what the condition actually means.
+ * "this caller is NOT allowed") — judged purely from syntactic shape (`!` reads
+ * negative; a bare truthy check reads positive; an identity comparison reads off its
+ * operator, `===`/`==` positive and `!==`/`!=` negative; an absence operand — `null`,
+ * `undefined`, `false`, `0`, `""` — flips that, so `x === undefined` reads negative
+ * and `x !== undefined` positive; any OTHER literal operand cancels the reading
+ * entirely, so `x === "admin"` and `x !== "guest"` say nothing; an `&&`/`||` chain
+ * reads as whichever polarity every operand agrees on), never by evaluating what
+ * the condition actually means.
  *
  * `"indeterminate"` covers everything this can't classify safely — a compound
  * condition mixing both polarities, `typeof`, `instanceof`, anything else — and the

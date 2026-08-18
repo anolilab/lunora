@@ -66,22 +66,43 @@ export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: ()
  * `manualCleanup: true` keeps teardown unified through the owner's `DestroyRef`
  * rather than also relying on whichever ambient `DestroyRef` the injector
  * happens to resolve.
+ *
+ * `effect()` needs an `Injector`, from `owner.injector` or from an ambient
+ * injection context. The manual-lifetime combination — an explicit `destroyRef`,
+ * no `injector`, called outside DI — is the one that has neither, and Angular's
+ * own NG0203 for it never mentions the `injector` option that fixes it, so the
+ * throw is re-raised with that named (the original kept as `cause`). Detected by
+ * catching rather than by `isInInjectionContext`, which Angular 22 dropped and
+ * this package's peer range still spans 19–22.
  */
 export const attachReactiveArgs = <A>(
     args: () => A,
     owner: { destroyRef: DestroyRef; injector?: Injector },
     open: (resolved: A, onCleanup: (teardown: () => void) => void) => void,
 ): void => {
-    const effectRef = effect(
-        (onCleanup) => {
-            const resolved = args();
+    let effectRef;
 
-            untracked(() => {
-                open(resolved, onCleanup);
-            });
-        },
-        { injector: owner.injector, manualCleanup: true },
-    );
+    try {
+        effectRef = effect(
+            (onCleanup) => {
+                const resolved = args();
+
+                untracked(() => {
+                    open(resolved, onCleanup);
+                });
+            },
+            { injector: owner.injector, manualCleanup: true },
+        );
+    } catch (error: unknown) {
+        if (owner.injector !== undefined) {
+            throw error;
+        }
+
+        throw new Error(
+            "reactive `args` need an injection context: call this primitive from a component/service field or constructor, or pass `injector` alongside `destroyRef`.",
+            { cause: error },
+        );
+    }
 
     owner.destroyRef.onDestroy(() => {
         effectRef.destroy();

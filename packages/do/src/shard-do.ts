@@ -663,6 +663,13 @@ type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" 
  * unenforced "remember to add the next field here too" invariant.
  */
 interface RequestScope {
+    /**
+     * The inbound `x-d1-bookmark`. In the scope for the same reason the identity
+     * fields are: a queued mutation admitted after a sibling's prologue would
+     * otherwise have `getInboundBookmark()` hand its `.global()` reads ANOTHER
+     * request's D1 session pin, which is read-your-writes reading someone else's.
+     */
+    bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
     mutationId: string | undefined;
@@ -4825,8 +4832,21 @@ abstract class ShardDO {
             // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
             // the request log/metrics below (JSON-safe — a raw `bigint` there
             // would throw `JSON.stringify`).
-            const runHandler = async (): Promise<unknown> =>
-                await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+            // The outbound bookmark this dispatch's own writes produced, snapshotted
+            // at the last instant the handler owns the shared field. `buildDispatchResponse`
+            // reads `currentResponseBookmark` after the gate has released, and the
+            // handler can still `await` past its final `.global()` write — so a
+            // sibling's prologue could clear the field, or replace it with its own,
+            // between the write and the response. A local closes that window.
+            let outboundBookmark: string | undefined;
+
+            const runHandler = async (): Promise<unknown> => {
+                const handlerResult = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+
+                outboundBookmark = this.currentResponseBookmark;
+
+                return handlerResult;
+            };
 
             const dedupMutationId = requestScope.mutationId;
 
@@ -4859,6 +4879,11 @@ abstract class ShardDO {
             // overwritten them. Without this the tail could commit under another
             // dispatch's identity.
             this.restoreRequestScope(requestScope);
+
+            // AFTER the restore, which clears the field on purpose. A cached
+            // outcome never ran a handler, so `undefined` is the right answer
+            // there: it performed no `.global()` write to report.
+            this.currentResponseBookmark = outboundBookmark;
 
             if (dispatchOutcome.kind === "cached") {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
@@ -5157,6 +5182,7 @@ abstract class ShardDO {
      */
     private captureRequestScope(): RequestScope {
         return {
+            bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
             mutationId: this.currentRequestMutationId,
@@ -5166,8 +5192,17 @@ abstract class ShardDO {
         };
     }
 
-    /** Re-pin a {@link RequestScope} captured by {@link ShardDO.captureRequestScope}. */
+    /**
+     * Re-pin a {@link RequestScope} captured by {@link ShardDO.captureRequestScope}.
+     *
+     * Also clears the OUTBOUND bookmark, which is produced rather than captured:
+     * whatever sits in the field on the way in belongs to whichever dispatch ran
+     * during the wait, and echoing it would report a stranger's D1 write position
+     * as this request's. The dispatch path re-pins its own afterwards.
+     */
     private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestBookmark = scope.bookmark;
+        this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
         this.currentRequestClientSeq = scope.clientSeq;
         this.currentRequestMutationId = scope.mutationId;

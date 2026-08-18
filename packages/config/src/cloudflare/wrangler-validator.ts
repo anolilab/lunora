@@ -475,6 +475,15 @@ const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | un
     Array.isArray(value) ? value.filter((entry): entry is T => entry !== null && typeof entry === "object") : [];
 
 /**
+ * The string members of a hand-written array field, or `[]` for anything that
+ * isn't one — the string-valued twin of {@link objectBindingEntries}, and needed
+ * for the same reason: a `wrangler.jsonc` is hand-edited, so `"new_classes": {}`
+ * would make a bare `for…of` throw a raw `TypeError` out of the validator, and
+ * `"new_classes": "ShardDO"` would fold in one CHARACTER per iteration.
+ */
+const stringEntries = (value: unknown): string[] => (Array.isArray(value) ? (value as unknown[]).filter((entry) => isNonEmptyString(entry)) : []);
+
+/**
  * Fold `wrangler.migrations[]` IN ORDER into the set of Durable Object classes
  * that currently exist, applying each entry's `new_classes` +
  * `new_sqlite_classes` (add), then its `renamed_classes` (from → to), then its
@@ -489,27 +498,23 @@ const objectBindingEntries = <T>(value: ReadonlyArray<T | null | undefined> | un
 const foldMigrationClasses = (migrations: WranglerConfig["migrations"]): ReadonlySet<string> => {
     const classes = new Set<string>();
 
-    for (const migration of migrations ?? []) {
-        if (!migration || typeof migration !== "object") {
-            continue;
-        }
-
-        for (const name of migration.new_classes ?? []) {
+    for (const migration of objectBindingEntries(migrations)) {
+        for (const name of stringEntries(migration.new_classes)) {
             classes.add(name);
         }
 
-        for (const name of migration.new_sqlite_classes ?? []) {
+        for (const name of stringEntries(migration.new_sqlite_classes)) {
             classes.add(name);
         }
 
-        for (const rename of migration.renamed_classes ?? []) {
-            if (rename && isNonEmptyString(rename.from) && isNonEmptyString(rename.to)) {
+        for (const rename of objectBindingEntries(migration.renamed_classes)) {
+            if (isNonEmptyString(rename.from) && isNonEmptyString(rename.to)) {
                 classes.delete(rename.from);
                 classes.add(rename.to);
             }
         }
 
-        for (const name of migration.deleted_classes ?? []) {
+        for (const name of stringEntries(migration.deleted_classes)) {
             classes.delete(name);
         }
     }

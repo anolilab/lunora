@@ -218,6 +218,42 @@ describe("subscription — reactive args (plan 340)", () => {
         expect(fake.subscriptions[0]?.args).toStrictEqual({ roomId: "r1" });
     });
 
+    it("clears data and error when the args source switches to 'skip'", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const injector = TestBed.inject(Injector);
+        const args = signal<{ roomId: string } | "skip">({ roomId: "r1" });
+
+        const { data, error } = subscription(streamRef, () => args(), { client: fake.asClient, destroyRef: destroy.asDestroyRef, injector });
+        TestBed.tick();
+
+        fake.subscriptions[0]?.push([{ id: "1" }]);
+
+        expect(data()).toStrictEqual([{ id: "1" }]);
+
+        args.set("skip");
+        TestBed.tick();
+
+        // The effect's cleanup closes the socket, but the signals are what the
+        // template renders — leaving them would show a skipped subscription's
+        // last payload as if it were live.
+        expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
+        expect(data()).toBeUndefined();
+        expect(error()).toBeUndefined();
+    });
+
+    it("names `injector` when reactive args are used outside an injection context", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+
+        // No `injector`, and not inside an injection context: Angular's own
+        // NG0203 never mentions the option that fixes this, so the adapter
+        // re-raises it with the option named.
+        expect(() => subscription(streamRef, () => ({ roomId: "r1" }), { client: fake.asClient, destroyRef: destroy.asDestroyRef })).toThrow(
+            /pass `injector` alongside `destroyRef`/,
+        );
+    });
+
     it("destroy tears down the reactive-form subscription", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

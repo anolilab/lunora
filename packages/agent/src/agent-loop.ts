@@ -258,7 +258,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // The gate's view: everything `toolContext` has EXCEPT `setState` — a gate
     // that mutates state is a side effect inside a decision predicate, which is
     // exactly the misuse durability here is fixing, not relocating.
-    const gateContext: AgentApprovalContext = { env, getState, idempotencyKey: stepName, reportProgress, run, threadKey, toolCallId: call.id };
+    const gateContext: AgentApprovalContext = { env, getState, idempotencyKey: stepName, run, threadKey, toolCallId: call.id };
     // Distinct from `stepName` (`tool:${call.name}:${call.id}`) so
     // `@lunora/workflow`'s BY-NAME step memoization can never confuse the gate's
     // durable result with the tool's own (see the advisor's duplicate-step-name

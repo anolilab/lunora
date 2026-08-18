@@ -51,9 +51,9 @@ interface FakeD1Database {
 
 /** The shape of the `D1Exec` object the real `buildExec` returns. */
 interface FakeD1Exec {
-    all: (sql: string, parameters: readonly unknown[]) => Promise<Record<string, unknown>[]>;
-    batch?: (statements: ReadonlyArray<{ params: readonly unknown[]; sql: string }>) => Promise<void>;
-    run: (sql: string, parameters: readonly unknown[]) => Promise<unknown>;
+    all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
+    run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<unknown>;
 }
 
 type BuildExecFunction = (database: FakeD1Database, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void) => FakeD1Exec;
@@ -88,17 +88,45 @@ const compileBuildExec = (source: string): BuildExecFunction => {
     return new Function(`"use strict";\n${outputText}\nreturn buildExec;`)() as BuildExecFunction;
 };
 
+/**
+ * A `D1PreparedStatement` double. `bind` chains back to the statement (what the
+ * real one does), `all` resolves `rows`, `run` reports success. Typed factories
+ * rather than inline `vi.fn()` so the doubles are declared once and each mock
+ * carries the signature `vitest/require-mock-type-parameters` asks for.
+ */
+const fakeStatement = (rows: unknown[] = []) => {
+    const statement = {
+        all: vi.fn<() => Promise<{ results: unknown[] }>>(async () => {
+            return { results: rows };
+        }),
+        bind: vi.fn<() => unknown>(() => statement),
+        run: vi.fn<() => Promise<{ success: boolean }>>(async () => {
+            return { success: true };
+        }),
+    };
+
+    return statement;
+};
+
+/** A `withSession(...)` return double: every `prepare` hands back the same statement. */
+const fakeSession = (statement: unknown, bookmark = "bookmark-after-write") => {
+    return {
+        getBookmark: vi.fn<() => string>(() => bookmark),
+        prepare: vi.fn<(sql: string) => unknown>(() => statement),
+    };
+};
+
 describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
     it("a write pins the D1 Sessions API session to the inbound bookmark and reports the write's bookmark via onBookmark", async () => {
         expect.assertions(3);
 
         const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
 
-        const preparedStatement = { bind: vi.fn().mockReturnThis(), run: vi.fn().mockResolvedValue({ success: true }) };
-        const session = { getBookmark: vi.fn().mockReturnValue("bookmark-after-write"), prepare: vi.fn().mockReturnValue(preparedStatement) };
-        const withSession = vi.fn().mockReturnValue(session);
-        const database: FakeD1Database = { prepare: vi.fn(), withSession };
-        const onBookmark = vi.fn();
+        const preparedStatement = fakeStatement();
+        const session = fakeSession(preparedStatement);
+        const withSession = vi.fn<(bookmark?: string) => unknown>(() => session);
+        const database: FakeD1Database = { prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database;
+        const onBookmark = vi.fn<(bookmark: string | undefined) => void>();
 
         const exec = buildExec(database, "bookmark-inbound", onBookmark);
 
@@ -114,14 +142,10 @@ describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
 
         const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
 
-        const preparedStatement = {
-            all: vi.fn().mockResolvedValue({ results: [{ id: "s1" }] }),
-            bind: vi.fn().mockReturnThis(),
-            run: vi.fn().mockResolvedValue({ success: true }),
-        };
-        const session = { getBookmark: vi.fn().mockReturnValue("bookmark-after-write"), prepare: vi.fn().mockReturnValue(preparedStatement) };
-        const withSession = vi.fn().mockReturnValue(session);
-        const database: FakeD1Database = { prepare: vi.fn(), withSession };
+        const preparedStatement = fakeStatement([{ id: "s1" }]);
+        const session = fakeSession(preparedStatement);
+        const withSession = vi.fn<(bookmark?: string) => unknown>(() => session);
+        const database: FakeD1Database = { prepare: vi.fn<(sql: string) => unknown>(), withSession } as FakeD1Database;
 
         const exec = buildExec(database, "bookmark-inbound");
 
@@ -142,8 +166,8 @@ describe("emitApp — buildExec real-output bookmark wiring (plan 336)", () => {
 
         const buildExec = compileBuildExec(extractBuildExec(emitApp(baseOptions)));
 
-        const preparedStatement = { all: vi.fn().mockResolvedValue({ results: [{ id: "s1" }] }), bind: vi.fn().mockReturnThis() };
-        const database: FakeD1Database = { prepare: vi.fn().mockReturnValue(preparedStatement) };
+        const preparedStatement = fakeStatement([{ id: "s1" }]);
+        const database: FakeD1Database = { prepare: vi.fn<(sql: string) => unknown>(() => preparedStatement) };
 
         const exec = buildExec(database);
         const rows = await exec.all("select * from settings", []);

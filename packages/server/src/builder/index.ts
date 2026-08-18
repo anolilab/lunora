@@ -247,7 +247,13 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
         },
         // `.meta(obj)` MERGES so a shared base builder can set defaults a
         // specific procedure then extends, mirroring tRPC.
-        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: { ...state.meta, ...value } }, visibility),
+        //
+        // Frozen because the SAME object reaches both the registered function and
+        // every invocation's `ctx.meta` — a middleware writing `ctx.meta.x = 1`
+        // would otherwise edit the procedure's static declaration and have it
+        // observed by every later request. A later `.meta()` still extends it: the
+        // spread above reads out of the frozen object into a fresh one.
+        meta: (value: Record<string, unknown>) => makeBuilder(kind, { ...state, meta: Object.freeze({ ...state.meta, ...value }) }, visibility),
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
         // `.stream()` is meaningful only on query builders. It's harmless to expose
         // on every builder shape (callers can't hit it from action/mutation builders

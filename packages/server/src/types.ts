@@ -554,7 +554,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * middleware (via `ctx.meta`) and tooling can read the same object; absent
      * when the chain never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 
     /**
@@ -675,7 +675,7 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly kind: "stream";
 
     /** Static per-procedure metadata attached via `.meta()`. See {@link RegisteredFunction.meta}. */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 
@@ -2082,7 +2082,7 @@ interface QueryCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2147,7 +2147,7 @@ interface MutationCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2234,7 +2234,7 @@ interface ActionCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**

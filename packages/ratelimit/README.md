@@ -84,16 +84,21 @@ export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx
 Or call the limiter directly, inside a mutation/action so `ctx.db` is available:
 
 ```ts
-import { RateLimiter, createDbStore } from "@lunora/ratelimit";
+import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
 export const login = mutation.mutation(async ({ ctx, args }) => {
     const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
     const status = await limiter.limit("login", { key: args.email });
 
     if (!status.ok) {
+        // Stop here — `limit` returns a failing status by default rather than
+        // throwing, so falling through authenticates the rejected attempt.
         // status.retryAfter is milliseconds until the request would succeed.
         // status.reason is "rate" or "deny".
+        throw new RateLimitError(status);
     }
+
+    await authenticate(args);
 });
 ```
 

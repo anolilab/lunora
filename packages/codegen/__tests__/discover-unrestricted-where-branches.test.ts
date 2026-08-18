@@ -324,6 +324,25 @@ export const allowArm = defineShape({
         expect(discover()).toMatchObject([{ exportName: "denyArm", form: "empty-object", key: "where", owner: "defineShape" }]);
     });
 
+    it("reads no polarity from a comparison against a role literal", () => {
+        expect.assertions(1);
+
+        // `!== "guest"` is an ALLOW check written with the operator that reads as a
+        // denial for an identity match, and `=== "admin"` is one written with the
+        // operator that reads as an allow. The literal is what makes the operator
+        // meaningless here, so neither `{}` may be called a deny arm.
+        write(
+            "shapes.ts",
+            `import { defineShape } from "@lunora/server";
+
+export const notGuest = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.role !== "guest" ? {} : { userId: ctx.auth.userId }) });
+export const isAdmin = defineShape({ table: "nodes", where: (ctx) => (ctx.auth.role === "admin" ? { userId: ctx.auth.userId } : {}) });
+`,
+        );
+
+        expect(discover()).toStrictEqual([]);
+    });
+
     it("leaves an arm returning allowAll() alone even in the deny position", () => {
         expect.assertions(1);
 

@@ -18,7 +18,7 @@ import { defineIdentity, v } from "../src/index";
 type FakeStandardSchema<Output> = {
     readonly "~standard": {
         readonly types?: { readonly input: Output; readonly output: Output };
-        readonly validate: (value: unknown) => { issues?: undefined; value: Output } | { issues: ReadonlyArray<{ message: string }> };
+        readonly validate: (value: unknown) => { issues?: never; value: Output } | { issues: ReadonlyArray<{ message: string }> };
         readonly vendor: string;
         readonly version: 1;
     };
