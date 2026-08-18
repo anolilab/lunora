@@ -1,0 +1,27 @@
+{
+    "rules": {
+        // This package is entirely SolidJS. React Doctor scans it because Solid
+        // compiles `.tsx` too, and its hook rule then fires on every primitive
+        // here — `createQuery`, `createMutation`, `createSubscription`, … — with
+        // the message "`useLunora` runs inside `createQuery`, which is not a
+        // component or Hook, so React cannot attach Hook state to a render."
+        //
+        // That is React's rule, and Solid does not have it. React preserves hook
+        // ORDER across re-renders, so a conditional or nested hook call
+        // desynchronises its state. A Solid component body runs exactly once and
+        // its primitives are plain function calls that register against the
+        // owning reactive scope, so there is no order to preserve and no render
+        // to attach state to. `useLunora()` is a context read, valid from any
+        // call site — which is precisely how every `create*` here uses it.
+        //
+        // Scoped to this one rule on purpose, not a blanket package ignore: the
+        // framework-agnostic findings (`react-doctor/js-index-maps` and friends)
+        // are real here and should keep reporting. `packages/auth-ui` documents
+        // the same false-positive class for its two Solid ports, and turns them
+        // off per-directory there because a React port sits beside them.
+        //
+        // The gates that do cover this package: `tsc --noEmit`, the 1.x render
+        // tests in `__tests__/`, and `tests/solid-v2-adapter` against Solid 2.
+        "react-doctor/rules-of-hooks": "off",
+    },
+}

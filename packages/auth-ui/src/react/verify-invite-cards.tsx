@@ -39,7 +39,7 @@ const VerifyEmailCard = ({ token }: VerifyEmailCardProps = {}): ReactElement => 
                     }}
                     type="button"
                 >
-                    {t.verifyEmailResend}
+                    {t.verifyEmailRetry}
                 </button>
             ) : null}
         </AuthCard>

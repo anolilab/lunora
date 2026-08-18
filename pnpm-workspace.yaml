@@ -293,6 +293,7 @@ catalogs:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
     "@types/node": 26.2.0
+    "@types/semver": ^7.7.1
   cloudflare:
     "@cloudflare/containers": ^0.3.7
     # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
@@ -467,6 +468,28 @@ catalogs:
     svelte: ^5.56.8
     vite-plugin-solid: ^2.11.14
     vue: ^3.5.41
+  # Solid 2.0 RC toolchain, deliberately kept OUT of the `frontend` catalog
+  # above so the two majors can move independently: `@lunora/solid` peers on
+  # `^1.9.0 || ^2.0.0-rc.0` and is tested against both. Consumed by
+  # tests/solid-v2-adapter (the dual-major guard) and mirrored by
+  # templates/solid-v2.
+  #
+  # Note the package split 2.0 introduced: JSX moved out of core into the
+  # renderer (`@solidjs/web`, hence `jsxImportSource: "@solidjs/web"`), and the
+  # Vite plugin's matching line is 3.x. `@solidjs/testing-library@1` is the
+  # first release that peers on Solid 2.
+  # The plain names are for packages whose ONLY Solid is 2.x —
+  # tests/solid-v2-adapter and tests/auth-ui-solid-v2. The `solid-js-v2` alias is
+  # for @lunora/auth-ui, which authors BOTH Solid ports side by side and so needs
+  # both majors resolvable at once: `solid-js` there is 1.x, and `solid-js-v2` is
+  # the same package under a second name, which `tsconfig.solid-v2.json` maps
+  # `solid-js` onto for that program. Keep the alias in step with `solid-js`.
+  solid2:
+    "@solidjs/testing-library": ^1.0.0-beta.2
+    "@solidjs/web": ^2.0.0-rc.0
+    solid-js: ^2.0.0-rc.0
+    solid-js-v2: npm:solid-js@^2.0.0-rc.0
+    vite-plugin-solid: ^3.0.0-next.27
   # Angular toolchain shared by @lunora/angular (the runtime adapter) and
   # @lunora/auth-ui (the registry source of truth synced into
   # registry/auth-ui-angular/). Pinned at the higher of the two versions that

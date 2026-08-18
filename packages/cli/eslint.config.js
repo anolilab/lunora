@@ -147,6 +147,19 @@ export default createConfig(
             "import/prefer-default-export": "off",
         },
     },
+    // `semver` is a devDependency ON PURPOSE: packem externalizes `dependencies`
+    // and inlines everything else, so keeping it out of `dependencies` is what
+    // bundles it into `dist` and keeps it off the manifest consumers install
+    // (the same trick `@lunora/agent` / `@lunora/server` use for the internal
+    // `@lunora/dispatch` and `@lunora/search-core`). `import/no-extraneous-
+    // dependencies` reads that as a mistake, so it is scoped off for the one
+    // file that imports it rather than suppressed at the import site.
+    {
+        files: ["**/commands/add/features.ts"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of JSON.stringify'd wire payloads / canonical objects, changing the bytes on
     // the wire and breaking order-sensitive tests; prefer-expect-type-of rewrites a

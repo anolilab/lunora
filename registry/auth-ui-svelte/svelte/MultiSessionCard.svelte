@@ -33,7 +33,7 @@
                         <span class="lunora-auth-list__actions">
                             <button
                                 class="lunora-auth-button lunora-auth-button--secondary"
-                                disabled={$res.busy}
+                                disabled={$res.busy || entry.session?.token === undefined}
                                 onclick={() => {
                                     void actions.setActive(entry.session?.token ?? "");
                                 }}
@@ -43,7 +43,7 @@
                             </button>
                             <button
                                 class="lunora-auth-button lunora-auth-button--danger"
-                                disabled={$res.busy}
+                                disabled={$res.busy || entry.session?.token === undefined}
                                 onclick={() => {
                                     void actions.revoke(entry.session?.token ?? "");
                                 }}

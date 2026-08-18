@@ -8,6 +8,7 @@ const initCommand: Command = {
         ["lunora init my-app -t next", "Scaffold a Next.js app"],
         ["lunora init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
         ["lunora init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
+        ["lunora init my-app -t solid-v2", "Scaffold a Solid 2.0 SPA"],
         ["lunora init my-app --ref alpha", "Scaffold from the alpha branch's templates"],
         ["lunora init --here", "Add Lunora to the current project"],
         ["lunora init my-app --ci github", "Scaffold + add a GitHub Actions deploy pipeline"],
@@ -27,7 +28,7 @@ const initCommand: Command = {
             // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
             // `-t` selects a bespoke template.
             description:
-                "Bespoke template (standalone | astro | next | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid | vinext | vinext-pages). For an SPA use --vite react|vue|solid|svelte.",
+                "Bespoke template (standalone | astro | next | nuxt | solid-v2 | sveltekit | tanstack-start-react | tanstack-start-solid | vinext | vinext-pages). For a Solid 1.x / React / Vue / Svelte SPA use --vite react|vue|solid|svelte.",
             name: "template",
             type: String,
         },

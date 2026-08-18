@@ -69,6 +69,7 @@ type Template =
     | "next"
     | "nuxt"
     | "react-router"
+    | "solid-v2"
     | "standalone"
     | "sveltekit"
     | "tanstack-start-react"
@@ -1296,6 +1297,10 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "React SPA — official create-vite base + the Lunora layer (the default)", label: "React", value: "react" },
     { description: "Vue SPA — create-vite base + Lunora", label: "Vue", value: "vue" },
     { description: "Solid SPA — create-vite base + Lunora", label: "Solid", value: "solid" },
+    // The Solid 2.0 line is a bespoke template rather than a `--vite` overlay:
+    // create-vite's `solid-ts` base is still Solid 1.x, and 2.0 needs a
+    // different renderer package, JSX source and Vite plugin major.
+    { description: "Solid 2.0 SPA — the Solid 2 line (@solidjs/web, vite-plugin-solid 3)", label: "Solid 2", value: "solid-v2" },
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
     { description: "Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker", label: "Next.js", value: "next" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },

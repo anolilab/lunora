@@ -35,6 +35,11 @@ const FRAMEWORKS = [
     { item: "auth-ui-vue", view: "vue" },
     { item: "auth-ui-svelte", view: "svelte" },
     { item: "auth-ui-solid", view: "solid" },
+    // The Solid 2 port is a separate item, not a variant of the one above: these
+    // are copy-in source files, and the two majors' spellings are mutually
+    // exclusive at the source level (`@solidjs/web` JSX, `onSettled`,
+    // split-phase effects). `detectAuthUiItem` picks between them.
+    { item: "auth-ui-solid-v2", view: "solid-v2" },
     { item: "auth-ui-angular", view: "angular" },
 ];
 

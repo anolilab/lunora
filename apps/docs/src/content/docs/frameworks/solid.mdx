@@ -48,12 +48,52 @@ bun add @lunora/solid
 
 </Tabs>
 
+## Solid 1.x and Solid 2.0
+
+`@lunora/solid` peers on `solid-js@^1.9.0 || ^2.0.0-rc.0` and ships **one build
+for both majors** — the adapter's public surface (`LunoraProvider`,
+`createQuery`, `createMutation`, `hydratePreloaded`, …) is identical on either.
+Where the two Solids diverge internally, the adapter picks the right primitive
+at runtime, so nothing about your usage changes.
+
+What does change is the code _around_ it. The snippets on this page are Solid
+1.x; on Solid 2.0 the imports and a few APIs move:
+
+| Solid 1.x                   | Solid 2.0                                       |
+| --------------------------- | ----------------------------------------------- |
+| `solid-js/web`              | `@solidjs/web` (also `jsxImportSource`)         |
+| `solid-js/store`            | `solid-js` — stores moved into core             |
+| `onMount`                   | `onSettled`, which returns its own cleanup      |
+| `createEffect(fn)` / `on()` | `createEffect(compute, apply)` — two arguments  |
+| `<Suspense>` / `<Index>`    | `<Loading>` / `<For keyed={false}>`             |
+| `<ErrorBoundary>`           | `<Errored>`                                     |
+| `mergeProps` / `splitProps` | `merge` / `omit`                                |
+| `classList={{ … }}`         | `class={{ … }}`                                 |
+| `<Ctx.Provider value={…}>`  | `<Ctx value={…}>` — the context is the provider |
+
+Two behaviour changes have no syntactic tell, so they surprise people: signal
+reads do not update until the microtask flushes (call `flush()` when a test
+asserts right after a write), and writing a signal from a component body throws
+in dev. Built-in DOM attributes are also lowercase now (`novalidate`,
+`autocomplete`, `tabindex`), though event handlers stay camelCase.
+
+`lunora init app -t solid-v2` scaffolds a project already wired for 2.0 (the
+`@solidjs/web` renderer, `jsxImportSource`, and `vite-plugin-solid` 3.x).
+`lunora init app --vite solid` stays on the stable Solid 1.x line.
+
+`lunora add auth-ui` splits the same way. The copy-in auth screens are source
+you own, so the two majors cannot share one payload: `auth-ui-solid` is the 1.x
+port and `auth-ui-solid-v2` the 2.0 one, and the CLI picks from your installed
+`solid-js`. The framework-agnostic controllers under `lunora/auth-ui/core` are
+identical in both.
+
 ## Provide the client
 
 Wrap the tree in `<LunoraProvider client={...}>` (required at the root). Read it
 anywhere below with `useLunora()`.
 
 ```tsx title="src/index.tsx"
+// Solid 2.0: `import { render } from "@solidjs/web"`.
 import { LunoraClient } from "lunorash/client";
 import { LunoraProvider } from "@lunora/solid";
 import { render } from "solid-js/web";

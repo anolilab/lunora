@@ -2,9 +2,10 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
 import type { Accessor } from "solid-js";
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { useLunora } from "./context";
+import { trackedEffect } from "./solid-compat";
 
 interface CreateSubscriptionResult<T> {
     data: Accessor<T | undefined>;
@@ -28,46 +29,43 @@ const createSubscription = <F extends FunctionReference>(
 
     const resolveArgs = typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">) : () => args;
 
-    createEffect(
-        on(resolveArgs, (currentArgs) => {
-            if (currentArgs === "skip") {
-                setData(() => undefined);
-                setError(() => undefined);
-                return;
-            }
+    trackedEffect(resolveArgs, (currentArgs) => {
+        if (currentArgs === "skip") {
+            setData(() => undefined);
+            setError(() => undefined);
 
-            const unsubscribe = createQuerySubscription(
-                client,
-                function_,
-                currentArgs,
-                {
-                    onData: (value: ReturnOf<F>) => {
-                        setData(() => value);
-                        setError(() => undefined);
-                    },
-                    onError: (subscriptionError) => {
-                        // Preserve the wire-level `code` the server attached (e.g.
-                        // "auth-expired" vs "not-found") so callers can branch on it —
-                        // a plain `new Error(message)` would discard it. When a code is
-                        // present, surface a `LunoraError` (its `.code` is typed);
-                        // otherwise fall back to a bare `Error`.
-                        const normalized = subscriptionError.code
-                            ? new LunoraError(subscriptionError.code, subscriptionError.message)
-                            : new Error(subscriptionError.message);
+            return undefined;
+        }
 
-                        setError(() => normalized);
-                        setData(() => undefined);
-                    },
-                    onReset: () => {
-                        setData(() => undefined);
-                    },
+        return createQuerySubscription(
+            client,
+            function_,
+            currentArgs,
+            {
+                onData: (value: ReturnOf<F>) => {
+                    setData(() => value);
+                    setError(() => undefined);
                 },
-                { shardKey: options.shardKey },
-            );
+                onError: (subscriptionError) => {
+                    // Preserve the wire-level `code` the server attached (e.g.
+                    // "auth-expired" vs "not-found") so callers can branch on it —
+                    // a plain `new Error(message)` would discard it. When a code is
+                    // present, surface a `LunoraError` (its `.code` is typed);
+                    // otherwise fall back to a bare `Error`.
+                    const normalized = subscriptionError.code
+                        ? new LunoraError(subscriptionError.code, subscriptionError.message)
+                        : new Error(subscriptionError.message);
 
-            onCleanup(unsubscribe);
-        }),
-    );
+                    setError(() => normalized);
+                    setData(() => undefined);
+                },
+                onReset: () => {
+                    setData(() => undefined);
+                },
+            },
+            { shardKey: options.shardKey },
+        );
+    });
 
     return { data, error };
 };

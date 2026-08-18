@@ -87,9 +87,15 @@ ${READ_URL}
 createApp(App).use(createLunora(new LunoraClient({ url }))).mount("#app");
 `;
 
+// `LunoraProvider`, not `<LunoraContext.Provider>`: the context object carries a
+// `.Provider` in Solid 1.x only — in Solid 2 the context IS the provider
+// component. `@lunora/solid` spans both majors and `LunoraProvider` resolves the
+// right one, so a project that later moves to Solid 2 keeps working. (This
+// overlay itself scaffolds create-vite's Solid 1.x base; `-t solid-v2` is the
+// Solid 2 template.)
 const SOLID_INDEX = `import "./index.css";
 
-import { LunoraContext } from "@lunora/solid";
+import { LunoraProvider } from "@lunora/solid";
 import { LunoraClient } from "lunorash/client";
 import { render } from "solid-js/web";
 
@@ -101,9 +107,9 @@ const root = document.getElementById("root");
 
 render(
     () => (
-        <LunoraContext.Provider value={client}>
+        <LunoraProvider client={client}>
             <App />
-        </LunoraContext.Provider>
+        </LunoraProvider>
     ),
     root!,
 );

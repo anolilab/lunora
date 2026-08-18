@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { detectAuthUiItem, isReactNativeProject, normalizeFeature } from "../../src/commands/add/features";
+import { detectAuthUiItem, isReactNativeProject, isSolid2Project, normalizeFeature } from "../../src/commands/add/features";
 import { runAddFeature } from "../../src/commands/add/handler";
 import type { Logger } from "../../src/util/logger";
 
@@ -81,6 +81,46 @@ describe("detectAuthUiItem", () => {
         expect(detectAuthUiItem({ expo: "54.0.0", react: "19.2.0", "react-native": "0.83.0" })).toBeUndefined();
         expect(detectAuthUiItem({ "@lunora/react-native": "1.0.0", react: "19.2.0" })).toBeUndefined();
         expect(isReactNativeProject({ "react-native": "0.83.0" })).toBe(true);
+    });
+
+    it("routes Solid 2 to its own payload, not the Solid 1.x one", () => {
+        expect.assertions(9);
+
+        // A Solid 2 project still depends on `solid-js` and `@lunora/solid`, both
+        // of which would otherwise match `auth-ui-solid` — whose screens are 1.x
+        // source and do not compile against Solid 2.
+        expect(detectAuthUiItem({ "@lunora/solid": "1.0.0", "@solidjs/web": "2.0.0-rc.0", "solid-js": "2.0.0-rc.0" })).toBe("auth-ui-solid-v2");
+        expect(detectAuthUiItem({ "solid-js": "^2.0.0-rc.0" })).toBe("auth-ui-solid-v2");
+        expect(isSolid2Project({ "solid-js": "^2.0.0-rc.0" })).toBe(true);
+        expect(isSolid2Project({ "@solidjs/web": "^2.0.0-rc.0" })).toBe(true);
+
+        // npm accepts partial ranges, so a major on its own is a legal way to
+        // pin Solid 2 and has no dot for the parser to anchor on.
+        expect(isSolid2Project({ "solid-js": "2" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": "^2" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": "1" })).toBe(false);
+
+        // Solid 1.x is untouched — it still resolves to the 1.x payload.
+        expect(isSolid2Project({ "solid-js": "^1.9.14" })).toBe(false);
+        expect(detectAuthUiItem({ "@lunora/solid": "1.0.0", "solid-js": "^1.9.14" })).toBe("auth-ui-solid");
+    });
+
+    it("reads the range's floor rather than its first digit", () => {
+        expect.assertions(6);
+
+        // `>1` is `>=2.0.0`: the first number in a range is not its floor.
+        expect(isSolid2Project({ "solid-js": ">1" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": ">=2" })).toBe(true);
+
+        // A union floors at its lowest alternative regardless of the order it is
+        // written in, so a range spanning both majors is not a Solid 2 signal.
+        expect(isSolid2Project({ "solid-js": "^1.9.0 || ^2.0.0-rc.0" })).toBe(false);
+        expect(isSolid2Project({ "solid-js": "2 || 1" })).toBe(false);
+
+        // Specifiers npm cannot parse as a range decide nothing on their own —
+        // the project falls through to the rest of the ladder.
+        expect(isSolid2Project({ "solid-js": "workspace:*" })).toBe(false);
+        expect(isSolid2Project({ "@solidjs/web": "workspace:*", "solid-js": "workspace:*" })).toBe(true);
     });
 });
 
@@ -163,6 +203,27 @@ describe("runAddFeature (auth-ui)", () => {
         expect(result.code).toBe(1);
         expect(lines.join("\n")).toMatch(/no React Native port/);
         expect(existsSync(join(workdir, "lunora", "auth-ui"))).toBe(false);
+    });
+
+    it("`add auth-ui` detects Solid 2 and installs the Solid 2 payload", async () => {
+        expect.assertions(4);
+
+        seedProject(workdir, { "@lunora/solid": "1.0.0", "@solidjs/web": "2.0.0-rc.0", "solid-js": "^2.0.0-rc.0" });
+
+        const result = await runAddFeature({
+            cwd: workdir,
+            feature: "auth-ui",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "demo-db",
+        });
+
+        expect(result.items).toStrictEqual(["auth-ui-solid-v2"]);
+        expect(existsSync(join(workdir, "lunora", "auth-ui", "solid-v2", "auth-cards.tsx"))).toBe(true);
+        // ...and not the 1.x views beside them.
+        expect(existsSync(join(workdir, "lunora", "auth-ui", "solid", "auth-cards.tsx"))).toBe(false);
+        // Shared, framework-agnostic core lands alongside them.
+        expect(existsSync(join(workdir, "lunora", "auth-ui", "core", "sign-in.ts"))).toBe(true);
     });
 
     it("uses the injected framework prompt when detection fails and not --yes", async () => {

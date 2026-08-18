@@ -55,6 +55,14 @@ const templates: Kit[] = [
     { brand: true, Icon: SiNextdotjs, id: "next", name: "Next.js", note: "App Router on OpenNext, plus a standalone Lunora worker.", stack: "React" },
     {
         brand: true,
+        Icon: SiSolid,
+        id: "solid-v2",
+        name: "Solid 2",
+        note: "The new signals core and @solidjs/web renderer, live queries as plain accessors.",
+        stack: "Solid",
+    },
+    {
+        brand: true,
         Icon: SiReactrouter,
         id: "react-router",
         name: "React Router",
@@ -165,7 +173,7 @@ const Start: FC = () => (
             <Shell className="py-20">
                 <div className="flex flex-col gap-3">
                     <Kicker size="micro">Templates · -t</Kicker>
-                    <h2 className="text-h2 font-semibold tracking-tight text-ink">Twelve whole projects</h2>
+                    <h2 className="text-h2 font-semibold tracking-tight text-ink">Thirteen whole projects</h2>
                     <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                         Each one is a complete app in <code className="font-mono text-ink-muted">templates/</code>, fetched at init and wired to the same typed,
                         live-syncing backend. Only the frontend changes.
