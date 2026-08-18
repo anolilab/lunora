@@ -327,20 +327,26 @@ class TestFlushIntegration(unittest.TestCase):
     def test_a_flush_replays_in_order_and_confirms_the_optimistic_overlay(self):
         covers("offline_flush_replays_and_confirms_optimistic")
         case = FIXTURES["flushReplay"]
-        by_id = {spec["id"]: spec for spec in case["responses"]}
-        seen_headers = []
+        seen_ids = []
 
-        def post(_url, headers, _body):
-            mutation_id = headers["x-lunora-mutation-id"]
-            seen_headers.append(mutation_id)
-            spec = by_id[mutation_id]
+        # The three fixture outcomes, as this transport now expresses them. Three
+        # queued writes coalesce into ONE batch hop, so `ok` and `coded-error`
+        # are slots and `transport-error` is an ABSENT slot: a per-entry
+        # transport failure is the server not answering for that entry, and an
+        # unanswered write is retried under its original idempotency key exactly
+        # as an uncoded throw re-queues on the single-call path.
+        def post(_url, _headers, body):
+            calls = json.loads(body)["calls"]
+            seen_ids.extend(call["mutationId"] for call in calls)
+            results = []
 
-            if spec["outcome"] == "transport-error":
-                raise OSError("connection reset")
-            if spec["outcome"] == "coded-error":
-                return 200, {"error": {"code": spec["code"], "message": "gone"}}
+            for index, spec in enumerate(case["responses"]):
+                if spec["outcome"] == "coded-error":
+                    results.append({"body": {"error": {"code": spec["code"], "message": "gone"}}, "id": index})
+                elif spec["outcome"] == "ok":
+                    results.append({"body": {"commitCursor": spec["commitCursor"], "result": {"ok": True}}, "id": index})
 
-            return 200, {"commitCursor": spec["commitCursor"], "result": {"ok": True}}
+            return 200, {"results": results}
 
         store = _Store()
         settled = []
@@ -366,13 +372,67 @@ class TestFlushIntegration(unittest.TestCase):
 
         # Replayed in FIFO order, each under its own idempotency key so a write
         # the server already committed is de-duplicated rather than re-applied.
-        self.assertEqual(seen_headers, case["mutationIdHeaders"])
+        self.assertEqual(seen_ids, case["mutationIdHeaders"])
         self.assertEqual(report.committed, case["committed"])
         # A coded verdict is terminal: replaying it would only re-trigger the
         # same failure. A transport failure is not, so that write stays queued.
         self.assertEqual(report.rejected, case["rejected"])
         self.assertEqual(_ids(client.offline_queue.items()), case["queuedAfterFlush"])
         self.assertEqual(report.requeued, case["queuedAfterFlush"])
+        self.assertEqual(store.removed, case["persistRemoveCalls"])
+        self.assertEqual(confirmed, [(case["committed"][0], case["confirmedCommitCursor"])])
+
+    def test_two_or_more_writes_coalesce_into_one_batch_round_trip(self):
+        covers("offline_flush_batches_multiple_writes")
+        case = FIXTURES["batchReplay"]
+        urls = []
+        calls = []
+
+        def post(url, _headers, body):
+            urls.append(url)
+            calls.extend(json.loads(body)["calls"])
+            results = []
+
+            for slot in case["slots"]:
+                if slot["outcome"] == "ok":
+                    results.append({"body": {"commitCursor": slot["commitCursor"], "result": None}, "id": slot["id"]})
+                else:
+                    results.append({"body": {"error": {"code": slot["code"], "message": "slot failed"}}, "id": slot["id"]})
+
+            return 200, {"results": results}
+
+        store = _Store()
+        client = LunoraClient("https://app.example", client_id="c-1", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store)
+
+        confirmed = []
+        for mutation_id in case["queued"]:
+            client.offline_queue.enqueue(
+                QueuedMutation(
+                    args={},
+                    confirms=[lambda cursor, _deferred, mid=mutation_id: confirmed.append((mid, cursor))],
+                    function_path="messages:send",
+                    mutation_id=mutation_id,
+                )
+            )
+
+        report = asyncio.run(client.flush_offline_queue())
+
+        self.assertEqual(len(urls), case["requests"])
+        self.assertTrue(urls[0].endswith(case["path"]))
+        # The idempotency key and the client id ride in the ENTRY, not in a
+        # request header: a batch is one hop carrying independent calls, and a
+        # single outer header would de-duplicate the whole chunk against one id.
+        self.assertEqual(
+            [{"clientId": c["clientId"], "functionPath": c["functionPath"], "id": c["id"], "mutationId": c["mutationId"]} for c in calls],
+            case["calls"],
+        )
+        self.assertEqual(report.committed, case["committed"])
+        # A transient shard code in a slot is not a verdict, so that write goes
+        # back on the queue instead of being reported as failed — and so does the
+        # slot the server never returned at all.
+        self.assertEqual(report.rejected, case["rejected"])
+        self.assertEqual(_ids(client.offline_queue.items()), case["queuedAfterFlush"])
         self.assertEqual(store.removed, case["persistRemoveCalls"])
         self.assertEqual(confirmed, [(case["committed"][0], case["confirmedCommitCursor"])])
 

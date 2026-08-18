@@ -44,7 +44,7 @@ from .optimistic import (
     confirm_all,
     rollback_all,
 )
-from .wire import encode_wire, stable_wire_key
+from .wire import decode_wire, encode_wire, stable_wire_key
 
 if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
     # Under TYPE_CHECKING alone: `client.py` imports this module at run time, so
@@ -59,6 +59,12 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: write to a transient condition. Everything else coded is a verdict — replaying
 #: it would only re-trigger the same failure (a poison-message loop).
 TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
+
+#: Hard cap on entries in one batch, matching the server's own
+#: (``shared/batch-wire.ts``). A Durable Object is single-threaded and replays a
+#: batch's entries sequentially, so an unbounded one could pin a shard for tens
+#: of thousands of dispatches. A flush with a larger backlog chunks itself.
+MAX_BATCH_ENTRIES = 500
 
 Transform = Callable[[Any], Any]
 
@@ -351,7 +357,42 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         settle_rejected(client, item, error)
         report.rejected.append(item.id)
 
-    for index, item in enumerate(sendable):
+    # A lone write rides the single-call path, which is the proven one. Two or
+    # more coalesce into batch round trips — the flaky-reconnect win, where N
+    # queued writes cost a handful of hops instead of N.
+    if len(sendable) == 1:
+        await _replay_sequential(client, queue, sendable, report)
+
+        return report
+
+    to_requeue: list = []
+
+    for start in range(0, len(sendable), MAX_BATCH_ENTRIES):
+        # Chunks replay sequentially, which is what preserves FIFO across a flush
+        # longer than one batch.
+        chunk_requeue, stop = await _replay_batched(client, queue, sendable[start : start + MAX_BATCH_ENTRIES], report)
+        to_requeue.extend(chunk_requeue)
+
+        if stop:
+            # A whole-chunk transport failure. Leave every write not yet sent
+            # queued, in order, rather than sending on into a connection that
+            # just failed.
+            to_requeue.extend(sendable[start + MAX_BATCH_ENTRIES :])
+
+            break
+
+    if to_requeue:
+        with client._lock:
+            queue.requeue(to_requeue)
+        report.requeued.extend(entry.id for entry in to_requeue)
+
+    return report
+
+
+async def _replay_sequential(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> None:
+    """Replay writes one at a time. FIFO is preserved by the loop itself."""
+
+    for index, item in enumerate(items):
         try:
             value, commit_cursor = await client._rpc_full(
                 item.function_path,
@@ -366,10 +407,10 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
                 # of order is how a durable queue corrupts the data it was
                 # protecting.
                 with client._lock:
-                    queue.requeue(sendable[index:])
-                report.requeued.extend(entry.id for entry in sendable[index:])
+                    queue.requeue(items[index:])
+                report.requeued.extend(entry.id for entry in items[index:])
 
-                return report
+                return
 
             with client._lock:
                 queue.unpersist(item.id)
@@ -383,7 +424,133 @@ async def flush_queue(client: LunoraClient, shard_key: Optional[str] = None) -> 
         settle_committed(client, item, value, commit_cursor)
         report.committed.append(item.id)
 
-    return report
+
+async def _replay_batched(client: LunoraClient, queue: Any, items: list, report: FlushReport) -> tuple:
+    """Replay one chunk over ``POST /_lunora/rpc-batch``.
+
+    The worker forwards the entries to their shard, which dispatches each through
+    its ordinary single-call path — so per-entry ``mutationId`` idempotency and
+    in-order application are inherited from the proven route rather than
+    re-implemented here.
+
+    Returns ``(requeue, stop)``: the writes to put back, and whether the caller
+    should STOP because the whole chunk failed at the transport level. Re-queuing
+    is the caller's, once and in order, so a write cannot land twice in the queue.
+    """
+
+    calls = [
+        {
+            "args": encode_wire(item.args if item.args is not None else {}),
+            "functionPath": item.function_path,
+            # The slot this entry's result comes back in.
+            "id": index,
+            # The same stable key the single-call replay sends, beside the id
+            # that namespaces its de-duplication row for an anonymous caller.
+            # Per ENTRY, not on the outer request: a batch is one hop, but its
+            # entries are dispatched as independent single calls.
+            "mutationId": item.id,
+            "clientId": item.client_id if item.client_id is not None else client.client_id,
+            **({"shardKey": item.shard_key} if item.shard_key else {}),
+        }
+        for index, item in enumerate(items)
+    ]
+
+    try:
+        body = await client._rpc_batch(calls)
+    except Exception:
+        # Transport failure — nothing committed, so retry everything.
+        return items, True
+
+    results = body.get("results")
+
+    if isinstance(results, list):
+        return _settle_batch_slots(client, queue, items, results, report), False
+
+    # No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
+    # bad request, an authorization denial — and therefore terminal for every
+    # entry; anything else is transport, and transient.
+    envelope = body.get("error")
+
+    if isinstance(envelope, dict):
+        error = LunoraError(
+            envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL",
+            envelope.get("message") if isinstance(envelope.get("message"), str) else "batch rejected",
+            decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
+        )
+
+        with client._lock:
+            for item in items:
+                queue.unpersist(item.id)
+
+        for item in items:
+            settle_rejected(client, item, error)
+            report.rejected.append(item.id)
+
+        return [], False
+
+    return items, True
+
+
+def _settle_batch_slots(client: LunoraClient, queue: Any, items: list, results: list, report: FlushReport) -> list:
+    """Demux a batch reply back onto the writes it replayed, in input order.
+
+    Each slot is classified exactly as :func:`_replay_sequential` classifies a
+    whole response. Returns the writes the caller must re-queue.
+    """
+
+    by_slot = {}
+
+    for entry in results:
+        if isinstance(entry, dict) and isinstance(entry.get("id"), int) and isinstance(entry.get("body"), dict):
+            by_slot[entry["id"]] = entry["body"]
+
+    requeue: list = []
+
+    for index, item in enumerate(items):
+        slot = by_slot.get(index)
+
+        if slot is None:
+            # The server never returned this slot. It may or may not have
+            # committed, so retry it — the `mutationId` makes that safe.
+            requeue.append(item)
+
+            continue
+
+        envelope = slot.get("error")
+
+        if isinstance(envelope, dict):
+            code = envelope.get("code") if isinstance(envelope.get("code"), str) else "INTERNAL"
+
+            # A transient shard failure is the batch's counterpart of an uncoded
+            # throw on the single-call path: the server never reached a verdict,
+            # so the write goes back on the queue rather than being reported as
+            # failed.
+            if code in TRANSIENT_ERROR_CODES:
+                requeue.append(item)
+
+                continue
+
+            error = LunoraError(
+                code,
+                envelope.get("message") if isinstance(envelope.get("message"), str) else "request failed",
+                decode_wire(envelope["data"]) if envelope.get("data") is not None else None,
+            )
+
+            with client._lock:
+                queue.unpersist(item.id)
+            settle_rejected(client, item, error)
+            report.rejected.append(item.id)
+
+            continue
+
+        cursor = slot.get("commitCursor")
+
+        with client._lock:
+            queue.unpersist(item.id)
+        settle_committed(client, item, decode_wire(slot.get("result")), cursor if isinstance(cursor, int) else None)
+        report.committed.append(item.id)
+
+    return requeue
 
 
 def close_queue(client: LunoraClient) -> None:

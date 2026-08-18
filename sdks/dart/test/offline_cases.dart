@@ -395,6 +395,76 @@ Future<void> caseGoldenOfflineQueueHydrateOverflow() async {
   }
 }
 
+/// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
+/// and each slot is classified exactly as a whole single-call response is.
+Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
+  covers('offline_flush_batches_multiple_writes');
+
+  final case_ = _scenario('batchReplay');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+  final poster = Poster();
+  final transport = LunoraTransport(url: 'https://app.example', post: poster.call, clientId: 'c-1');
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
+
+  final committed = <String>[];
+  final rejected = <String>[];
+  final cursors = <String, int?>{};
+
+  for (final id in _expected(case_, 'queued')) {
+    queue.enqueue(
+      QueuedMutation(
+        id: id,
+        functionPath: 'messages:send',
+        args: const <String, Object?>{},
+        onCommit: (cursor) {
+          committed.add(id);
+          cursors[id] = cursor;
+        },
+        onReject: (_) => rejected.add(id),
+      ),
+    );
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  store.removed.clear();
+
+  final slots = <String>[
+    for (final slot in objectList(case_['slots']))
+      if (slot['outcome'] == 'ok')
+        '{"id":${slot['id']},"body":{"result":null,"commitCursor":${slot['commitCursor']}}}'
+      else
+        '{"id":${slot['id']},"body":{"error":{"code":"${slot['code']}","message":"slot failed"}}}',
+  ];
+
+  poster.batchReply = '{"results":[${slots.join(',')}]}';
+
+  await replayer.flush();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(poster.batchRequests, case_['requests'], 'the whole flush is one batch hop');
+  equals(poster.urls.first.endsWith(case_['path']! as String), true, 'sent to the batch endpoint');
+  // The idempotency key and the client id ride in the ENTRY, not in a request
+  // header: a batch is one hop carrying independent calls, and a single outer
+  // header would de-duplicate the whole chunk against one id.
+  equals(
+    canonical(<Object?>[
+      for (final call in poster.callsAt(0))
+        <String, Object?>{'clientId': call['clientId'], 'functionPath': call['functionPath'], 'id': call['id'], 'mutationId': call['mutationId']},
+    ]),
+    canonical(case_['calls']),
+    'every entry carries its own slot id, idempotency key and client id',
+  );
+  equals(canonical(committed), canonical(case_['committed']), 'the successful slot commits');
+  // A transient shard code in a slot is not a verdict, so that write goes back
+  // on the queue instead of being reported as failed — and so does the slot the
+  // server never returned at all.
+  equals(canonical(rejected), canonical(case_['rejected']), 'only the coded verdict is terminal');
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterFlush']), 'the transient and unanswered writes are re-queued, in order');
+  equals(cursors[_expected(case_, 'committed').first], case_['confirmedCommitCursor'], 'the overlay confirms on the echoed commit cursor');
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'only the settled writes are un-persisted');
+}
+
 /// A write whose args cannot be wire-encoded can never succeed, so it settles
 /// TERMINALLY on the first flush instead of re-queueing forever ahead of every
 /// write behind it — a codec error carries no code, and the transient rule would

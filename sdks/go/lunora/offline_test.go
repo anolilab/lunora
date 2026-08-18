@@ -8,8 +8,10 @@ package lunora
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -705,34 +707,46 @@ func TestFlushReplaysInOrderAndConfirmsOptimistic(t *testing.T) {
 
 	scenario := fixtureScenario(t, "offlineQueue", "flushReplay")
 	responses, _ := scenario["responses"].([]any)
-	bySlot := map[string]map[string]any{}
 
-	for _, raw := range responses {
-		spec, _ := raw.(map[string]any)
-		id, _ := spec["id"].(string)
-		bySlot[id] = spec
-	}
+	var seenIDs []string
 
-	var seenHeaders []string
-
-	client := NewClient("https://app.example", func(_ string, headers map[string]string, _ []byte) (int, []byte, error) {
-		mutationID := headers["x-lunora-mutation-id"]
-		seenHeaders = append(seenHeaders, mutationID)
-		spec := bySlot[mutationID]
-
-		switch spec["outcome"] {
-		case "transport-error":
-			return 0, nil, errors.New("connection reset")
-		case "coded-error":
-			code, _ := spec["code"].(string)
-			body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": code, "message": "gone"}})
-
-			return 200, body, nil
-		default:
-			body, _ := json.Marshal(map[string]any{"commitCursor": spec["commitCursor"], "result": map[string]any{"ok": true}})
-
-			return 200, body, nil
+	// The three fixture outcomes, as this transport now expresses them. Three
+	// queued writes coalesce into ONE batch hop, so `ok` and `coded-error` are
+	// slots and `transport-error` is an ABSENT slot: a per-entry transport
+	// failure is the server not answering for that entry, and an unanswered
+	// write is retried under its original idempotency key exactly as an uncoded
+	// error re-queues on the single-call path.
+	client := NewClient("https://app.example", func(_ string, _ map[string]string, body []byte) (int, []byte, error) {
+		var envelope struct {
+			Calls []struct {
+				MutationID string `json:"mutationId"`
+			} `json:"calls"`
 		}
+
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return 0, nil, err
+		}
+
+		for _, call := range envelope.Calls {
+			seenIDs = append(seenIDs, call.MutationID)
+		}
+
+		slots := make([]string, 0, len(responses))
+
+		for index, raw := range responses {
+			spec, _ := raw.(map[string]any)
+
+			switch spec["outcome"] {
+			case "coded-error":
+				code, _ := spec["code"].(string)
+				slots = append(slots, fmt.Sprintf(`{"id":%d,"body":{"error":{"code":%q,"message":"gone"}}}`, index, code))
+			case "ok":
+				cursor, _ := spec["commitCursor"].(float64)
+				slots = append(slots, fmt.Sprintf(`{"id":%d,"body":{"commitCursor":%d,"result":{"ok":true}}}`, index, int64(cursor)))
+			}
+		}
+
+		return 200, []byte(`{"results":[` + strings.Join(slots, ",") + `]}`), nil
 	})
 
 	store := &memoryStore{}
@@ -757,7 +771,7 @@ func TestFlushReplaysInOrderAndConfirmsOptimistic(t *testing.T) {
 
 	// Replayed in FIFO order, each under its own idempotency key so a write the
 	// server already committed is de-duplicated rather than re-applied.
-	if got, want := seenHeaders, fixtureStrings(scenario["mutationIdHeaders"]); !reflect.DeepEqual(got, want) {
+	if got, want := seenIDs, fixtureStrings(scenario["mutationIdHeaders"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("idempotency keys: got %v, want %v", got, want)
 	}
 
@@ -767,6 +781,127 @@ func TestFlushReplaysInOrderAndConfirmsOptimistic(t *testing.T) {
 
 	// A coded verdict is terminal: replaying it would only re-trigger the same
 	// failure. A transport failure is not, so that write stays queued.
+	if got, want := report.Rejected, fixtureStrings(scenario["rejected"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rejected: got %v, want %v", got, want)
+	}
+
+	if got, want := queuedIDs(client.OfflineQueue().Items()), fixtureStrings(scenario["queuedAfterFlush"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("queued after flush: got %v, want %v", got, want)
+	}
+
+	if got, want := store.removed, fixtureStrings(scenario["persistRemoveCalls"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("un-persisted: got %v, want %v", got, want)
+	}
+
+	if want := int64(scenario["confirmedCommitCursor"].(float64)); len(confirmed) != 1 || confirmed[0] != want {
+		t.Fatalf("confirmed cursors: got %v, want [%d]", confirmed, want)
+	}
+}
+
+// TestFlushBatchesTwoOrMoreWrites pins the batch path: N queued writes cost one
+// hop, each entry carries its own idempotency key, and a slot's verdict is
+// classified exactly as a whole single-call response would be.
+func TestFlushBatchesTwoOrMoreWrites(t *testing.T) {
+	covers("offline_flush_batches_multiple_writes")
+
+	scenario := fixtureScenario(t, "offlineQueue", "batchReplay")
+	slots, _ := scenario["slots"].([]any)
+
+	var (
+		urls  []string
+		calls []any
+	)
+
+	client := NewClient("https://app.example", func(url string, _ map[string]string, body []byte) (int, []byte, error) {
+		urls = append(urls, url)
+
+		var envelope struct {
+			Calls []any `json:"calls"`
+		}
+
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return 0, nil, err
+		}
+
+		calls = append(calls, envelope.Calls...)
+
+		answers := make([]string, 0, len(slots))
+
+		for _, raw := range slots {
+			slot, _ := raw.(map[string]any)
+			id, _ := slot["id"].(float64)
+
+			if slot["outcome"] == "ok" {
+				cursor, _ := slot["commitCursor"].(float64)
+				answers = append(answers, fmt.Sprintf(`{"id":%d,"body":{"commitCursor":%d,"result":null}}`, int(id), int64(cursor)))
+
+				continue
+			}
+
+			code, _ := slot["code"].(string)
+			answers = append(answers, fmt.Sprintf(`{"id":%d,"body":{"error":{"code":%q,"message":"slot failed"}}}`, int(id), code))
+		}
+
+		return 200, []byte(`{"results":[` + strings.Join(answers, ",") + `]}`), nil
+	})
+
+	client.SetClientID("c-1")
+
+	store := &memoryStore{}
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store}))
+
+	var confirmed []int64
+
+	for _, id := range fixtureStrings(scenario["queued"]) {
+		client.OfflineQueue().Enqueue(&QueuedMutation{
+			Args:         map[string]any{},
+			FunctionPath: "messages:send",
+			ID:           id,
+			OnCommit: func(commitCursor *int64) {
+				if commitCursor != nil {
+					confirmed = append(confirmed, *commitCursor)
+				}
+			},
+		})
+	}
+
+	report := client.FlushOfflineQueue("")
+
+	if want := int(scenario["requests"].(float64)); len(urls) != want {
+		t.Fatalf("requests: got %d, want %d", len(urls), want)
+	}
+
+	if path, _ := scenario["path"].(string); !strings.HasSuffix(urls[0], path) {
+		t.Fatalf("endpoint: got %s, want a suffix of %s", urls[0], path)
+	}
+
+	// The idempotency key and the client id ride in the ENTRY, not in a request
+	// header: a batch is one hop carrying independent calls, and a single outer
+	// header would de-duplicate the whole chunk against one id.
+	wanted, _ := scenario["calls"].([]any)
+
+	if len(calls) != len(wanted) {
+		t.Fatalf("entries: got %d, want %d", len(calls), len(wanted))
+	}
+
+	for index, raw := range calls {
+		got, _ := raw.(map[string]any)
+		want, _ := wanted[index].(map[string]any)
+
+		for _, field := range []string{"clientId", "functionPath", "id", "mutationId"} {
+			if !reflect.DeepEqual(got[field], want[field]) {
+				t.Fatalf("entry %d %s: got %v, want %v", index, field, got[field], want[field])
+			}
+		}
+	}
+
+	if got, want := report.Committed, fixtureStrings(scenario["committed"]); !reflect.DeepEqual(got, want) {
+		t.Fatalf("committed: got %v, want %v", got, want)
+	}
+
+	// A transient shard code in a slot is not a verdict, so that write goes back
+	// on the queue instead of being reported as failed — and so does the slot the
+	// server never returned at all.
 	if got, want := report.Rejected, fixtureStrings(scenario["rejected"]); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rejected: got %v, want %v", got, want)
 	}
@@ -980,6 +1115,28 @@ func TestSubmitRollsBackTheOverlayWhenTheWriteIsRejected(t *testing.T) {
 	}
 }
 
+// echoBatchSlots answers a request in whichever shape it arrived in: a single
+// call gets a whole response, a batch gets one success slot per entry. A flush of
+// two or more writes coalesces into `/_lunora/rpc-batch`, so a poster that only
+// speaks the single-call shape makes every batched write look unanswered.
+func echoBatchSlots(body []byte, result string, commitCursor int64) []byte {
+	var envelope struct {
+		Calls []map[string]any `json:"calls"`
+	}
+
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Calls == nil {
+		return []byte(fmt.Sprintf(`{"commitCursor":%d,"result":%s}`, commitCursor, result))
+	}
+
+	slots := make([]string, 0, len(envelope.Calls))
+
+	for index := range envelope.Calls {
+		slots = append(slots, fmt.Sprintf(`{"id":%d,"body":{"commitCursor":%d,"result":%s}}`, index, commitCursor, result))
+	}
+
+	return []byte(`{"results":[` + strings.Join(slots, ",") + `]}`)
+}
+
 // TestSubmitAndFlushDoNotRaceTheQueue is the normal topology: application code
 // submitting on one goroutine while the reconnect logic flushes on another.
 //
@@ -990,8 +1147,8 @@ func TestSubmitRollsBackTheOverlayWhenTheWriteIsRejected(t *testing.T) {
 func TestSubmitAndFlushDoNotRaceTheQueue(t *testing.T) {
 	const writes = 200
 
-	client := NewClient("https://app.example", func(string, map[string]string, []byte) (int, []byte, error) {
-		return 200, []byte(`{"commitCursor":1,"result":{"ok":true}}`), nil
+	client := NewClient("https://app.example", func(_ string, _ map[string]string, body []byte) (int, []byte, error) {
+		return 200, echoBatchSlots(body, `{"ok":true}`, 1), nil
 	})
 
 	// Connected once, then dropped: every Submit queues.

@@ -10,7 +10,16 @@ require_relative "wire"
 
 module Lunora
   RPC_PATH = "/_lunora/rpc"
+  # Where a flush of two or more queued writes goes: one hop carrying
+  # independent calls.
+  RPC_BATCH_PATH = "/_lunora/rpc-batch"
   WS_PATH = "/_lunora/ws"
+
+  # Hard cap on entries in one batch, matching the server's own
+  # (+shared/batch-wire.ts+). A Durable Object is single-threaded and replays a
+  # batch's entries sequentially, so an unbounded one could pin a shard for tens
+  # of thousands of dispatches. A flush with a larger backlog chunks itself.
+  MAX_BATCH_ENTRIES = 500
 
   # A coded error from an RPC error envelope.
   class ApiError < StandardError
@@ -731,7 +740,39 @@ module Lunora
       OfflineError.new(OFFLINE_WRITE_UNENCODABLE, "offline mutation dropped: its args cannot be wire-encoded (#{e.message})")
     end
 
+    # A lone write rides the single-call path, which is the proven one. Two or
+    # more coalesce into batch round trips — the flaky-reconnect win, where N
+    # queued writes cost a handful of hops instead of N.
     def replay(queue, sendable, report)
+      return replay_sequential(queue, sendable, report) if sendable.length <= 1
+
+      to_requeue = []
+
+      sendable.each_slice(MAX_BATCH_ENTRIES).with_index do |chunk, chunk_index|
+        # Chunks replay sequentially, which is what preserves FIFO across a
+        # flush longer than one batch.
+        requeue, stop = replay_batched(queue, chunk, report)
+        to_requeue.concat(requeue)
+
+        next unless stop
+
+        # A whole-chunk transport failure. Leave every write not yet sent
+        # queued, in order, rather than sending on into a connection that just
+        # failed.
+        to_requeue.concat(sendable[((chunk_index + 1) * MAX_BATCH_ENTRIES)..] || [])
+        break
+      end
+
+      unless to_requeue.empty?
+        @mutex.synchronize { queue.requeue(to_requeue) }
+        report.requeued.concat(to_requeue.map(&:id))
+      end
+
+      report
+    end
+
+    # Replay writes one at a time. FIFO is preserved by the loop itself.
+    def replay_sequential(queue, sendable, report)
       sendable.each_with_index do |item, index|
         begin
           value, commit_cursor = rpc_full(item.function_path, item.args, item.shard_key, item.id, item.client_id)
@@ -755,6 +796,137 @@ module Lunora
       end
 
       report
+    end
+
+    # Replay one chunk over +POST /_lunora/rpc-batch+.
+    #
+    # The worker forwards the entries to their shard, which dispatches each
+    # through its ordinary single-call path — so per-entry +mutationId+
+    # idempotency and in-order application are inherited from the proven route
+    # rather than re-implemented here.
+    #
+    # Returns +[requeue, stop]+: the writes to put back, and whether the caller
+    # should STOP because the whole chunk failed at the transport level.
+    # Re-queuing is the caller's, once and in order, so a write cannot land twice
+    # in the queue.
+    def replay_batched(queue, items, report)
+      body =
+        begin
+          rpc_batch(batch_calls(items))
+        rescue StandardError
+          # Transport failure — nothing committed, so retry everything.
+          nil
+        end
+
+      return [items, true] if body.nil?
+
+      results = body["results"]
+      return [settle_batch_slots(queue, items, results, report), false] if results.is_a?(Array)
+
+      # No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
+      # bad request, an authorization denial — and therefore terminal for every
+      # entry; anything else is transport, and transient.
+      envelope = body["error"]
+      return [items, true] unless envelope.is_a?(Hash)
+
+      error = batch_error(envelope, "batch rejected")
+      items.each { |item| settle_terminal(queue, item, error, report) }
+
+      [[], false]
+    end
+
+    # One batch entry per write, in input order.
+    def batch_calls(items)
+      items.each_with_index.map do |item, index|
+        call = {
+          "args" => Lunora.encode_wire(item.args || {}),
+          "functionPath" => item.function_path,
+          # The slot this entry's result comes back in.
+          "id" => index,
+          # The same stable key the single-call replay sends, beside the id that
+          # namespaces its de-duplication row for an anonymous caller. Per ENTRY,
+          # not on the outer request: a batch is one hop, but its entries are
+          # dispatched as independent single calls.
+          "mutationId" => item.id,
+          "clientId" => item.client_id || @client_id
+        }
+        shard_key = item.shard_key
+        call["shardKey"] = shard_key if shard_key && !shard_key.empty?
+        call
+      end
+    end
+
+    # POST one chunk. No +x-lunora-mutation-id+ on the request: a batch is ONE
+    # transport hop carrying independent calls, so each entry carries its own key
+    # in the body, and a single outer header would de-duplicate the whole chunk
+    # against one write.
+    def rpc_batch(calls)
+      raise ApiError.new("INTERNAL", "no http_post configured") if @http_post.nil?
+
+      headers = { "content-type" => "application/json" }
+      headers["authorization"] = "Bearer #{@auth_token}" if @auth_token
+
+      _status, body = @http_post.call(join_url(RPC_BATCH_PATH), headers, JSON.generate({ "calls" => calls }))
+      body.is_a?(Hash) ? body : {}
+    end
+
+    # Demux a batch reply back onto the writes it replayed, in input order,
+    # classifying each slot exactly as +replay_sequential+ classifies a whole
+    # response. Returns the writes the caller must re-queue.
+    def settle_batch_slots(queue, items, results, report)
+      by_slot = {}
+      results.each do |entry|
+        next unless entry.is_a?(Hash) && entry["id"].is_a?(Integer) && entry["body"].is_a?(Hash)
+
+        by_slot[entry["id"]] = entry["body"]
+      end
+
+      requeue = []
+
+      items.each_with_index do |item, index|
+        slot = by_slot[index]
+
+        # The server never returned this slot. It may or may not have committed,
+        # so retry it — the +mutationId+ makes that safe.
+        if slot.nil?
+          requeue << item
+          next
+        end
+
+        envelope = slot["error"]
+
+        if envelope.is_a?(Hash)
+          code = envelope["code"].is_a?(String) ? envelope["code"] : "INTERNAL"
+
+          # A transient shard failure is the batch's counterpart of a raw error
+          # on the single-call path: the server never reached a verdict, so the
+          # write goes back on the queue rather than being reported as failed.
+          if TRANSIENT_ERROR_CODES.include?(code)
+            requeue << item
+            next
+          end
+
+          settle_terminal(queue, item, batch_error(envelope, "request failed"), report)
+          next
+        end
+
+        cursor = slot["commitCursor"]
+        @mutex.synchronize { queue.unpersist(item.id) }
+        settle_committed(item, Lunora.decode_wire(slot["result"]), cursor.is_a?(Integer) ? cursor : nil)
+        report.committed << item.id
+      end
+
+      requeue
+    end
+
+    # Rebuild an ApiError from a slot's or a batch's error envelope, defaulting
+    # the way +parse_rpc_response+ does.
+    def batch_error(envelope, fallback)
+      ApiError.new(
+        envelope["code"].is_a?(String) ? envelope["code"] : "INTERNAL",
+        envelope["message"].is_a?(String) ? envelope["message"] : fallback,
+        envelope["data"].nil? ? nil : Lunora.decode_wire(envelope["data"])
+      )
     end
 
     # Forget a write's durable record under the lock, then settle it outside one.

@@ -10,7 +10,9 @@ import dev.lunora.Optimistic.LocalStore;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -402,6 +404,54 @@ public final class Submit {
 
     private static void replay(
             Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
+        // A lone write rides the single-call path, which is the proven one. Two or more coalesce
+        // into batch round trips — the flaky-reconnect win, where N queued writes cost a handful
+        // of hops instead of N.
+        if (sendable.size() < 2) {
+            replaySequential(client, queue, sendable, report);
+
+            return;
+        }
+
+        List<QueuedMutation> toRequeue = new ArrayList<>();
+
+        for (int start = 0; start < sendable.size(); start += Offline.MAX_BATCH_ENTRIES) {
+            int end = Math.min(start + Offline.MAX_BATCH_ENTRIES, sendable.size());
+            // Chunks replay sequentially, which is what preserves FIFO across a flush longer than
+            // one batch.
+            BatchOutcome outcome =
+                    replayBatched(client, queue, sendable.subList(start, end), report);
+
+            toRequeue.addAll(outcome.requeue());
+
+            if (outcome.stop()) {
+                // A whole-chunk transport failure. Leave every write not yet sent queued, in
+                // order, rather than sending on into a connection that just failed.
+                toRequeue.addAll(sendable.subList(end, sendable.size()));
+
+                break;
+            }
+        }
+
+        if (toRequeue.isEmpty()) {
+            return;
+        }
+
+        synchronized (client.lock) {
+            queue.requeue(toRequeue);
+        }
+
+        for (QueuedMutation entry : toRequeue) {
+            report.requeued.add(entry.id);
+        }
+    }
+
+    /** What one batch chunk left for the caller: the writes to re-queue, and whether to stop. */
+    private record BatchOutcome(List<QueuedMutation> requeue, boolean stop) {}
+
+    /** Replays writes one at a time. FIFO is preserved by the loop itself. */
+    private static void replaySequential(
+            Client client, OfflineQueue queue, List<QueuedMutation> sendable, FlushReport report) {
         for (int index = 0; index < sendable.size(); index++) {
             QueuedMutation item = sendable.get(index);
             RpcReply reply;
@@ -449,6 +499,159 @@ public final class Submit {
             settleCommitted(client, item, reply.result(), reply.commitCursor());
             report.committed.add(item.id);
         }
+    }
+
+    /**
+     * Replays one chunk over {@code POST /_lunora/rpc-batch}.
+     *
+     * <p>The worker forwards the entries to their shard, which dispatches each through its ordinary
+     * single-call path — so per-entry {@code mutationId} idempotency and in-order application are
+     * inherited from the proven route rather than re-implemented here.
+     *
+     * <p>Returns the writes to put back and whether the caller should STOP because the whole chunk
+     * failed at the transport level. Re-queuing is the caller's, once and in order, so a write
+     * cannot land twice in the queue.
+     */
+    private static BatchOutcome replayBatched(
+            Client client, OfflineQueue queue, List<QueuedMutation> items, FlushReport report) {
+        List<Object> calls = new ArrayList<>();
+
+        for (int index = 0; index < items.size(); index++) {
+            QueuedMutation item = items.get(index);
+            Map<String, Object> call = new LinkedHashMap<>();
+
+            call.put("args", Wire.encode(item.args != null ? item.args : new LinkedHashMap<>()));
+            call.put("functionPath", item.functionPath);
+            // The slot this entry's result comes back in.
+            call.put("id", index);
+            // The same stable key the single-call replay sends, beside the id that namespaces its
+            // de-duplication row for an anonymous caller. Per ENTRY, not on the outer request: a
+            // batch is one hop, but its entries are dispatched as independent single calls.
+            call.put("mutationId", item.id);
+            call.put("clientId", item.clientId != null ? item.clientId : client.clientId);
+
+            if (item.shardKey != null && !item.shardKey.isEmpty()) {
+                call.put("shardKey", item.shardKey);
+            }
+
+            calls.add(call);
+        }
+
+        Map<String, Object> body;
+
+        try {
+            body = client.rpcBatch(calls);
+        } catch (RuntimeException error) {
+            // Transport failure — nothing committed, so retry everything.
+            return new BatchOutcome(new ArrayList<>(items), true);
+        }
+
+        if (body.get("results") instanceof List<?> results) {
+            return new BatchOutcome(settleBatchSlots(client, queue, items, results, report), false);
+        }
+
+        // No per-slot results. A coded envelope is a verdict on the WHOLE batch — a bad request,
+        // an authorization denial — and therefore terminal for every entry; anything else is
+        // transport, and transient.
+        if (!(body.get("error") instanceof Map<?, ?> envelope)) {
+            return new BatchOutcome(new ArrayList<>(items), true);
+        }
+
+        ApiException error = batchSlotError(envelope, "batch rejected");
+
+        for (QueuedMutation item : items) {
+            synchronized (client.lock) {
+                queue.unpersist(item.id);
+            }
+
+            settleRejected(client, item, error);
+            report.rejected.add(item.id);
+        }
+
+        return new BatchOutcome(new ArrayList<>(), false);
+    }
+
+    /**
+     * Demuxes a batch reply back onto the writes it replayed, in input order, classifying each slot
+     * exactly as {@link #replaySequential} classifies a whole response.
+     *
+     * @return the writes the caller must re-queue
+     */
+    private static List<QueuedMutation> settleBatchSlots(
+            Client client,
+            OfflineQueue queue,
+            List<QueuedMutation> items,
+            List<?> results,
+            FlushReport report) {
+        Map<Integer, Map<?, ?>> bySlot = new LinkedHashMap<>();
+
+        for (Object raw : results) {
+            if (raw instanceof Map<?, ?> entry
+                    && entry.get("id") instanceof Number id
+                    && entry.get("body") instanceof Map<?, ?> slot) {
+                bySlot.put(id.intValue(), slot);
+            }
+        }
+
+        List<QueuedMutation> requeue = new ArrayList<>();
+
+        for (int index = 0; index < items.size(); index++) {
+            QueuedMutation item = items.get(index);
+            Map<?, ?> slot = bySlot.get(index);
+
+            if (slot == null) {
+                // The server never returned this slot. It may or may not have committed, so retry
+                // it — the `mutationId` makes that safe.
+                requeue.add(item);
+
+                continue;
+            }
+
+            if (slot.get("error") instanceof Map<?, ?> envelope) {
+                String code = envelope.get("code") instanceof String text ? text : "INTERNAL";
+
+                // A transient shard failure is the batch's counterpart of an uncoded throw on the
+                // single-call path: the server never reached a verdict, so the write goes back on
+                // the queue rather than being reported as failed.
+                if (Offline.TRANSIENT_ERROR_CODES.contains(code)) {
+                    requeue.add(item);
+
+                    continue;
+                }
+
+                synchronized (client.lock) {
+                    queue.unpersist(item.id);
+                }
+
+                settleRejected(client, item, batchSlotError(envelope, "request failed"));
+                report.rejected.add(item.id);
+
+                continue;
+            }
+
+            Long cursor =
+                    slot.get("commitCursor") instanceof Number number ? number.longValue() : null;
+
+            synchronized (client.lock) {
+                queue.unpersist(item.id);
+            }
+
+            settleCommitted(client, item, Wire.decode(slot.get("result")), cursor);
+            report.committed.add(item.id);
+        }
+
+        return requeue;
+    }
+
+    /**
+     * Rebuilds an {@link ApiException} from a slot's or a batch's error envelope, defaulting the
+     * way {@code parseRpcResponse} does.
+     */
+    private static ApiException batchSlotError(Map<?, ?> envelope, String fallback) {
+        return new ApiException(
+                envelope.get("code") instanceof String code ? code : "INTERNAL",
+                envelope.get("message") instanceof String message ? message : fallback,
+                envelope.get("data") == null ? null : Wire.decode(envelope.get("data")));
     }
 
     /**

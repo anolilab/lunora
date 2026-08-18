@@ -40,6 +40,14 @@ public func lunoraSameShard(_ left: String?, _ right: String?) -> Bool { (left ?
 /// Bounds the queue when no capacity is configured.
 public let lunoraDefaultMaxQueuedMutations = 1000
 
+/// Hard cap on entries in one batch, matching the server's own
+/// (`shared/batch-wire.ts`).
+///
+/// A Durable Object is single-threaded and replays a batch's entries
+/// sequentially, so an unbounded one could pin a shard for tens of thousands of
+/// dispatches. A flush with a larger backlog chunks itself.
+public let lunoraMaxBatchEntries = 500
+
 /// Who made a queued write.
 ///
 /// Three cases, not two, and the third is load-bearing. `absent` is a record that

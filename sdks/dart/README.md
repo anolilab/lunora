@@ -14,7 +14,7 @@ implementing the transport specified in
   key.
 - Cursor-gated optimistic updates (`optimistic.dart`) over the durable replay
   queue (`offline_queue.dart`), replayed by `replay.dart` — including **batched
-  replay** over `/_lunora/rpc-batch`, which no sibling port has.
+  replay** over `/_lunora/rpc-batch`.
 
 > **Not a pnpm/TS package.** This lives under `sdks/dart/` and is a standalone
 > pub package. It imports `dart:convert`, `dart:typed_data` and `dart:async` and

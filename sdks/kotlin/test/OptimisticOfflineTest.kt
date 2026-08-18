@@ -21,6 +21,38 @@ private fun ids(value: Any?): List<String?> = (value as List<*>).map { it as Str
 
 private fun count(value: Any?): Int = (value as Number).toInt()
 
+/** The entries of a batch request body, or an empty list for a single call. */
+private fun batchCalls(body: ByteArray): List<Map<*, *>> {
+    val parsed = Json.parse(String(body, Charsets.UTF_8)) as? Map<*, *> ?: return emptyList()
+
+    return (parsed["calls"] as? List<*>)?.filterIsInstance<Map<*, *>>() ?: emptyList()
+}
+
+/**
+ * The `mutationId` of every entry in a batch request body, in order.
+ *
+ * A flush of two or more writes coalesces into `/_lunora/rpc-batch`, so the
+ * idempotency key rides in the ENTRY rather than in an `x-lunora-mutation-id`
+ * header.
+ */
+private fun batchMutationIds(body: ByteArray): List<String?> = batchCalls(body).map { it["mutationId"] as? String }
+
+/**
+ * Answer a request in whichever shape it arrived in: a single call gets a whole
+ * response, a batch gets one success slot per entry. A poster that only speaks
+ * the single-call shape makes every batched write look unanswered.
+ */
+private fun echoBatchSlots(body: ByteArray, result: String = "null", commitCursor: Int? = null): String {
+    val cursor = commitCursor?.let { ",\"commitCursor\":$it" } ?: ""
+    val calls = batchCalls(body)
+
+    if (calls.isEmpty()) return "{\"result\":$result$cursor}"
+
+    val slots = calls.indices.joinToString(",") { "{\"id\":$it,\"body\":{\"result\":$result$cursor}}" }
+
+    return "{\"results\":[$slots]}"
+}
+
 /** A fixture value as the client would hold it. */
 private fun wire(value: Any?): WireValue = Wire.decode(value)
 
@@ -596,28 +628,32 @@ private fun offlineFlushReplaysAndConfirmsOptimistic() {
     covers("offline_flush_replays_and_confirms_optimistic")
 
     val case = scenario("offlineQueue", "flushReplay")
-    val bySlot = (case["responses"] as List<*>).associate { raw ->
-        val spec = raw as Map<*, *>
-
-        spec["id"] as String to spec
-    }
-    val seenHeaders = mutableListOf<String?>()
+    val responses = case["responses"] as List<*>
+    val seenIds = mutableListOf<String?>()
     val confirmed = mutableListOf<Long?>()
     val store = MemoryStore()
+    // The three fixture outcomes, as this transport now expresses them. Three
+    // queued writes coalesce into ONE batch hop, so `ok` and `coded-error` are
+    // slots and `transport-error` is an ABSENT slot: a per-entry transport failure
+    // is the server not answering for that entry, and an unanswered write is
+    // retried under its original idempotency key exactly as an uncoded throw
+    // re-queues on the single-call path.
     val client = Client(
         "https://app.example",
-        { _, headers, _ ->
-            val mutationId = headers["x-lunora-mutation-id"]
+        { _, _, body ->
+            seenIds.addAll(batchMutationIds(body))
 
-            seenHeaders.add(mutationId)
+            val slots = responses.mapIndexedNotNull { index, raw ->
+                val spec = raw as Map<*, *>
 
-            val spec = bySlot.getValue(mutationId!!)
-
-            when (spec["outcome"]) {
-                "transport-error" -> throw IllegalStateException("connection reset")
-                "coded-error" -> HttpResponse(200, "{\"error\":{\"code\":\"${spec["code"]}\",\"message\":\"gone\"}}")
-                else -> HttpResponse(200, "{\"commitCursor\":${count(spec["commitCursor"])},\"result\":{\"ok\":true}}")
+                when (spec["outcome"]) {
+                    "coded-error" -> "{\"id\":$index,\"body\":{\"error\":{\"code\":\"${spec["code"]}\",\"message\":\"gone\"}}}"
+                    "ok" -> "{\"id\":$index,\"body\":{\"commitCursor\":${count(spec["commitCursor"])},\"result\":{\"ok\":true}}}"
+                    else -> null
+                }
             }
+
+            HttpResponse(200, "{\"results\":[${slots.joinToString(",")}]}")
         },
     )
 
@@ -635,7 +671,7 @@ private fun offlineFlushReplaysAndConfirmsOptimistic() {
 
     // Replayed in FIFO order, each under its own idempotency key so a write the
     // server already committed is de-duplicated rather than re-applied.
-    check(seenHeaders == ids(case["mutationIdHeaders"]), "queued writes replay in order, under their own idempotency keys")
+    check(seenIds == ids(case["mutationIdHeaders"]), "queued writes replay in order, under their own idempotency keys")
     check(report.committed == ids(case["committed"]), "the good write commits")
     // A coded verdict is terminal: replaying it would only re-trigger the same
     // failure. A transport failure is not, so that write stays queued.
@@ -678,6 +714,81 @@ private fun checkedExceptionRequeuesInOrder() {
     check(queuedIds(client.offlineQueue.items()) == listOf("m1", "m2", "m3"), "at the front, in submission order")
     check(report.rejected.isEmpty(), "and settles none of them terminally")
     check(store.removed.isEmpty(), "nor un-persists them")
+}
+
+/**
+ * Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip, and
+ * each slot is classified exactly as a whole single-call response is.
+ */
+private fun offlineFlushBatchesMultipleWrites() {
+    covers("offline_flush_batches_multiple_writes")
+
+    val case = scenario("offlineQueue", "batchReplay")
+    val slots = case["slots"] as List<*>
+    val urls = mutableListOf<String>()
+    val calls = mutableListOf<Map<*, *>>()
+    val confirmed = mutableListOf<Long?>()
+    val store = MemoryStore()
+    val client = Client(
+        "https://app.example",
+        { url, _, body ->
+            urls.add(url)
+            calls.addAll(batchCalls(body))
+
+            val answers = slots.joinToString(",") { raw ->
+                val slot = raw as Map<*, *>
+
+                if (slot["outcome"] == "ok") {
+                    "{\"id\":${count(slot["id"])},\"body\":{\"commitCursor\":${count(slot["commitCursor"])},\"result\":null}}"
+                } else {
+                    "{\"id\":${count(slot["id"])},\"body\":{\"error\":{\"code\":\"${slot["code"]}\",\"message\":\"slot failed\"}}}"
+                }
+            }
+
+            HttpResponse(200, "{\"results\":[$answers]}")
+        },
+    )
+
+    client.clientId = "c-1"
+    client.offlineQueue = OfflineQueue(persistence = store)
+
+    for (id in ids(case["queued"])) {
+        val item = QueuedMutation(id!!, "messages:send", WireValue.Obj(emptyList()))
+
+        item.onCommit = { cursor -> confirmed.add(cursor) }
+        client.offlineQueue.enqueue(item)
+    }
+
+    val report = client.flushOfflineQueue()
+
+    check(urls.size == count(case["requests"]), "the whole flush is one batch hop")
+    check(urls[0].endsWith(case["path"] as String), "sent to the batch endpoint")
+    // The idempotency key and the client id ride in the ENTRY, not in a request
+    // header: a batch is one hop carrying independent calls, and a single outer
+    // header would de-duplicate the whole chunk against one id.
+    val wanted = (case["calls"] as List<*>).map { it as Map<*, *> }
+
+    check(calls.size == wanted.size, "one entry per queued write")
+    check(
+        calls.indices.all { index ->
+            val got = calls[index]
+            val want = wanted[index]
+
+            got["clientId"] == want["clientId"] &&
+                got["functionPath"] == want["functionPath"] &&
+                count(got["id"]) == count(want["id"]) &&
+                got["mutationId"] == want["mutationId"]
+        },
+        "every entry carries its own slot id, key and client id",
+    )
+    check(report.committed == ids(case["committed"]), "the successful slot commits")
+    // A transient shard code in a slot is not a verdict, so that write goes back on
+    // the queue instead of being reported as failed — and so does the slot the
+    // server never returned at all.
+    check(report.rejected == ids(case["rejected"]), "only the coded verdict is terminal")
+    check(queuedIds(client.offlineQueue.items()) == ids(case["queuedAfterFlush"]), "the rest are re-queued, in order")
+    check(store.removed == ids(case["persistRemoveCalls"]), "only the settled writes are un-persisted")
+    check(confirmed == listOf(count(case["confirmedCommitCursor"]).toLong()), "and the committed write confirms against the echoed cursor")
 }
 
 /**
@@ -775,7 +886,7 @@ private fun overflowDuringSubmitSettles() {
 private fun concurrentSubmitAndFlush() {
     val writes = 400
     val committed = AtomicInteger()
-    val client = Client("https://app.example", { _, _, _ -> HttpResponse(200, "{\"result\":null}") })
+    val client = Client("https://app.example", { _, _, body -> HttpResponse(200, echoBatchSlots(body)) })
 
     client.offlineQueue = OfflineQueue(queueBeforeFirstConnect = true)
 
@@ -955,5 +1066,6 @@ internal fun runOptimisticOfflineCases() {
     offlineQueueHydrateOverflowSettlesDiscarded()
     offlineQueueIdentityGateRejectsReplay()
     offlineFlushReplaysAndConfirmsOptimistic()
+    offlineFlushBatchesMultipleWrites()
     offlineFlushUnencodableWriteSettlesTerminal()
 }

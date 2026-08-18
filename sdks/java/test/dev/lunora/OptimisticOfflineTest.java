@@ -50,6 +50,7 @@ final class OptimisticOfflineTest {
         offlineQueueHydrateOverflowSettlesDiscarded();
         offlineQueueIdentityGateRejectsReplay();
         offlineFlushReplaysAndConfirmsOptimistic();
+        offlineFlushBatchesMultipleWrites();
         offlineFlushUnencodableWriteSettlesTerminal();
         clientIdIsPerInstanceAndPersisted();
         consumerCallbacksRunOutsideTheLock();
@@ -209,6 +210,67 @@ final class OptimisticOfflineTest {
         check(
                 first.clientId.equals(store.appended.get(0).get("clientId")),
                 "and a queued write persists the issuing client's real id");
+    }
+
+    /**
+     * The {@code mutationId} of every entry in a batch request body, in order.
+     *
+     * <p>A flush of two or more writes coalesces into {@code /_lunora/rpc-batch}, so the
+     * idempotency key rides in the ENTRY rather than in an {@code x-lunora-mutation-id} header.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<String> batchMutationIds(byte[] body) {
+        List<String> ids = new ArrayList<>();
+
+        for (Object raw : batchCalls(body)) {
+            ids.add((String) ((Map<String, Object>) raw).get("mutationId"));
+        }
+
+        return ids;
+    }
+
+    /** The entries of a batch request body, or an empty list for a single call. */
+    @SuppressWarnings("unchecked")
+    private static List<Object> batchCalls(byte[] body) {
+        Object parsed = Json.parse(new String(body, StandardCharsets.UTF_8));
+
+        if (parsed instanceof Map<?, ?> envelope
+                && envelope.get("calls") instanceof List<?> calls) {
+            return (List<Object>) calls;
+        }
+
+        return new ArrayList<>();
+    }
+
+    /**
+     * Answer a request in whichever shape it arrived in: a single call gets a whole response, a
+     * batch gets one success slot per entry. A poster that only speaks the single-call shape makes
+     * every batched write look unanswered.
+     */
+    private static String echoBatchSlots(byte[] body, String result, Long commitCursor) {
+        String cursor = commitCursor == null ? "" : ",\"commitCursor\":" + commitCursor;
+        List<Object> calls = batchCalls(body);
+
+        if (calls.isEmpty()) {
+            return "{\"result\":" + result + cursor + "}";
+        }
+
+        StringBuilder slots = new StringBuilder();
+
+        for (int index = 0; index < calls.size(); index++) {
+            if (index > 0) {
+                slots.append(',');
+            }
+
+            slots.append("{\"id\":")
+                    .append(index)
+                    .append(",\"body\":{\"result\":")
+                    .append(result)
+                    .append(cursor)
+                    .append("}}");
+        }
+
+        return "{\"results\":[" + slots + "]}";
     }
 
     private static Map<String, Object> scenario(String block, String name) throws IOException {
@@ -707,13 +769,15 @@ final class OptimisticOfflineTest {
 
         Map<String, Object> shard = scenario("offlineQueue", "shardDrain");
         List<String> replayed = new ArrayList<>();
+        // Three writes drain together, so they coalesce into ONE batch hop and their idempotency
+        // keys ride in the entries rather than in a request header.
         Client sharded =
                 new Client(
                         "https://app.example",
                         (url, headers, body) -> {
-                            replayed.add(headers.get("x-lunora-mutation-id"));
+                            replayed.addAll(batchMutationIds(body));
 
-                            return new Response(200, "{\"result\":null}");
+                            return new Response(200, echoBatchSlots(body, "null", null));
                         });
 
         sharded.offlineQueue(new OfflineQueue().queueBeforeFirstConnect(true));
@@ -995,6 +1059,111 @@ final class OptimisticOfflineTest {
     }
 
     /**
+     * Two or more queued writes coalesce into ONE {@code /_lunora/rpc-batch} round trip, and each
+     * slot is classified exactly as a whole single-call response is.
+     */
+    @SuppressWarnings("unchecked")
+    private static void offlineFlushBatchesMultipleWrites() throws IOException {
+        covers("offline_flush_batches_multiple_writes");
+
+        Map<String, Object> testCase = scenario("offlineQueue", "batchReplay");
+        List<Object> slots = list(testCase.get("slots"));
+        List<String> urls = new ArrayList<>();
+        List<Object> calls = new ArrayList<>();
+        List<Long> confirmed = new ArrayList<>();
+        MemoryStore store = new MemoryStore();
+        Client client =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) -> {
+                            urls.add(url);
+                            calls.addAll(batchCalls(body));
+
+                            StringBuilder answers = new StringBuilder();
+
+                            for (Object raw : slots) {
+                                Map<String, Object> slot = map(raw);
+
+                                if (answers.length() > 0) {
+                                    answers.append(',');
+                                }
+
+                                answers.append("{\"id\":").append(count(slot.get("id")));
+
+                                if ("ok".equals(slot.get("outcome"))) {
+                                    answers.append(",\"body\":{\"commitCursor\":")
+                                            .append(count(slot.get("commitCursor")))
+                                            .append(",\"result\":null}}");
+
+                                    continue;
+                                }
+
+                                answers.append(",\"body\":{\"error\":{\"code\":\"")
+                                        .append(slot.get("code"))
+                                        .append("\",\"message\":\"slot failed\"}}}");
+                            }
+
+                            return new Response(200, "{\"results\":[" + answers + "]}");
+                        });
+
+        client.clientId = "c-1";
+        client.offlineQueue(new OfflineQueue().persistence(store));
+
+        for (String id : strings(testCase.get("queued"))) {
+            QueuedMutation item =
+                    new QueuedMutation("messages:send", new LinkedHashMap<>(), null, id);
+
+            item.onCommit = confirmed::add;
+            client.offlineQueue().enqueue(item);
+        }
+
+        FlushReport report = client.flushOfflineQueue(null);
+
+        check(urls.size() == count(testCase.get("requests")), "the whole flush is one batch hop");
+        check(urls.get(0).endsWith((String) testCase.get("path")), "sent to the batch endpoint");
+
+        // The idempotency key and the client id ride in the ENTRY, not in a request header: a
+        // batch is one hop carrying independent calls, and a single outer header would
+        // de-duplicate the whole chunk against one id.
+        List<Object> wanted = list(testCase.get("calls"));
+
+        check(calls.size() == wanted.size(), "one entry per queued write");
+
+        for (int index = 0; index < calls.size(); index++) {
+            Map<String, Object> got = (Map<String, Object>) calls.get(index);
+            Map<String, Object> want = map(wanted.get(index));
+
+            check(
+                    String.valueOf(got.get("clientId")).equals(String.valueOf(want.get("clientId")))
+                            && String.valueOf(got.get("functionPath"))
+                                    .equals(String.valueOf(want.get("functionPath")))
+                            && count(got.get("id")) == count(want.get("id"))
+                            && String.valueOf(got.get("mutationId"))
+                                    .equals(String.valueOf(want.get("mutationId"))),
+                    "entry " + index + " carries its own slot id, key and client id");
+        }
+
+        check(
+                report.committed.equals(strings(testCase.get("committed"))),
+                "the successful slot commits");
+        // A transient shard code in a slot is not a verdict, so that write goes back on the queue
+        // instead of being reported as failed — and so does the slot the server never returned.
+        check(
+                report.rejected.equals(strings(testCase.get("rejected"))),
+                "only the coded verdict is terminal");
+        check(
+                ids(client.offlineQueue().items())
+                        .equals(strings(testCase.get("queuedAfterFlush"))),
+                "the transient and unanswered writes are re-queued, in order");
+        check(
+                store.removed.equals(strings(testCase.get("persistRemoveCalls"))),
+                "only the settled writes are un-persisted");
+        check(
+                confirmed.equals(List.of((long) count(testCase.get("confirmedCommitCursor")))),
+                "and the committed write confirms against the echoed cursor");
+    }
+
+    /**
      * A queued write whose args cannot be wire-encoded settles TERMINALLY on the first flush.
      *
      * <p>A codec failure carries no server code, so the transient rule would re-queue it at the
@@ -1119,45 +1288,51 @@ final class OptimisticOfflineTest {
         covers("offline_flush_replays_and_confirms_optimistic");
 
         Map<String, Object> testCase = scenario("offlineQueue", "flushReplay");
-        Map<String, Map<String, Object>> bySlot = new LinkedHashMap<>();
-
-        for (Object raw : list(testCase.get("responses"))) {
-            Map<String, Object> spec = map(raw);
-
-            bySlot.put((String) spec.get("id"), spec);
-        }
-
-        List<String> seenHeaders = new ArrayList<>();
+        List<Object> responses = list(testCase.get("responses"));
+        List<String> seenIds = new ArrayList<>();
         List<Long> confirmed = new ArrayList<>();
         MemoryStore store = new MemoryStore();
+        // The three fixture outcomes, as this transport now expresses them. Three queued writes
+        // coalesce into ONE batch hop, so `ok` and `coded-error` are slots and `transport-error`
+        // is an ABSENT slot: a per-entry transport failure is the server not answering for that
+        // entry, and an unanswered write is retried under its original idempotency key exactly as
+        // an uncoded throw re-queues on the single-call path.
         Client client =
                 new Client(
                         "https://app.example",
                         (url, headers, body) -> {
-                            String mutationId = headers.get("x-lunora-mutation-id");
+                            seenIds.addAll(batchMutationIds(body));
 
-                            seenHeaders.add(mutationId);
+                            StringBuilder slots = new StringBuilder();
 
-                            Map<String, Object> spec = bySlot.get(mutationId);
-                            Object outcome = spec.get("outcome");
+                            for (int index = 0; index < responses.size(); index++) {
+                                Map<String, Object> spec = map(responses.get(index));
+                                Object outcome = spec.get("outcome");
 
-                            if ("transport-error".equals(outcome)) {
-                                throw new IllegalStateException("connection reset");
+                                if ("transport-error".equals(outcome)) {
+                                    continue;
+                                }
+
+                                if (slots.length() > 0) {
+                                    slots.append(',');
+                                }
+
+                                slots.append("{\"id\":").append(index).append(",\"body\":");
+
+                                if ("coded-error".equals(outcome)) {
+                                    slots.append("{\"error\":{\"code\":\"")
+                                            .append(spec.get("code"))
+                                            .append("\",\"message\":\"gone\"}}}");
+
+                                    continue;
+                                }
+
+                                slots.append("{\"commitCursor\":")
+                                        .append(count(spec.get("commitCursor")))
+                                        .append(",\"result\":{\"ok\":true}}}");
                             }
 
-                            if ("coded-error".equals(outcome)) {
-                                return new Response(
-                                        200,
-                                        "{\"error\":{\"code\":\""
-                                                + spec.get("code")
-                                                + "\",\"message\":\"gone\"}}");
-                            }
-
-                            return new Response(
-                                    200,
-                                    "{\"commitCursor\":"
-                                            + count(spec.get("commitCursor"))
-                                            + ",\"result\":{\"ok\":true}}");
+                            return new Response(200, "{\"results\":[" + slots + "]}");
                         });
 
         client.offlineQueue(new OfflineQueue().persistence(store));
@@ -1176,7 +1351,7 @@ final class OptimisticOfflineTest {
         // Replayed in FIFO order, each under its own idempotency key so a write the server already
         // committed is de-duplicated rather than re-applied.
         check(
-                seenHeaders.equals(strings(testCase.get("mutationIdHeaders"))),
+                seenIds.equals(strings(testCase.get("mutationIdHeaders"))),
                 "queued writes replay in order, under their own idempotency keys");
         check(
                 report.committed.equals(strings(testCase.get("committed"))),

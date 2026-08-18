@@ -139,7 +139,7 @@ change that adds or removes a capability.
 | Offline mutation queue        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Durable offline queue         | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
 | Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Batched offline replay        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 
@@ -254,9 +254,9 @@ the proven one. The three rules that make it safe for a DURABLE write —
 retried under its original idempotency key, and a body with no `results` is a
 whole-batch outcome — are in §4.3 and asserted here.
 
-It is deliberately NOT in `conformance-cases.json`. The endpoint is optional, so
-requiring it would fail the seven ports that correctly do not implement it; the
-capability row above is where that difference belongs.
+`offline_flush_batches_multiple_writes` in `conformance-cases.json` is what keeps
+the eight agreeing about it: the round-trip count, the per-entry envelope, and
+the transient-slot rule that only a batch can express.
 
 Deliberately not ported, and none of it is a gap a mobile client feels: cross-tab
 leader election and the `BroadcastChannel` mirror (there are no tabs), the
@@ -429,9 +429,7 @@ Each of these is forced by what these SDKs are rather than chosen:
 
 **Multi-tab leader election** is the one browser-only half no port has — a Web
 Lock deciding which tab hydrates the shared durable queue, and there are no tabs
-here. **Batched replay** over `/_lunora/rpc-batch` is ported in Dart alone (see
-`protocol/README.md` §4.3); the other seven replay sequentially on `/rpc`, which
-is the reference client's own single-write path.
+here.
 
 ### The queue never calls back; it returns what it let go of
 

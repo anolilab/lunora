@@ -20,6 +20,12 @@ import "errors"
 // would only re-trigger the same failure, which is a poison-message loop.
 var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
 
+// MaxBatchEntries is the hard cap on entries in one batch, matching the server's
+// own (shared/batch-wire.ts). A Durable Object is single-threaded and replays a
+// batch's entries sequentially, so an unbounded one could pin a shard for tens
+// of thousands of dispatches. A flush with a larger backlog chunks itself.
+const MaxBatchEntries = 500
+
 // MutationStatus is what Submit did with a write.
 type MutationStatus string
 
@@ -311,6 +317,53 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 		replayable = append(replayable, item)
 	}
 
+	// A lone write rides the single-call path, which is the proven one. Two or
+	// more coalesce into batch round trips — the flaky-reconnect win, where N
+	// queued writes cost a handful of hops instead of N.
+	if len(replayable) == 1 {
+		c.replaySequential(queue, replayable, &report)
+
+		return report
+	}
+
+	var toRequeue []*QueuedMutation
+
+	for start := 0; start < len(replayable); start += MaxBatchEntries {
+		end := start + MaxBatchEntries
+		if end > len(replayable) {
+			end = len(replayable)
+		}
+
+		// Chunks replay sequentially, which is what preserves FIFO across a flush
+		// longer than one batch.
+		requeue, stop := c.replayBatched(queue, replayable[start:end], &report)
+		toRequeue = append(toRequeue, requeue...)
+
+		if stop {
+			// A whole-chunk transport failure. Leave every write not yet sent
+			// queued, in order, rather than sending on into a connection that
+			// just failed.
+			toRequeue = append(toRequeue, replayable[end:]...)
+
+			break
+		}
+	}
+
+	if len(toRequeue) > 0 {
+		c.mu.Lock()
+		queue.Requeue(toRequeue)
+		c.mu.Unlock()
+
+		for _, pending := range toRequeue {
+			report.Requeued = append(report.Requeued, pending.ID)
+		}
+	}
+
+	return report
+}
+
+// replaySequential replays writes one at a time. FIFO is preserved by the loop.
+func (c *Client) replaySequential(queue *OfflineQueue, replayable []*QueuedMutation, report *FlushReport) {
 	for index, item := range replayable {
 		value, commitCursor, err := c.rpcFull(item.FunctionPath, item.Args, item.ShardKey, item.ID, item.ClientID)
 		if err == nil {
@@ -332,15 +385,190 @@ func (c *Client) FlushOfflineQueue(shardKey string) FlushReport {
 				report.Requeued = append(report.Requeued, pending.ID)
 			}
 
-			return report
+			return
 		}
 
 		c.unpersist(queue, item.ID)
 		c.settleRejected(item, err)
 		report.Rejected = append(report.Rejected, item.ID)
 	}
+}
 
-	return report
+// replayBatched replays one chunk over POST /_lunora/rpc-batch.
+//
+// The worker forwards the entries to their shard, which dispatches each through
+// its ordinary single-call path — so per-entry mutationId idempotency and
+// in-order application are inherited from the proven route rather than
+// re-implemented here.
+//
+// It returns the writes to put back and whether the caller should STOP because
+// the whole chunk failed at the transport level. Re-queuing is the caller's,
+// once and in order, so a write cannot land twice in the queue.
+func (c *Client) replayBatched(queue *OfflineQueue, items []*QueuedMutation, report *FlushReport) ([]*QueuedMutation, bool) {
+	calls := make([]map[string]any, 0, len(items))
+
+	for index, item := range items {
+		encoded, err := EncodeWire(argsOrEmpty(item.Args))
+		if err != nil {
+			// Unreachable: the caller already partitioned the unencodable writes
+			// out. Re-queue rather than drop, so a future encoder change cannot
+			// silently lose a durable write here.
+			return items, true
+		}
+
+		clientID := item.ClientID
+		if clientID == "" {
+			clientID = c.ClientID()
+		}
+
+		call := map[string]any{
+			"args":         encoded,
+			"functionPath": item.FunctionPath,
+			// The slot this entry's result comes back in.
+			"id": index,
+			// The same stable key the single-call replay sends, beside the id that
+			// namespaces its de-duplication row for an anonymous caller. Per ENTRY,
+			// not on the outer request: a batch is one hop, but its entries are
+			// dispatched as independent single calls.
+			"mutationId": item.ID,
+			"clientId":   clientID,
+		}
+
+		if item.ShardKey != "" {
+			call["shardKey"] = item.ShardKey
+		}
+
+		calls = append(calls, call)
+	}
+
+	body, err := c.rpcBatch(calls)
+	if err != nil {
+		// Transport failure — nothing committed, so retry everything.
+		return items, true
+	}
+
+	if results, ok := body["results"].([]any); ok {
+		return c.settleBatchSlots(queue, items, results, report), false
+	}
+
+	// No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
+	// bad request, an authorization denial — and therefore terminal for every
+	// entry; anything else is transport, and transient.
+	envelope, ok := body["error"].(map[string]any)
+	if !ok {
+		return items, true
+	}
+
+	for _, item := range items {
+		c.unpersist(queue, item.ID)
+		c.settleRejected(item, batchSlotError(envelope, "batch rejected"))
+		report.Rejected = append(report.Rejected, item.ID)
+	}
+
+	return nil, false
+}
+
+// settleBatchSlots demuxes a batch reply back onto the writes it replayed, in
+// input order, classifying each slot exactly as replaySequential classifies a
+// whole response. It returns the writes the caller must re-queue.
+func (c *Client) settleBatchSlots(queue *OfflineQueue, items []*QueuedMutation, results []any, report *FlushReport) []*QueuedMutation {
+	bySlot := make(map[int]map[string]any, len(results))
+
+	for _, entry := range results {
+		slot, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		id, isNumber := slot["id"].(float64)
+		payload, isObject := slot["body"].(map[string]any)
+
+		if isNumber && isObject {
+			bySlot[int(id)] = payload
+		}
+	}
+
+	var requeue []*QueuedMutation
+
+	for index, item := range items {
+		payload, answered := bySlot[index]
+		if !answered {
+			// The server never returned this slot. It may or may not have
+			// committed, so retry it — the mutationId makes that safe.
+			requeue = append(requeue, item)
+
+			continue
+		}
+
+		if envelope, failed := payload["error"].(map[string]any); failed {
+			code, _ := envelope["code"].(string)
+
+			// A transient shard failure is the batch's counterpart of an uncoded
+			// error on the single-call path: the server never reached a verdict, so
+			// the write goes back on the queue rather than being reported as failed.
+			if TransientErrorCodes[code] {
+				requeue = append(requeue, item)
+
+				continue
+			}
+
+			c.unpersist(queue, item.ID)
+			c.settleRejected(item, batchSlotError(envelope, "request failed"))
+			report.Rejected = append(report.Rejected, item.ID)
+
+			continue
+		}
+
+		var commitCursor *int64
+
+		if cursor, ok := payload["commitCursor"].(float64); ok {
+			exact := int64(cursor)
+			commitCursor = &exact
+		}
+
+		value, err := DecodeWire(payload["result"])
+		if err != nil {
+			// A slot whose payload will not decode is a server answer this client
+			// cannot read. Terminal, like any other verdict: replaying it produces
+			// the identical undecodable payload.
+			c.unpersist(queue, item.ID)
+			c.settleRejected(item, APIError{Code: "INTERNAL", Message: "batch slot result could not be decoded: " + err.Error()})
+			report.Rejected = append(report.Rejected, item.ID)
+
+			continue
+		}
+
+		c.unpersist(queue, item.ID)
+		c.settleCommitted(item, value, commitCursor)
+		report.Committed = append(report.Committed, item.ID)
+	}
+
+	return requeue
+}
+
+// batchSlotError rebuilds an APIError from a slot's or a batch's error envelope,
+// defaulting the way ParseRPCEnvelope does.
+func batchSlotError(envelope map[string]any, fallback string) APIError {
+	code, _ := envelope["code"].(string)
+	message, _ := envelope["message"].(string)
+
+	if code == "" {
+		code = "INTERNAL"
+	}
+
+	if message == "" {
+		message = fallback
+	}
+
+	var data any
+
+	if payload, present := envelope["data"]; present && payload != nil {
+		if decoded, err := DecodeWire(payload); err == nil {
+			data = decoded
+		}
+	}
+
+	return APIError{Code: code, Data: data, Message: message}
 }
 
 // dropStalePreconditions weeds out the writes whose assumptions died while the

@@ -26,6 +26,9 @@ public final class Client {
     /** The single endpoint every query/mutation/action posts to. */
     public static final String RPC_PATH = "/_lunora/rpc";
 
+    /** Where a flush of two or more queued writes goes: one hop carrying independent calls. */
+    public static final String RPC_BATCH_PATH = "/_lunora/rpc-batch";
+
     /** The live-subscription endpoint. */
     public static final String WS_PATH = "/_lunora/ws";
 
@@ -402,6 +405,41 @@ public final class Client {
         Map<String, Object> body = (Map<String, Object>) Json.parse(response.body());
 
         return new RpcReply(parseRpcResponse(body, response.status()), parseCommitCursor(body));
+    }
+
+    /**
+     * POST one {@code /_lunora/rpc-batch} chunk, returning the parsed body.
+     *
+     * <p>No {@code x-lunora-mutation-id} on the request: a batch is ONE transport hop carrying
+     * independent calls, so each entry carries its own idempotency key and client id in the body. A
+     * single outer header would name one write and de-duplicate the whole chunk against it.
+     */
+    @SuppressWarnings("unchecked")
+    Map<String, Object> rpcBatch(List<Object> calls) {
+        if (poster == null) {
+            throw new ApiException("INTERNAL", "no HTTP poster configured", null);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+
+        headers.put("content-type", "application/json");
+
+        if (authToken != null) {
+            headers.put("authorization", "Bearer " + authToken);
+        }
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+
+        envelope.put("calls", calls);
+
+        Response response =
+                poster.post(
+                        join(RPC_BATCH_PATH),
+                        headers,
+                        Json.write(envelope).getBytes(StandardCharsets.UTF_8));
+        Object body = Json.parse(response.body());
+
+        return body instanceof Map<?, ?> map ? (Map<String, Object>) map : new LinkedHashMap<>();
     }
 
     /**

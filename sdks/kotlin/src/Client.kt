@@ -6,6 +6,12 @@ import java.nio.charset.StandardCharsets
 /** The single endpoint every query/mutation/action posts to. */
 const val RPC_PATH: String = "/_lunora/rpc"
 
+/**
+ * Where a flush of two or more queued writes goes: one hop carrying independent
+ * calls.
+ */
+const val RPC_BATCH_PATH: String = "/_lunora/rpc-batch"
+
 /** The live-subscription endpoint. */
 const val WS_PATH: String = "/_lunora/ws"
 
@@ -376,6 +382,27 @@ class Client(
         val body = Json.parse(response.body) as Map<*, *>
 
         return RpcReply(parseRpcResponse(body, response.status), parseCommitCursor(body))
+    }
+
+    /**
+     * POSTs one `/_lunora/rpc-batch` chunk, returning the parsed body.
+     *
+     * No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
+     * carrying independent calls, so each entry carries its own idempotency key
+     * and client id in the body. A single outer header would name one write and
+     * de-duplicate the whole chunk against it.
+     */
+    internal fun rpcBatch(calls: List<Any?>): Map<*, *> {
+        val poster = post ?: throw ApiException("INTERNAL", "no HTTP poster configured")
+        val headers = LinkedHashMap<String, String>()
+
+        headers["content-type"] = "application/json"
+        authToken?.let { headers["authorization"] = "Bearer $it" }
+
+        val payload = Json.write(mapOf("calls" to calls))
+        val response = poster(join(RPC_BATCH_PATH), headers, payload.toByteArray(StandardCharsets.UTF_8))
+
+        return Json.parse(response.body) as? Map<*, *> ?: emptyMap<String, Any?>()
     }
 
     /**

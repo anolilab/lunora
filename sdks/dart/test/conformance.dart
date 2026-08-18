@@ -70,6 +70,7 @@ Future<void> main() async {
   await run(caseGoldenOptimisticCursorlessFrame);
   await run(caseGoldenOfflineQueueFifo);
   await run(caseGoldenOfflineQueueShardDrain);
+  await run(caseGoldenOfflineFlushBatchesMultipleWrites);
   await run(caseGoldenOfflineQueueRequeue);
   await run(caseGoldenOfflineQueueClear);
   await run(caseGoldenOfflineQueueOverflow);

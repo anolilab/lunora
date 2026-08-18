@@ -81,6 +81,7 @@ final class ConformanceTests: XCTestCase {
             case "offline_queue_hydrates_persisted_writes": try caseOfflineQueueHydratesPersistedWrites()
             case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
             case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
+            case "offline_flush_batches_multiple_writes": try caseOfflineFlushBatchesMultipleWrites()
             case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
             case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
             case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()

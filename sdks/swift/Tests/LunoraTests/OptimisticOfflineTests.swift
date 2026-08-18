@@ -3,6 +3,41 @@ import XCTest
 
 @testable import Lunora
 
+/// The entries of a batch request body, or an empty list for a single call.
+///
+/// A file-scope function rather than a method: it is called from inside a poster
+/// closure, where reaching for `self` would capture the test case.
+func batchCalls(_ body: Data) -> [[String: Any]] {
+    guard let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+        let calls = parsed["calls"] as? [[String: Any]]
+    else { return [] }
+
+    return calls
+}
+
+/// The `mutationId` of every entry in a batch request body, in order.
+///
+/// A flush of two or more writes coalesces into `/_lunora/rpc-batch`, so the
+/// idempotency key rides in the ENTRY rather than in an `x-lunora-mutation-id`
+/// header.
+func batchMutationIDs(_ body: Data) -> [String?] {
+    batchCalls(body).map { $0["mutationId"] as? String }
+}
+
+/// Answer a request in whichever shape it arrived in: a single call gets a whole
+/// response, a batch gets one success slot per entry. A poster that only speaks
+/// the single-call shape makes every batched write look unanswered.
+func echoBatchSlots(_ body: Data, result: String = "null", commitCursor: Int? = nil) -> Data {
+    let cursor = commitCursor.map { ",\"commitCursor\":\($0)" } ?? ""
+    let calls = batchCalls(body)
+
+    if calls.isEmpty { return Data("{\"result\":\(result)\(cursor)}".utf8) }
+
+    let slots = calls.indices.map { "{\"id\":\($0),\"body\":{\"result\":\(result)\(cursor)}}" }
+
+    return Data("{\"results\":[\(slots.joined(separator: ","))]}".utf8)
+}
+
 /// The cursor-gated optimistic-layer engine and the durable offline write queue,
 /// against the shared golden scenarios in
 /// `protocol/fixtures/offline-optimistic.json`.
@@ -387,12 +422,14 @@ extension ConformanceTests {
         // comparison actually strands the write: the flush is the only thing that
         // ever names a shard.
         var replayed: [String?] = []
+        // Three writes drain together, so they coalesce into ONE batch hop and
+        // their idempotency keys ride in the entries rather than in a header.
         let flushing = LunoraClient(
             url: "https://app.example",
-            post: { _, headers, _ in
-                replayed.append(headers["x-lunora-mutation-id"])
+            post: { _, _, body in
+                replayed.append(contentsOf: batchMutationIDs(body))
 
-                return (200, Data("{\"result\":null}".utf8))
+                return (200, echoBatchSlots(body))
             }
         )
 
@@ -652,34 +689,110 @@ extension ConformanceTests {
         XCTAssertEqual(codes, [try XCTUnwrap(testCase["code"] as? String)], "and it carries the documented code")
     }
 
-    func caseOfflineFlushReplaysAndConfirmsOptimistic() throws {
-        let testCase = try scenario("offlineQueue", "flushReplay")
-        let responses = testCase["responses"] as? [[String: Any]] ?? []
-        var seenHeaders: [String?] = []
+    /// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
+    /// and each slot is classified exactly as a whole single-call response is.
+    func caseOfflineFlushBatchesMultipleWrites() throws {
+        let testCase = try scenario("offlineQueue", "batchReplay")
+        let slots = testCase["slots"] as? [[String: Any]] ?? []
+        var urls: [String] = []
+        var calls: [[String: Any]] = []
         let store = MemoryPersistence()
         let client = LunoraClient(
             url: "https://app.example",
-            post: { _, headers, _ in
-                let mutationID = headers["x-lunora-mutation-id"]
+            post: { url, _, body in
+                urls.append(url)
+                calls.append(contentsOf: batchCalls(body))
 
-                seenHeaders.append(mutationID)
+                let answers: [String] = slots.map { slot in
+                    let id = (slot["id"] as? NSNumber)?.intValue ?? 0
 
-                guard let spec = responses.first(where: { $0["id"] as? String == mutationID }) else {
-                    throw LunoraAPIError(code: "INTERNAL", message: "no response for \(mutationID ?? "?")")
+                    if slot["outcome"] as? String == "ok" {
+                        let cursor = (slot["commitCursor"] as? NSNumber)?.intValue ?? 0
+
+                        return "{\"id\":\(id),\"body\":{\"commitCursor\":\(cursor),\"result\":null}}"
+                    }
+
+                    let code = slot["code"] as? String ?? "INTERNAL"
+
+                    return "{\"id\":\(id),\"body\":{\"error\":{\"code\":\"\(code)\",\"message\":\"slot failed\"}}}"
                 }
 
-                switch spec["outcome"] as? String {
-                case "transport-error":
-                    throw LunoraSubscriptionError(code: nil, message: "connection reset")
-                case "coded-error":
-                    let code = spec["code"] as? String ?? "INTERNAL"
+                return (200, Data("{\"results\":[\(answers.joined(separator: ","))]}".utf8))
+            }
+        )
 
-                    return (200, Data("{\"error\":{\"code\":\"\(code)\",\"message\":\"gone\"}}".utf8))
-                default:
-                    let cursor = (spec["commitCursor"] as? NSNumber)?.intValue ?? 0
+        client.clientID = "c-1"
+        client.offlineQueue = LunoraOfflineQueue(persistence: store)
 
-                    return (200, Data("{\"commitCursor\":\(cursor),\"result\":{\"ok\":true}}".utf8))
+        for id in ids(testCase["queued"]) {
+            client.offlineQueue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        let report = client.flushOfflineQueue()
+
+        XCTAssertEqual(urls.count, count(testCase["requests"]), "the whole flush is one batch hop")
+        XCTAssertTrue(
+            try XCTUnwrap(urls.first).hasSuffix(try XCTUnwrap(testCase["path"] as? String)),
+            "sent to the batch endpoint"
+        )
+
+        // The idempotency key and the client id ride in the ENTRY, not in a request
+        // header: a batch is one hop carrying independent calls, and a single outer
+        // header would de-duplicate the whole chunk against one id.
+        let wanted = testCase["calls"] as? [[String: Any]] ?? []
+
+        XCTAssertEqual(calls.count, wanted.count, "one entry per queued write")
+
+        for (index, got) in calls.enumerated() {
+            let want = wanted[index]
+
+            XCTAssertEqual(got["clientId"] as? String, want["clientId"] as? String, "entry \(index) client id")
+            XCTAssertEqual(got["functionPath"] as? String, want["functionPath"] as? String, "entry \(index) path")
+            XCTAssertEqual(count(got["id"]), count(want["id"]), "entry \(index) slot id")
+            XCTAssertEqual(got["mutationId"] as? String, want["mutationId"] as? String, "entry \(index) key")
+        }
+
+        XCTAssertEqual(report.committed, ids(testCase["committed"]).compactMap { $0 }, "the successful slot commits")
+        // A transient shard code in a slot is not a verdict, so that write goes back
+        // on the queue instead of being reported as failed — and so does the slot the
+        // server never returned at all.
+        XCTAssertEqual(report.rejected, ids(testCase["rejected"]).compactMap { $0 }, "only the coded verdict is terminal")
+        XCTAssertEqual(queuedIDs(client.offlineQueue), ids(testCase["queuedAfterFlush"]), "the rest are re-queued, in order")
+        XCTAssertEqual(store.removed, ids(testCase["persistRemoveCalls"]).compactMap { $0 }, "only the settled writes are un-persisted")
+    }
+
+    func caseOfflineFlushReplaysAndConfirmsOptimistic() throws {
+        let testCase = try scenario("offlineQueue", "flushReplay")
+        let responses = testCase["responses"] as? [[String: Any]] ?? []
+        var seenIDs: [String?] = []
+        let store = MemoryPersistence()
+        // The three fixture outcomes, as this transport now expresses them. Three
+        // queued writes coalesce into ONE batch hop, so `ok` and `coded-error` are
+        // slots and `transport-error` is an ABSENT slot: a per-entry transport
+        // failure is the server not answering for that entry, and an unanswered
+        // write is retried under its original idempotency key exactly as an
+        // uncoded throw re-queues on the single-call path.
+        let client = LunoraClient(
+            url: "https://app.example",
+            post: { _, _, body in
+                seenIDs.append(contentsOf: batchMutationIDs(body))
+
+                let slots: [String] = responses.enumerated().compactMap { index, spec in
+                    switch spec["outcome"] as? String {
+                    case "coded-error":
+                        let code = spec["code"] as? String ?? "INTERNAL"
+
+                        return "{\"id\":\(index),\"body\":{\"error\":{\"code\":\"\(code)\",\"message\":\"gone\"}}}"
+                    case "ok":
+                        let cursor = (spec["commitCursor"] as? NSNumber)?.intValue ?? 0
+
+                        return "{\"id\":\(index),\"body\":{\"commitCursor\":\(cursor),\"result\":{\"ok\":true}}}"
+                    default:
+                        return nil
+                    }
                 }
+
+                return (200, Data("{\"results\":[\(slots.joined(separator: ","))]}".utf8))
             }
         )
 
@@ -696,7 +809,7 @@ extension ConformanceTests {
 
         // Replayed in FIFO order, each under its own idempotency key so a write the
         // server already committed is de-duplicated rather than re-applied.
-        XCTAssertEqual(seenHeaders, ids(testCase["mutationIdHeaders"]), "replayed in order")
+        XCTAssertEqual(seenIDs, ids(testCase["mutationIdHeaders"]), "replayed in order")
         XCTAssertEqual(report.committed, ids(testCase["committed"]).compactMap { $0 })
         // A coded verdict is terminal: replaying it would only re-trigger the same
         // failure. A transport failure is not, so that write stays queued.

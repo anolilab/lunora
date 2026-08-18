@@ -85,6 +85,15 @@ public final class Offline {
     /** Bounds the queue when no capacity is configured. */
     public static final int DEFAULT_MAX_ITEMS = 1000;
 
+    /**
+     * Hard cap on entries in one batch, matching the server's own ({@code shared/batch-wire.ts}).
+     *
+     * <p>A Durable Object is single-threaded and replays a batch's entries sequentially, so an
+     * unbounded one could pin a shard for tens of thousands of dispatches. A flush with a larger
+     * backlog chunks itself.
+     */
+    public static final int MAX_BATCH_ENTRIES = 500;
+
     /** A coded, queue-scoped failure. */
     public static final class OfflineException extends RuntimeException {
         private static final long serialVersionUID = 1L;

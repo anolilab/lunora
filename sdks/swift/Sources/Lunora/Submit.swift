@@ -339,6 +339,46 @@ extension LunoraClient {
     }
 
     private func replay(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
+        // A lone write rides the single-call path, which is the proven one. Two
+        // or more coalesce into batch round trips — the flaky-reconnect win,
+        // where N queued writes cost a handful of hops instead of N.
+        guard sendable.count > 1 else {
+            replaySequential(queue, sendable, &report)
+
+            return
+        }
+
+        var toRequeue: [LunoraQueuedMutation] = []
+        var start = sendable.startIndex
+
+        while start < sendable.endIndex {
+            let end = min(start + lunoraMaxBatchEntries, sendable.endIndex)
+            // Chunks replay sequentially, which is what preserves FIFO across a
+            // flush longer than one batch.
+            let outcome = replayBatched(queue, Array(sendable[start..<end]), &report)
+
+            toRequeue.append(contentsOf: outcome.requeue)
+
+            if outcome.stop {
+                // A whole-chunk transport failure. Leave every write not yet sent
+                // queued, in order, rather than sending on into a connection that
+                // just failed.
+                toRequeue.append(contentsOf: sendable[end...])
+
+                break
+            }
+
+            start = end
+        }
+
+        guard !toRequeue.isEmpty else { return }
+
+        withLock { queue.requeue(toRequeue) }
+        report.requeued.append(contentsOf: toRequeue.map(\.id))
+    }
+
+    /// Replays writes one at a time. FIFO is preserved by the loop itself.
+    private func replaySequential(_ queue: LunoraOfflineQueue, _ sendable: [LunoraQueuedMutation], _ report: inout LunoraFlushReport) {
         for (index, entry) in sendable.enumerated() {
             do {
                 let reply = try rpcFull(
@@ -392,6 +432,163 @@ extension LunoraClient {
                 )
             }
         }
+    }
+
+    /// Replays one chunk over `POST /_lunora/rpc-batch`.
+    ///
+    /// The worker forwards the entries to their shard, which dispatches each
+    /// through its ordinary single-call path — so per-entry `mutationId`
+    /// idempotency and in-order application are inherited from the proven route
+    /// rather than re-implemented here.
+    ///
+    /// Returns the writes to put back and whether the caller should STOP because
+    /// the whole chunk failed at the transport level. Re-queuing is the caller's,
+    /// once and in order, so a write cannot land twice in the queue.
+    private func replayBatched(
+        _ queue: LunoraOfflineQueue,
+        _ items: [LunoraQueuedMutation],
+        _ report: inout LunoraFlushReport
+    ) -> (requeue: [LunoraQueuedMutation], stop: Bool) {
+        var calls: [Any] = []
+
+        for (index, entry) in items.enumerated() {
+            guard let encoded = try? Wire.encode(entry.args ?? [:]) else {
+                // Unreachable: the caller already partitioned the unencodable
+                // writes out. Re-queue rather than drop, so a future codec change
+                // cannot silently lose a durable write here.
+                return (items, true)
+            }
+
+            var call: [String: Any] = [
+                "args": encoded,
+                "functionPath": entry.functionPath,
+                // The slot this entry's result comes back in.
+                "id": index,
+                // The same stable key the single-call replay sends, beside the id
+                // that namespaces its de-duplication row for an anonymous caller.
+                // Per ENTRY, not on the outer request: a batch is one hop, but its
+                // entries are dispatched as independent single calls.
+                "mutationId": entry.id,
+                "clientId": entry.clientID ?? clientID,
+            ]
+
+            if let shardKey = entry.shardKey, !shardKey.isEmpty { call["shardKey"] = shardKey }
+
+            calls.append(call)
+        }
+
+        guard let body = try? rpcBatch(calls) else {
+            // Transport failure — nothing committed, so retry everything.
+            return (items, true)
+        }
+
+        if let results = body["results"] as? [Any] {
+            return (settleBatchSlots(queue, items, results, &report), false)
+        }
+
+        // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
+        // a bad request, an authorization denial — and therefore terminal for
+        // every entry; anything else is transport, and transient.
+        guard let envelope = body["error"] as? [String: Any] else { return (items, true) }
+
+        let error = LunoraClient.batchSlotError(envelope, fallback: "batch rejected")
+
+        for entry in items {
+            settleBatchRejection(queue, entry, error, &report)
+        }
+
+        return ([], false)
+    }
+
+    /// Demuxes a batch reply back onto the writes it replayed, in input order,
+    /// classifying each slot exactly as ``replaySequential(_:_:_:)`` classifies a
+    /// whole response. Returns the writes the caller must re-queue.
+    private func settleBatchSlots(
+        _ queue: LunoraOfflineQueue,
+        _ items: [LunoraQueuedMutation],
+        _ results: [Any],
+        _ report: inout LunoraFlushReport
+    ) -> [LunoraQueuedMutation] {
+        var bySlot: [Int: [String: Any]] = [:]
+
+        for raw in results {
+            guard let entry = raw as? [String: Any],
+                let id = LunoraClient.parseSlotID(entry["id"]),
+                let slot = entry["body"] as? [String: Any]
+            else { continue }
+
+            bySlot[id] = slot
+        }
+
+        var requeue: [LunoraQueuedMutation] = []
+
+        for (index, entry) in items.enumerated() {
+            guard let slot = bySlot[index] else {
+                // The server never returned this slot. It may or may not have
+                // committed, so retry it — the `mutationId` makes that safe.
+                requeue.append(entry)
+
+                continue
+            }
+
+            if let envelope = slot["error"] as? [String: Any] {
+                let code = envelope["code"] as? String ?? "INTERNAL"
+
+                // A transient shard failure is the batch's counterpart of an
+                // uncoded throw on the single-call path: the server never reached
+                // a verdict, so the write goes back on the queue rather than being
+                // reported as failed.
+                if LunoraOfflineCode.transient.contains(code) {
+                    requeue.append(entry)
+
+                    continue
+                }
+
+                settleBatchRejection(queue, entry, LunoraClient.batchSlotError(envelope, fallback: "request failed"), &report)
+
+                continue
+            }
+
+            withLock { queue.unpersist(entry.id) }
+            // The overlay is confirmed BEFORE the caller is told, so the gapless
+            // drop is already in place when the confirming frame lands.
+            settleLayers(confirm: entry.handles, rollback: [], commitCursor: LunoraClient.parseSlotID(slot["commitCursor"]))
+            report.committed.append(entry.id)
+            emitSettled(
+                LunoraMutationSettled(
+                    mutationID: entry.id,
+                    status: .committed,
+                    value: (try? Wire.decode(slot["result"] ?? NSNull())) ?? NSNull(),
+                    error: nil,
+                    hadAwaiter: entry.liveAwaiter
+                ),
+                entry.onSettled
+            )
+        }
+
+        return requeue
+    }
+
+    /// Un-persists a batch-rejected write, rolls its overlay back and settles it.
+    private func settleBatchRejection(
+        _ queue: LunoraOfflineQueue,
+        _ entry: LunoraQueuedMutation,
+        _ error: Error,
+        _ report: inout LunoraFlushReport
+    ) {
+        withLock { queue.unpersist(entry.id) }
+        settleLayers(confirm: [], rollback: entry.handles, commitCursor: nil)
+        report.rejected.append(entry.id)
+        emitSettled(
+            LunoraMutationSettled(
+                mutationID: entry.id,
+                status: .rejected,
+                value: nil,
+                error: error,
+                hadAwaiter: entry.liveAwaiter
+            ),
+            entry.onSettled
+        )
     }
 
     /// Whether a failed replay may be retried rather than dropped.

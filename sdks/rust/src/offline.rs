@@ -56,6 +56,12 @@ pub const CODE_CLIENT_CLOSED: &str = "CLIENT_CLOSED";
 /// replaying it would only re-trigger the same failure, a poison-message loop.
 pub const TRANSIENT_ERROR_CODES: [&str; 2] = ["SHARD_ERROR", "SHARD_UNAVAILABLE"];
 
+/// Hard cap on entries in one batch, matching the server's own
+/// (`shared/batch-wire.ts`). A Durable Object is single-threaded and replays a
+/// batch's entries sequentially, so an unbounded one could pin a shard for tens
+/// of thousands of dispatches. A flush with a larger backlog chunks itself.
+pub const MAX_BATCH_ENTRIES: usize = 500;
+
 /// Bounds the queue when no capacity is configured.
 pub const DEFAULT_MAX_ITEMS: usize = 1000;
 

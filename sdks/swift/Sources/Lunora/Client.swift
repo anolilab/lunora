@@ -2,6 +2,10 @@ import Foundation
 
 /// The single endpoint every query/mutation/action posts to.
 public let lunoraRPCPath = "/_lunora/rpc"
+
+/// Where a flush of two or more queued writes goes: one hop carrying independent
+/// calls.
+public let lunoraRPCBatchPath = "/_lunora/rpc-batch"
 /// The live-subscription endpoint.
 public let lunoraWSPath = "/_lunora/ws"
 
@@ -307,6 +311,26 @@ public final class LunoraClient {
         return number.intValue
     }
 
+    /// An integer from a JSON value, rejecting the `Bool` that bridges to `NSNumber`.
+    ///
+    /// The same guard ``parseCommitCursor(_:)`` uses, reused for a batch slot's
+    /// `id` and `commitCursor` so a `true` cannot be read as `1`.
+    static func parseSlotID(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+
+        return number.intValue
+    }
+
+    /// Rebuilds a ``LunoraAPIError`` from a slot's or a batch's error envelope,
+    /// defaulting the way ``parseRPCResponse(_:status:)`` does.
+    static func batchSlotError(_ envelope: [String: Any], fallback: String) -> LunoraAPIError {
+        LunoraAPIError(
+            code: envelope["code"] as? String ?? "INTERNAL",
+            message: envelope["message"] as? String ?? fallback,
+            data: envelope["data"].flatMap { try? Wire.decode($0) }
+        )
+    }
+
     /// One round-trip, keeping the echoed `commitCursor`.
     ///
     /// The cursor is what gates an optimistic overlay's removal, so it has to
@@ -341,6 +365,24 @@ public final class LunoraClient {
         let parsed = try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:]
 
         return (try LunoraClient.parseRPCResponse(parsed, status: status), LunoraClient.parseCommitCursor(parsed))
+    }
+
+    /// POSTs one `/_lunora/rpc-batch` chunk, returning the parsed body.
+    ///
+    /// No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
+    /// carrying independent calls, so each entry carries its own idempotency key
+    /// and client id in the body. A single outer header would name one write and
+    /// de-duplicate the whole chunk against it.
+    func rpcBatch(_ calls: [Any]) throws -> [String: Any] {
+        guard let post else { throw LunoraAPIError(code: "INTERNAL", message: "no HTTP poster configured") }
+
+        var headers = ["content-type": "application/json"]
+        if let authToken { headers["authorization"] = "Bearer \(authToken)" }
+
+        let payload = try JSONSerialization.data(withJSONObject: ["calls": calls])
+        let (_, raw) = try post(join(lunoraRPCBatchPath), headers, payload)
+
+        return try JSONSerialization.jsonObject(with: raw) as? [String: Any] ?? [:]
     }
 
     /// Projects a generated model into the dictionary tree ``Wire/encode(_:depth:)``

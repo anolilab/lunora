@@ -11,6 +11,9 @@ import (
 const (
 	// RPCPath is the single endpoint every query/mutation/action posts to.
 	RPCPath = "/_lunora/rpc"
+	// RPCBatchPath is where a flush of two or more queued writes goes, as one
+	// hop carrying independent calls.
+	RPCBatchPath = "/_lunora/rpc-batch"
 	// WSPath is the live-subscription endpoint.
 	WSPath = "/_lunora/ws"
 )
@@ -465,6 +468,42 @@ func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutatio
 	}
 
 	return ParseRPCEnvelope(status, raw)
+}
+
+// rpcBatch posts one /_lunora/rpc-batch chunk and returns the parsed body.
+//
+// No x-lunora-mutation-id on the request: a batch is ONE transport hop carrying
+// independent calls, so each entry carries its own idempotency key and client id
+// in the body. A single outer header would name one write and de-duplicate the
+// whole chunk against it.
+func (c *Client) rpcBatch(calls []map[string]any) (map[string]any, error) {
+	if c.Post == nil {
+		return nil, fmt.Errorf("lunora: no HTTPPoster configured")
+	}
+
+	payload, err := json.Marshal(map[string]any{"calls": calls})
+	if err != nil {
+		return nil, err
+	}
+
+	headers := map[string]string{"content-type": "application/json"}
+	if c.AuthToken != "" {
+		headers["authorization"] = "Bearer " + c.AuthToken
+	}
+
+	_, raw, err := c.Post(joinURL(c.BaseURL, RPCBatchPath), headers, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var body map[string]any
+
+	if err := json.Unmarshal(raw, &body); err != nil {
+		// A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
+		return nil, err
+	}
+
+	return body, nil
 }
 
 // Call invokes functionPath and decodes the result into T.

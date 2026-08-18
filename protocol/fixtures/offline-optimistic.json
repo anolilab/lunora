@@ -205,6 +205,28 @@
             ],
             "code": "OFFLINE_IDENTITY_CHANGED"
         },
+        "batchReplay": {
+            "$comment": "Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip instead of N single calls — the flaky-reconnect win. The worker forwards each entry to its shard, which dispatches it through the ordinary single-call path, so per-entry `mutationId` idempotency is inherited rather than re-implemented: the key rides in the ENTRY, not in a request header, because a batch is one hop carrying independent calls. `clientId` rides with it for the same reason the header does — the shard namespaces an anonymous caller's de-duplication rows by it. Slot classification mirrors the single-call path exactly, with one rule that only a batch can express: a slot carrying a TRANSIENT shard code is not a verdict, so that write goes back on the queue rather than being reported as failed. A slot the server never returned (`m4`) is likewise retried, since it may or may not have committed and the idempotency key makes that safe.",
+            "path": "/_lunora/rpc-batch",
+            "requests": 1,
+            "queued": ["m1", "m2", "m3", "m4"],
+            "calls": [
+                { "id": 0, "mutationId": "m1", "functionPath": "messages:send", "clientId": "c-1" },
+                { "id": 1, "mutationId": "m2", "functionPath": "messages:send", "clientId": "c-1" },
+                { "id": 2, "mutationId": "m3", "functionPath": "messages:send", "clientId": "c-1" },
+                { "id": 3, "mutationId": "m4", "functionPath": "messages:send", "clientId": "c-1" }
+            ],
+            "slots": [
+                { "id": 0, "outcome": "ok", "commitCursor": 9 },
+                { "id": 1, "outcome": "transient-error", "code": "SHARD_UNAVAILABLE" },
+                { "id": 2, "outcome": "coded-error", "code": "NOT_FOUND" }
+            ],
+            "committed": ["m1"],
+            "rejected": ["m3"],
+            "queuedAfterFlush": ["m2", "m4"],
+            "confirmedCommitCursor": 9,
+            "persistRemoveCalls": ["m1", "m3"]
+        },
         "flushReplay": {
             "$comment": "The end-to-end reconnect path. Writes replay sequentially under their own idempotency key so the server de-duplicates one it already committed. A CODED error is a server verdict — replaying it would re-trigger the same failure (a poison-message loop), so the write is dropped terminally. A CODELESS (transport) failure stops the flush and re-queues that write and every unreplayed one, in order, for the next reconnect. The successful write's optimistic overlay is confirmed against the ECHOED commitCursor.",
             "queued": ["m1", "m2", "m3"],

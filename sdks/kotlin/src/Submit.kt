@@ -280,6 +280,43 @@ private fun Client.settleTerminal(queue: OfflineQueue, entries: List<QueuedMutat
 }
 
 private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport) {
+    // A lone write rides the single-call path, which is the proven one. Two or
+    // more coalesce into batch round trips — the flaky-reconnect win, where N
+    // queued writes cost a handful of hops instead of N.
+    if (sendable.size < 2) {
+        replaySequential(queue, sendable, report)
+
+        return
+    }
+
+    val toRequeue = mutableListOf<QueuedMutation>()
+
+    for (start in sendable.indices step MAX_BATCH_ENTRIES) {
+        val end = minOf(start + MAX_BATCH_ENTRIES, sendable.size)
+        // Chunks replay sequentially, which is what preserves FIFO across a flush
+        // longer than one batch.
+        val (requeue, stop) = replayBatched(queue, sendable.subList(start, end), report)
+
+        toRequeue.addAll(requeue)
+
+        if (stop) {
+            // A whole-chunk transport failure. Leave every write not yet sent
+            // queued, in order, rather than sending on into a connection that
+            // just failed.
+            toRequeue.addAll(sendable.subList(end, sendable.size))
+
+            break
+        }
+    }
+
+    if (toRequeue.isEmpty()) return
+
+    synchronized(lock) { queue.requeue(toRequeue) }
+    toRequeue.mapTo(report.requeued) { it.id }
+}
+
+/** Replays writes one at a time. FIFO is preserved by the loop itself. */
+private fun Client.replaySequential(queue: OfflineQueue, sendable: List<QueuedMutation>, report: FlushReport) {
     for ((index, item) in sendable.withIndex()) {
         val reply = try {
             rpcFull(item.functionPath, item.args, item.shardKey, item.id, item.clientId)
@@ -310,6 +347,130 @@ private fun Client.replay(queue: OfflineQueue, sendable: List<QueuedMutation>, r
         report.committed.add(item.id)
     }
 }
+
+/**
+ * Replays one chunk over `POST /_lunora/rpc-batch`.
+ *
+ * The worker forwards the entries to their shard, which dispatches each through
+ * its ordinary single-call path — so per-entry `mutationId` idempotency and
+ * in-order application are inherited from the proven route rather than
+ * re-implemented here.
+ *
+ * Returns the writes to put back and whether the caller should STOP because the
+ * whole chunk failed at the transport level. Re-queuing is the caller's, once and
+ * in order, so a write cannot land twice in the queue.
+ */
+private fun Client.replayBatched(queue: OfflineQueue, items: List<QueuedMutation>, report: FlushReport): Pair<List<QueuedMutation>, Boolean> {
+    val calls = items.mapIndexed { index, item ->
+        buildMap<String, Any?> {
+            put("args", Wire.encode(item.args))
+            put("functionPath", item.functionPath)
+            // The slot this entry's result comes back in.
+            put("id", index)
+            // The same stable key the single-call replay sends, beside the id that
+            // namespaces its de-duplication row for an anonymous caller. Per
+            // ENTRY, not on the outer request: a batch is one hop, but its entries
+            // are dispatched as independent single calls.
+            put("mutationId", item.id)
+            put("clientId", item.clientId ?: clientId)
+
+            item.shardKey?.takeIf { it.isNotEmpty() }?.let { put("shardKey", it) }
+        }
+    }
+
+    val body = try {
+        rpcBatch(calls)
+    } catch (error: Exception) {
+        // Transport failure — nothing committed, so retry everything.
+        return items to true
+    }
+
+    (body["results"] as? List<*>)?.let { return settleBatchSlots(queue, items, it, report) to false }
+
+    // No per-slot results. A coded envelope is a verdict on the WHOLE batch — a
+    // bad request, an authorization denial — and therefore terminal for every
+    // entry; anything else is transport, and transient.
+    val envelope = body["error"] as? Map<*, *> ?: return items to true
+    val error = batchSlotError(envelope, "batch rejected")
+
+    for (item in items) {
+        synchronized(lock) { queue.unpersist(item.id) }
+        report.rejected.add(item.id)
+        settleWrite(item, MutationStatus.REJECTED, null, error)
+    }
+
+    return emptyList<QueuedMutation>() to false
+}
+
+/**
+ * Demuxes a batch reply back onto the writes it replayed, in input order,
+ * classifying each slot exactly as [replaySequential] classifies a whole
+ * response. Returns the writes the caller must re-queue.
+ */
+private fun Client.settleBatchSlots(queue: OfflineQueue, items: List<QueuedMutation>, results: List<*>, report: FlushReport): List<QueuedMutation> {
+    val bySlot = mutableMapOf<Int, Map<*, *>>()
+
+    for (raw in results) {
+        val entry = raw as? Map<*, *> ?: continue
+        val id = (entry["id"] as? Number)?.toInt()
+        val slot = entry["body"] as? Map<*, *>
+
+        if (id != null && slot != null) bySlot[id] = slot
+    }
+
+    val requeue = mutableListOf<QueuedMutation>()
+
+    for ((index, item) in items.withIndex()) {
+        // The server never returned this slot. It may or may not have committed,
+        // so retry it — the `mutationId` makes that safe.
+        val slot = bySlot[index] ?: run {
+            requeue.add(item)
+
+            null
+        } ?: continue
+
+        val envelope = slot["error"] as? Map<*, *>
+
+        if (envelope != null) {
+            val code = envelope["code"] as? String ?: "INTERNAL"
+
+            // A transient shard failure is the batch's counterpart of an uncoded
+            // throw on the single-call path: the server never reached a verdict,
+            // so the write goes back on the queue rather than being reported as
+            // failed.
+            if (code in TRANSIENT_ERROR_CODES) {
+                requeue.add(item)
+
+                continue
+            }
+
+            synchronized(lock) { queue.unpersist(item.id) }
+            report.rejected.add(item.id)
+            settleWrite(item, MutationStatus.REJECTED, null, batchSlotError(envelope, "request failed"))
+
+            continue
+        }
+
+        synchronized(lock) { queue.unpersist(item.id) }
+        // The overlay is confirmed BEFORE the caller is told, so the gapless drop
+        // is already in place when the confirming frame lands.
+        item.onCommit?.invoke((slot["commitCursor"] as? Number)?.toLong())
+        settleWrite(item, MutationStatus.COMMITTED, Wire.decode(slot["result"]), null)
+        report.committed.add(item.id)
+    }
+
+    return requeue
+}
+
+/**
+ * Rebuilds an [ApiException] from a slot's or a batch's error envelope,
+ * defaulting the way `parseRpcResponse` does.
+ */
+private fun batchSlotError(envelope: Map<*, *>, fallback: String): ApiException = ApiException(
+    envelope["code"] as? String ?: "INTERNAL",
+    envelope["message"] as? String ?: fallback,
+    envelope["data"]?.let { Wire.decode(it) },
+)
 
 /**
  * Every live subscription as a snapshot slot, read under the monitor.

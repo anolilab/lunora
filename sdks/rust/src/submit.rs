@@ -7,16 +7,18 @@
 //! calls it and a typed wrapper must keep returning a typed result.
 //! [`Client::submit`] is the write path that survives a dropped socket.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::client::{ApiError, Client, ClientError, Subscription};
 use crate::key::stable_wire_key;
 use crate::offline::{
     identity_allows_replay, random_id, same_shard, Discarded, Identity, Precondition, QueuedMutation, SettledHandler, CODE_CLIENT_CLOSED,
-    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, TRANSIENT_ERROR_CODES,
+    CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, TRANSIENT_ERROR_CODES,
 };
 use crate::optimistic::{apply_layer, confirm_layer, constant, rollback_layer, shared, SharedTransform};
 use crate::wire::{decode_wire, encode_wire, WireValue};
+use serde_json::{json, Value};
 
 /// What [`Client::submit`] did with a write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -331,6 +333,47 @@ impl Client {
     }
 
     fn replay(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
+        // A lone write rides the single-call path, which is the proven one. Two
+        // or more coalesce into batch round trips — the flaky-reconnect win,
+        // where N queued writes cost a handful of hops instead of N.
+        if sendable.len() < 2 {
+            self.replay_sequential(sendable, report);
+
+            return;
+        }
+
+        // Chunked by hand rather than with `chunks()`, which needs `Clone`: a
+        // queued write owns its settle closures and is deliberately move-only.
+        let mut remaining = sendable;
+        let mut to_requeue: Vec<QueuedMutation> = Vec::new();
+
+        while !remaining.is_empty() {
+            let rest = remaining.split_off(remaining.len().min(MAX_BATCH_ENTRIES));
+            let chunk = std::mem::replace(&mut remaining, rest);
+            // Chunks replay sequentially, which is what preserves FIFO across a
+            // flush longer than one batch.
+            let (requeue, stop) = self.replay_batched(chunk, report);
+
+            to_requeue.extend(requeue);
+
+            if stop {
+                // A whole-chunk transport failure. Leave every write not yet
+                // sent queued, in order, rather than sending on into a
+                // connection that just failed.
+                to_requeue.extend(std::mem::take(&mut remaining));
+
+                break;
+            }
+        }
+
+        if !to_requeue.is_empty() {
+            report.requeued.extend(to_requeue.iter().map(|item| item.id.clone()));
+            self.offline_queue.requeue(to_requeue);
+        }
+    }
+
+    /// Replays writes one at a time. FIFO is preserved by the loop itself.
+    fn replay_sequential(&mut self, sendable: Vec<QueuedMutation>, report: &mut FlushReport) {
         let mut pending = sendable.into_iter();
 
         while let Some(entry) = pending.next() {
@@ -378,6 +421,137 @@ impl Client {
                 }
             }
         }
+    }
+
+    /// Replays one chunk over `POST /_lunora/rpc-batch`.
+    ///
+    /// The worker forwards the entries to their shard, which dispatches each
+    /// through its ordinary single-call path — so per-entry `mutationId`
+    /// idempotency and in-order application are inherited from the proven route
+    /// rather than re-implemented here.
+    ///
+    /// Returns the writes to put back and whether the caller should STOP because
+    /// the whole chunk failed at the transport level. Re-queuing is the
+    /// caller's, once and in order, so a write cannot land twice in the queue.
+    fn replay_batched(&mut self, items: Vec<QueuedMutation>, report: &mut FlushReport) -> (Vec<QueuedMutation>, bool) {
+        let mut calls = Vec::with_capacity(items.len());
+
+        for (index, item) in items.iter().enumerate() {
+            let Ok(encoded) = encode_wire(&item.args) else {
+                // Unreachable: `encodable_or_settle_terminal` already partitioned
+                // these out. Re-queue rather than drop, so a future codec change
+                // cannot silently lose a durable write here.
+                return (items, true);
+            };
+
+            let mut call = json!({
+                "args": encoded,
+                "functionPath": item.function_path,
+                // The slot this entry's result comes back in.
+                "id": index,
+                // The same stable key the single-call replay sends, beside the id
+                // that namespaces its de-duplication row for an anonymous caller.
+                // Per ENTRY, not on the outer request: a batch is one hop, but its
+                // entries are dispatched as independent single calls.
+                "mutationId": item.id,
+                "clientId": item.client_id.clone().unwrap_or_else(|| self.client_id.clone()),
+            });
+
+            if let Some(shard_key) = item.shard_key.as_deref().filter(|key| !key.is_empty()) {
+                call["shardKey"] = Value::String(shard_key.to_string());
+            }
+
+            calls.push(call);
+        }
+
+        let Ok(body) = self.rpc_batch(calls) else {
+            // Transport failure — nothing committed, so retry everything.
+            return (items, true);
+        };
+
+        if let Some(results) = body.get("results").and_then(Value::as_array) {
+            let results = results.clone();
+
+            return (self.settle_batch_slots(items, &results, report), false);
+        }
+
+        // No per-slot results. A coded envelope is a verdict on the WHOLE batch —
+        // a bad request, an authorization denial — and therefore terminal for
+        // every entry; anything else is transport, and transient.
+        let Some(envelope) = body.get("error").filter(|value| value.is_object()) else {
+            return (items, true);
+        };
+
+        let error = batch_slot_error(envelope, "batch rejected");
+
+        for entry in items {
+            self.offline_queue.unpersist(&entry.id);
+            self.rollback_layers(&entry.layers);
+            report.rejected.push(entry.id.clone());
+            self.emit_settled(&entry, MutationStatus::Rejected, WireValue::Null, Some(error.clone()));
+        }
+
+        (Vec::new(), false)
+    }
+
+    /// Demuxes a batch reply back onto the writes it replayed, in input order,
+    /// classifying each slot exactly as [`Client::replay_sequential`] classifies
+    /// a whole response. Returns the writes the caller must re-queue.
+    fn settle_batch_slots(&mut self, items: Vec<QueuedMutation>, results: &[Value], report: &mut FlushReport) -> Vec<QueuedMutation> {
+        let mut by_slot: HashMap<u64, &Value> = HashMap::new();
+
+        for entry in results {
+            if let (Some(id), Some(slot)) = (entry.get("id").and_then(Value::as_u64), entry.get("body").filter(|value| value.is_object())) {
+                by_slot.insert(id, slot);
+            }
+        }
+
+        let mut requeue = Vec::new();
+
+        for (index, entry) in items.into_iter().enumerate() {
+            let Some(slot) = by_slot.get(&(index as u64)) else {
+                // The server never returned this slot. It may or may not have
+                // committed, so retry it — the `mutationId` makes that safe.
+                requeue.push(entry);
+
+                continue;
+            };
+
+            if let Some(envelope) = slot.get("error").filter(|value| value.is_object()) {
+                let code = envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL");
+
+                // A transient shard failure is the batch's counterpart of an
+                // uncoded error on the single-call path: the server never reached
+                // a verdict, so the write goes back on the queue rather than being
+                // reported as failed.
+                if TRANSIENT_ERROR_CODES.contains(&code) {
+                    requeue.push(entry);
+
+                    continue;
+                }
+
+                let error = batch_slot_error(envelope, "request failed");
+
+                self.offline_queue.unpersist(&entry.id);
+                self.rollback_layers(&entry.layers);
+                report.rejected.push(entry.id.clone());
+                self.emit_settled(&entry, MutationStatus::Rejected, WireValue::Null, Some(error));
+
+                continue;
+            }
+
+            let commit_cursor = slot.get("commitCursor").and_then(Value::as_i64);
+            let value = slot.get("result").map_or(WireValue::Null, |raw| decode_wire(raw).unwrap_or(WireValue::Null));
+
+            self.offline_queue.unpersist(&entry.id);
+            // The overlay is confirmed BEFORE the caller is told, so the gapless
+            // drop is already in place when the confirming frame lands.
+            self.confirm_layers(&entry.layers, commit_cursor);
+            report.committed.push(entry.id.clone());
+            self.emit_settled(&entry, MutationStatus::Committed, value, None);
+        }
+
+        requeue
     }
 
     /// Registers both optimistic paths' layers, returning `(subscription id,
@@ -531,6 +705,16 @@ impl Client {
         for listener in &self.settled_listeners {
             listener(&event);
         }
+    }
+}
+
+/// Rebuilds an [`ApiError`] from a slot's or a batch's error envelope,
+/// defaulting the way `parse_rpc_response` does.
+fn batch_slot_error(envelope: &Value, fallback: &str) -> ApiError {
+    ApiError {
+        code: envelope.get("code").and_then(Value::as_str).unwrap_or("INTERNAL").to_string(),
+        data: envelope.get("data").filter(|value| !value.is_null()).and_then(|value| decode_wire(value).ok()),
+        message: envelope.get("message").and_then(Value::as_str).unwrap_or(fallback).to_string(),
     }
 }
 

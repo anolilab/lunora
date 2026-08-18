@@ -59,6 +59,21 @@ module QueueFixtures
 
   def ids(items) = items.map(&:id)
 
+  # Answer a request in whichever shape it arrived in: a single call gets a whole
+  # response, a batch gets one success slot per entry. A flush of two or more
+  # writes coalesces into +/_lunora/rpc-batch+, so a poster that only speaks the
+  # single-call shape makes every batched write look unanswered.
+  def echo_batch_slots(body, result: nil, commit_cursor: nil)
+    calls = JSON.parse(body)["calls"]
+    return [200, { "commitCursor" => commit_cursor, "result" => result }] unless calls.is_a?(Array)
+
+    slots = calls.each_index.map do |index|
+      { "id" => index, "body" => { "commitCursor" => commit_cursor, "result" => result } }
+    end
+
+    [200, { "results" => slots }]
+  end
+
   # The (id, code) pairs a queue reported letting go of.
   def discarded_pairs(discarded) = discarded.map { |item| [item.entry.id, item.code] }
 
@@ -198,7 +213,7 @@ class TestQueuePrecondition < Minitest::Test
   def test_a_precondition_may_re_enter_the_client
     ConformanceManifest.covers("offline_queue_precondition_drops_stale_write")
     case_data = queue_case("precondition")
-    client = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, _body) { [200, { "result" => nil }] })
+    client = Lunora::Client.new("https://app.example", http_post: ->(_url, _headers, body) { echo_batch_slots(body) })
 
     case_data["entries"].each do |spec|
       verdict = spec["precondition"]
@@ -358,23 +373,29 @@ class TestFlushIntegration < Minitest::Test
   def test_a_flush_replays_in_order_and_confirms_the_optimistic_overlay
     ConformanceManifest.covers("offline_flush_replays_and_confirms_optimistic")
     case_data = queue_case("flushReplay")
-    by_id = case_data["responses"].to_h { |spec| [spec["id"], spec] }
-    seen_headers = []
+    seen_ids = []
     confirmed = []
 
+    # The three fixture outcomes, as this transport now expresses them. Three
+    # queued writes coalesce into ONE batch hop, so `ok` and `coded-error` are
+    # slots and `transport-error` is an ABSENT slot: a per-entry transport
+    # failure is the server not answering for that entry, and an unanswered
+    # write is retried under its original idempotency key exactly as a raw error
+    # re-queues on the single-call path.
     client = Lunora::Client.new(
       "https://app.example",
       client_id: "client-1",
-      http_post: lambda { |_url, headers, _body|
-        mutation_id = headers["x-lunora-mutation-id"]
-        seen_headers << mutation_id
-        spec = by_id[mutation_id]
+      http_post: lambda { |_url, _headers, body|
+        seen_ids.concat(JSON.parse(body)["calls"].map { |call| call["mutationId"] })
 
-        case spec["outcome"]
-        when "transport-error" then raise IOError, "connection reset"
-        when "coded-error" then [200, { "error" => { "code" => spec["code"], "message" => "gone" } }]
-        else [200, { "commitCursor" => spec["commitCursor"], "result" => { "ok" => true } }]
+        slots = case_data["responses"].each_with_index.filter_map do |spec, index|
+          case spec["outcome"]
+          when "coded-error" then { "id" => index, "body" => { "error" => { "code" => spec["code"], "message" => "gone" } } }
+          when "ok" then { "id" => index, "body" => { "commitCursor" => spec["commitCursor"], "result" => { "ok" => true } } }
+          end
         end
+
+        [200, { "results" => slots }]
       }
     )
 
@@ -394,7 +415,7 @@ class TestFlushIntegration < Minitest::Test
 
     # Replayed in FIFO order, each under its own idempotency key so a write the
     # server already committed is de-duplicated rather than re-applied.
-    assert_equal case_data["mutationIdHeaders"], seen_headers
+    assert_equal case_data["mutationIdHeaders"], seen_ids
     assert_equal case_data["committed"], report.committed
     # A coded verdict is terminal: replaying it would only re-trigger the same
     # failure. A transport failure is not, so that write stays queued.
@@ -536,6 +557,66 @@ class TestFlushIntegration < Minitest::Test
 
     refute_includes persisted, nil
     refute_equal persisted[0], persisted[1]
+  end
+
+  # Two or more queued writes coalesce into ONE +/_lunora/rpc-batch+ round trip,
+  # and each slot is classified exactly as a whole single-call response is.
+  def test_two_or_more_writes_coalesce_into_one_batch_round_trip
+    ConformanceManifest.covers("offline_flush_batches_multiple_writes")
+    case_data = queue_case("batchReplay")
+    urls = []
+    calls = []
+    confirmed = []
+
+    client = Lunora::Client.new(
+      "https://app.example",
+      client_id: "c-1",
+      http_post: lambda { |url, _headers, body|
+        urls << url
+        calls.concat(JSON.parse(body)["calls"])
+
+        slots = case_data["slots"].map do |slot|
+          if slot["outcome"] == "ok"
+            { "id" => slot["id"], "body" => { "commitCursor" => slot["commitCursor"], "result" => nil } }
+          else
+            { "id" => slot["id"], "body" => { "error" => { "code" => slot["code"], "message" => "slot failed" } } }
+          end
+        end
+
+        [200, { "results" => slots }]
+      }
+    )
+
+    store = MemoryStore.new
+    client.offline_queue = Lunora::OfflineQueue.new(persistence: store)
+
+    case_data["queued"].each do |id|
+      client.offline_queue.enqueue(
+        Lunora::QueuedMutation.new(
+          args: {}, confirms: [->(cursor, _deferred) { confirmed << [id, cursor] }],
+          function_path: "messages:send", id: id
+        )
+      )
+    end
+
+    report = client.flush_offline_queue
+
+    assert_equal case_data["requests"], urls.length
+    assert urls.first.end_with?(case_data["path"])
+    # The idempotency key and the client id ride in the ENTRY, not in a request
+    # header: a batch is one hop carrying independent calls, and a single outer
+    # header would de-duplicate the whole chunk against one id.
+    sent = calls.map { |call| call.slice("clientId", "functionPath", "id", "mutationId") }
+
+    assert_equal case_data["calls"], sent
+    assert_equal case_data["committed"], report.committed
+    # A transient shard code in a slot is not a verdict, so that write goes back
+    # on the queue instead of being reported as failed — and so does the slot the
+    # server never returned at all.
+    assert_equal case_data["rejected"], report.rejected
+    assert_equal case_data["queuedAfterFlush"], ids(client.offline_queue.items)
+    assert_equal case_data["persistRemoveCalls"], store.removed
+    assert_equal [[case_data["committed"].first, case_data["confirmedCommitCursor"]]], confirmed
   end
 
   def test_an_unencodable_write_settles_terminally_instead_of_looping_forever

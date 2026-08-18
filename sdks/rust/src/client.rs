@@ -14,6 +14,10 @@ use crate::wire::{decode_wire, encode_wire, WireError, WireValue};
 
 /// The single endpoint every query/mutation/action posts to.
 pub const RPC_PATH: &str = "/_lunora/rpc";
+
+/// Where a flush of two or more queued writes goes: one hop carrying independent
+/// calls.
+pub const RPC_BATCH_PATH: &str = "/_lunora/rpc-batch";
 /// The live-subscription endpoint.
 pub const WS_PATH: &str = "/_lunora/ws";
 
@@ -511,6 +515,31 @@ impl Client {
         let result = parse_rpc_response(&parsed, status)?;
 
         Ok((result, parsed.get("commitCursor").and_then(Value::as_i64)))
+    }
+
+    /// POST one `/_lunora/rpc-batch` chunk, returning the parsed body.
+    ///
+    /// No `x-lunora-mutation-id` on the request: a batch is ONE transport hop
+    /// carrying independent calls, so each entry carries its own idempotency key
+    /// and client id in the body. A single outer header would name one write and
+    /// de-duplicate the whole chunk against it.
+    pub(crate) fn rpc_batch(&self, calls: Vec<Value>) -> Result<Value, ClientError> {
+        let post = self.post.as_ref().ok_or_else(|| ClientError::Transport("no HTTP poster configured".into()))?;
+
+        let mut headers = HashMap::new();
+
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        if let Some(token) = &self.auth_token {
+            headers.insert("authorization".to_string(), format!("Bearer {token}"));
+        }
+
+        let payload = serde_json::to_vec(&json!({ "calls": calls })).map_err(|error| ClientError::Transport(error.to_string()))?;
+        let (_status, raw) = post(&self.join(RPC_BATCH_PATH), &headers, &payload).map_err(ClientError::Transport)?;
+
+        // A non-JSON body, an edge 5xx say. Transient: the caller does not lose
+        // the writes.
+        serde_json::from_slice(&raw).map_err(|error| ClientError::Transport(error.to_string()))
     }
 
     pub fn subscribe(&mut self, function_path: &str, args: WireValue, on_data: DataHandler, on_error: ErrorHandler) -> String {

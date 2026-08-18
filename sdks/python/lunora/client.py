@@ -45,6 +45,7 @@ from .submit import (
 from .wire import decode_wire, encode_wire, stable_wire_key
 
 RPC_PATH = "/_lunora/rpc"
+RPC_BATCH_PATH = "/_lunora/rpc-batch"
 WS_PATH = "/_lunora/ws"
 
 # `urllib.request.urlopen`'s own default is no timeout at all — the socket
@@ -402,6 +403,22 @@ class LunoraClient:
         body = json.dumps(build_rpc_body(function_path, args, shard_key)).encode("utf-8")
         status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body))
         return parse_rpc_response(parsed, status), parse_commit_cursor(parsed)
+
+    async def _rpc_batch(self, calls: list) -> dict:
+        """POST one ``/_lunora/rpc-batch`` chunk, returning the parsed body.
+
+        No ``x-lunora-mutation-id`` on the request: a batch is ONE transport hop
+        carrying independent calls, so each entry carries its own idempotency key
+        and client id in the body. A single outer header would name one write and
+        de-duplicate the whole chunk against it.
+        """
+
+        headers = {"content-type": "application/json"}
+        if self.auth_token:
+            headers["authorization"] = f"Bearer {self.auth_token}"
+        body = json.dumps({"calls": calls}).encode("utf-8")
+        _status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_BATCH_PATH), headers, body))
+        return parsed if isinstance(parsed, dict) else {}
 
     # --- Offline-capable writes ---------------------------------------------
     #

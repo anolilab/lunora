@@ -571,15 +571,25 @@ pub fn offline_queue_precondition_drops_stale_write() {
 fn client_evaluates_the_preconditions(case: &Value) {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&sent);
+    // Two surviving writes coalesce into ONE batch hop, so the idempotency keys
+    // ride in the entries rather than in a request header, and the reply carries
+    // a success slot per entry.
     let mut client = Client::new(
         "https://app.example",
-        Some(Box::new(move |_url, headers, _body| {
-            recorder
-                .lock()
-                .expect("sent")
-                .push(headers.get("x-lunora-mutation-id").cloned().unwrap_or_default());
+        Some(Box::new(move |_url, _headers, body| {
+            let request: Value = serde_json::from_slice(body).expect("batch body");
+            let calls = request["calls"].as_array().expect("calls");
 
-            Ok((200, br#"{"result":{"ok":true}}"#.to_vec()))
+            for call in calls {
+                recorder.lock().expect("sent").push(call["mutationId"].as_str().unwrap_or_default().to_string());
+            }
+
+            let slots = (0..calls.len())
+                .map(|index| format!(r#"{{"id":{index},"body":{{"result":{{"ok":true}}}}}}"#))
+                .collect::<Vec<_>>()
+                .join(",");
+
+            Ok((200, format!(r#"{{"results":[{slots}]}}"#).into_bytes()))
         })),
     );
 
@@ -759,29 +769,32 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
     let store = MemoryStore::default();
     let mut client = Client::new(
         "https://app.example",
-        Some(Box::new(move |_url, headers, _body| {
-            let mutation_id = headers.get("x-lunora-mutation-id").cloned().unwrap_or_default();
+        // The three fixture outcomes, as this transport now expresses them. Three
+        // queued writes coalesce into ONE batch hop, so `ok` and `coded-error`
+        // are slots and `transport-error` is an ABSENT slot: a per-entry
+        // transport failure is the server not answering for that entry, and an
+        // unanswered write is retried under its original idempotency key exactly
+        // as an uncoded error re-queues on the single-call path.
+        Some(Box::new(move |_url, _headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
 
-            recorder.lock().expect("seen").push(mutation_id.clone());
+            for call in request["calls"].as_array().expect("calls") {
+                recorder.lock().expect("seen").push(call["mutationId"].as_str().unwrap_or_default().to_string());
+            }
 
-            let spec = responses
+            let slots: Vec<Value> = responses
                 .as_array()
                 .expect("responses")
                 .iter()
-                .find(|entry| entry["id"].as_str() == Some(mutation_id.as_str()))
-                .expect("a response for every replayed write");
+                .enumerate()
+                .filter_map(|(index, spec)| match spec["outcome"].as_str() {
+                    Some("coded-error") => Some(json!({ "id": index, "body": { "error": { "code": spec["code"], "message": "gone" } } })),
+                    Some("ok") => Some(json!({ "id": index, "body": { "commitCursor": spec["commitCursor"], "result": { "ok": true } } })),
+                    _ => None,
+                })
+                .collect();
 
-            match spec["outcome"].as_str() {
-                Some("transport-error") => Err("connection reset".to_string()),
-                Some("coded-error") => Ok((
-                    200,
-                    serde_json::to_vec(&json!({ "error": { "code": spec["code"], "message": "gone" } })).expect("body"),
-                )),
-                _ => Ok((
-                    200,
-                    serde_json::to_vec(&json!({ "commitCursor": spec["commitCursor"], "result": { "ok": true } })).expect("body"),
-                )),
-            }
+            Ok((200, serde_json::to_vec(&json!({ "results": slots })).expect("body")))
         })),
     );
 
@@ -810,6 +823,80 @@ pub fn offline_flush_replays_and_confirms_optimistic() {
     submit_queues_while_offline(case["confirmedCommitCursor"].as_i64().expect("cursor"));
     submit_before_first_connect_fails_fast();
     overflow_during_submit_settles();
+}
+
+/// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
+/// and each slot is classified exactly as a whole single-call response is.
+pub fn offline_flush_batches_multiple_writes() {
+    let case = queue_case("batchReplay");
+    let slots = case["slots"].clone();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
+    let store = MemoryStore::default();
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |url, _headers, body| {
+            let request: Value = serde_json::from_slice(body).map_err(|error| error.to_string())?;
+
+            recorder.lock().expect("seen").push((url.to_string(), request["calls"].clone()));
+
+            let answers: Vec<Value> = slots
+                .as_array()
+                .expect("slots")
+                .iter()
+                .map(|slot| {
+                    if slot["outcome"].as_str() == Some("ok") {
+                        json!({ "id": slot["id"], "body": { "commitCursor": slot["commitCursor"], "result": Value::Null } })
+                    } else {
+                        json!({ "id": slot["id"], "body": { "error": { "code": slot["code"], "message": "slot failed" } } })
+                    }
+                })
+                .collect();
+
+            Ok((200, serde_json::to_vec(&json!({ "results": answers })).expect("body")))
+        })),
+    );
+
+    client.client_id = "c-1".to_string();
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    for id in ids(&case["queued"]) {
+        client.offline_queue.enqueue(entry(&id, None), Ok(json!({})));
+    }
+
+    let report = client.flush_offline_queue(None);
+    let requests = seen.lock().expect("seen");
+
+    assert_eq!(
+        requests.len() as u64,
+        case["requests"].as_u64().expect("requests"),
+        "the whole flush is one batch hop"
+    );
+    assert!(requests[0].0.ends_with(case["path"].as_str().expect("path")), "sent to the batch endpoint");
+
+    // The idempotency key and the client id ride in the ENTRY, not in a request
+    // header: a batch is one hop carrying independent calls, and a single outer
+    // header would de-duplicate the whole chunk against one id.
+    let sent: Vec<Value> = requests[0]
+        .1
+        .as_array()
+        .expect("calls")
+        .iter()
+        .map(|call| json!({ "clientId": call["clientId"], "functionPath": call["functionPath"], "id": call["id"], "mutationId": call["mutationId"] }))
+        .collect();
+
+    assert_eq!(Value::Array(sent), case["calls"], "every entry carries its own slot id, key and client id");
+    assert_eq!(report.committed, ids(&case["committed"]), "the successful slot commits");
+    // A transient shard code in a slot is not a verdict, so that write goes back
+    // on the queue instead of being reported as failed — and so does the slot the
+    // server never returned at all.
+    assert_eq!(report.rejected, ids(&case["rejected"]), "only the coded verdict is terminal");
+    assert_eq!(
+        queued_ids(&client.offline_queue),
+        ids(&case["queuedAfterFlush"]),
+        "the rest are re-queued, in order"
+    );
+    assert_eq!(store.removed(), ids(&case["persistRemoveCalls"]), "only the settled writes are un-persisted");
 }
 
 /// Args the wire codec cannot encode: nested past its depth cap.

@@ -43,6 +43,7 @@ from .optimistic import (
     rollback_all,
 )
 from .submit import (
+    MAX_BATCH_ENTRIES,
     TRANSIENT_ERROR_CODES,
     FlushReport,
     MutationOutcome,
@@ -68,6 +69,7 @@ from .wire import (
 __all__ = [
     "ABSENT_IDENTITY",
     "CLIENT_CLOSED",
+    "MAX_BATCH_ENTRIES",
     "OFFLINE_IDENTITY_CHANGED",
     "OFFLINE_PRECONDITION_FAILED",
     "OFFLINE_QUEUE_OVERFLOW",
