@@ -206,7 +206,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasGlobal
             ? [
                   `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";`,
+                  `import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
               ]
             : []),
         ...(hasHyperdriveGlobal
@@ -849,7 +849,22 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
 const buildGlobalHelpers = (hasGlobal: boolean): string =>
     hasGlobal
         ? `
-/** Adapt the raw D1 binding to \`@lunora/d1\`'s \`D1Exec\` (reads via \`all\`, writes via \`run\`, and — when the binding exposes it — several writes in one round trip via \`batch\`). Opens a D1 Sessions API session pinned to \`bookmark\` (the caller's own last-known write, when supplied) so reads observe it — read-your-writes across replicas. \`onBookmark\`, when supplied, is invoked with the bookmark produced by each write so the caller (the generated DO) can record it via \`setOutboundBookmark\` and echo \`x-d1-bookmark\` on the response. */
+/**
+ * Adapt the raw D1 binding to \`@lunora/d1\`'s \`D1Exec\` (reads via \`all\`, writes via \`run\`, and — when the binding exposes it — several writes in one round trip via \`batch\`).
+ *
+ * Opens a D1 Sessions API session pinned to \`bookmark\` (the caller's own
+ * last-known write, when supplied) so reads observe it — read-your-writes
+ * across replicas. \`onBookmark\`, when supplied, is invoked with the bookmark
+ * produced by each write so the caller (the generated DO) can record it via
+ * \`setOutboundBookmark\` and echo \`x-d1-bookmark\` on the response.
+ *
+ * Wrapped in \`retryingExec\` so D1's documented baseline of transient failures
+ * (storage-object resets, isolate memory evictions, dropped connections) does
+ * not surface on every \`.global()\` read. Only statements that are provably
+ * read-only retry; writes — including the \`UPDATE … RETURNING\` the store's
+ * optimistic-concurrency check issues through \`all\` — pass straight through,
+ * because a transient error never says whether the write applied.
+ */
 const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes \`withSession\`; guarded the same way as \`batch\`
     // below so a hand-rolled test double that omits it keeps working via
@@ -860,7 +875,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
     const target = session ?? database;
     const batchFn = target.batch;
 
-    return {
+    return retryingExec({
         all: async (sql, parameters) => {
             const result = await target
                 .prepare(sql)
@@ -897,7 +912,7 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
                 .run();
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
-    };
+    });
 };
 
 /** Introspect \`.global()\` (D1-backed) tables for the studio's global data browser. */

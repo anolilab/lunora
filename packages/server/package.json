@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.75",
+    "version": "1.0.0-alpha.77",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -82,7 +82,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.22",
-        "@lunora/scheduler": "1.0.0-alpha.32",
+        "@lunora/scheduler": "1.0.0-alpha.33",
         "@lunora/values": "1.0.0-alpha.27",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"

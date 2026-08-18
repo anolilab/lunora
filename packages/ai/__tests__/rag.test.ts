@@ -38,16 +38,21 @@ vi.mock(import("ai"), async (importOriginal) => {
         embed: vi.fn<
             (options: { model: unknown; value: string }) => Promise<{
                 embedding: number[];
-                providerMetadata: { gateway: { cost: number } };
+                providerMetadata?: { gateway: { cost: number } };
                 usage: { tokens: number };
             }>
         >(async ({ value }) => {
             // `usage` + `providerMetadata` mirror the real AI SDK embed result so
             // the post-hoc span path (token usage / gateway cost) is exercised;
             // callers that only read `embedding` are unaffected.
+            //
+            // Text containing "nocost" omits `providerMetadata`, standing in for
+            // a direct-to-provider call with no AI Gateway in front.
+            const reportsCost = !value.toLowerCase().includes("nocost");
+
             return {
                 embedding: bagVector(value),
-                providerMetadata: { gateway: { cost: 0.0002 } },
+                ...(reportsCost ? { providerMetadata: { gateway: { cost: 0.0002 } } } : {}),
                 usage: { tokens: value.split(/\s+/u).filter(Boolean).length },
             };
         }) as unknown as typeof actual.embed,
@@ -89,7 +94,8 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
             queryCalls.push(input);
 
             const topK = input.topK ?? 5;
-            const ceiling = input.returnMetadata === "all" ? 20 : 100;
+            // Mirrors Vectorize V2: 50 with full metadata, 100 otherwise.
+            const ceiling = input.returnMetadata === "all" ? 50 : 100;
 
             if (!Number.isInteger(topK) || topK < 1 || topK > ceiling) {
                 throw new RangeError(`topK must be an integer between 1 and ${String(ceiling)}`);
@@ -426,7 +432,7 @@ describe(defineRag, () => {
         expect(new Set(result.sources.map((source) => source.id)).size).toBe(result.sources.length);
     });
 
-    it("caps topK at 20 in metadata mode instead of tripping the Vectorize ceiling", async () => {
+    it("caps topK at 50 in metadata mode instead of tripping the Vectorize ceiling", async () => {
         expect.assertions(3);
 
         const { queryCalls, vectors } = memoryVectors();
@@ -435,9 +441,9 @@ describe(defineRag, () => {
 
         await docs(ctx).index({ id: "doc-1", text: "hello world" });
 
-        await expect(docs(ctx).retrieve("hello", { topK: 50 })).resolves.toBeDefined();
+        await expect(docs(ctx).retrieve("hello", { topK: 80 })).resolves.toBeDefined();
 
-        expect(queryCalls[0]?.topK).toBe(20);
+        expect(queryCalls[0]?.topK).toBe(50);
         expect(queryCalls[0]?.returnMetadata).toBe("all");
     });
 
@@ -555,6 +561,38 @@ describe(defineRag, () => {
 
         expect(second).toStrictEqual({ chunks: 2, ids: ["doc-1#0", "doc-1#1"], unchanged: true });
         expect(vi.mocked(embed)).toHaveBeenCalledTimes(embedCallsAfterFirst);
+    });
+
+    it("re-runs the whole index path under `reindex`, mirroring into a newly attached store", async () => {
+        expect.assertions(3);
+
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const mirrored: string[] = [];
+        const lexicalStore = {
+            index: (chunks: ReadonlyArray<{ id: string }>) => {
+                mirrored.push(...chunks.map((entry) => entry.id));
+
+                return Promise.resolve();
+            },
+            search: () => Promise.resolve([]),
+        };
+
+        // Index once WITHOUT the lexical store — the shape of an app that adds
+        // hybrid search to a corpus it already indexed.
+        await defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" })(ctx).index({ id: "doc-1", text: "alpha | beta" });
+
+        const upgraded = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", lexicalStore })(ctx);
+
+        // The content hash still matches, so the ordinary re-sync short-circuits
+        // before reaching the lexical mirror: the keyword leg would return
+        // nothing forever, with no error.
+        await expect(upgraded.index({ id: "doc-1", text: "alpha | beta" })).resolves.toMatchObject({ unchanged: true });
+        expect(mirrored).toStrictEqual([]);
+
+        await upgraded.index({ id: "doc-1", reindex: true, text: "alpha | beta" });
+
+        expect(mirrored).toStrictEqual(["doc-1#0", "doc-1#1"]);
     });
 
     it("deletes stale trailing chunks when a re-indexed source shrinks", async () => {
@@ -1378,47 +1416,69 @@ describe(bm25LexicalStore, () => {
         await expect(store.search("secret", { topK: 5 })).resolves.toStrictEqual([]);
     });
 
-    it("fails closed when handed a metadata filter it cannot evaluate", async () => {
+    it("evaluates a flat-equality metadata filter (the shape rlsFilter produces)", async () => {
         expect.assertions(2);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const store = bm25LexicalStore();
 
-        try {
-            const store = bm25LexicalStore();
+        await store.index(
+            [
+                { chunkIndex: 0, id: "a#0", metadata: { orgId: "org-1" }, sourceId: "a", text: "tenant one secret document" },
+                { chunkIndex: 0, id: "b#0", metadata: { orgId: "org-2" }, sourceId: "b", text: "tenant two secret document" },
+            ],
+            {},
+        );
 
-            await store.index([chunk("a#0", "public knowledge base entry")], {});
+        const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
 
-            // An operator-object filter is beyond a metadata-less store → no hits.
-            const matches = await store.search("public", { filter: { visibility: { $ne: "private" } }, topK: 5 });
-
-            expect(matches).toStrictEqual([]);
-            expect(warn).toHaveBeenCalledTimes(1);
-        } finally {
-            warn.mockRestore();
-        }
+        // The RLS-excluded tenant's chunk must never reach fusion.
+        expect(matches).toHaveLength(1);
+        expect(matches[0]?.text).toBe("tenant one secret document");
     });
 
-    it("fails closed on a FLAT-equality filter too (the shape rlsFilter produces) — RLS bypass regression", async () => {
+    it("evaluates operator-object clauses", async () => {
         expect.assertions(2);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const store = bm25LexicalStore();
 
-        try {
-            const store = bm25LexicalStore();
+        await store.index(
+            [
+                { chunkIndex: 0, id: "a#0", metadata: { visibility: "private" }, sourceId: "a", text: "private knowledge entry" },
+                { chunkIndex: 0, id: "b#0", metadata: { visibility: "public" }, sourceId: "b", text: "public knowledge entry" },
+            ],
+            {},
+        );
 
-            // "secret" is indexed WITHOUT a namespace/metadata split — a flat
-            // `{ orgId }` filter (exactly the shape `rlsFilter` produces) must not
-            // be exempted from the fail-closed guard, or the BM25 search runs over
-            // the whole namespace and leaks this chunk's text past the RLS filter.
-            await store.index([chunk("a#0", "tenant secret document")], {});
+        const matches = await store.search("knowledge", { filter: { visibility: { $ne: "private" } }, topK: 5 });
 
-            const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
+        expect(matches).toHaveLength(1);
+        expect(matches[0]?.text).toBe("public knowledge entry");
+    });
 
-            expect(matches).toStrictEqual([]);
-            expect(warn).toHaveBeenCalledTimes(1);
-        } finally {
-            warn.mockRestore();
-        }
+    it("excludes a chunk indexed without metadata when a filter is set", async () => {
+        expect.assertions(1);
+
+        const store = bm25LexicalStore();
+
+        // No metadata means nothing can satisfy the predicate — fail closed
+        // rather than admit an unscoped chunk into a scoped query.
+        await store.index([chunk("a#0", "unscoped secret document")], {});
+
+        const matches = await store.search("secret", { filter: { orgId: "org-1" }, topK: 5 });
+
+        expect(matches).toStrictEqual([]);
+    });
+
+    it("still returns everything when no filter is set", async () => {
+        expect.assertions(1);
+
+        const store = bm25LexicalStore();
+
+        await store.index([{ chunkIndex: 0, id: "a#0", metadata: { orgId: "org-1" }, sourceId: "a", text: "findable secret" }], {});
+
+        const matches = await store.search("secret", { topK: 5 });
+
+        expect(matches).toHaveLength(1);
     });
 });
 
@@ -1485,6 +1545,29 @@ describe("defineRag ctx.trace instrumentation", () => {
             // Post-hoc — only knowable after the embed call resolves.
             expect(span.attributes["gen_ai.usage.input_tokens"]).toBeGreaterThan(0);
             expect(span.attributes["gen_ai.usage.cost"]).toBe(0.0002);
+            // A provider-reported cost is labelled as such, never conflated
+            // with an estimate.
+            expect(span.attributes["lunora.usage.cost.source"]).toBe("provider");
+        }
+    });
+
+    it("estimates cost from the price table when no gateway reported one", async () => {
+        expect.hasAssertions();
+
+        const { vectors } = memoryVectors();
+        const ctx = tracingCtx(vectors);
+        const docs = defineRag({ allowSharedNamespace: true, embeddingModel: "@cf/baai/bge-base-en-v1.5", index: "docs" });
+
+        // "nocost" suppresses the mock's providerMetadata, standing in for a
+        // direct-to-provider call with no AI Gateway in front.
+        await docs(ctx).index({ id: "doc-1", text: "nocost hello world" });
+
+        expect(ctx.spans.length).toBeGreaterThan(0);
+
+        for (const span of ctx.spans) {
+            // Spend stays visible off Cloudflare — but marked as derived.
+            expect(span.attributes["gen_ai.usage.cost"]).toBeGreaterThan(0);
+            expect(span.attributes["lunora.usage.cost.source"]).toBe("estimated");
         }
     });
 

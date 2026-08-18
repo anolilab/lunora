@@ -393,14 +393,19 @@ export const operator = defineAgent({
   to gate it.
 - **`containerTool(name, opts?)`** talks to the declared container at
   `ctx.containers.<name>`. `op: "fetch"` sends an HTTP request (`path`, `method`,
-  `body`); `op: "exec"` runs a command (routed as a `POST /exec` the container
-  app serves). **Command execution is gated behind a human approval by default**:
-  an `exec`, and a `fetch` whose path resolves to that same `/exec` route (both
-  reach the container's command path, so gating on the `op` name alone would let a
-  `fetch` to `/exec` run a command unattended). A `fetch` to any _other_ route
-  runs unattended, so scope the container's routes accordingly. Pass
+  `body`); `op: "exec"` runs a command (routed as a `POST /__lunora/exec` the
+  container app serves). **Command execution is gated behind a human approval by
+  default**: an `exec`, and any `fetch` using a non-idempotent method
+  (`POST`/`PUT`/`PATCH`/`DELETE`), since a prompt-injected model could otherwise
+  reach some other mutating route unattended. A `fetch` cannot reach the exec
+  route at all — `@lunora/container` reserves `/__lunora/*` on the handle — so
+  there is no path spelling that runs a command around the gate. A `GET`/`HEAD`/
+  `OPTIONS` `fetch` (including a method-omitted one) to any other route runs
+  unattended, so scope the container's read routes accordingly. Pass
   `opts.needsApproval` (a boolean or a predicate over the input) to widen or
-  disable the gate.
+  disable the gate. An `exec` that fails to run at all is returned to the model
+  as text rather than thrown, so an approved command is never re-executed by a
+  step retry.
 - **`fsTool(bucket, opts?)`** exposes a persistent, **R2-backed virtual
   filesystem**. `op` is `ls` / `read` / `write` (with `content`) / `rm` / `stat`,
   over the R2 binding named `bucket`. Every path is scoped under `opts.root` (e.g.

@@ -46,14 +46,19 @@ const toVector = async <TInput>(input: UpsertInput<TInput>): Promise<VectorizeVe
 const MAX_TOP_K = 100;
 
 /**
- * Vectorize lowers the `topK` ceiling to 20 when a query also asks for the
+ * Vectorize lowers the `topK` ceiling to 50 when a query also asks for the
  * vector values (`returnValues: true`) or full metadata (`returnMetadata:
  * "all"`) — the larger 100 cap only applies to id/score-only queries. We
- * enforce the tighter bound locally so a `topK: 50, returnValues: true` call
+ * enforce the tighter bound locally so a `topK: 80, returnValues: true` call
  * fails with a clear error instead of being silently capped (or rejected)
  * remotely.
+ *
+ * **Legacy V1 indexes cap at 20** and reject a larger `topK` remotely. A
+ * binding handle does not expose its index version, so this cannot branch on
+ * it; V2's limit is the one enforced, because capping everyone at 20 to spare
+ * V1 users a remote error denied the other 30 results to every V2 index.
  */
-const MAX_TOP_K_WITH_VALUES = 20;
+const MAX_TOP_K_WITH_VALUES = 50;
 
 /** Vectorize hard ceiling on the `ids` array for batched id lookups. */
 const MAX_ID_BATCH = 1000;
@@ -93,13 +98,13 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
     const query = async <TInput>(indexName: string, input: QueryInput<TInput>): Promise<VectorizeMatches> => {
         const index = resolveIndex(options.indexes, indexName);
 
-        // The ceiling depends on what the query returns: 20 when values or full
+        // The ceiling depends on what the query returns: 50 when values or full
         // metadata are requested, 100 otherwise.
         const wantsHeavyPayload = input.returnValues === true || input.returnMetadata === "all";
         const topKCeiling = wantsHeavyPayload ? MAX_TOP_K_WITH_VALUES : MAX_TOP_K;
 
         if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > topKCeiling)) {
-            const reason = wantsHeavyPayload ? ' (lowered to 20 because returnValues/returnMetadata:"all" is set)' : "";
+            const reason = wantsHeavyPayload ? ` (lowered to ${String(MAX_TOP_K_WITH_VALUES)} because returnValues/returnMetadata:"all" is set)` : "";
 
             throw new RangeError(`@lunora/bindings/vectors: topK must be an integer in [1, ${String(topKCeiling)}]${reason} (got ${String(input.topK)})`);
         }

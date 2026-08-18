@@ -27,8 +27,8 @@ type BrowserToolInput =
 /**
  * The model-provided input to a {@link containerTool} call — a discriminated
  * union on `op`. `fetch` sends an HTTP request to the container; `exec` asks it
- * to run a command (routed as a POST to `/exec`, since the container surface
- * exposes no first-class exec RPC — the container app must serve that route).
+ * to run a command (delegated to `ctx.containers.<name>.exec`, the first-class
+ * exec contract in `@lunora/container`; the container app serves its route).
  * @experimental
  */
 type ContainerToolInput = { args?: string[]; command?: string; op: "exec" } | { body?: string; method?: string; op: "fetch"; path: string };
@@ -102,12 +102,13 @@ interface ContainerToolOptions {
 
     /**
      * Gate a call behind a human approval. Defaults to gating any command
-     * execution: an `exec`, AND a `fetch` whose path resolves to the privileged
-     * `/exec` route (both reach the same command-execution path in the container,
-     * so gating on the `op` name alone would let a `fetch` to `/exec` run a
-     * command unattended). A plain `fetch` to any other route runs unattended.
-     * Pass a boolean or your own predicate to change that. Evaluated from
-     * replay-stable input, so keep it deterministic.
+     * execution — an `exec` — plus any `fetch` using a non-idempotent method
+     * (POST/PUT/PATCH/DELETE), so a prompt-injected model cannot reach some
+     * other mutating route unattended. A read-only `fetch` runs unattended. The
+     * exec route itself needs no special case: `@lunora/container` reserves
+     * `/__lunora/*` and refuses a `fetch` into it. Pass a boolean or your own
+     * predicate to change that. Evaluated from replay-stable input, so keep it
+     * deterministic.
      */
     needsApproval?: ((input: ContainerToolInput) => boolean) | boolean;
 }
@@ -149,71 +150,30 @@ const BROWSER_TOOL_SCHEMA = jsonSchema<BrowserToolInput>({
     type: "object",
 });
 
-/** The privileged route the container `exec` op POSTs to (see `runContainerOp` in `sandbox-component`). */
-const CONTAINER_EXEC_ROUTE = "/exec";
-
-/** Splits a container fetch `path` off its query/fragment. Hoisted to avoid per-call recompilation. */
-const CONTAINER_PATH_QUERY_SPLIT = /[?#]/u;
-
-/**
- * Normalize a container fetch `path` to its resolved route so the default gate
- * can tell whether a `fetch` reaches the privileged `/exec` route. Strips the
- * query/fragment and resolves empty/`.`/`..` segments — `"/exec"`, `"exec"`,
- * `"//exec"`, `"/./exec"`, and `"/foo/../exec"` all normalize to `"/exec"`.
- */
-const normalizeContainerPath = (path: string | undefined): string => {
-    const [raw = ""] = (path ?? "").split(CONTAINER_PATH_QUERY_SPLIT);
-    const segments: string[] = [];
-
-    for (const segment of raw.split("/")) {
-        if (segment === "" || segment === ".") {
-            continue;
-        }
-
-        if (segment === "..") {
-            segments.pop();
-
-            continue;
-        }
-
-        segments.push(segment);
-    }
-
-    return `/${segments.join("/")}`;
-};
-
 /**
  * HTTP methods considered non-idempotent — a `fetch` using one of these is
- * gated by default even off the `/exec` route, since it can mutate container
- * state. An omitted `method` defaults to GET (idempotent, unattended), per
- * `CONTAINER_TOOL_SCHEMA`'s own documented default.
+ * gated by default, since it can mutate container state. An omitted `method`
+ * defaults to GET (idempotent, unattended), per `CONTAINER_TOOL_SCHEMA`'s own
+ * documented default.
  */
 const NON_IDEMPOTENT_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
 
 /**
  * The default human-in-the-loop gate for `containerTool`. Gates command
- * execution — an `exec`, AND a `fetch` whose path resolves to the privileged
- * `/exec` route, since both reach the same command-execution path in the
- * container — AND, more broadly, any `fetch` using a non-idempotent HTTP
- * method (POST/PUT/PATCH/DELETE), since a prompt-injected model could
- * otherwise reach an arbitrary *other* privileged/mutating container route
- * unattended just by avoiding the literal `/exec` path. A GET/HEAD/OPTIONS (or
- * method-omitted, defaulting to GET) `fetch` to any route still runs
- * unattended — scope the container's read routes accordingly.
+ * execution — an `exec` — AND, more broadly, any `fetch` using a
+ * non-idempotent HTTP method (POST/PUT/PATCH/DELETE), since a prompt-injected
+ * model could otherwise reach an arbitrary privileged/mutating container route
+ * unattended. A GET/HEAD/OPTIONS (or method-omitted, defaulting to GET)
+ * `fetch` to any route still runs unattended — scope the container's read
+ * routes accordingly.
+ *
+ * Deliberately *not* pattern-matching the exec route: a `fetch` cannot reach
+ * it at all. `@lunora/container` refuses `/__lunora/*` from `ContainerHandle.fetch`,
+ * which is the only place that sees the same resolved path the container's
+ * router will — so there is no spelling of that route to recognise here, and no
+ * second copy of the route literal to drift out of lockstep.
  */
-const defaultContainerGate = (input: ContainerToolInput): boolean => {
-    if (input.op === "exec") {
-        return true;
-    }
-
-    // Narrowed to the `fetch` variant: gate it iff its path resolves to
-    // `/exec`, or its method is non-idempotent.
-    if (normalizeContainerPath(input.path) === CONTAINER_EXEC_ROUTE) {
-        return true;
-    }
-
-    return NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
-};
+const defaultContainerGate = (input: ContainerToolInput): boolean => input.op === "exec" || NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
 
 const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
     properties: {
@@ -273,12 +233,12 @@ const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<Brow
  *
  * By default a read-only (GET/HEAD/OPTIONS, or method-omitted) `fetch` runs
  * unattended while everything else is gated behind a human approval — an
- * `exec`; a `fetch` whose path resolves to the privileged `/exec` route (both
+ * `exec`; a `fetch` whose path resolves to the privileged exec route (both
  * reach the same command-execution path in the container, so gating on the
- * `op` name alone would let a `fetch` to `/exec` run a command unattended);
+ * `op` name alone would let a `fetch` to it run a command unattended);
  * and a `fetch` using a non-idempotent method (POST/PUT/PATCH/DELETE) to ANY
  * route, since a prompt-injected model could otherwise mutate container state
- * through some other privileged route just by avoiding the literal `/exec`
+ * through some other privileged route just by avoiding the literal exec
  * path. A `fetch` can still reach any *other read* route unattended, so scope
  * the container's GET routes accordingly. Pass `opts.needsApproval` to widen
  * or disable the gate.
@@ -300,7 +260,7 @@ const containerTool = (name: string, options: ContainerToolOptions = {}): AgentT
 
     // Default gate: any command execution, plus any state-mutating fetch. A
     // read-only fetch (GET/HEAD/OPTIONS) runs unattended; an exec — or a fetch
-    // that resolves to the `/exec` route, or uses a non-idempotent method —
+    // that resolves to the exec route, or uses a non-idempotent method —
     // pauses for approval unless overridden. See `defaultContainerGate`.
     const needsApproval: ((input: ContainerToolInput) => boolean) | boolean = options.needsApproval ?? defaultContainerGate;
 

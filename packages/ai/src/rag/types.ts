@@ -1,6 +1,7 @@
 import type { Tool } from "ai";
 
 import type { EmbeddingModelInput, LunoraAi } from "../types";
+import type { RagVectorStore } from "./vector-store";
 
 /**
  * `(text) => vector` — the embedder shape `ctx.vectors` accepts on both its
@@ -136,13 +137,24 @@ export interface RagContext {
      * untraced when it is absent (a hand-built context / test).
      */
     trace?: unknown;
-    vectors: RagVectors;
+
+    /**
+     * The Vectorize facade backing the default store — an `ActionCtx`'s
+     * `ctx.vectors` satisfies it.
+     *
+     * OPTIONAL, because it is never read when {@link RagConfig.store} is set,
+     * and codegen only emits `ctx.vectors` for a schema that declares a vector
+     * index. Requiring it made "the store that needs no Vectorize" impossible
+     * to type-check in an app with no Vectorize index. Absent with no `store`
+     * configured throws a directed error when the RAG is bound.
+     */
+    vectors?: RagVectors;
 }
 
 /**
  * Pluggable chunk-text storage. By default chunk text is stored in vector
  * metadata (`__ragText`), which forces `returnMetadata: "all"` on retrieval and
- * caps `topK` at 20 (the Vectorize full-metadata ceiling) — and each vector's
+ * caps `topK` at 50 (the Vectorize full-metadata ceiling) — and each vector's
  * metadata must stay under the ~10 KiB Vectorize cap. Supplying a text store
  * (a DO table, KV, …) moves the text out of metadata: retrieval queries with
  * `returnMetadata: "indexed"` (topK up to 100) and hydrates text by chunk id.
@@ -164,6 +176,17 @@ export interface RagTextStore {
 export interface StoredRagChunk {
     chunkIndex: number;
     id: string;
+
+    /**
+     * The caller `metadata` attached to this chunk's source at index time
+     * (internal `__rag*` keys excluded).
+     *
+     * Present so a {@link RagLexicalStore} can evaluate the same metadata
+     * filter the vector leg gets. Without it a lexical store has nothing to
+     * filter on and must fail closed on every filtered query — which made
+     * hybrid search and metadata-based RLS mutually exclusive.
+     */
+    metadata?: Record<string, unknown>;
     sourceId: string;
     text: string;
 }
@@ -234,6 +257,22 @@ export interface RagNamedFilter {
 }
 
 /**
+ * Re-score retrieved candidates against the query. Returns the chunks in their
+ * new order; may drop chunks. See {@link RagConfig.rerank}.
+ * @experimental
+ */
+export type RagReranker = (query: string, chunks: ReadonlyArray<RetrievedChunk>) => Promise<ReadonlyArray<RetrievedChunk>> | ReadonlyArray<RetrievedChunk>;
+
+/**
+ * Rewrite a query, or expand it into several. See {@link RagConfig.transformQuery}.
+ * @experimental
+ */
+export type RagQueryTransform = (
+    query: string,
+    info: { conversationId?: string; namespace?: string },
+) => Promise<ReadonlyArray<string> | string> | ReadonlyArray<string> | string;
+
+/**
  * `RagConfig` is part of the experimental `@lunora/ai` API and may change without a major version bump.
  * @experimental
  */
@@ -245,10 +284,43 @@ export interface RagConfig {
      * vectors across every tenant.
      */
     allowSharedNamespace?: boolean;
+
+    /**
+     * Retain up to this many embeddings per bound context, keyed by text, so a
+     * repeated `retrieve()` of the same question does not re-embed it.
+     *
+     * Default 0 (retain nothing beyond one call). Indexing always batches its
+     * embeds regardless of this setting — the batch lives in its own
+     * request-scoped map, released when `index()` returns, so it neither needs
+     * this budget nor evicts what is held in it.
+     *
+     * Sized in entries, not bytes, but budget in bytes: one 1536-dimension
+     * embedding is ~12 KB, so 100 entries is over a megabyte held in the
+     * isolate. Keep it small.
+     */
+    cacheEmbeddings?: number;
+
+    /**
+     * How many chunks each retrieval leg fetches **before** fusion and
+     * reranking trim the result to `topK`.
+     *
+     * Defaults to `topK * 4` whenever anything downstream reorders — a
+     * `lexicalStore`, a multi-query `transformQuery`, or a `rerank` — and to
+     * plain `topK` otherwise. Bounded by the store ceiling (50 in metadata
+     * mode, 100 with a `textStore`).
+     *
+     * This is the knob that decides how much recall the reordering has to work
+     * with. Fetching only `topK` per leg defeats the point of having two: the
+     * whole reason to run a lexical leg is to surface a chunk the vector leg
+     * ranked *below* `topK`, and it cannot do that if it was never asked for
+     * more than `topK`.
+     */
+    candidates?: number;
     /** Custom chunker; overrides the built-in fixed-window splitter. */
     chunk?: (text: string) => ReadonlyArray<string>;
     /** Overlap (chars) between adjacent chunks. Default 200. Must be < `chunkSize`. */
     chunkOverlap?: number;
+
     /** Target chunk size (chars). Default 1000. */
     chunkSize?: number;
 
@@ -282,6 +354,7 @@ export interface RagConfig {
      * name is not found here — catches spelling mistakes early.
      */
     filters?: Record<string, RagNamedFilter>;
+
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
 
@@ -294,8 +367,27 @@ export interface RagConfig {
      * one. See {@link RagLexicalStore}.
      */
     lexicalStore?: RagLexicalStore;
+
     /** Retrieval depth for the lexical leg of hybrid search. Defaults to the effective `topK`. */
     lexicalTopK?: number;
+
+    /**
+     * Ceiling on the embedding model's dimensionality, checked once per bound
+     * context against the first embedding actually produced. Defaults to
+     * **1536** — Vectorize's per-vector limit at 32-bit precision.
+     *
+     * The default rules out most current large embedding models
+     * (`text-embedding-3-large` and Gemini embedding at 3072,
+     * Qwen3-Embedding at 4096). Without the check they fail at Vectorize with
+     * nothing naming the cause; with it they fail at the first embed, naming
+     * the ceiling and both escapes — truncate via the provider's Matryoshka
+     * `dimensions` option, or set this to `false` when the index is not
+     * Vectorize-backed.
+     *
+     * `false` disables the check entirely: the right setting for a
+     * {@link RagVectors} implementation with a different (or no) ceiling.
+     */
+    maxEmbeddingDimensions?: number | false;
 
     /**
      * Enforce tenant isolation: throw (instead of the one-time dev warning)
@@ -304,6 +396,24 @@ export interface RagConfig {
      * in metadata mode the leaked payload includes raw chunk text.
      */
     requireNamespace?: boolean;
+
+    /**
+     * Re-score the retrieved candidates against the query before they are
+     * trimmed to `topK`. **Injected, not bundled** — a reranker is a model call,
+     * and `@lunora/ai` takes no provider dependency to make one. Adapt yours
+     * with `scoreReranker`/`batchReranker`, or write the two-line hook yourself.
+     *
+     * This is the standard quality step that vector search alone cannot do:
+     * an embedding is computed without the query, so it cannot know which of
+     * two topically-similar passages actually answers *this* question. A
+     * cross-encoder sees both at once and orders them accordingly.
+     *
+     * Retrieval fetches {@link RagConfig.candidates} chunks, hands them
+     * here, and keeps the first `topK` of whatever comes back — so the hook may
+     * reorder and drop, but its output order is final. Runs after hybrid fusion
+     * and before `chunkContext` expansion.
+     */
+    rerank?: RagReranker;
 
     /**
      * Row-level-security filter derived from the retrieval identity. Called once
@@ -324,10 +434,45 @@ export interface RagConfig {
      */
     rlsFilter?: (auth: unknown) => Promise<Record<string, unknown> | undefined> | Record<string, unknown> | undefined;
 
+    /**
+     * Back this RAG with a different vector store.
+     *
+     * Called once per bound context with that context, so a store needing
+     * per-request state (a Hyperdrive/pgvector connection from `ctx.sql`, a
+     * shard's own SQLite) can build itself from it. Defaults to wrapping
+     * `context.vectors` as a Vectorize-backed store.
+     *
+     * The store declares its own limits, and `defineRag` reads them instead of
+     * assuming Vectorize's — so a pgvector index is not held to a
+     * 1536-dimension ceiling or a 10 KiB metadata budget it does not have.
+     */
+    store?: (context: RagContext) => RagVectorStore;
+
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
-    /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */
+
+    /** Default retrieval depth. Default 5. Capped by the store: 50 (metadata mode) / 100 (text-store mode) on Vectorize. */
     topK?: number;
+
+    /**
+     * Rewrite or expand the query before it is embedded.
+     *
+     * The raw user query is often the worst possible search string: a
+     * conversational follow-up ("what about the other one?") carries its
+     * meaning in the preceding turns, and a short question shares few terms
+     * with the long passage that answers it.
+     *
+     * Return **one** string to rewrite, or **several** to run multi-query
+     * retrieval — each is embedded and searched independently and the rankings
+     * are fused with RRF, which recovers passages any single phrasing would
+     * miss. Returning the query unchanged is a no-op.
+     *
+     * **Injected, not bundled**, for the same reason as {@link RagConfig.rerank}:
+     * every useful strategy (HyDE, multi-query expansion, follow-up rewriting)
+     * needs a language model, and this package does not pick one for you. The
+     * lexical leg searches the first returned query.
+     */
+    transformQuery?: RagQueryTransform;
 }
 
 /**
@@ -360,6 +505,19 @@ export interface IndexInput {
      * bar or logging per-chunk status.
      */
     onChunk?: (info: { chunkIndex: number; id: string; text: string; total: number }) => void;
+
+    /**
+     * Index this source even when its content hash is unchanged.
+     *
+     * The hash short-circuit skips chunking, embedding and every write — which
+     * is what makes a cron re-sync cheap, and also what makes attaching a
+     * `textStore` or `lexicalStore` to an ALREADY-indexed corpus a silent no-op:
+     * the new store is never written, so the keyword leg returns nothing
+     * forever with no error. Set this for the one pass that backfills it.
+     *
+     * It re-embeds, so it is not a setting to leave on.
+     */
+    reindex?: boolean;
     /** The document body to chunk + embed + upsert. */
     text: string;
 }
@@ -419,7 +577,17 @@ export interface RetrieveOptions {
      * observability — logging query latency, hit counts, etc.
      */
     onRetrieve?: (info: { matches: number; query: string }) => void;
+
+    /**
+     * Set `false` to skip {@link RagConfig.rerank} for this call — the escape
+     * hatch for a latency-sensitive path (typeahead, an agent's inner loop)
+     * that cannot afford the extra model round-trip.
+     */
+    rerank?: false;
     topK?: number;
+
+    /** Set `false` to skip {@link RagConfig.transformQuery} for this call. */
+    transformQuery?: false;
 }
 
 /**

@@ -43,6 +43,21 @@ interface Scorer {
     score: (sample: ScorerSample) => Promise<ScoreResult | number> | ScoreResult | number;
 }
 
+/**
+ * What a `produce` runner may return: the output text alone, or the text plus
+ * metadata describing what the run actually did.
+ *
+ * The metadata form exists for scorers that judge more than the final string —
+ * a retrieval scorer needs the ranked ids the run retrieved, which only the run
+ * can know. It is merged OVER the case's own metadata before scoring.
+ */
+interface ProducedOutput {
+    /** Merged over the case's `metadata`, then handed to every scorer. */
+    metadata?: Record<string, unknown>;
+    /** The output text under test. */
+    output: string;
+}
+
 /** One dataset case: an input and its optional gold answer/metadata. */
 interface EvalCase {
     expected?: string;
@@ -194,17 +209,23 @@ const scoreSample = async (sample: ScorerSample, scorers: ReadonlyArray<Scorer>)
  */
 const evaluate = async (
     cases: ReadonlyArray<EvalCase>,
-    produce: (input: string) => Promise<string> | string,
+    produce: (input: string) => Promise<ProducedOutput | string> | ProducedOutput | string,
     scorers: ReadonlyArray<Scorer>,
 ): Promise<EvalResult> => {
     const items = await Promise.all(
         cases.map(async (testCase): Promise<EvalItemResult> => {
-            const output = await produce(testCase.input);
+            const produced = await produce(testCase.input);
+            const output = typeof produced === "string" ? produced : produced.output;
+            // Run metadata wins over case metadata: the case declares what was
+            // *expected* (gold ids), the run reports what actually *happened*
+            // (retrieved ids), and only the latter can know the run's outcome.
+            const metadata =
+                typeof produced === "string" || produced.metadata === undefined ? testCase.metadata : { ...testCase.metadata, ...produced.metadata };
             const sample: ScorerSample = {
                 input: testCase.input,
                 output,
                 ...(testCase.expected === undefined ? {} : { expected: testCase.expected }),
-                ...(testCase.metadata === undefined ? {} : { metadata: testCase.metadata }),
+                ...(metadata === undefined ? {} : { metadata }),
             };
             const { average, scores } = await scoreSample(sample, scorers);
 
@@ -215,5 +236,5 @@ const evaluate = async (
     return { average: mean(items.map((item) => item.average)), items };
 };
 
-export type { EvalCase, EvalItemResult, EvalResult, Scorer, ScoreResult, ScorerSample };
-export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample };
+export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample };
+export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, parseJudgeScore, regexScorer, scoreSample };

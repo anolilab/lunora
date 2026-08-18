@@ -898,7 +898,7 @@ export interface ShardDOConfig {
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
     vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;
-    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { bookmark?: string; identity?: Record<string, unknown>; onBookmark?: (bookmark: string | undefined) => void; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {

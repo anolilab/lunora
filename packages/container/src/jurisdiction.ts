@@ -2,7 +2,6 @@
  * Cloudflare Durable Object data-residency jurisdiction. Widening union —
  * Cloudflare adds values over time.
  * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
- * @experimental
  */
 type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 
