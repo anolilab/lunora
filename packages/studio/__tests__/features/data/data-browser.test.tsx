@@ -834,6 +834,42 @@ describe("dataBrowser — editable", () => {
         expect((call[1] as { doc: Record<string, unknown> }).doc).toMatchObject({ status: "published" });
     });
 
+    it("marks each header with its declared type, and leaves an undescribed column bare", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { name: "title", optional: false, type: "string" },
+                                { name: "views", optional: false, type: "number" },
+                            ],
+                        },
+                    };
+                }
+
+                return { columns: ["__id__", "title", "views"], rows: [{ __id__: "p1", title: "hi", views: 3 }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-rows");
+
+        expect(screen.getByTestId("db-type-title").textContent).toBe("T");
+        expect(screen.getByTestId("db-type-views").textContent).toBe("#");
+        // `__id__` is a page column the schema does not describe — a glyph there
+        // would be an assertion about a type nobody declared.
+        expect(screen.queryByTestId("db-type-__id__")).toBeNull();
+    });
+
     it("keeps a stored value the union no longer declares, rather than rewriting it", async () => {
         expect.assertions(2);
 

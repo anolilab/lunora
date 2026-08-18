@@ -305,6 +305,7 @@ const DataBrowserPage = ({
         {browser.viewMode === "table" && page.rows.length > 0 && !preferences.transposed && (
             <DataBrowserTableView
                 backRelationCounts={backRelations.counts}
+                columnMeta={columnMeta}
                 edit={edit}
                 editable={editable}
                 highlight={browser.filter}

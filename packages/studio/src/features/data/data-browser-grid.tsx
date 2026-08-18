@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmButton } from "../../components/confirm-button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
-import type { TablePage } from "../../lib/admin";
+import type { ColumnMeta, TablePage } from "../../lib/admin";
 import { fireAndForget, formatCell } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
 import { maskCell } from "../../lib/mask-preview";
@@ -615,12 +615,36 @@ const onDragOver = (event: React.DragEvent<HTMLTableCellElement>): void => {
 };
 
 /**
+ * The one-character glyph for a declared column type.
+ *
+ * A character rather than an icon set: the header is dense, every glyph must
+ * survive at 10px next to a truncated name, and a validator kind is a label
+ * rather than a picture. `undefined` for a kind with no established convention,
+ * which renders nothing — a wrong glyph is worse than none in a header an
+ * operator scans.
+ */
+const TYPE_GLYPHS: Readonly<Record<string, string>> = {
+    any: "?",
+    array: "[]",
+    bigint: "#",
+    boolean: "01",
+    bytes: "0x",
+    id: "→",
+    number: "#",
+    object: "{}",
+    storage: "◫",
+    string: "T",
+    union: "|",
+};
+
+/**
  * One grid column header: the sort toggle, a drag handle for reordering (native
  * HTML5 drag → `table.setColumnOrder`), and a right-edge resize grip wired to
  * TanStack's resize handler. `draggedRef` carries the column id being dragged
  * between the source's `dragstart` and the target's `drop`.
  */
 const GridHeaderCell = ({
+    declaredType,
     draggedRef,
     header,
     masked = false,
@@ -628,6 +652,8 @@ const GridHeaderCell = ({
     pinnedOffset,
     table,
 }: {
+    /** The column's declared type, when the schema describes it. */
+    declaredType?: string;
     draggedRef: React.RefObject<null | string>;
     header: Header<TableRow, unknown>;
     /** Show a "masked" chip: this column is covered by a `.use(mask(...))` policy (static annotation, independent of the toggle). */
@@ -683,6 +709,11 @@ const GridHeaderCell = ({
                 {flexRender(header.column.columnDef.header, header.getContext())}
                 {sortIndicator(header.column.getIsSorted())}
             </button>
+            {declaredType !== undefined && TYPE_GLYPHS[declaredType] !== undefined && (
+                <span className="ms-1 font-mono text-[0.625rem] text-muted-foreground/70" data-testid={`db-type-${header.column.id}`} title={declaredType}>
+                    {TYPE_GLYPHS[declaredType]}
+                </span>
+            )}
             {masked && (
                 <span
                     className="ms-1 inline-flex items-center rounded-sm bg-warning/15 px-1 text-[0.625rem] font-medium uppercase text-warning"
@@ -780,6 +811,7 @@ const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
  * callbacks so this stays a pure render of the page's rows.
  */
 const DataBrowserTableView = ({
+    columnMeta,
     edit,
     editable,
     mask,
@@ -795,6 +827,8 @@ const DataBrowserTableView = ({
 }: {
     /** Reverse-relation counts, keyed `table.column` → parent id → count. */
     backRelationCounts: Readonly<Record<string, Readonly<Record<string, number>>>>;
+    /** Declared columns of the open table, keyed by name — the header's type glyphs. */
+    columnMeta?: Record<string, ColumnMeta>;
     edit: GridEdit;
     editable: boolean;
     /** Active row-search term, highlighted inside matching cells. */
@@ -1044,6 +1078,7 @@ const DataBrowserTableView = ({
                                 .map((header) =>
                                     columnSlice.ids.has(header.column.id) ? (
                                         <GridHeaderCell
+                                            declaredType={columnMeta?.[header.column.id]?.type}
                                             draggedRef={draggedColumn}
                                             header={header}
                                             key={header.id}
