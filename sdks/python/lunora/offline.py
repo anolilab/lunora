@@ -132,13 +132,17 @@ class PersistenceAdapter(Protocol):
     cannot be read must not look like an empty store.
     """
 
-    def append(self, record: dict) -> None: ...
+    def append(self, record: dict) -> None:
+        pass
 
-    def load(self) -> list: ...
+    def load(self) -> list:
+        pass
 
-    def remove(self, mutation_id: str) -> None: ...
+    def remove(self, mutation_id: str) -> None:
+        pass
 
-    def clear(self) -> None: ...
+    def clear(self) -> None:
+        pass
 
 
 class Discarded:
