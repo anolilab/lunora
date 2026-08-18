@@ -3092,7 +3092,6 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 schema: {
                     tables: [
                         {
-                            aggregateIndexes: [],
                             indexes: [],
                             name: "posts",
                             rankIndexes: [],
@@ -3128,7 +3127,6 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 schema: {
                     tables: [
                         {
-                            aggregateIndexes: [],
                             indexes: [],
                             name: "posts",
                             rankIndexes: [],
