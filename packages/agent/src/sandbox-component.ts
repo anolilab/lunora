@@ -29,6 +29,12 @@ interface SandboxBrowserSurface {
 /** Structural view of a `ctx.containers.<name>` accessor + its fetch handle. */
 interface SandboxContainerAccessor {
     any: () => {
+        /**
+         * `ctx.containers.<name>.exec` — the first-class exec contract from
+         * `@lunora/container`. Structural here so this module stays free of a
+         * runtime import, but the shape is that package's `ContainerHandle`.
+         */
+        exec: (command: string, options?: { args?: ReadonlyArray<string> }) => Promise<{ code: number; stderr: string; stdout: string }>;
         fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{ text: () => Promise<string> }>;
     };
 }
@@ -141,19 +147,47 @@ const runBrowserOp = async (browser: SandboxBrowserSurface, request: SandboxInvo
     }
 };
 
+/**
+ * Render an exec result as the single string a tool call returns to the model.
+ * Streams are labelled and the exit code is always stated, including on success:
+ * a model reading `exit code: 0` can tell "ran, produced nothing" from "did not
+ * run", which a bare empty string cannot express.
+ */
+const renderExecResult = (result: { code: number; stderr: string; stdout: string }): string => {
+    const sections = [`exit code: ${String(result.code)}`];
+
+    if (result.stdout.length > 0) {
+        sections.push(`stdout:\n${result.stdout}`);
+    }
+
+    if (result.stderr.length > 0) {
+        sections.push(`stderr:\n${result.stderr}`);
+    }
+
+    return sections.join("\n\n");
+};
+
 const runContainerOp = async (accessor: SandboxContainerAccessor, request: SandboxInvokeArgs): Promise<string> => {
     const handle = accessor.any();
 
     if (request.op === "exec") {
-        // No first-class exec RPC on the container surface — route it as a POST
-        // to `/exec` carrying the command; the container app serves that route.
-        const response = await handle.fetch("/exec", {
-            body: JSON.stringify({ args: request.args ?? [], command: request.command ?? "" }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
-        });
-
-        return response.text();
+        // `ctx.containers.<name>.exec` owns the wire contract now (a typed POST
+        // to `/__lunora/exec`), so this only has to render the result for the
+        // model. The exit code is part of that render: the previous version read
+        // the raw body back as output, so a command that failed — or a container
+        // with no exec route at all — was indistinguishable from success.
+        try {
+            return renderExecResult(await handle.exec(request.command ?? "", { args: request.args ?? [] }));
+        } catch (error: unknown) {
+            // Rendered, NOT rethrown. A tool call runs inside `step.do`, which
+            // retries a step that throws — and `exec` throws on outcomes that
+            // happen *after* the command has already run (the runner 500s while
+            // serialising, the output overruns the cap). Rethrowing would
+            // re-execute an approved `pnpm publish`. A string keeps the step
+            // exactly-once and still tells the model the command did not report
+            // a result, which is the whole point of the contract.
+            return `exec failed: ${error instanceof Error ? error.message : String(error)}`;
+        }
     }
 
     if (request.op === "fetch") {
@@ -378,5 +412,5 @@ const sandboxComponent = (): SandboxComponent => {
     return { invoke };
 };
 
-export type { R2BucketLike, SandboxComponent, SandboxInvokeArgs, SandboxRegisteredFunction };
+export type { R2BucketLike, SandboxComponent, SandboxContainerAccessor, SandboxInvokeArgs, SandboxRegisteredFunction };
 export { resolveFsKey, runFsOp, sandboxComponent };

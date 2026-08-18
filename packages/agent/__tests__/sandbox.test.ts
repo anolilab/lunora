@@ -1,14 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
+import type { ContainerHandle } from "@lunora/container";
+import { CONTAINER_EXEC_PATH, createContainerTestContext } from "@lunora/container";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { sandboxComponent } from "../src/component";
 import { SANDBOX_INVOKE_PATH } from "../src/paths";
 import { browserTool, containerTool } from "../src/sandbox";
+import type { SandboxContainerAccessor } from "../src/sandbox-component";
 import type { AgentToolContext } from "../src/types";
 
 const EMPTY_NAME_ERROR = /requires a container `name`/u;
 const MISSING_BROWSER_ERROR = /needs `ctx\.browser`/u;
 const UNKNOWN_CONTAINER_ERROR = /no ctx\.containers\["missing"\]/u;
 const NO_FS_BUCKET_ERROR = /found no R2 bucket/u;
+const RESERVED_ROUTE_ERROR = /reserved for Lunora's own container routes/u;
 
 /** A tool `execute` context whose `run` records the dispatched (ref, args). */
 const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context: AgentToolContext } => {
@@ -112,26 +116,53 @@ describe(containerTool, () => {
         expect((always.needsApproval as (input: { op: string }) => boolean)({ op: "fetch" })).toBe(true);
     });
 
-    it("gates a fetch whose path resolves to the privileged /exec route", () => {
-        const needsApproval = containerTool("sandbox").needsApproval as (input: { op: string; path?: string }) => boolean;
+    it("cannot reach the exec route with a fetch at all", async () => {
+        expect.assertions(3);
 
-        // A fetch to /exec reaches the same command path as an exec, so it must gate.
-        expect(needsApproval({ op: "fetch", path: "/exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "//exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/./exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/foo/../exec" })).toBe(true);
-        expect(needsApproval({ op: "fetch", path: "/exec?x=1" })).toBe(true);
-        // A GET fetch to any other route stays unattended.
-        expect(needsApproval({ op: "fetch", path: "/health" })).toBe(false);
-        expect(needsApproval({ op: "fetch", path: "/execute" })).toBe(false);
+        // The gate does not pattern-match the exec route, because a `fetch`
+        // never arrives there: `@lunora/container` reserves `/__lunora/*` at the
+        // handle, which is the only place that resolves the path the same way
+        // the container's router will. Assert the refusal rather than trusting
+        // it — this is what makes a second copy of the route literal (and the
+        // spelling-guessing that came with it) unnecessary here.
+        const accessor: SandboxContainerAccessor = createContainerTestContext({ box: () => new Response("ok") }).box!;
+
+        await expect(accessor.any().fetch(CONTAINER_EXEC_PATH)).rejects.toThrow(RESERVED_ROUTE_ERROR);
+        await expect(accessor.any().fetch("/foo/../__lunora/exec")).rejects.toThrow(RESERVED_ROUTE_ERROR);
+        await expect(accessor.any().fetch("/health")).resolves.toBeInstanceOf(Response);
     });
 
-    it("gates a fetch using a non-idempotent method, even off the /exec route", () => {
+    it("keeps the structural container accessor a subset of the real one", () => {
+        // `SandboxContainerAccessor` re-declares `exec`/`fetch` by hand so the
+        // component module stays free of a runtime import. Hand-copied
+        // structural mirrors drift — this is what notices when they do, in the
+        // types AND at runtime, since `handle.exec` only exists in
+        // `@lunora/container` from the version the peer range names.
+        expectTypeOf<ContainerHandle>().toExtend<ReturnType<SandboxContainerAccessor["any"]>>();
+
+        const accessor: SandboxContainerAccessor = createContainerTestContext({ box: () => new Response("ok") }).box!;
+
+        expect(accessor.any().exec).toBeTypeOf("function");
+    });
+
+    it("never throws out of the gate on a malformed or non-string path", () => {
+        const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: unknown }) => boolean;
+
+        // A gate that throws fails OPEN — the exception escapes the policy and
+        // leaves the caller deciding what an errored approval check means. Model
+        // tool input reaches here unvalidated (`CONTAINER_TOOL_SCHEMA` carries no
+        // `validate`), so `path` can be anything at all.
+        expect(needsApproval({ op: "fetch", path: "/100%" })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: null })).toBe(false);
+        expect(needsApproval({ op: "fetch", path: 42 })).toBe(false);
+        expect(needsApproval({ method: "POST", op: "fetch", path: "/%zz" })).toBe(true);
+    });
+
+    it("gates a fetch using a non-idempotent method", () => {
         const needsApproval = containerTool("sandbox").needsApproval as (input: { method?: string; op: string; path?: string }) => boolean;
 
         // A prompt-injected model could otherwise mutate container state
-        // through some OTHER privileged route just by avoiding `/exec`.
+        // through some other privileged/mutating route on the container.
         expect(needsApproval({ method: "POST", op: "fetch", path: "/health" })).toBe(true);
         expect(needsApproval({ method: "PUT", op: "fetch", path: "/config" })).toBe(true);
         expect(needsApproval({ method: "PATCH", op: "fetch", path: "/config" })).toBe(true);
@@ -212,25 +243,81 @@ describe("sandboxComponent().invoke", () => {
         expect(result).toBe("pong");
     });
 
-    it("routes a container exec as a POST to /exec", async () => {
-        const fetch = vi.fn<(path: string, init: Record<string, unknown>) => Promise<{ text: () => Promise<string> }>>(async () => {
-            return { text: async () => "done" };
+    it("delegates a container exec to ctx.containers.<name>.exec", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 0, stderr: "", stdout: "done" };
         });
         const containers = {
             sandbox: {
                 any: () => {
-                    return { fetch };
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
                 },
             },
         };
         const result = await invokeSandbox({ containers }, { args: ["-la"], command: "ls", kind: "container", name: "sandbox", op: "exec" });
 
-        expect(fetch).toHaveBeenCalledWith("/exec", {
-            body: JSON.stringify({ args: ["-la"], command: "ls" }),
-            headers: { "content-type": "application/json" },
-            method: "POST",
+        // The wire format is @lunora/container's contract now, not this module's.
+        expect(exec).toHaveBeenCalledWith("ls", { args: ["-la"] });
+        expect(result).toBe("exit code: 0\n\nstdout:\ndone");
+    });
+
+    it("reports a failed command's exit code and stderr to the model", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 2, stderr: "no such file\n", stdout: "" };
         });
-        expect(result).toBe("done");
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // The regression this contract exists for: before E2 the tool read the raw
+        // response body back as output, so a failed command — or a container with
+        // no exec route — was indistinguishable from a successful one.
+        const result = await invokeSandbox({ containers }, { command: "cat", kind: "container", name: "sandbox", op: "exec" });
+
+        expect(result).toBe("exit code: 2\n\nstderr:\nno such file\n");
+    });
+
+    it("states the exit code even when a command produced no output", async () => {
+        const exec = vi.fn<() => Promise<{ code: number; stderr: string; stdout: string }>>(async () => {
+            return { code: 0, stderr: "", stdout: "" };
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // "ran, produced nothing" must be distinguishable from "did not run".
+        await expect(invokeSandbox({ containers }, { command: "true", kind: "container", name: "sandbox", op: "exec" })).resolves.toBe("exit code: 0");
+    });
+
+    it("renders a thrown exec failure instead of rethrowing it", async () => {
+        const exec = vi.fn<() => Promise<never>>(async () => {
+            throw new Error("ctx.containers.sandbox: exec failed — the container answered 500 for POST /__lunora/exec");
+        });
+        const containers = {
+            sandbox: {
+                any: () => {
+                    return { exec, fetch: vi.fn<() => Promise<never>>() };
+                },
+            },
+        };
+
+        // A tool call runs inside `step.do`, which RETRIES a step that throws.
+        // `exec` throws on outcomes that occur after the command already ran —
+        // the runner crashing while serialising the result, or output past the
+        // cap — so rethrowing would re-execute an approved `pnpm publish`. The
+        // step has to complete, with the failure as its value.
+        await expect(invokeSandbox({ containers }, { command: "pnpm", kind: "container", name: "sandbox", op: "exec" })).resolves.toBe(
+            "exec failed: ctx.containers.sandbox: exec failed — the container answered 500 for POST /__lunora/exec",
+        );
+        expect(exec).toHaveBeenCalledTimes(1);
     });
 
     it("errors when a container op names an unknown container", async () => {

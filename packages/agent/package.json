@@ -106,6 +106,7 @@
         "yaml": "catalog:content"
     },
     "devDependencies": {
+        "@lunora/container": "workspace:*",
         "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

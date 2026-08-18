@@ -133,11 +133,13 @@ against something written down rather than case by case.
 
 Where the tier stands today:
 
-| Package                     | 1. Snapshotted                     | 2. Verified on workerd |
-| --------------------------- | ---------------------------------- | ---------------------- |
-| `agent`                     | yes — `api-snapshots/agent.api.md` | no                     |
-| `ai`                        | yes — `api-snapshots/ai.api.md`    | no                     |
-| everything else in the tier | not yet                            | —                      |
+| Package                     | 1. Snapshotted                                                                                                                   | 2. Verified on workerd                                                                                                                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                     | yes — `api-snapshots/agent.api.md`                                                                                               | no                                                                                                                                                                                                                                                |
+| `ai`                        | yes — `api-snapshots/ai.api.md`                                                                                                  | no                                                                                                                                                                                                                                                |
+| `container`                 | yes — `api-snapshots/container.api.md`, and **no export carries `@experimental`**, so signatures are tracked rather than skipped | partial — a real workerd suite boots the DO, resolves `ctx.containers` bindings and round-trips the bridge, but **starting** a container needs Docker and is out of scope there, so proxied fetch, lifecycle and `exec` are unverified on workerd |
+| `platform-node`             | yes — `api-snapshots/platform-node.api.md`                                                                                       | n/a — a Node host; workerd is not the runtime it ships to                                                                                                                                                                                         |
+| everything else in the tier | not yet                                                                                                                          | —                                                                                                                                                                                                                                                 |
 
 Ordering is not fixed: a package that clears the bar early graduates early,
 regardless of where it sits in the tier list above.

@@ -52,11 +52,18 @@ const packagesDir = join(rootDir, "packages");
 const snapshotsDir = join(rootDir, "api-snapshots");
 
 /**
+ * The line `renderExport` emits in place of a tagged export's signature, and
+ * the string the fully-tracked check below scans for. One constant, not two
+ * literals: reworded in only one place, the check would silently pass.
+ */
+const UNTRACKED_MARKER = "signature not tracked";
+
+/**
  * Packages covered by the guard, by DIRECTORY name (`packages/<dir>`).
  *
- * `agent`, `ai` and `platform-node` ARE covered, at TIER_3, and being covered is
- * NOT a stability promise — see {@link TIER_3}. The rest of the experimental
- * tier (`replica`, `x402`, `react-native`, `angular`, `browser`, `container`,
+ * `agent`, `ai`, `container` and `platform-node` ARE covered, at TIER_3, and
+ * being covered is NOT a stability promise — see {@link TIER_3}. The rest of the
+ * experimental tier (`replica`, `x402`, `react-native`, `angular`, `browser`,
  * `payment`) is not covered yet.
  *
  * `platform-node` was held out entirely while it was a plan-234 spike, on the
@@ -146,8 +153,16 @@ const TIER_2 = [
  * packages tag heavily. What the snapshot then tracks is the part that is NOT
  * tagged, plus every export appearing or disappearing — which is exactly the
  * settling signal.
+ *
+ * `container` was added when `ctx.containers` gained a first-class `exec`
+ * (plan 335). That change moved the package's public surface with nothing
+ * watching: the plan asserted `api:check` would gate it, and `api:check` had
+ * never heard of the package. `@lunora/agent` already consumes this surface —
+ * `containerTool` calls `ContainerHandle.exec` — so a second package tracks it
+ * the same way `platform-node` tracks `platform`, which is the case TIER_3
+ * exists for.
  */
-const TIER_3 = ["agent", "ai", "platform-node"];
+const TIER_3 = ["agent", "ai", "container", "platform-node"];
 
 /**
  * The tiers, each carrying the stability sentence its snapshot header ends with.
@@ -358,7 +373,7 @@ const renderExport = (checker, pkgDirName, symbol) => {
     const header = `### \`${name}\` (${kind})`;
 
     if (experimental) {
-        return `${header}\n\n_Tagged \`@experimental\` — signature not tracked; churn here does not fail the gate._`;
+        return `${header}\n\n_Tagged \`@experimental\` — ${UNTRACKED_MARKER}; churn here does not fail the gate._`;
     }
 
     if (isForeign) {
@@ -557,6 +572,66 @@ if (mode !== "check" && mode !== "update") {
 }
 
 const rendered = buildAll();
+
+/**
+ * Snapshots whose package documents, as a fact reviewers rely on, that NO
+ * individual export carries `@experimental`.
+ *
+ * `renderExport` skips signature tracking for a tagged export, so one tag
+ * copied in from a sibling file (where the tag is still house style) silently
+ * drops that export out of the gate — and the gate stays green, because a
+ * skipped signature is exactly what "no drift" looks like. An invariant a docs
+ * page asserts and nothing enforces is the shape this repo has been burned by;
+ * this is the enforcement.
+ *
+ * This runs before `update` writes anything, so `pnpm run api:update` cannot
+ * launder a newly-tagged export into the committed snapshot either.
+ */
+const FULLY_TRACKED_SNAPSHOTS = new Set(["container.api.md"]);
+
+// A configured snapshot that no longer renders would make this check silently
+// inert — the loop below only sees what `rendered` contains, so a package
+// leaving TIER_3 (or being renamed) would drop its enforcement without a word.
+for (const fileName of FULLY_TRACKED_SNAPSHOTS) {
+    if (!rendered.has(fileName)) {
+        console.error(`❌ FULLY_TRACKED_SNAPSHOTS names ${fileName}, which this run does not render.`);
+        console.error("   Remove it from the set, or restore the package to the guard.");
+        process.exit(1);
+    }
+}
+
+const untracked = [];
+
+for (const [fileName, content] of rendered) {
+    if (!FULLY_TRACKED_SNAPSHOTS.has(fileName)) {
+        continue;
+    }
+
+    let heading = "?";
+
+    for (const line of content.split("\n")) {
+        if (line.startsWith("### ")) {
+            heading = line.slice(4);
+        } else if (line.includes(UNTRACKED_MARKER)) {
+            untracked.push(`${fileName}: ${heading}`);
+        }
+    }
+}
+
+if (untracked.length > 0) {
+    console.error("❌ `@experimental` on an export of a fully-tracked package:");
+
+    for (const entry of untracked) {
+        console.error(`   ${entry}`);
+    }
+
+    console.error("");
+    console.error("A tagged export's signature is NOT tracked, so it drops out of this gate");
+    console.error("silently. Drop the tag (the package-level experimental status is published");
+    console.error("in ROADMAP.md and the package's docs), or drop the snapshot from");
+    console.error("FULLY_TRACKED_SNAPSHOTS in this script and fix the docs claim it backs.");
+    process.exit(1);
+}
 
 if (mode === "update") {
     mkdirSync(snapshotsDir, { recursive: true });
