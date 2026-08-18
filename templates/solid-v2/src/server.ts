@@ -19,6 +19,16 @@ interface Env extends Record<string, unknown> {
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    // Demo/local default: this app has no auth, so shard access is left OPEN
+    // (any caller may target any shard) and data is protected by per-row RLS.
+    // It belongs HERE rather than on the Vite plugin: `lunora({
+    // allowUnauthenticatedShardAccess })` only reaches the generated
+    // `virtual:lunora/worker` entry that meta-framework templates use, and this
+    // one is its own hand-written entry — without this line the `.shardBy(...)`
+    // demo in `lunora/schema.ts` default-denies and every sharded socket 403s.
+    // A PRODUCTION sharded app must gate this instead — e.g.
+    // `.extend(() => ({ authorizeShard: (identity, shardKey) => identity?.userId === ownerOf(shardKey) }))`.
+    .extend(() => ({ allowUnauthenticatedShardAccess: true }))
     .build();
 
 export const ShardDO = app.ShardDO;

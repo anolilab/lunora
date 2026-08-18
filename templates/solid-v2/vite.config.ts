@@ -20,10 +20,9 @@ import { defineConfig } from "vite";
  * you never wrote.
  */
 export default defineConfig({
-    // `allowUnauthenticatedShardAccess: true` is a DEMO default: the worker
-    // default-denies client-named shard access (403), so the auth-less
-    // `.shardBy(...)` demo in `lunora/schema.ts` needs it — data is protected by
-    // per-row RLS. A PRODUCTION sharded app should drop it and configure
-    // `authorizeShard` on the worker entry instead.
-    plugins: [solidPlugin(), lunora({ allowUnauthenticatedShardAccess: true })],
+    // The open-shard-access demo default lives on the worker entry
+    // (`src/server.ts`), not here: this plugin option only reaches the generated
+    // `virtual:lunora/worker` composition that the meta-framework templates use,
+    // and this template ships its own entry.
+    plugins: [solidPlugin(), lunora()],
 });
