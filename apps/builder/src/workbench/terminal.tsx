@@ -1,4 +1,4 @@
-import { useLunora } from "@lunora/react";
+import { useAction } from "@lunora/react";
 import type { ChangeEventHandler, FormEventHandler, JSX } from "react";
 import { useCallback, useState } from "react";
 
@@ -25,15 +25,14 @@ const WHITESPACE = /\s+/u;
  * that quietly reports simulated success is worse than one with no terminal.
  */
 const Terminal = ({ projectId }: { projectId: string }): JSX.Element => {
-    // `@lunora/react` ships `useQuery` and `useMutation` but no `useAction`, so
-    // an action is called through the client directly. Worth closing in the
-    // adapter rather than re-deriving this wrapper in every app — left as a
-    // follow-up rather than widening a Core-tier package's API mid-build.
-    const client = useLunora();
+    // `useAction` is the adapter's action primitive — the follow-up this pane
+    // used to name in a comment while calling `client.action` through
+    // `useLunora()` by hand. Its `pending` is ref-counted across overlapping
+    // invocations, which is why there is no local `busy` flag any more.
+    const { call: runCommand, pending } = useAction(api.commands.run);
 
     const [input, setInput] = useState("");
     const [lines, setLines] = useState<ReadonlyArray<TerminalLine>>([]);
-    const [busy, setBusy] = useState(false);
 
     const onChange: ChangeEventHandler<HTMLInputElement> = useCallback((event) => {
         setInput(event.target.value);
@@ -52,16 +51,14 @@ const Terminal = ({ projectId }: { projectId: string }): JSX.Element => {
             const [command, ...args] = parts;
 
             setInput("");
-            setBusy(true);
 
-            // An inner async function rather than a `.then().catch().finally()`
-            // chain: the failure path is not an error here, it is a line in the
-            // log — a refused command's message names what IS allowed, which is
-            // the most useful thing the pane can show — and try/finally keeps
-            // "always clear busy" adjacent to the thing that set it.
+            // An inner async function rather than a `.then().catch()` chain:
+            // the failure path is not an error here, it is a line in the log —
+            // a refused command's message names what IS allowed, which is the
+            // most useful thing the pane can show.
             const dispatch = async (): Promise<void> => {
                 try {
-                    const result = await client.action(api.commands.run, { args, command, projectId });
+                    const result = await runCommand({ args, command, projectId });
 
                     setLines((previous) => [
                         ...previous,
@@ -78,14 +75,12 @@ const Terminal = ({ projectId }: { projectId: string }): JSX.Element => {
                             output: error instanceof Error ? error.message : String(error),
                         },
                     ]);
-                } finally {
-                    setBusy(false);
                 }
             };
 
             void dispatch();
         },
-        [client, input, projectId],
+        [input, projectId, runCommand],
     );
 
     return (
@@ -104,7 +99,7 @@ const Terminal = ({ projectId }: { projectId: string }): JSX.Element => {
 
             <form className="terminal-input" onSubmit={onSubmit}>
                 <span className="prompt">$</span>
-                <input aria-label="Run a command" disabled={busy} onChange={onChange} placeholder="lunora verify" value={input} />
+                <input aria-label="Run a command" disabled={pending} onChange={onChange} placeholder="lunora verify" value={input} />
             </form>
         </div>
     );

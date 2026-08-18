@@ -712,10 +712,12 @@ What that branch carries, and why it grew past the one hook:
   will land; an action is not a write, so the option would imply a rollback
   guarantee nothing can honour.
 
-**Consequence for this branch:** `apps/builder`'s terminal goes back to calling
-`client.action` through `useLunora()` until that branch merges. That is the
-honest state — the app should not import a hook that only exists on an unmerged
-branch.
+**Consequence for this branch:** `apps/builder`'s terminal went back to calling
+`client.action` through `useLunora()` until that branch merged. **It has since
+merged** (PR #422), and review improved it on the way: the shared runner landed
+as one `createCallRunner` rather than the `createActionRunner`/`createMutationRunner`
+pair proposed here, since the two differ only in the options they forward. The
+terminal now uses `useAction`.
 
 **A gate this branch had been failing, caught on the way.** Reverting the hook
 surfaced that `api:check` was red here and had been since the first-full-version
@@ -772,10 +774,12 @@ reason, one feature later; three tests added.
   the action it protected; widening it to `{ db: unknown }` stripped `ctx.db` and
   `ctx.log` instead. Fixed with one implementation and two typed aliases.
 
-**Deliberately not done:** `useAction` does not exist in `@lunora/react`
-(`useQuery` and `useMutation` do), so the terminal calls `client.action` through
-`useLunora()`. Worth closing in the adapter rather than re-deriving that wrapper
-in every app — but not by widening a Core-tier package's API mid-build.
+**Deliberately not done at the time:** `useAction` did not exist in
+`@lunora/react` (`useQuery` and `useMutation` did), so the terminal called
+`client.action` through `useLunora()` — worth closing in the adapter rather than
+re-deriving that wrapper in every app, but not by widening a Core-tier package's
+API mid-build. **Closed since:** the hook shipped in all five adapters via PR
+#422 and the terminal now uses it.
 
 Verified: codegen clean of advisories, `tsc` clean for app and `_generated`,
 ESLint clean, `vite build` succeeds, **52/52** builder tests, `@lunora/vite`
