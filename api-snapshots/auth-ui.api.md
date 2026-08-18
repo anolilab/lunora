@@ -1121,9 +1121,10 @@ const DEFAULT_LOCALIZATION: Localization = {
     usernameSaved: "Your username has been updated.",
     usernameTaken: "That username is taken.",
     verifyEmail: "Verify your email",
-    verifyEmailFailed: "We couldn't verify that link. Request a new one.",
+    verifyEmailFailed: "We couldn't verify that link. Try again.",
     verifyEmailNoToken: "This page needs a verification link to work.",
     verifyEmailResend: "Send a new link",
+    verifyEmailRetry: "Try again",
     verifyEmailSent: "Check your email for a verification link.",
     verifyEmailVerifying: "Verifying your email…",
 };
@@ -1614,6 +1615,7 @@ interface Localization {
     verifyEmailFailed: string;
     verifyEmailNoToken: string;
     verifyEmailResend: string;
+    verifyEmailRetry: string;
     verifyEmailSent: string;
     verifyEmailVerifying: string;
 }
@@ -6058,9 +6060,10 @@ const DEFAULT_LOCALIZATION: Localization = {
     usernameSaved: "Your username has been updated.",
     usernameTaken: "That username is taken.",
     verifyEmail: "Verify your email",
-    verifyEmailFailed: "We couldn't verify that link. Request a new one.",
+    verifyEmailFailed: "We couldn't verify that link. Try again.",
     verifyEmailNoToken: "This page needs a verification link to work.",
     verifyEmailResend: "Send a new link",
+    verifyEmailRetry: "Try again",
     verifyEmailSent: "Check your email for a verification link.",
     verifyEmailVerifying: "Verifying your email…",
 };
@@ -6617,6 +6620,7 @@ interface Localization {
     verifyEmailFailed: string;
     verifyEmailNoToken: string;
     verifyEmailResend: string;
+    verifyEmailRetry: string;
     verifyEmailSent: string;
     verifyEmailVerifying: string;
 }

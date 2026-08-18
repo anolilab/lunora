@@ -70,16 +70,26 @@ const onBanToggle = (user: AuthAdminUser): void => {
                     <select
                         class="lunora-auth-select"
                         :aria-label="t.roleLabel"
-                        :disabled="state.busy"
+                        :disabled="state.busy || user.id === undefined"
                         :value="user.role ?? 'user'"
                         @change="onRole(user, $event)"
                     >
                         <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
                     </select>
-                    <button class="lunora-auth-button lunora-auth-button--secondary" type="button" :disabled="state.busy" @click="onImpersonate(user)">
+                    <button
+                        class="lunora-auth-button lunora-auth-button--secondary"
+                        type="button"
+                        :disabled="state.busy || user.id === undefined"
+                        @click="onImpersonate(user)"
+                    >
                         {{ t.adminImpersonate }}
                     </button>
-                    <button class="lunora-auth-button lunora-auth-button--danger" type="button" :disabled="state.busy" @click="onBanToggle(user)">
+                    <button
+                        class="lunora-auth-button lunora-auth-button--danger"
+                        type="button"
+                        :disabled="state.busy || user.id === undefined"
+                        @click="onBanToggle(user)"
+                    >
                         {{ user.banned === true ? t.adminUnban : t.adminBan }}
                     </button>
                 </span>

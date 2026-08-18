@@ -5,9 +5,16 @@
  * the registry — behind both front doors.
  */
 import type { SelectOption } from "@lunora/config";
+import { minVersion, validRange } from "semver";
 
-/** The per-framework auth-UI registry items (`auth-ui` resolves to one of these). */
-type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-svelte" | "auth-ui-vue";
+/**
+ * The per-framework auth-UI registry items (`auth-ui` resolves to one of these).
+ *
+ * Solid has two because these are copy-in source files, not a compiled package:
+ * the 1.x and 2.0 spellings are mutually exclusive in the source itself, so the
+ * two majors get one item each and {@link detectAuthUiItem} picks.
+ */
+type AuthUiItem = "auth-ui-angular" | "auth-ui-react" | "auth-ui-solid" | "auth-ui-solid-v2" | "auth-ui-svelte" | "auth-ui-vue";
 
 /** A registry item a feature can install. */
 type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
@@ -45,7 +52,8 @@ const AUTH_UI_OPTIONS: ReadonlyArray<SelectOption<AuthUiItem>> = [
     { description: "Next, react-router, TanStack Start, Astro islands", label: "React", value: "auth-ui-react" },
     { description: "Nuxt, Vue + Vite", label: "Vue", value: "auth-ui-vue" },
     { description: "SvelteKit, Svelte + Vite", label: "Svelte", value: "auth-ui-svelte" },
-    { description: "TanStack Start Solid, Solid + Vite", label: "Solid", value: "auth-ui-solid" },
+    { description: "TanStack Start Solid, Solid 1.x + Vite", label: "Solid", value: "auth-ui-solid" },
+    { description: "Solid 2.0 + Vite (@solidjs/web)", label: "Solid 2", value: "auth-ui-solid-v2" },
     { description: "Analog", label: "Angular", value: "auth-ui-angular" },
 ];
 
@@ -63,18 +71,73 @@ const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): b
     Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
 
 /**
+ * The lowest major a semver range admits — `^2.0.0-rc.0` → `2`, `>1` → `2`,
+ * `^1.9.0 || ^2.0.0-rc.0` → `1`.
+ *
+ * `minVersion` rather than a leading-digit regex, because the first number in a
+ * range is not its floor: `>1` means `>=2.0.0`, and a `||` union floors at
+ * whichever alternative is lowest regardless of the order it is written in, so
+ * `2 || 1` admits Solid 1.
+ *
+ * A range spanning both majors therefore reports `1`. That is deliberate rather
+ * than exact — nothing in the manifest says which side the install resolved to,
+ * so the caller keeps its pre-existing default instead of guessing, and a real
+ * Solid 2 project is still recognised by its `@solidjs/web` dependency.
+ *
+ * Returns `undefined` for anything npm can't parse as a range (`workspace:*`,
+ * `catalog:`, a git URL), so callers fall through to their own default.
+ */
+const minimumMajor = (range: string | undefined): number | undefined => {
+    // `validRange` first: `minVersion` throws on anything it can't parse, and a
+    // manifest read off disk can hold `workspace:*`, `catalog:`, or a git URL.
+    if (range === undefined || validRange(range) === null) {
+        return undefined;
+    }
+
+    return minVersion(range)?.major;
+};
+
+/**
+ * Is this a Solid **2.x** project?
+ *
+ * `@lunora/solid` spans both Solid majors, but the auth-UI payload cannot: those
+ * screens are user-owned *source*, and the 1.x spelling
+ * (`import type { JSX } from "solid-js"`, `onMount`, camelCase DOM attributes)
+ * is exactly what Solid 2 removed or renamed. So each major has its own item and
+ * this is the fork between them — `auth-ui-solid-v2` here, `auth-ui-solid`
+ * otherwise.
+ *
+ * Detected from `@solidjs/web` (a package that exists only on the 2.x line) or
+ * an explicit `solid-js` major, so a project cannot land here by accident.
+ */
+const isSolid2Project = (dependencies: Readonly<Record<string, string>>): boolean =>
+    Object.hasOwn(dependencies, "@solidjs/web") || (minimumMajor(dependencies["solid-js"]) ?? 0) >= 2;
+
+/**
  * Detect which auth-UI item fits a project from its package.json dependencies.
  * The Lunora framework adapter dep wins; a bare framework (or its meta-framework)
  * is the fallback. Returns `undefined` when nothing matches (caller then prompts)
  * — including for React Native, which has no DOM to render these screens into;
  * callers gate on {@link isReactNativeProject} first so that case gets its own
  * message rather than the generic "couldn't detect your framework".
+ *
+ * This ladder — including {@link isSolid2Project}'s two signals and its position
+ * ahead of the framework matches — is mirrored in an inline node script in
+ * `scripts/template-build-smoke.sh`, which cannot import TypeScript. Adding a
+ * signal here without adding it there makes the smoke test assert the payload
+ * the CLI no longer picks.
  */
 const detectAuthUiItem = (dependencies: Readonly<Record<string, string>>): AuthUiItem | undefined => {
     const has = (name: string): boolean => Object.hasOwn(dependencies, name);
 
     if (isReactNativeProject(dependencies)) {
         return undefined;
+    }
+
+    // Ahead of every framework match: a Solid 2 project also has `solid-js` and
+    // `@lunora/solid`, which would otherwise resolve to the Solid 1.x payload.
+    if (isSolid2Project(dependencies)) {
+        return "auth-ui-solid-v2";
     }
 
     if (has("@lunora/react")) {
@@ -169,6 +232,7 @@ export {
     detectAuthUiItem,
     EMAIL_ITEM,
     isReactNativeProject,
+    isSolid2Project,
     normalizeFeature,
     promptAuthProvider,
 };

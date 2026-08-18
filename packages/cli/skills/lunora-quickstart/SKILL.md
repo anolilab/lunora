@@ -74,6 +74,7 @@ templates fetched remotely (via `giget`) from
 | `next`                 | Next.js (App Router, OpenNext on Cloudflare)               |
 | `tanstack-start-react` | TanStack Start (React) — SSR with live-loader routes       |
 | `tanstack-start-solid` | TanStack Start (Solid)                                     |
+| `solid-v2`             | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)      |
 | `react-router`         | React Router v7 (framework mode), SSR in the Lunora worker |
 | `astro`                | Astro + a standalone Lunora worker                         |
 | `analog`               | AnalogJS (Angular) — single worker, Lunora in Nitro        |
@@ -83,7 +84,10 @@ templates fetched remotely (via `giget`) from
 | `standalone`           | Worker-only Lunora backend, no frontend                    |
 
 > There is **no `--template vite`.** SPAs go through `--vite <framework>`; `-t`
-> is only for the bespoke templates above.
+> is only for the bespoke templates above. The one exception is `solid-v2`:
+> create-vite's Solid base is still 1.x, and Solid 2.0 needs its own renderer
+> package, `jsxImportSource`, and Vite plugin major — so it ships as a template
+> rather than an overlay. `--vite solid` stays on Solid 1.x.
 
 With neither flag, an interactive run shows the framework picker (defaulting to
 the React overlay) and a **non-interactive run errors out** — so as an agent,

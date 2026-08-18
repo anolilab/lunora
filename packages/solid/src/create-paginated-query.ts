@@ -2,10 +2,11 @@ import type { ArgsOf, FunctionReference, ReturnOf, Unsubscribe } from "@lunora/c
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { Accessor } from "solid-js";
-import { createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 
 import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./context";
+import { trackedEffect } from "./solid-compat";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
 type PaginatedArgs<F extends FunctionReference> = Omit<ArgsOf<F>, "paginationOpts">;
@@ -275,32 +276,28 @@ const createPaginatedCore = <T>(
     };
 
     // Re-subscribe whenever the base args (or skip) change.
-    createEffect(
-        on(resolveArgs, (current) => {
-            teardownAll();
-            setPages(initialPages(initialNumItems));
-            setPageResults([]);
+    trackedEffect(resolveArgs, (current) => {
+        teardownAll();
+        setPages(initialPages(initialNumItems));
+        setPageResults([]);
 
-            if (current !== "skip") {
-                syncSubscriptions(pages(), current);
-                rebuildPageResults(pages(), current);
-            }
+        if (current !== "skip") {
+            syncSubscriptions(pages(), current);
+            rebuildPageResults(pages(), current);
+        }
 
-            onCleanup(teardownAll);
-        }),
-    );
+        return teardownAll;
+    });
 
     // Re-sync subscriptions whenever `pages` change (loadMore or rebalance).
-    createEffect(
-        on(pages, (currentPages) => {
-            const current = resolveArgs();
+    trackedEffect(pages, (currentPages) => {
+        const current = resolveArgs();
 
-            if (current !== "skip") {
-                syncSubscriptions(currentPages, current);
-                rebuildPageResults(currentPages, current);
-            }
-        }),
-    );
+        if (current !== "skip") {
+            syncSubscriptions(currentPages, current);
+            rebuildPageResults(currentPages, current);
+        }
+    });
 
     const status = createMemo<PaginationStatus>(() => {
         const skipped = resolveArgs() === "skip";

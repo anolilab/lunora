@@ -1,0 +1,23 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "preserve",
+        "jsxImportSource": "@solidjs/web",
+        "types": ["node"],
+        "noEmit": true,
+        // The suites pull in the port, whose files live under
+        // `packages/auth-ui/src` — so TypeScript resolves THEIR bare `solid-js`
+        // next to those files, which is the 1.x copy. Pin it to this package's
+        // own install instead, which is a real (unaliased) Solid 2.
+        "paths": {
+            "solid-js": ["./node_modules/solid-js"],
+            "solid-js/*": ["./node_modules/solid-js/*"]
+        }
+        // No `outDir`/`rootDir`: this package only type-checks.
+    },
+    // The suites only; the port and the controllers they import come in
+    // transitively, so this covers the test files themselves as well.
+    "include": ["**/*.ts", "**/*.tsx"],
+    "exclude": ["node_modules"]
+}

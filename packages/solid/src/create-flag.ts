@@ -1,11 +1,12 @@
 import type { FunctionReference, Unsubscribe } from "@lunora/client";
 import type { Accessor } from "solid-js";
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { stableStringify } from "../../../shared/stable-key";
 import { useLunora } from "./context";
 import type { MaybeAccessor } from "./create-agent";
 import { resolveMaybe } from "./create-agent";
+import { trackedEffect } from "./solid-compat";
 
 /**
  * The reserved runtime path the generated flag-subscription read override
@@ -70,34 +71,33 @@ const createFlag = <T extends FlagValue>(key: MaybeAccessor<string>, defaultValu
     const type = flagKind(defaultValue);
     const [value, setValue] = createSignal<T>(defaultValue);
 
-    // `on(serializedKey, …)` re-runs the body whenever the (reactive) key/context
-    // changes, tearing down the previous subscription via `onCleanup` first. The
-    // source is a stable string so an equal-but-new context never re-subscribes.
-    createEffect(
-        on(
-            () => `${resolveMaybe(key)} ${serializeContext(resolveMaybe(context))}`,
-            () => {
-                const currentKey = resolveMaybe(key);
-                const currentContext = resolveMaybe(context);
+    // The tracked source is a stable string built from the (reactive) key +
+    // context, so the body re-runs — tearing down the previous subscription via
+    // the returned disposer — only when one of them actually changes; an
+    // equal-but-new context object never re-subscribes.
+    trackedEffect(
+        () => `${resolveMaybe(key)} ${serializeContext(resolveMaybe(context))}`,
+        () => {
+            const currentKey = resolveMaybe(key);
+            const currentContext = resolveMaybe(context);
 
-                // A different key/context is a different flag — drop the prior value.
-                setValue(() => defaultValue);
+            // A different key/context is a different flag — drop the prior value.
+            setValue(() => defaultValue);
 
-                let unsubscribe: Unsubscribe;
+            let unsubscribe: Unsubscribe;
 
-                try {
-                    unsubscribe = client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key: currentKey, type }, (next) => {
-                        setValue(() => next as T);
-                    });
-                } catch {
-                    // The attach threw (e.g. the client is closed). Keep the default;
-                    // a flag read has no error channel — it fails open by design.
-                    return;
-                }
+            try {
+                unsubscribe = client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key: currentKey, type }, (next) => {
+                    setValue(() => next as T);
+                });
+            } catch {
+                // The attach threw (e.g. the client is closed). Keep the default;
+                // a flag read has no error channel — it fails open by design.
+                return undefined;
+            }
 
-                onCleanup(unsubscribe);
-            },
-        ),
+            return unsubscribe;
+        },
     );
 
     return value;
@@ -120,38 +120,36 @@ const createFlags = <T extends Record<string, FlagValue>>(flags: T, context?: Ma
     // reactive, so the effect key combines the (stable) spec with the context.
     const spec = stableStringify(flags);
 
-    createEffect(
-        on(
-            () => `${spec} ${serializeContext(resolveMaybe(context))}`,
-            () => {
-                const currentContext = resolveMaybe(context);
+    trackedEffect(
+        () => `${spec} ${serializeContext(resolveMaybe(context))}`,
+        () => {
+            const currentContext = resolveMaybe(context);
 
-                // Reset to defaults so a changed context never shows stale values.
-                setValues(() => flags);
+            // Reset to defaults so a changed context never shows stale values.
+            setValues(() => flags);
 
-                const unsubscribes: Unsubscribe[] = [];
+            const unsubscribes: Unsubscribe[] = [];
 
-                for (const [key, defaultValue] of Object.entries(flags)) {
-                    try {
-                        unsubscribes.push(
-                            client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
-                                setValues((previous) => {
-                                    return { ...previous, [key]: next };
-                                });
-                            }),
-                        );
-                    } catch {
-                        // The attach threw — keep this flag's default; flags fail open.
-                    }
+            for (const [key, defaultValue] of Object.entries(flags)) {
+                try {
+                    unsubscribes.push(
+                        client.subscribe(flagsReference, { context: currentContext, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
+                            setValues((previous) => {
+                                return { ...previous, [key]: next };
+                            });
+                        }),
+                    );
+                } catch {
+                    // The attach threw — keep this flag's default; flags fail open.
                 }
+            }
 
-                onCleanup(() => {
-                    for (const unsubscribe of unsubscribes) {
-                        unsubscribe();
-                    }
-                });
-            },
-        ),
+            return () => {
+                for (const unsubscribe of unsubscribes) {
+                    unsubscribe();
+                }
+            };
+        },
     );
 
     return values;

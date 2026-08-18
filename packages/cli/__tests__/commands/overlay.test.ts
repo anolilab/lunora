@@ -242,7 +242,7 @@ describe("applyLunoraOverlay", () => {
         expect.assertions(4);
 
         const expectations: Record<string, { contains: string; entry: string }> = {
-            solid: { contains: "LunoraContext.Provider", entry: "src/index.tsx" },
+            solid: { contains: "LunoraProvider", entry: "src/index.tsx" },
             svelte: { contains: "setLunoraClient", entry: "src/Root.svelte" },
             vanilla: { contains: "lunorash/client", entry: "src/main.ts" },
             vue: { contains: "createLunora", entry: "src/main.ts" },

@@ -1,0 +1,24 @@
+{
+    "compilerOptions": {
+        "target": "ES2024",
+        "module": "ESNext",
+        "moduleResolution": "bundler",
+        "lib": ["ES2024", "DOM", "DOM.Iterable"],
+        "jsx": "preserve",
+        // Solid 2 moved JSX typing out of core and into the renderer package —
+        // `solid-js/jsx-runtime` is gone. Pointing this at `solid-js` (the Solid
+        // 1.x spelling) is the single most common Solid 2 setup mistake.
+        "jsxImportSource": "@solidjs/web",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "noEmit": true,
+        "types": ["@cloudflare/workers-types", "vite/client"],
+        "paths": {
+            "~/*": ["./src/*"]
+        }
+    },
+    "include": ["src/**/*", "lunora/**/*", "vite.config.ts"]
+}

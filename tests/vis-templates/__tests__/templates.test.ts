@@ -143,10 +143,20 @@ const LATEST_MAJORS: Record<string, number> = {
 };
 
 /**
- * Per-template major overrides for a dep a template intentionally pins below
- * {@link LATEST_MAJORS} — keyed by template → dep → the major it must stay on.
+ * Per-template major overrides — keyed by template → dep → the major it must
+ * stay on. Covers a template that intentionally pins a dep *below*
+ * {@link LATEST_MAJORS}, and the reverse: one that deliberately runs ahead.
+ *
+ * `solid-v2` is the ahead case. It exists to track the Solid 2.0 line while
+ * Solid 2 is still an RC, so {@link LATEST_MAJORS} keeps `solid-js` on the
+ * stable major 1 for every other template (`tanstack-start-solid` is pinned
+ * there by TanStack's own peer range anyway) and this template opts forward.
+ * When Solid 2 ships stable, move these into `LATEST_MAJORS` and drop the
+ * override.
  */
-const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {};
+const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {
+    "solid-v2": { "solid-js": 2, "vite-plugin-solid": 3 },
+};
 
 /**
  * The Lunora client adapter each template's UI must depend on. `standalone` has
@@ -161,6 +171,7 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     next: "@lunora/react",
     nuxt: "@lunora/vue",
     "react-router": "@lunora/react",
+    "solid-v2": "@lunora/solid",
     standalone: null,
     sveltekit: "@lunora/svelte",
     "tanstack-start-react": "@lunora/react",

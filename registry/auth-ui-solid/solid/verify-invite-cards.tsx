@@ -37,7 +37,7 @@ const VerifyEmailCard = (props: VerifyEmailCardProps = {}): JSX.Element => {
                     }}
                     type="button"
                 >
-                    {t.verifyEmailResend}
+                    {t.verifyEmailRetry}
                 </button>
             </Show>
         </AuthCard>

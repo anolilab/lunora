@@ -53,7 +53,7 @@
                             <select
                                 aria-label={t.roleLabel}
                                 class="lunora-auth-select"
-                                disabled={$res.busy}
+                                disabled={$res.busy || user.id === undefined}
                                 onchange={(event) => {
                                     void actions.setRole(user.id ?? "", event.currentTarget.value);
                                 }}
@@ -65,7 +65,7 @@
                             </select>
                             <button
                                 class="lunora-auth-button lunora-auth-button--secondary"
-                                disabled={$res.busy}
+                                disabled={$res.busy || user.id === undefined}
                                 onclick={() => {
                                     void actions.impersonate(user.id ?? "");
                                 }}
@@ -75,7 +75,7 @@
                             </button>
                             <button
                                 class="lunora-auth-button lunora-auth-button--danger"
-                                disabled={$res.busy}
+                                disabled={$res.busy || user.id === undefined}
                                 onclick={() => {
                                     void (user.banned === true ? actions.unban(user.id ?? "") : actions.ban(user.id ?? ""));
                                 }}

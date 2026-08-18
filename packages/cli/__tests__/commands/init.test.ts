@@ -411,6 +411,38 @@ describe("lunora init", () => {
             expect(pkg).toContain('"name": "starter"');
         });
 
+        it("solid-v2 template scaffolds a Solid 2 SPA on the 2.x toolchain", async () => {
+            expect.assertions(11);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "starter",
+                templateType: "solid-v2",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "starter");
+
+            expect(existsSync(join(target, "index.html"))).toBe(true);
+            expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "src", "index.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "App.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "server.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+
+            const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+            // The 2.x toolchain, not the 1.x one: Solid 2 ships its renderer as a
+            // separate package and needs the matching (3.x) Vite plugin.
+            expect(pkg).toContain('"solid-js": "^2.');
+            expect(pkg).toContain("@solidjs/web");
+            expect(pkg).toContain('"vite-plugin-solid": "^3.');
+            expect(pkg).toContain('"name": "starter"');
+        });
+
         it("next template scaffolds app router + two-worker entries", async () => {
             expect.assertions(12);
 
@@ -582,12 +614,13 @@ describe("lunora init", () => {
         });
 
         it("isTemplate accepts the real template dir names incl. next and vinext (not the removed vite-react)", () => {
-            expect.assertions(12);
+            expect.assertions(13);
 
             expect(isTemplate("astro")).toBe(true);
             expect(isTemplate("expo")).toBe(true);
             expect(isTemplate("next")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
+            expect(isTemplate("solid-v2")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start-react")).toBe(true);

@@ -29,16 +29,24 @@ pnpm dev
 
 Scaffolded from the official create-vite base with the Lunora layer applied on
 top, so you get the standard Vite project you would have created yourself, plus
-the plugin, codegen, and Studio.
+the plugin, codegen, and Studio. (Solid 2.0 is the exception — see below.)
 
-| Framework | Command                     | Guide                             |
-| --------- | --------------------------- | --------------------------------- |
-| React     | `lunora init app -t react`  | [React](/docs/frameworks/react)   |
-| Vue       | `lunora init app -t vue`    | [Vue](/docs/frameworks/vue)       |
-| Solid     | `lunora init app -t solid`  | [Solid](/docs/frameworks/solid)   |
-| Svelte    | `lunora init app -t svelte` | [Svelte](/docs/frameworks/svelte) |
+| Framework | Command                         | Guide                             |
+| --------- | ------------------------------- | --------------------------------- |
+| React     | `lunora init app --vite react`  | [React](/docs/frameworks/react)   |
+| Vue       | `lunora init app --vite vue`    | [Vue](/docs/frameworks/vue)       |
+| Solid     | `lunora init app --vite solid`  | [Solid](/docs/frameworks/solid)   |
+| Svelte    | `lunora init app --vite svelte` | [Svelte](/docs/frameworks/svelte) |
+| Solid 2.0 | `lunora init app -t solid-v2`   | [Solid](/docs/frameworks/solid)   |
 
 React is the default when you do not choose.
+
+The overlay frameworks take `--vite`, not `-t`; `-t` is for the bespoke
+templates in the sections below. **Solid 2.0** is the one SPA that is a bespoke
+template: create-vite's Solid base is still 1.x, while 2.0 needs a different
+renderer package (`@solidjs/web`), a different `jsxImportSource`, and
+`vite-plugin-solid` 3.x. `--vite solid` stays on the stable Solid 1.x line —
+pick `-t solid-v2` to track the 2.0 release candidate.
 
 ### Server-rendered apps
 

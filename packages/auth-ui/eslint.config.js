@@ -5,6 +5,41 @@ import typescriptParser from "@typescript-eslint/parser";
 import vueParser from "vue-eslint-parser";
 import vuePlugin from "eslint-plugin-vue";
 
+/*
+ * The React rule set is on for this whole package — it really does ship a React
+ * port — so it also lands on the Solid files beside it. Solid compiles JSX too,
+ * but none of React's hook/component rules describe it. Shared by both Solid
+ * ports so the two lists cannot drift.
+ *
+ * `packages/solid` lints its own `.tsx` with none of these overrides, which can
+ * look like they are unnecessary here. The difference is that package has no
+ * React to turn the rule set on.
+ */
+const SOLID_REACT_RULE_OVERRIDES = {
+    "react-hooks/exhaustive-deps": "off",
+    "react-hooks/rules-of-hooks": "off",
+    "react/no-unknown-property": "off",
+    "react-perf/jsx-no-new-function-as-prop": "off",
+    "react-perf/jsx-no-new-object-as-prop": "off",
+    /*
+     * This one is not merely inapplicable, it is backwards: destructuring a
+     * Solid component's props reads them once and severs reactivity. The ports
+     * deliberately never do it.
+     */
+    "react/destructuring-assignment": "off",
+    // Solid spells it `for`, not `htmlFor`, so the a11y rule can't see the association.
+    "jsx-a11y/label-has-associated-control": "off",
+    // `solid-js` / `@solidjs/web` are devDependencies for the same reason
+    // `@angular/core` is: the port is copied into the user's project.
+    "import/no-extraneous-dependencies": "off",
+    // Solid's context API is its own; these rules describe React 19's.
+    "react-x/no-context-provider": "off",
+    "react-x/no-use-context": "off",
+    "react/jsx-no-constructed-context-values": "off",
+    // Solid has no Fast Refresh component/constant split.
+    "react-refresh/only-export-components": "off",
+};
+
 // Self-contained flat config for @lunora/auth-ui — the source-of-truth for the
 // copy-in auth screens. Built on @anolilab/eslint-config; mirrors packages/react.
 export default createConfig(
@@ -59,38 +94,29 @@ export default createConfig(
     {
         files: ["src/solid/**/*.{ts,tsx}", "__tests__/solid/**/*.{ts,tsx}"],
         languageOptions: { parserOptions: { project: "./tsconfig.solid.json", tsconfigRootDir: import.meta.dirname } },
+        rules: { ...SOLID_REACT_RULE_OVERRIDES },
+    },
+    /*
+     * The Solid 2 port. Same reasoning as the Solid block above — its own
+     * program, and none of React's component rules describe it — plus its
+     * program is the one that resolves the aliased Solid 2 install
+     * (`tsconfig.solid-v2.json`), so type-aware rules have to be pointed there
+     * or every file resolves `solid-js` to the 1.x copy and reports phantom
+     * missing exports.
+     */
+    {
+        files: ["src/solid-v2/**/*.{ts,tsx}"],
+        languageOptions: { parserOptions: { project: "./tsconfig.solid-v2.json", tsconfigRootDir: import.meta.dirname } },
         rules: {
+            ...SOLID_REACT_RULE_OVERRIDES,
             /*
-             * `packages/solid` lints its own `.tsx` with none of these overrides,
-             * which can look like they are unnecessary here. The difference is
-             * that this package really does depend on React — it ships a React
-             * port — so the shared config turns the React rule set on for the
-             * whole package, including the Solid files beside it.
-             *
-             * Solid compiles JSX too, but none of React's hook/component rules
-             * describe it.
+             * Solid 2 only. Its conditional-class API *is* an inline array/object
+             * — `class={["card", { active: isActive() }]}` — and the cheatsheet
+             * calls building the string by hand the React reflex to avoid. So
+             * this rule is not merely inapplicable here, it argues for the wrong
+             * code.
              */
-            "react-hooks/exhaustive-deps": "off",
-            "react-hooks/rules-of-hooks": "off",
-            "react/no-unknown-property": "off",
-            "react-perf/jsx-no-new-function-as-prop": "off",
-            "react-perf/jsx-no-new-object-as-prop": "off",
-            /*
-             * This one is not merely inapplicable, it is backwards: destructuring
-             * a Solid component's props reads them once and severs reactivity.
-             * The port deliberately never does it.
-             */
-            "react/destructuring-assignment": "off",
-            // Solid spells it `for`, not `htmlFor`, so the a11y rule can't see the association.
-            "jsx-a11y/label-has-associated-control": "off",
-            // `solid-js` is a devDependency for the same reason `@angular/core` is.
-            "import/no-extraneous-dependencies": "off",
-            // Solid's context API is its own; these rules describe React 19's.
-            "react-x/no-context-provider": "off",
-            "react-x/no-use-context": "off",
-            "react/jsx-no-constructed-context-values": "off",
-            // Solid has no Fast Refresh component/constant split.
-            "react-refresh/only-export-components": "off",
+            "react-perf/jsx-no-new-array-as-prop": "off",
         },
     },
     /*
