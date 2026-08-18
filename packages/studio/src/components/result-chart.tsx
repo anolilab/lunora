@@ -78,11 +78,21 @@ const ContinuousChart = ({ data, kind }: { readonly data: ChartPoint[]; readonly
  * at {@link MAX_BARS} rows; shows a hint when the result has no numeric column
  * to plot.
  *
- * `axes.kind` selects the shape when the assistant inferred one; a heuristic
- * chart (no `axes`) is always a bar chart, which is the reading that needs the
- * fewest assumptions about the x axis being ordered.
+ * Two independent inputs decide the shape. `kind` is the operator's explicit
+ * choice and always wins. `axes.kind` is the assistant's inference and applies
+ * only when its suggested series survived; a heuristic chart (neither given) is
+ * always a bar chart, which is the reading that needs the fewest assumptions
+ * about the x axis being ordered.
  */
-const SqlResultChart = ({ axes, result }: { readonly axes?: AssistantChartConfig; readonly result: SqlConsoleResult }): ReactElement => {
+const SqlResultChart = ({
+    axes,
+    kind: chosenKind,
+    result,
+}: {
+    readonly axes?: AssistantChartConfig;
+    readonly kind?: AssistantChartConfig["kind"];
+    readonly result: SqlConsoleResult;
+}): ReactElement => {
     const t = useT();
     const picked = pickColumns(result);
     // A set, not repeated `columns.includes`: the `y` scan below is a lookup per
@@ -113,11 +123,16 @@ const SqlResultChart = ({ axes, result }: { readonly axes?: AssistantChartConfig
         );
     }
 
-    // The suggested SHAPE only applies when the suggested SERIES survived the
-    // gate above. A result the suggestion did not fit falls back to the heuristic
-    // columns, and a line drawn through columns the model never saw asserts an
-    // ordering nothing has established — so that case stays a bar chart.
-    const kind = axes !== undefined && suggestedValue !== undefined ? axes.kind : "bar";
+    // An explicitly CHOSEN shape always wins: the operator asserting "this is a
+    // time series" is the ordering evidence the paragraph below says a suggestion
+    // lacks, and a picker whose selection is silently overruled is worse than no
+    // picker. It applies even when the columns fall back to the heuristic.
+    //
+    // The suggested SHAPE, in contrast, only applies when the suggested SERIES
+    // survived the gate above. A result the suggestion did not fit falls back to
+    // the heuristic columns, and a line drawn through columns the model never saw
+    // asserts an ordering nothing has established — so that case stays a bar chart.
+    const kind = chosenKind ?? (axes !== undefined && suggestedValue !== undefined ? axes.kind : "bar");
 
     return (
         // The kind is stamped on the wrapper because Recharts draws into a

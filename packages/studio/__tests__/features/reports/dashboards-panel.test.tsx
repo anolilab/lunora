@@ -18,11 +18,19 @@ const NUMERIC_RESULT = {
     truncated: false,
 };
 
+/**
+ * A deployment with data but no AI binding — the default for these tests, so the
+ * chart picker is exercised on the path every no-AI deployment actually takes.
+ */
 const numericMock = (): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.runSql) {
                 return NUMERIC_RESULT;
+            }
+
+            if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                return { available: false };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -35,12 +43,19 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
     </LunoraProvider>
 );
 
-const addWidget = (title: string, sql: string): void => {
+const addWidget = (title: string, sql: string, kind?: string): void => {
     fireEvent.click(screen.getByTestId("dashboards-add"));
     fireEvent.change(screen.getByTestId("dashboards-form-title"), { target: { value: title } });
     fireEvent.change(screen.getByTestId("dashboards-form-sql"), { target: { value: sql } });
+
+    if (kind !== undefined) {
+        fireEvent.change(screen.getByTestId("dashboards-form-kind"), { target: { value: kind } });
+    }
+
     fireEvent.click(screen.getByTestId("dashboards-form-save"));
 };
+
+const SQL = "SELECT author, COUNT(*) AS messages FROM messages GROUP BY author;";
 
 describe("dashboardsPanel", () => {
     afterEach(() => {
@@ -62,6 +77,83 @@ describe("dashboardsPanel", () => {
         // so assert the chart mounted (not the empty-state) rather than its bars.
         expect(chart).toBeDefined();
         expect(screen.queryByTestId("sql-chart-empty")).toBeNull();
+    });
+
+    it("draws the chart type the operator picked, with no AI binding", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(numericMock()));
+
+        addWidget("Messages over time", SQL, "line");
+
+        const chart = await screen.findByTestId("sql-chart");
+
+        // The headline defect: before this the widget passed no shape at all, so
+        // `SqlResultChart` took its "bar" constant arm on every render and the
+        // picker's selection was unobservable.
+        expect(chart.dataset["chartKind"]).toBe("line");
+        // And the affordance that needs a model stays hidden when there is none.
+        expect(screen.queryByTestId(/^dashboards-widget-suggest-/u)).toBeNull();
+    });
+
+    it("keeps the picked chart type across a remount", async () => {
+        expect.assertions(1);
+
+        const view = render(renderPanel(numericMock()));
+
+        addWidget("Persisted area", SQL, "area");
+        await screen.findByTestId("sql-chart");
+
+        view.unmount();
+        render(renderPanel(numericMock()));
+
+        const chart = await screen.findByTestId("sql-chart");
+
+        expect(chart.dataset["chartKind"]).toBe("area");
+    });
+
+    it("applies a suggestion as a choice, so the shape survives a missing series", async () => {
+        // `hasAssertions`, not a count: `waitFor` retries its callback, so the
+        // inner expectation runs an unpredictable number of times.
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return NUMERIC_RESULT;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChartConfig) {
+                    // A y column the result does not have. `SqlResultChart` drops a
+                    // SUGGESTED shape in that case — but accepting it was a click,
+                    // so the widget stores it as a choice and the shape holds.
+                    return { result: { chart: { kind: "line", x: "author", y: ["absent"] }, degraded: false } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        addWidget("Suggested", SQL);
+        await screen.findByTestId("sql-chart");
+
+        const [suggest] = screen.getAllByTestId(/^dashboards-widget-suggest-/u);
+
+        fireEvent.click(suggest as HTMLButtonElement);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("sql-chart").dataset["chartKind"]).toBe("line");
+        });
+
+        const [stored] = JSON.parse(localStorage.getItem("lunora-studio-dashboards") ?? "[]") as { chartKind?: string }[];
+
+        expect(stored?.chartKind).toBe("line");
     });
 
     it("surfaces a per-widget query error inline", async () => {

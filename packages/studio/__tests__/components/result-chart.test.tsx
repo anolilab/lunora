@@ -44,6 +44,26 @@ describe("sqlResultChart", () => {
         expect(screen.getByTestId("sql-chart").dataset["chartKind"]).toBe("bar");
     });
 
+    it.each(["area", "line"] as const)("draws a chosen %s chart with nothing inferred at all", (kind) => {
+        expect.assertions(1);
+
+        render(<SqlResultChart kind={kind} result={RESULT} />);
+
+        // The picker's whole job. With no `axes` the heuristic supplies the
+        // columns, and before this the shape was hard-wired to "bar".
+        expect(screen.getByTestId("sql-chart").dataset["chartKind"]).toBe(kind);
+    });
+
+    it("keeps the chosen shape when the suggested series is missing", () => {
+        expect.assertions(1);
+
+        // The suggestion's series is absent, so its SHAPE is discarded — but the
+        // operator's is not: they asserted the ordering themselves.
+        render(<SqlResultChart axes={{ kind: "bar", x: "day", y: ["revenue"] }} kind="line" result={RESULT} />);
+
+        expect(screen.getByTestId("sql-chart").dataset["chartKind"]).toBe("line");
+    });
+
     it("shows the empty state when no column is numeric", () => {
         expect.assertions(1);
 
