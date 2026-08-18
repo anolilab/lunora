@@ -467,7 +467,7 @@ class Client(
      * `Flow` lives in kotlinx-coroutines, and this transport takes no
      * dependencies beyond the JDK.
      */
-    inner class Stream internal constructor() :
+    class Stream internal constructor() :
         Sequence<StreamEvent>,
         AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the

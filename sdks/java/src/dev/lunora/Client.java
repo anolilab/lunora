@@ -611,7 +611,7 @@ public final class Client {
      * try-with-resources — otherwise the subscription outlives the loop and the iterator blocks
      * forever.
      */
-    public final class Stream implements Iterable<StreamEvent>, AutoCloseable {
+    public static final class Stream implements Iterable<StreamEvent>, AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the trade is that one
         // which stops reading without closing grows the buffer.
         private final LinkedBlockingQueue<StreamEvent> events = new LinkedBlockingQueue<>();
