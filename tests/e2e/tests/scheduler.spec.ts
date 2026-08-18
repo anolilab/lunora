@@ -18,20 +18,16 @@ test.beforeEach(async ({ resetServer }) => {
 test("scheduled cleanup fires within a few seconds and updates the runs log", async ({ user }) => {
     // Durable Object alarms don't fire in `@cloudflare/vite-plugin`'s embedded dev
     // Miniflare, so the SchedulerDO never dispatches the job here. The scheduler
-    // itself works against a standalone `wrangler dev` / production; schedule +
-    // `/test/job-status` are wired correctly (the job just stays "scheduled").
+    // itself works against a standalone `wrangler dev` / production; the playground's
+    // `/test/schedule` + `/test/job-status` harness routes are wired and reachable
+    // (the job just stays "scheduled"), so this is the ONE thing still missing.
+    // Drop this line once the embedded worker runs alarms — the body below is live.
     test.skip(true, "DO alarms don't fire in the embedded dev worker (@cloudflare/vite-plugin Miniflare)");
 
     // `user.request` carries the better-auth session cookie set during signup.
     const scheduleResponse = await user.request.post(`/test/schedule`, {
         data: { delayMs: 1000, functionPath: "cleanup:cleanupOldMessages" },
     });
-
-    if (scheduleResponse.status() === 404) {
-        test.skip(true, "playground has no /test/schedule helper; scheduler test needs harness route");
-
-        return;
-    }
 
     expect(scheduleResponse.ok()).toBe(true);
 

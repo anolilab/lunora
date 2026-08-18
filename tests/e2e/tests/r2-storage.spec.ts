@@ -83,13 +83,6 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
         data: { expiresInSeconds: 1, key: "avatars/e2e/expiry" },
     });
 
-    if (response.status() === 404) {
-        // Older playground without /test/sign — skip rather than fail.
-        test.skip(true, "playground has no /test/sign helper; expiry test needs harness route");
-
-        return;
-    }
-
     expect(response.ok()).toBe(true);
 
     const body = (await response.json()) as { url?: string };
