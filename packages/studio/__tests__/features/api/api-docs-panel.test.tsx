@@ -3,14 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import ApiDocsPanel, {
-    buildClientSnippet,
-    buildCliSnippet,
-    buildReactSnippet,
-    buildTableSnippet,
-    REACT_HAS_ACTION_HOOK,
-    splitPath,
-} from "../../../src/features/api/api-docs-panel";
+import ApiDocsPanel, { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath } from "../../../src/features/api/api-docs-panel";
 import type { FunctionDescriptor } from "../../../src/index";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
@@ -57,14 +50,7 @@ describe("snippet builders", () => {
 
         expect(buildReactSnippet({ file: "messages", fn: "list", kind: "query" })).toBe("const data = useQuery(api.messages.list, { /* args */ });");
         expect(buildReactSnippet({ file: "messages", fn: "send", kind: "mutation" })).toBe("const send = useMutation(api.messages.send);");
-        // Actions have no React hook, so the React tab falls back to the client snippet.
-        expect(buildReactSnippet({ file: "stripe", fn: "sync", kind: "action" })).toBe(buildClientSnippet({ file: "stripe", fn: "sync", kind: "action" }));
-    });
-
-    it("documents that actions have no React hook", () => {
-        expect.assertions(1);
-
-        expect(REACT_HAS_ACTION_HOOK).toBe(false);
+        expect(buildReactSnippet({ file: "stripe", fn: "sync", kind: "action" })).toBe("const { call: sync } = useAction(api.stripe.sync);");
     });
 
     it("builds the client SDK snippet per kind", () => {
@@ -148,16 +134,18 @@ describe("apiDocsPanel", () => {
         expect(screen.getByTestId("api-snippet-cli").textContent).toContain("lunora run messages:list --args");
     });
 
-    it("notes the action fallback on the React tab", () => {
+    it("shows the useAction hook on the React tab for an action", () => {
         expect.assertions(2);
 
         render(renderPanel(createClient()));
 
         fireEvent.click(screen.getByTestId("api-rail-fn-stripe:sync"));
 
-        // React tab for an action shows the client call plus the explanatory note.
-        expect(screen.getByTestId("api-snippet-react").textContent).toContain("await client.action(api.stripe.sync");
-        expect(screen.getByTestId("api-action-note")).toBeDefined();
+        expect(screen.getByTestId("api-snippet-react").textContent).toContain("useAction(api.stripe.sync");
+
+        fireEvent.click(screen.getByTestId("api-tab-client"));
+
+        expect(screen.getByTestId("api-snippet-client").textContent).toContain("await client.action(api.stripe.sync");
     });
 
     it("shows the typed data-model snippet for a selected table", async () => {

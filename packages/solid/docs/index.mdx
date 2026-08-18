@@ -60,6 +60,8 @@ render(
 | `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.          |
 | `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                 |
 | `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                        |
+| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.         |
+| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                         |
 | `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
 | `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore }`.                                   |
 | `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
@@ -72,7 +74,8 @@ render(
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 `Preloaded`, `ReturnOf`, `Unsubscribe`, plus `LunoraProviderProps`,
-`CreateQueryOptions`, `MutationClient`, and the `MutationHandle` interface.
+`CreateQueryOptions`, `MutationClient`, `ActionClient`, and the
+`MutationHandle` / `ActionHandle` interfaces.
 
 ## `<LunoraProvider client={...}>`
 
@@ -179,6 +182,46 @@ await send.mutate(
 `createMutationForClient(client, fn)` builds the same handle bound to an explicit
 client object (only `{ mutation }` is required). It's the internal seam behind
 `createMutation`, exported for tests that inject a stub.
+
+## `createAction(fn)`
+
+Returns a reactive `ActionHandle` — the same shape as `MutationHandle`, with
+`call` in place of `mutate`:
+
+```ts
+interface ActionHandle<F> {
+    data: Accessor<ReturnOf<F> | undefined>; // latest resolved value
+    error: Accessor<Error | undefined>; // latest error
+    pending: Accessor<boolean>; // true while any call from this handle is in flight (ref-counted)
+    call: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+```tsx
+import { createAction } from "@lunora/solid";
+
+import { api } from "./lunora/_generated/api";
+
+function VerifyButton() {
+    const verify = createAction(api.commands.run);
+
+    return (
+        <button disabled={verify.pending()} onClick={() => verify.call({ command: "lunora", args: ["verify"] })}>
+            Verify
+        </button>
+    );
+}
+```
+
+Per-call options are `{ shardKey }` only. Unlike `createMutation` there are no
+`optimistic` / `optimisticUpdate` options: an optimistic update patches the
+subscription cache on the assumption a write will land, and an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query.
+
+`createActionForClient(client, fn)` builds the same handle bound to an explicit
+client object (only `{ action }` is required), the seam behind `createAction`.
 
 ## Reactive loaders — `hydratePreloaded`
 

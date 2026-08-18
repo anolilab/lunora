@@ -32,6 +32,8 @@ interface StreamCall {
  * network — pure in-memory.
  */
 interface FakeClient {
+    /** A recorded mock of `action` so tests can assert calls/resolve a value. */
+    actionSpy: ReturnType<typeof vi.fn>;
     /** The fake typed as a `LunoraClient` for passing into the composables. */
     client: LunoraClient;
     /** Await a macrotask so the stream consumer's `for await` loop drains queued chunks into `chunks`. */
@@ -59,6 +61,7 @@ const createFakeClient = (): FakeClient => {
     const streamCalls: StreamCall[] = [];
     const unsubscribeSpy = vi.fn<() => void>();
     const mutationSpy = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => undefined);
+    const actionSpy = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => undefined);
 
     // A throwaway Vue app gives us a real `runWithContext` so `inject`/`provide`
     // resolve without mounting a component into a DOM.
@@ -104,7 +107,7 @@ const createFakeClient = (): FakeClient => {
         return iterable as StreamIterable<ReturnOf<F>>;
     };
 
-    const fake = { mutation: mutationSpy, stream, subscribe } as unknown as LunoraClient;
+    const fake = { action: actionSpy, mutation: mutationSpy, stream, subscribe } as unknown as LunoraClient;
 
     // Install the fake into the app's provide context up front so
     // `useLunora()` resolves it inside `runWithContext`.
@@ -139,7 +142,7 @@ const createFakeClient = (): FakeClient => {
             setTimeout(resolve, 0);
         });
 
-    return { client: fake, flush, mutationSpy, provide, push, pushStream, streamCalls, subscribeCalls, unsubscribeSpy };
+    return { actionSpy, client: fake, flush, mutationSpy, provide, push, pushStream, streamCalls, subscribeCalls, unsubscribeSpy };
 };
 
 export type { FakeClient };

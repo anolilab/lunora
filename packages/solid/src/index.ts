@@ -1,4 +1,6 @@
 export { LunoraContext, useLunora } from "./context";
+export type { ActionClient, ActionHandle } from "./create-action";
+export { createAction, createActionForClient } from "./create-action";
 export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentOptions, CreateAgentResult } from "./create-agent";
 export { createAgent } from "./create-agent";
 export type {

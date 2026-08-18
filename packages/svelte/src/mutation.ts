@@ -1,5 +1,5 @@
 import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, ReturnOf } from "@lunora/client";
-import { createMutationRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
@@ -40,8 +40,13 @@ export interface MutationHandle<F extends FunctionReference> {
  * Svelte counterpart to React's `useMutation`: returns
  * `{ data, error, pending, mutate, reset }` of readable stores plus an awaitable
  * `mutate`. The ref-counted pending + error-normalize orchestration is the
- * shared `createMutationRunner` from `@lunora/client`; only the stores are
+ * shared `createCallRunner` from `@lunora/client`; only the stores are
  * adapter-specific.
+ *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place.
+ * `reset()` clears both; it does not cancel an in-flight call.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient`.
@@ -57,18 +62,21 @@ export function mutation<F extends FunctionReference>(clientOrFunction: LunoraCl
     const error = writable<Error | undefined>();
     const pending = writable(false);
 
-    const mutate = createMutationRunner<F>(client, functionRef, {
-        setError: (next) => {
-            error.set(next);
+    const mutate = createCallRunner(
+        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => client.mutation(functionRef, args, options),
+        {
+            setError: (next) => {
+                error.set(next);
+            },
+            setPending: (next) => {
+                pending.set(next);
+            },
+            setResult: (result) => {
+                data.set(result);
+                error.set(undefined);
+            },
         },
-        setPending: (next) => {
-            pending.set(next);
-        },
-        setResult: (result) => {
-            data.set(result);
-            error.set(undefined);
-        },
-    });
+    );
 
     const reset = (): void => {
         data.set(undefined);

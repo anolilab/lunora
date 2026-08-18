@@ -9,6 +9,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/svelte`
 
+### `ActionHandle` (interface)
+
+```ts
+interface ActionHandle<F extends FunctionReference> {
+    call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
+    data: Readable<ReturnOf<F> | undefined>;
+    error: Readable<Error | undefined>;
+    pending: Readable<boolean>;
+    reset: () => void;
+}
+```
+
 ### `AgentApi` (interface)
 
 ```ts
@@ -575,6 +587,14 @@ type VoiceReference = FunctionReference<"stream", {
 
 ```ts
 type VoiceStatus = "idle" | "listening" | "speaking" | "thinking";
+```
+
+### `action` (function)
+
+```ts
+function action<F extends FunctionReference>(function_: F): ActionHandle<F>;
+
+function action<F extends FunctionReference>(client: LunoraClient, function_: F): ActionHandle<F>;
 ```
 
 ### `agent` (function)

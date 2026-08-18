@@ -325,6 +325,20 @@ interface MutationSettledEvent {
 }
 
 /**
+ * Per-call options for {@link LunoraClient.action} — just `shardKey`, since an
+ * action is not a write and carries none of the optimistic machinery. Exported
+ * (at the end of this file) for the same reason {@link MutationCallOptions} is:
+ * so the framework adapters (`@lunora/react`, `/solid`, `/svelte`, `/vue`,
+ * `/angular`) type their `call(args, options?)` against one canonical
+ * definition. Add an option here and every adapter forwards it; re-declare it
+ * per adapter and they silently cannot.
+ */
+interface ActionCallOptions {
+    /** Route the call to a specific shard. */
+    shardKey?: string;
+}
+
+/**
  * Per-call options for {@link LunoraClient.mutation} — the optimistic-update
  * machinery plus `shardKey`. Exported (at the end of this file) so the framework
  * adapters (`@lunora/react`, `/solid`, `/svelte`, `/vue`) can type their
@@ -2077,7 +2091,7 @@ class LunoraClient {
         }
     }
 
-    public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: ActionCallOptions = {}): Promise<ReturnOf<F>> {
         this.assertOpen();
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
@@ -6229,6 +6243,7 @@ class LunoraClient {
 
 export { LunoraClient };
 export type {
+    ActionCallOptions,
     BatchSlot,
     ClientDebugShard,
     ClientDebugSnapshot,

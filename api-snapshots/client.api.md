@@ -9,6 +9,14 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/client`
 
+### `ActionCallOptions` (interface)
+
+```ts
+interface ActionCallOptions {
+    shardKey?: string;
+}
+```
+
 ### `ArgsOf` (type)
 
 ```ts
@@ -437,9 +445,7 @@ class LunoraClient {
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
     mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
-    action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
-        shardKey?: string;
-    }): Promise<ReturnOf<F>>;
+    action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
         chunkSize?: number;
         importId?: string;
@@ -820,16 +826,6 @@ interface MutationDelta {
     op: "delete" | "insert" | "update";
     row?: Record<string, unknown>;
     table: string;
-}
-```
-
-### `MutationRunnerSinks` (interface)
-
-```ts
-interface MutationRunnerSinks<R> {
-    setError: (error: Error) => void;
-    setPending: (pending: boolean) => void;
-    setResult: (result: R) => void;
 }
 ```
 
@@ -1478,6 +1474,12 @@ const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unk
 const createAsyncStoragePersistence: (options: AsyncStoragePersistenceOptions) => PersistenceAdapter;
 ```
 
+### `createCallRunner` (const)
+
+```ts
+const createCallRunner: <A, O, R>(invoke: (args: A, options?: O) => Promise<R>, sinks: CallRunnerSinks<R>) => ((args: A, options?: O) => Promise<R>);
+```
+
 ### `createClientQuery` (const)
 
 ```ts
@@ -1524,12 +1526,6 @@ const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string |
     rollbacks: (() => void)[];
     store: OptimisticLocalStore;
 };
-```
-
-### `createMutationRunner` (const)
-
-```ts
-const createMutationRunner: <F extends FunctionReference>(client: MutationCapableClient<F>, function_: F, sinks: MutationRunnerSinks<ReturnOf<F>>) => ((args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>);
 ```
 
 ### `createMutatorRunner` (const)

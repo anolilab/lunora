@@ -83,7 +83,6 @@ const MESSAGE_IDS = [
     "{status} — processed",
     "{title} failed",
     "Actions",
-    "Actions have no React hook — call them through the client.",
     "Add a widget to chart a saved SQL query on this browser.",
     "Add index on {table}",
     "Add row",

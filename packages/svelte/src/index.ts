@@ -1,3 +1,5 @@
+export type { ActionHandle } from "./action";
+export { action } from "./action";
 export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThreadStatus } from "./agent";
 export { agent } from "./agent";
 export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta } from "./agent-chat";

@@ -102,6 +102,17 @@ type Requirement = Export | Gap;
  * one that doesn't.
  */
 const REQUIRED_SURFACE: Record<string, Record<AdapterName, Requirement>> = {
+    // Angular's is `runAction`, not the bare `action` the naming convention
+    // would predict: `action` is a reserved-feeling word in an Angular
+    // template/DI context, and its sibling write primitive is the verb
+    // `mutate`, so the verb form is what actually matches that adapter.
+    action: {
+        angular: { name: "runAction" },
+        react: { name: "useAction" },
+        solid: { name: "createAction" },
+        svelte: { name: "action" },
+        vue: { name: "useAction" },
+    },
     agent: {
         angular: { name: "agent" },
         react: { name: "useAgent" },
