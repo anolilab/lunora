@@ -44,8 +44,13 @@ export const createFakeClient = (): FakeClient => {
 
             return Promise.resolve(args);
         },
+        // Mirrors the real client: the listener fires immediately with the
+        // current status, then on every transition. Load-bearing — that
+        // synchronous first call is what makes a body-time `setStatus` a
+        // reactive write inside an owned scope, which Solid 2 rejects outright.
         onConnectionStatus: (listener: (next: ConnectionStatus) => void): Unsubscribe => {
             statusListeners.add(listener);
+            listener(status);
 
             return () => {
                 statusListeners.delete(listener);

@@ -204,11 +204,11 @@ describe("@lunora/solid on Solid 2", () => {
 
         expect(container.textContent).toBe("connected");
 
-        // Several primitives (`createConnectionStatus`, `createAuth`,
-        // `createStream`, `createRateLimit`) register teardown with a top-level
-        // `onCleanup` in the component body. Solid 2 steers app code towards
-        // `onSettled` for that, so this pins the behaviour the adapter still
-        // depends on — a silent no-op here would leak a listener per mount.
+        // `createConnectionStatus` registers at mount and returns its teardown,
+        // because `onConnectionStatus` calls back synchronously and a signal
+        // write in the component body halts Solid 2's whole reactive system.
+        // The listener count above proves the mount ran; this proves the
+        // teardown does too — a silent no-op would leak a listener per mount.
         unmount();
 
         expect(fake.listenerCount()).toBe(0);

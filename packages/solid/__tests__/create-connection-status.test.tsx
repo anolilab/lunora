@@ -16,8 +16,11 @@ const makeFake = (initial: ConnectionStatus) => {
 
     const client = {
         connectionStatus: () => current,
+        // Mirrors the real client, which invokes the listener immediately with
+        // the current status before returning the unsubscribe.
         onConnectionStatus: (listener: (status: ConnectionStatus) => void): Unsubscribe => {
             listeners.add(listener);
+            listener(current);
 
             return () => {
                 listeners.delete(listener);
