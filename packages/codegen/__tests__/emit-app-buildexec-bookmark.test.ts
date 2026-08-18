@@ -84,8 +84,12 @@ const extractBuildExec = (output: string): string => {
 const compileBuildExec = (source: string): BuildExecFunction => {
     const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } });
 
+    // `retryingExec` wraps the emitted exec but is imported by the generated
+    // module rather than declared in the slice above, so it is supplied here as
+    // a pass-through. These tests are about session/bookmark wiring; the retry
+    // policy has its own coverage in `@lunora/d1`.
     // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- test-only: evaluating the emitter's own real output (types stripped), mirroring snippet-helpers.ts's established pattern
-    return new Function(`"use strict";\n${outputText}\nreturn buildExec;`)() as BuildExecFunction;
+    return new Function("retryingExec", `"use strict";\n${outputText}\nreturn buildExec;`)((exec: unknown) => exec) as BuildExecFunction;
 };
 
 /**
@@ -99,11 +103,16 @@ const fakeStatement = (rows: unknown[] = []) => {
         all: vi.fn<() => Promise<{ results: unknown[] }>>(async () => {
             return { results: rows };
         }),
-        bind: vi.fn<() => unknown>(() => statement),
+        // Wired after the literal, not as `() => statement` inside it: a
+        // self-referencing initializer leaves TS unable to infer the object's
+        // own type (TS7022/TS7024).
+        bind: vi.fn<() => unknown>(),
         run: vi.fn<() => Promise<{ success: boolean }>>(async () => {
             return { success: true };
         }),
     };
+
+    statement.bind.mockReturnValue(statement);
 
     return statement;
 };

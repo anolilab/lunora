@@ -7,6 +7,7 @@ import { subscription } from "../src/subscription";
 import { createFakeClient, createFakeDestroyRef } from "./fake-client";
 
 const streamRef = { __lunoraRef: "events:stream" } as FunctionReference;
+const NEEDS_INJECTOR_RE = /pass `injector` alongside `destroyRef`/u;
 
 /**
  * Wraps `client.subscribe` with an order log of `subscribe:<args>` /
@@ -249,9 +250,15 @@ describe("subscription — reactive args (plan 340)", () => {
         // No `injector`, and not inside an injection context: Angular's own
         // NG0203 never mentions the option that fixes this, so the adapter
         // re-raises it with the option named.
-        expect(() => subscription(streamRef, () => ({ roomId: "r1" }), { client: fake.asClient, destroyRef: destroy.asDestroyRef })).toThrow(
-            /pass `injector` alongside `destroyRef`/,
-        );
+        expect(() =>
+            subscription(
+                streamRef,
+                () => {
+                    return { roomId: "r1" };
+                },
+                { client: fake.asClient, destroyRef: destroy.asDestroyRef },
+            ),
+        ).toThrow(NEEDS_INJECTOR_RE);
     });
 
     it("destroy tears down the reactive-form subscription", () => {
