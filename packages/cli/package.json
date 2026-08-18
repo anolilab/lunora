@@ -94,7 +94,6 @@
         "magic-string": "catalog:cli",
         "react": "catalog:frontend",
         "react-reconciler": "catalog:cli",
-        "semver": "catalog:node",
         "smol-toml": "catalog:cli",
         "ts-morph": "catalog:tooling"
     },
@@ -108,6 +107,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "semver": "catalog:node",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
