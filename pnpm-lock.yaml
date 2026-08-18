@@ -3564,8 +3564,8 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.29
-        version: 1.0.0-alpha.29
+        specifier: 1.0.0-alpha.30
+        version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
@@ -3966,8 +3966,8 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.17
-        version: 1.0.0-alpha.17
+        specifier: 1.0.0-alpha.18
+        version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -4892,8 +4892,8 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.29
-        version: 1.0.0-alpha.29
+        specifier: 1.0.0-alpha.30
+        version: link:../observability
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -8150,14 +8150,6 @@ packages:
   '@lingui/message-utils@6.6.0':
     resolution: {integrity: sha512-XkEcuMjIUjq7KZfTe83jP6UWQvKskpae/Ve7E8M8HEJ3TujHIPLzKn/quEmot6pKRtGwYxQzktGRfs2sPcZaqg==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/observability@1.0.0-alpha.29':
-    resolution: {integrity: sha512-tA4fD0goiC/otjvtpTGRFYx8HvGcwI+WipbaXgCHgG0moVEynKj0Si7owtvX+eR4/uXdR/sKGI0+A+EiTW2OcA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/platform-cloudflare@1.0.0-alpha.17':
-    resolution: {integrity: sha512-WJ13G60z1nZ/9b8pb+BcUm76cLg7afEMpgWnadFb9ucE5VkCrHfHK6lYd4ht182adKceKH9ETrrKM+JsOg6cGg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -27642,18 +27634,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/observability@1.0.0-alpha.29':
-    dependencies:
-      '@lunora/errors': link:packages/errors
-      '@lunora/fingerprint': link:packages/fingerprint
-      '@lunora/shard-engine': link:packages/shard-engine
-      '@visulima/redact': 4.0.0
-
-  '@lunora/platform-cloudflare@1.0.0-alpha.17':
-    dependencies:
-      '@lunora/errors': link:packages/errors
-      '@lunora/platform': link:packages/platform
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
