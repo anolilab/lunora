@@ -80,7 +80,10 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 };
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {
+const LUNORA_TABLE_COLUMNS: Record<
+    string,
+    Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>
+> = {
     "profiles": [
         {
             "name": "_id",
@@ -966,7 +969,9 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return LUNORA_TTL_SWEEPS;
         }
 
-        protected override tableColumns(table: string): Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        protected override tableColumns(
+            table: string,
+        ): Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 
