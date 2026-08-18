@@ -70,9 +70,9 @@ describe(rollbackDeployment, () => {
     it("throws on a failed rollback", async () => {
         const fetchImpl = vi.fn(async () => new Response("nope", { status: 409 })) as unknown as typeof globalThis.fetch;
 
-        await expect(rollbackDeployment({ apiUrl: "https://cloud", deployKey: "dk", deploymentId: "d", fetch: fetchImpl, organizationId: "o" })).rejects.toThrow(
-            /rollback failed \(409\)/,
-        );
+        await expect(
+            rollbackDeployment({ apiUrl: "https://cloud", deployKey: "dk", deploymentId: "d", fetch: fetchImpl, organizationId: "o" }),
+        ).rejects.toThrow(/rollback failed \(409\)/);
     });
 });
 

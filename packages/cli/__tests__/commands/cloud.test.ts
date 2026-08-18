@@ -42,7 +42,14 @@ describe("lunora cloud", () => {
 
     it("errors when the deploy key is absent (never a flag/file)", async () => {
         const { errors, logger } = capturingLogger();
-        const result = await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps({ env: { LUNORA_CLOUD_URL: "https://cloud" } }), logger, project: "prj_1", bundlePath: "dist/index.js" });
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            cwd: "/x",
+            deps: deps({ env: { LUNORA_CLOUD_URL: "https://cloud" } }),
+            logger,
+            project: "prj_1",
+            bundlePath: "dist/index.js",
+        });
 
         expect(result.code).toBe(1);
         expect(errors[0]).toMatch(/LUNORA_DEPLOY_KEY/);
@@ -50,7 +57,14 @@ describe("lunora cloud", () => {
 
     it("errors when the API URL is absent", async () => {
         const { errors, logger } = capturingLogger();
-        const result = await runCloudCommand({ argument: ["deploy"], cwd: "/x", deps: deps({ env: { LUNORA_DEPLOY_KEY: "dk" } }), logger, project: "prj_1", bundlePath: "b" });
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            cwd: "/x",
+            deps: deps({ env: { LUNORA_DEPLOY_KEY: "dk" } }),
+            logger,
+            project: "prj_1",
+            bundlePath: "b",
+        });
 
         expect(result.code).toBe(1);
         expect(errors[0]).toMatch(/LUNORA_CLOUD_URL/);

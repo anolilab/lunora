@@ -324,7 +324,7 @@ export const dispatch = internalAction.action(async ({ ctx: context }): Promise<
     };
 
     const { outcomes } = await runBuildDispatch({
-        claimNext: async (id) => (await context.runMutation(claimNext, { runnerId: id })),
+        claimNext: async (id) => await context.runMutation(claimNext, { runnerId: id }),
         runnerId,
         runnerPorts,
     });

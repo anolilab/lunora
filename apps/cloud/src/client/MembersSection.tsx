@@ -79,7 +79,9 @@ export const MembersSection = ({ organizationId, preloaded }: MembersSectionProp
 
                             void (async () => {
                                 try {
-                                    await addMember.mutate({ organizationId, userId });
+                                    // `role` is required by `members.add`; "member" is the default this
+                                    // component documents above (there is no server-side default).
+                                    await addMember.mutate({ organizationId, role: "member", userId });
                                     setUserId("");
                                 } catch (error_: unknown) {
                                     setError(error_ instanceof Error ? error_.message : "add failed");

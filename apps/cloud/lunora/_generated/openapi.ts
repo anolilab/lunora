@@ -186,11 +186,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -256,11 +256,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -320,11 +320,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -395,11 +395,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -459,11 +459,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -533,11 +533,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -597,11 +597,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -667,11 +667,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -731,11 +731,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -797,11 +797,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -859,11 +859,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -923,11 +923,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -993,11 +993,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1066,11 +1066,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1122,11 +1122,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1159,7 +1159,73 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "x-lunora-table": "organizations"
                                             },
                                             "panels": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "config": {
+                                                            "additionalProperties": false,
+                                                            "properties": {
+                                                                "filter": {
+                                                                    "type": "string"
+                                                                },
+                                                                "metricName": {
+                                                                    "type": "string"
+                                                                },
+                                                                "stat": {
+                                                                    "anyOf": [
+                                                                        {
+                                                                            "const": "last",
+                                                                            "type": "string"
+                                                                        },
+                                                                        {
+                                                                            "const": "first",
+                                                                            "type": "string"
+                                                                        },
+                                                                        {
+                                                                            "const": "count",
+                                                                            "type": "string"
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            },
+                                                            "required": [],
+                                                            "type": "object"
+                                                        },
+                                                        "id": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "metric",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "stat",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "traces",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "logs",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "title": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "config",
+                                                        "id",
+                                                        "kind",
+                                                        "title"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             }
                                         },
@@ -1192,11 +1258,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1262,11 +1328,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1326,11 +1392,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1396,11 +1462,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1438,7 +1504,73 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "x-lunora-table": "organizations"
                                             },
                                             "panels": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "config": {
+                                                            "additionalProperties": false,
+                                                            "properties": {
+                                                                "filter": {
+                                                                    "type": "string"
+                                                                },
+                                                                "metricName": {
+                                                                    "type": "string"
+                                                                },
+                                                                "stat": {
+                                                                    "anyOf": [
+                                                                        {
+                                                                            "const": "last",
+                                                                            "type": "string"
+                                                                        },
+                                                                        {
+                                                                            "const": "first",
+                                                                            "type": "string"
+                                                                        },
+                                                                        {
+                                                                            "const": "count",
+                                                                            "type": "string"
+                                                                        }
+                                                                    ]
+                                                                }
+                                                            },
+                                                            "required": [],
+                                                            "type": "object"
+                                                        },
+                                                        "id": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "metric",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "stat",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "traces",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "logs",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "title": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "config",
+                                                        "id",
+                                                        "kind",
+                                                        "title"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             }
                                         },
@@ -1471,11 +1603,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1537,11 +1669,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1637,11 +1769,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1701,11 +1833,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1782,11 +1914,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1852,11 +1984,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1912,11 +2044,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -1977,11 +2109,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2047,11 +2179,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2162,11 +2294,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2232,11 +2364,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2292,11 +2424,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2363,11 +2495,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2423,11 +2555,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2527,11 +2659,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2603,11 +2735,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2673,11 +2805,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2743,11 +2875,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2818,11 +2950,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2888,11 +3020,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -2948,11 +3080,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3016,11 +3148,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3080,11 +3212,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3150,11 +3282,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3214,11 +3346,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3254,7 +3386,18 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "status": {}
+                                            "status": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "open",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "resolved",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            }
                                         },
                                         "required": [
                                             "id",
@@ -3286,11 +3429,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3356,11 +3499,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3416,11 +3559,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3451,11 +3594,13 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
-                                            }
+                                            },
+                                            "role": {}
                                         },
                                         "required": [
                                             "email",
-                                            "organizationId"
+                                            "organizationId",
+                                            "role"
                                         ],
                                         "type": "object"
                                     },
@@ -3482,11 +3627,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3546,11 +3691,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3616,11 +3761,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3680,11 +3825,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3720,7 +3865,18 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
-                                            "status": {}
+                                            "status": {
+                                                "anyOf": [
+                                                    {
+                                                        "const": "open",
+                                                        "type": "string"
+                                                    },
+                                                    {
+                                                        "const": "resolved",
+                                                        "type": "string"
+                                                    }
+                                                ]
+                                            }
                                         },
                                         "required": [
                                             "id",
@@ -3752,11 +3908,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3784,7 +3940,73 @@ export const openApiSpec: Record<string, unknown> = {
                                         "properties": {
                                             "deployKey": {},
                                             "lines": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "createdAt": {
+                                                            "type": "number"
+                                                        },
+                                                        "fields": {
+                                                            "additionalProperties": {},
+                                                            "type": "object"
+                                                        },
+                                                        "functionPath": {
+                                                            "type": "string"
+                                                        },
+                                                        "level": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "trace",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "debug",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "info",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "log",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "warn",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "error",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "fatal",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "message": {
+                                                            "type": "string"
+                                                        },
+                                                        "shardKey": {
+                                                            "type": "string"
+                                                        },
+                                                        "spanId": {
+                                                            "type": "string"
+                                                        },
+                                                        "traceId": {
+                                                            "type": "string"
+                                                        },
+                                                        "userId": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "level",
+                                                        "message"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             },
                                             "organizationId": {
@@ -3825,11 +4047,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3863,7 +4085,38 @@ export const openApiSpec: Record<string, unknown> = {
                                             },
                                             "functionPath": {},
                                             "levels": {
-                                                "items": {},
+                                                "items": {
+                                                    "anyOf": [
+                                                        {
+                                                            "const": "trace",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "debug",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "info",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "log",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "warn",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "error",
+                                                            "type": "string"
+                                                        },
+                                                        {
+                                                            "const": "fatal",
+                                                            "type": "string"
+                                                        }
+                                                    ]
+                                                },
                                                 "type": "array"
                                             },
                                             "limit": {
@@ -3910,11 +4163,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -3945,10 +4198,12 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "organizations"
                                             },
+                                            "role": {},
                                             "userId": {}
                                         },
                                         "required": [
                                             "organizationId",
+                                            "role",
                                             "userId"
                                         ],
                                         "type": "object"
@@ -3976,11 +4231,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4040,11 +4295,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4110,11 +4365,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4201,11 +4456,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4243,7 +4498,36 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "x-lunora-table": "organizations"
                                             },
                                             "points": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "at": {
+                                                            "type": "number"
+                                                        },
+                                                        "functionPath": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "type": "string"
+                                                        },
+                                                        "name": {
+                                                            "type": "string"
+                                                        },
+                                                        "serviceName": {
+                                                            "type": "string"
+                                                        },
+                                                        "value": {
+                                                            "type": "number"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "at",
+                                                        "kind",
+                                                        "name",
+                                                        "value"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             }
                                         },
@@ -4277,11 +4561,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4347,11 +4631,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4417,11 +4701,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4481,11 +4765,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4565,11 +4849,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4625,11 +4909,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4681,11 +4965,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4747,11 +5031,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4811,11 +5095,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4871,11 +5155,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -4941,11 +5225,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5005,11 +5289,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5077,11 +5361,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5147,11 +5431,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5234,11 +5518,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5304,11 +5588,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5400,11 +5684,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5466,11 +5750,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5533,11 +5817,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5570,11 +5854,174 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "x-lunora-table": "deployments"
                                             },
                                             "events": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "code": {
+                                                            "type": "string"
+                                                        },
+                                                        "container": {
+                                                            "type": "string"
+                                                        },
+                                                        "functionPath": {
+                                                            "type": "string"
+                                                        },
+                                                        "instance": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "error",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "container",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "message": {
+                                                            "type": "string"
+                                                        },
+                                                        "traceId": {
+                                                            "type": "string"
+                                                        },
+                                                        "ts": {
+                                                            "type": "number"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "functionPath",
+                                                        "kind",
+                                                        "message",
+                                                        "ts"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             },
                                             "observations": {
-                                                "items": {},
+                                                "items": {
+                                                    "additionalProperties": false,
+                                                    "properties": {
+                                                        "attributes": {
+                                                            "additionalProperties": {
+                                                                "type": "string"
+                                                            },
+                                                            "type": "object"
+                                                        },
+                                                        "completionTokens": {
+                                                            "type": "number"
+                                                        },
+                                                        "durationMs": {
+                                                            "type": "number"
+                                                        },
+                                                        "endedAt": {
+                                                            "type": "number"
+                                                        },
+                                                        "evaluations": {
+                                                            "items": {
+                                                                "additionalProperties": false,
+                                                                "properties": {
+                                                                    "label": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "name": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "score": {
+                                                                        "type": "number"
+                                                                    }
+                                                                },
+                                                                "required": [
+                                                                    "name",
+                                                                    "score"
+                                                                ],
+                                                                "type": "object"
+                                                            },
+                                                            "type": "array"
+                                                        },
+                                                        "functionPath": {
+                                                            "type": "string"
+                                                        },
+                                                        "input": {
+                                                            "type": "string"
+                                                        },
+                                                        "kind": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "container",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "generation",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "worker",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "level": {
+                                                            "anyOf": [
+                                                                {
+                                                                    "const": "error",
+                                                                    "type": "string"
+                                                                },
+                                                                {
+                                                                    "const": "info",
+                                                                    "type": "string"
+                                                                }
+                                                            ]
+                                                        },
+                                                        "model": {
+                                                            "type": "string"
+                                                        },
+                                                        "name": {
+                                                            "type": "string"
+                                                        },
+                                                        "output": {
+                                                            "type": "string"
+                                                        },
+                                                        "parentSpanId": {
+                                                            "type": "string"
+                                                        },
+                                                        "promptTokens": {
+                                                            "type": "number"
+                                                        },
+                                                        "serviceName": {
+                                                            "type": "string"
+                                                        },
+                                                        "sessionId": {
+                                                            "type": "string"
+                                                        },
+                                                        "spanId": {
+                                                            "type": "string"
+                                                        },
+                                                        "startedAt": {
+                                                            "type": "number"
+                                                        },
+                                                        "statusMessage": {
+                                                            "type": "string"
+                                                        },
+                                                        "traceId": {
+                                                            "type": "string"
+                                                        }
+                                                    },
+                                                    "required": [
+                                                        "durationMs",
+                                                        "endedAt",
+                                                        "kind",
+                                                        "level",
+                                                        "name",
+                                                        "spanId",
+                                                        "startedAt",
+                                                        "traceId"
+                                                    ],
+                                                    "type": "object"
+                                                },
                                                 "type": "array"
                                             },
                                             "organizationId": {
@@ -5613,11 +6060,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5679,11 +6126,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5745,11 +6192,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5830,11 +6277,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5905,11 +6352,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -5978,11 +6425,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -6042,11 +6489,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -6078,6 +6525,7 @@ export const openApiSpec: Record<string, unknown> = {
                                                 "type": "string",
                                                 "x-lunora-table": "deployments"
                                             },
+                                            "kind": {},
                                             "organizationId": {
                                                 "description": "Id<\"organizations\">",
                                                 "type": "string",
@@ -6092,6 +6540,7 @@ export const openApiSpec: Record<string, unknown> = {
                                         },
                                         "required": [
                                             "deployKey",
+                                            "kind",
                                             "organizationId",
                                             "periodStart",
                                             "quantity"
@@ -6121,11 +6570,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -6189,11 +6638,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"
@@ -6257,11 +6706,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                    "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
                                 }
                             }
                         },
-                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                        "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
                     },
                     "default": {
                         "$ref": "#/components/responses/LunoraError"

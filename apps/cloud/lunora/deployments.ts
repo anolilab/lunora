@@ -199,7 +199,9 @@ export const create = mutation
         adminTokenIv: v.optional(boundedString(LIMITS.id)),
         // What the tenant's wrangler config binds, captured at deploy time — the
         // studio renders this as the deployment's binding graph.
-        bindings: v.optional(v.array(v.object({ name: boundedString(LIMITS.name), target: v.optional(boundedString(LIMITS.name)), type: boundedString(LIMITS.tag) }))),
+        bindings: v.optional(
+            v.array(v.object({ name: boundedString(LIMITS.name), target: v.optional(boundedString(LIMITS.name)), type: boundedString(LIMITS.tag) })),
+        ),
         branch: v.optional(boundedString(LIMITS.gitRef)),
         // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
         cronSpecs: v.optional(v.array(boundedString(LIMITS.name))),
