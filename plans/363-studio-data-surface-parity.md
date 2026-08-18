@@ -1,7 +1,7 @@
 # Plan 363 — Close nine gaps in the Studio's data/SQL surface
 
 **Baseline:** `9a0b5263a` (2026-08-18)
-**Status:** TODO
+**Status:** IN PROGRESS — W1, W3, W6, W7, W8 shipped; W2, W4, W9, W10 open; W5 spun out to [364](364-studio-conversational-assistant.md)
 
 ## 0. Headline finding
 
@@ -121,11 +121,20 @@ Numbered to match the audit table. W1, W6, W7, W8 are independent and can land i
 any order; W2 depends on W1; W3 spans codegen; W4 and W5 are the two that need
 design review before code.
 
-- **W1 (S) — Pass `axes` to dashboard widgets.** Add `kind` + `x`/`y` to `Widget`
-  and the draft form; render `<SqlResultChart axes={…} result={result} />`. Offer
-  the assistant's inference as a "suggest" button that _fills the form_, so the
-  picker still works with no AI binding. Gate: a dashboard widget saved with
-  `kind: "line"` renders a line chart with the assistant unavailable.
+- **W1 (S) — Done.** Shipped as `5b9e64b9c`. `SqlResultChart` gained a `kind`
+  prop for an explicitly CHOSEN shape, which always wins, kept separate from
+  `axes.kind` (the suggestion, still discarded when its series does not survive
+  the column gate). The widget stores `chartKind` apart from `chartAxes` so
+  picking a shape does not discard inferred columns. **Differs from the plan in
+  one place:** "Suggest chart" went on the CARD, not the form — inference needs a
+  result and the form has never run its query. Accepting a suggestion writes both
+  fields, because a click is a choice. Original text follows.
+
+    **Pass `axes` to dashboard widgets.** Add `kind` + `x`/`y` to `Widget`
+    and the draft form; render `<SqlResultChart axes={…} result={result} />`. Offer
+    the assistant's inference as a "suggest" button that _fills the form_, so the
+    picker still works with no AI binding. Gate: a dashboard widget saved with
+    `kind: "line"` renders a line chart with the assistant unavailable.
 
 - **W2 (M) — Three more widget kinds.** `kpi` (single scalar + label, from the
   first cell of the first row), `text` (markdown), `table` (reuse the console's
@@ -133,18 +142,32 @@ design review before code.
   dashboard mixing all four kinds round-trips through `localStorage` and
   reorders.
 
-- **W3 (M) — Schema-aware row editing.** Three files move together:
-  `packages/codegen/src/emit.ts:2759` adds `enumValues` when `resolved.kind` is a
-  union whose every member is a literal. **`literalValue` is canonical _source
-  text_, not the value** (`parse-validator.ts:326-329` — strings arrive
-  JSON-stringified), so the emitter parses it back before writing the array or
-  every dropdown option ships wrapped in quotes; `ColumnMeta` gains the optional field in
-  `packages/studio/src/lib/admin.ts:422` and `packages/shard-engine/src/introspect.ts:284`;
-  `row-form.tsx:181` takes `ColumnMeta` and falls back to `inferKind` only when
-  the column is unknown. Adds a `<select>` for enums, a checkbox for a _null_
-  boolean, and column type icons in the grid header. Gate: a `v.union(v.literal…)`
-  column renders a dropdown; golden codegen fixtures + example `_generated`
-  regenerated; `api:update` after a fresh build.
+- **W3 (M) — Done.** Shipped as `f55f0b06e` + `a6d5cdeb9` (regeneration).
+  **Two corrections to this plan.** First, there are FOUR declarations of the
+  `ColumnMeta` shape, not three — §6 missed
+  `studio/src/features/schema/database-schema-node.tsx:17`. It is the diagram's
+  own local shape and structurally compatible, so it did not need the field, but
+  the parity note undercounted. Second, the column type icons named below were
+  **not built** — filed as W10, with the reasoning there.
+
+    Unplanned upside: `examples/chess` and `examples/feedback-board` already
+    declare `v.union(v.literal(…))` columns, so the regeneration exercised the
+    emitter end to end on real schemas rather than only the hand-built IR in the
+    unit tests — `chess.games.status` emits `["active", "completed", "abandoned"]`.
+    Original text follows.
+
+    **Schema-aware row editing.** Three files move together:
+    `packages/codegen/src/emit.ts:2759` adds `enumValues` when `resolved.kind` is a
+    union whose every member is a literal. **`literalValue` is canonical _source
+    text_, not the value** (`parse-validator.ts:326-329` — strings arrive
+    JSON-stringified), so the emitter parses it back before writing the array or
+    every dropdown option ships wrapped in quotes; `ColumnMeta` gains the optional field in
+    `packages/studio/src/lib/admin.ts:422` and `packages/shard-engine/src/introspect.ts:284`;
+    `row-form.tsx:181` takes `ColumnMeta` and falls back to `inferKind` only when
+    the column is unknown. Adds a `<select>` for enums, a checkbox for a _null_
+    boolean, and column type icons in the grid header. Gate: a `v.union(v.literal…)`
+    column renders a dropdown; golden codegen fixtures + example `_generated`
+    regenerated; `api:update` after a fresh build.
 
 - **W4 (M) — Multi-statement scripts as N gated runs.** Split on statement
   boundaries in the editor using the comment scanner already in
@@ -154,30 +177,49 @@ design review before code.
   second statement fails the gate shows the first result _and_ the rejection,
   and the server never receives a `;`-joined string.
 
-- **W5 (L) — A conversational assistant.** The one genuinely new mechanism.
-  Multi-turn chat with history, grounded in the same schema facts, able to call
-  the read-only admin RPCs as tools and to _propose_ a migration the operator
-  reviews before applying. **Must not run on the ShardDO admin dispatch** — needs
-  its own transport (an action, or `@lunora/agent` over Workflows, which already
-  exists in-repo). Design first: this workstream should produce its own plan
-  before it produces code. Gate: a ten-turn conversation completes without
-  holding an admin dispatch open, provable by concurrent `runSql` latency.
+- **W5 (L) — Spun out.** Its own plan, as this one required: see
+  [364-studio-conversational-assistant.md](364-studio-conversational-assistant.md).
+  Original text follows.
 
-- **W6 (S) — Paste into the grid.** Clipboard TSV → staged edits, reusing
-  `staged-edits.tsx` so the review-then-apply path is the existing one. Gate: a
-  pasted block that would violate a column type is rejected at stage time, not at
-  apply time.
+    **A conversational assistant.** The one genuinely new mechanism.
+    Multi-turn chat with history, grounded in the same schema facts, able to call
+    the read-only admin RPCs as tools and to _propose_ a migration the operator
+    reviews before applying. **Must not run on the ShardDO admin dispatch** — needs
+    its own transport (an action, or `@lunora/agent` over Workflows, which already
+    exists in-repo). Design first: this workstream should produce its own plan
+    before it produces code. Gate: a ten-turn conversation completes without
+    holding an admin dispatch open, provable by concurrent `runSql` latency.
 
-- **W7 (S) — Stop persisting SQL history by default.** `use-sql-library.tsx:9`
-  moves `HISTORY_KEY` to `sessionStorage` (`storageOf("session")` already exists),
-  with a settings toggle to opt into `localStorage` and a "clear history" that
-  clears both. Saved queries stay in `localStorage` — those are deliberate.
-  Gate: a fresh tab after a browser restart shows no history unless opted in.
+- **W6 (S) — Done.** Shipped as `542207504`. Went further than "reuse
+  `staged-edits`": the planner (`planPastedEdits`) is a pure module-level
+  function separate from the handler, because what a paste DECLINES is the part
+  worth asserting. Original text follows.
 
-- **W8 (S) — Media preview for storage cells.** In the cell-detail popover
-  (`grid-features.tsx:354-385`), when the column has `isStorage`, resolve the
-  signed URL the way `file-gallery.tsx:40` does and render the image. Gate: a
-  `v.storage()` column shows a thumbnail; a non-image object still shows text.
+    **Paste into the grid.** Clipboard TSV → staged edits, reusing
+    `staged-edits.tsx` so the review-then-apply path is the existing one. Gate: a
+    pasted block that would violate a column type is rejected at stage time, not at
+    apply time.
+
+- **W7 (S) — Done.** Shipped as `542207504`. One thing the plan did not
+  anticipate: `usePersistedList` reloads from the new slot when the storage area
+  changes, so flipping the toggle ON would have DISCARDED the tab's history —
+  asking to keep it is what would have destroyed it. The toggle now seeds the
+  destination before flipping. It lives next to the history list in the SQL
+  sidebar rather than in settings, which is where an operator is when they think
+  about it; W9 need not move it. Original text follows.
+
+    **Stop persisting SQL history by default.** `use-sql-library.tsx:9`
+    moves `HISTORY_KEY` to `sessionStorage` (`storageOf("session")` already exists),
+    with a settings toggle to opt into `localStorage` and a "clear history" that
+    clears both. Saved queries stay in `localStorage` — those are deliberate.
+    Gate: a fresh tab after a browser restart shows no history unless opted in.
+
+- **W8 (S) — Done.** Shipped as `542207504`, as planned. Original text follows.
+
+    **Media preview for storage cells.** In the cell-detail popover
+    (`grid-features.tsx:354-385`), when the column has `isStorage`, resolve the
+    signed URL the way `file-gallery.tsx:40` does and render the image. Gate: a
+    `v.storage()` column shows a thumbnail; a non-image object still shows text.
 
 - **W9 (S) — A real settings panel + keymap.** Extend
   `features/settings/settings-panel.tsx` from read-only deploy facts to actual
@@ -185,6 +227,15 @@ design review before code.
   `use-console-shortcut.ts:24`) read from that store rather than hardcoded.
   W7's history toggle lands here. Gate: a rebound palette shortcut survives a
   reload and the default is restorable.
+
+- **W10 (S) — Column type icons in the grid header.** Split out of W3, which
+  named it and did not build it. The declared type per column is already on the
+  wire (`ColumnMeta.type`); the work is threading `columnMeta` from
+  `data-browser.tsx` through the page and `DataBrowserTableView` to
+  `GridHeaderCell`, and picking a glyph per validator kind. Deliberately last:
+  three new props for decoration, and nothing here can fail a gate. Gate: a
+  numeric and a string column render distinguishable header glyphs, and a column
+  with no metadata renders none.
 
 ## 6. Platform parity
 
@@ -212,7 +263,8 @@ two of three is the drift `AGENTS.md` calls out for the `*Like` projections.
 | 2     | W3         | `pnpm run test` in codegen with regenerated fixtures + example `_generated`; `api:check` green after `api:update` on a fresh build |
 | 3     | W2, W9     | Four-kind dashboard round-trips + reorders; rebound shortcut survives reload                                                       |
 | 4     | W4         | Script with a gate-failing second statement shows result 1 + the rejection; no `;`-joined string reaches the server                |
-| 5     | W5         | Its own plan, reviewed, before any code                                                                                            |
+| 5     | W5         | Its own plan, reviewed, before any code — **done, see [364](364-studio-conversational-assistant.md)**                              |
+| 6     | W10        | A numeric and a string column render distinguishable header glyphs                                                                 |
 
 Phase 2 is the only one that leaves `@lunora/studio`. Run `pnpm run build:packages`
 before measuring anything in it (stale `dist` is the usual false failure), and
