@@ -119,6 +119,49 @@ const applyRowOpsToView = (rows: Map<string, Record<string, unknown>>, ops: RowO
 };
 
 /**
+ * Content-derived digest of one `importRows` chunk — the stable half of its
+ * idempotency key.
+ *
+ * The key has to identify what a chunk CARRIES, not where it sat. Keying on the
+ * chunk index made `${importId}:3` mean different rows under a different
+ * `chunkSize`, so a resume that re-chunked collided with the first run's keys and
+ * the server deduped those rows away: silent data loss, not a retry.
+ *
+ * `stableWireKey` canonicalizes the built args (object keys sorted at every depth,
+ * wire-tagged leaves for `bigint` / `Date` / bytes, `TypeError` on anything the
+ * wire refuses), then FNV-1a runs over that encoding twice with different offsets
+ * and the two words concatenate into a 16-char digest. Same shape and reasoning as
+ * `shared/schema-snapshot.ts`'s `hashSchemaSnapshot`, deliberately kept local: this
+ * is its only consumer, and the two address different domains. A non-cryptographic
+ * digest is the right tool for dedup identity, and it must stay synchronous —
+ * `crypto.subtle.digest` is async and `node:crypto` is absent in the browser.
+ *
+ * A 64-bit digest can collide, and a collision here DROPS a chunk rather than
+ * mis-writing one. Across ~10k chunks in a single import that is on the order of
+ * 1e-12; anyone importing enough chunks for that to matter should widen the digest
+ * rather than work around it.
+ */
+const importChunkDigest = (args: Record<string, unknown>): string => {
+    const text = stableWireKey(args);
+
+    /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and an unsigned shift; the bit ops ARE the algorithm */
+    const fnv = (offset: number): string => {
+        let hash = offset;
+
+        for (let index = 0; index < text.length; index += 1) {
+            hash ^= text.codePointAt(index) ?? 0;
+            // FNV prime 16777619, applied with Math.imul to stay inside 32-bit int math.
+            hash = Math.imul(hash, 0x01_00_01_93) >>> 0;
+        }
+
+        return hash.toString(16).padStart(8, "0");
+    };
+    /* eslint-enable no-bitwise */
+
+    return `${fnv(0x81_1c_9d_c5)}${fnv(0x01_00_01_93)}`;
+};
+
+/**
  * Keepalive frame sent on the heartbeat. MUST match the request payload the
  * server registers via `setWebSocketAutoResponse` (`@lunora/do`'s ShardDO
  * `WS_KEEPALIVE_PING`): the runtime answers it with `lunora-pong` WITHOUT
@@ -2097,8 +2140,9 @@ class LunoraClient {
      * predictable ways — a serial per-row loop pays one round-trip *and* one watermark
      * wait per row (a 200-row import becomes 200 sequential hops), while a single
      * giant call blows the DO's batch limit. So: chunk, send sequentially, and give
-     * each chunk a stable idempotency key derived from `importId` + its index, so a
-     * resumed or retried import doesn't double-insert the chunks that already landed.
+     * each chunk a stable idempotency key derived from `importId` + a digest of the
+     * chunk's own content, so a resumed or retried import doesn't double-insert the
+     * chunks that already landed.
      *
      * The server mutation is yours (Lunora can't guess the table or the row shape);
      * back it with `ctx.db.insertMany(...)`, or `insertManyUnsafe(...)` for data you
@@ -2122,17 +2166,21 @@ class LunoraClient {
 
             /**
              * Stable id for this import run. Each chunk is sent under
-             * `${importId}:${chunkIndex}` as its mutation id, so re-running an import
-             * that uses the SAME `chunkSize` re-sends each chunk under its prior key
+             * `${importId}:${contentDigest}:${occurrence}` as its mutation id, so
+             * re-running an import re-sends every unchanged chunk under its prior key
              * and the server dedupes it instead of inserting twice.
              *
-             * CAVEAT — the key is POSITIONAL, not content-based: it pins on the chunk
-             * INDEX, not on the rows inside it. Resume or retry with a DIFFERENT
-             * `chunkSize` (or a changed row ordering) and index N now covers different
-             * rows than the first run's index N; the server sees a duplicate key and
-             * SILENTLY DROPS those rows. Keep `chunkSize` (and the row order) identical
-             * across resumes of the same `importId`. Omit `importId` only for a
-             * throwaway import where double-insertion is acceptable.
+             * The key is CONTENT-derived, so re-chunking is safe in the direction that
+             * matters: a resume with a different `chunkSize` produces different chunks,
+             * which get different keys, so nothing is silently deduped away. The trade
+             * is the other direction — those re-chunked rows are genuinely re-sent, so
+             * rows the first run already committed can land twice. Keeping `chunkSize`
+             * and the row order identical across resumes of one `importId` is still the
+             * way to get exact once-only semantics; it is now a correctness preference
+             * rather than the difference between working and losing rows.
+             *
+             * Omit `importId` only for a throwaway import where double-insertion is
+             * acceptable.
              */
             importId?: string;
 
@@ -2163,15 +2211,36 @@ class LunoraClient {
         let done = 0;
         let chunks = 0;
 
+        // How many earlier chunks in THIS run carried byte-identical content. Duplicate
+        // source rows can produce identical chunks, and a purely content-derived key
+        // would make the second one dedupe against the first — reintroducing the very
+        // silent drop the content key exists to remove. The count is stable for a given
+        // (rows, chunkSize) pair, so a same-shaped resume still reproduces every key.
+        const digestOccurrences = new Map<string, number>();
+
         for (let offset = 0; offset < total; offset += chunkSize) {
             const chunk = rows.slice(offset, offset + chunkSize);
-            const chunkIndex = chunks;
+            // Built once and digested as-sent: the key must identify the PAYLOAD, not the
+            // raw slice. `toArgs` may normalize rows on the way out, and digesting the raw
+            // chunk would key on a shape the server never sees (and could fail the wire
+            // encoder on a value `toArgs` was about to make wire-safe).
+            const args = toArgs(chunk);
+
+            let mutationId: string | undefined;
+
+            if (options.importId !== undefined) {
+                const digest = importChunkDigest(args);
+                const occurrence = digestOccurrences.get(digest) ?? 0;
+
+                digestOccurrences.set(digest, occurrence + 1);
+                mutationId = `${options.importId}:${digest}:${String(occurrence)}`;
+            }
 
             // Sequential on purpose: concurrent chunks would race the shard's write
             // path and give up the deterministic resume point the idempotency key buys.
             // eslint-disable-next-line no-await-in-loop -- chunked import is sequential by design (see comment)
-            await this.mutation(function_, toArgs(chunk), {
-                ...(options.importId === undefined ? {} : { mutationId: `${options.importId}:${String(chunkIndex)}` }),
+            await this.mutation(function_, args, {
+                ...(mutationId === undefined ? {} : { mutationId }),
                 shardKey: options.shardKey,
             });
 

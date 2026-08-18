@@ -4141,21 +4141,30 @@ describe("lunoraClient", () => {
             expect(lastBody.args.rows).toEqual([{ id: 5 }]);
         });
 
-        it("keys each chunk under the importId-plus-index form so a retry dedupes server-side", async () => {
-            expect.assertions(1);
+        it("keys each chunk under the importId-plus-content-digest form so a retry dedupes server-side", async () => {
+            expect.assertions(3);
 
-            const { keyToRows } = await runImport([{ id: 1 }, { id: 2 }, { id: 3 }], { chunkSize: 2, importId: "imp" });
+            const rows = [{ id: 1 }, { id: 2 }, { id: 3 }];
+            const { keyToRows } = await runImport(rows, { chunkSize: 2, importId: "imp" });
+            const keys = [...keyToRows.keys()];
 
-            expect([...keyToRows.keys()]).toEqual(["imp:0", "imp:1"]);
+            // `imp:<16 hex digest>:<occurrence>` — one key per chunk, each pinned to the
+            // rows it carried rather than to its position in the run.
+            expect(keys).toHaveLength(2);
+            expect(keys.every((key) => /^imp:[\da-f]{16}:\d+$/.test(key))).toBe(true);
+
+            // Re-running the identical import reproduces the identical keys, which is what
+            // lets the server dedupe a retry instead of inserting the rows twice.
+            const { keyToRows: replayed } = await runImport(rows, { chunkSize: 2, importId: "imp" });
+
+            expect([...replayed.keys()]).toEqual(keys);
         });
 
-        // Resume-safety: this asserts the CORRECT behavior and is EXPECTED TO FAIL against
-        // the current position-based idempotency key (importId plus chunk index). When a
-        // resume uses a different `chunkSize`, the same key aliases different content, so the
-        // server dedupes and silently drops rows. `it.fails` keeps the suite green while
-        // pinning the bug; it flips to a real failure (prompting an un-skip) once the client
-        // importRows content-key fix lands. See the plans index (plan 192 depends on that fix).
-        it.fails("does not reuse a mutation key for differently-chunked content across a resume", async () => {
+        // Resume-safety regression: the key used to be POSITIONAL (`importId` plus chunk
+        // index), so a resume at a different `chunkSize` reused index N for different rows,
+        // the server saw a duplicate key, and those rows were silently dropped. The key is
+        // content-derived now, so a re-chunked resume cannot collide with the first run.
+        it("does not reuse a mutation key for differently-chunked content across a resume", async () => {
             expect.hasAssertions();
 
             const rows = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
@@ -4171,6 +4180,20 @@ describe("lunoraClient", () => {
                 .map(([key]) => key);
 
             expect(aliasedKeys).toEqual([]);
+        });
+
+        // The flip side of a content-derived key: byte-identical chunks would key
+        // identically and the server would dedupe the second one away. The occurrence
+        // suffix keeps them distinct, so duplicate source rows all land.
+        it("keeps byte-identical chunks distinct within one run", async () => {
+            expect.assertions(2);
+
+            const { keyToRows, result } = await runImport([{ id: 1 }, { id: 1 }, { id: 1 }], { chunkSize: 1, importId: "imp" });
+
+            expect(result).toEqual({ chunks: 3, imported: 3 });
+
+            // Three identical chunks → three distinct keys, so none is deduped away.
+            expect(keyToRows.size).toBe(3);
         });
     });
 
