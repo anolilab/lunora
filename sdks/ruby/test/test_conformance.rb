@@ -10,38 +10,8 @@ require "json"
 require "minitest/autorun"
 
 require_relative "../lib/lunora"
+require_relative "fixtures"
 require_relative "manifest"
-
-module FixtureLoader
-  def fixtures_dir
-    @fixtures_dir ||= begin
-      directory = File.expand_path(__dir__)
-      found = nil
-      8.times do
-        candidate = File.join(directory, "protocol", "fixtures")
-        if File.directory?(candidate)
-          found = candidate
-          break
-        end
-        parent = File.dirname(directory)
-        break if parent == directory
-
-        directory = parent
-      end
-      found || raise("could not locate protocol/fixtures")
-    end
-  end
-
-  def fixture(name)
-    JSON.parse(File.read(File.join(fixtures_dir, name)))
-  end
-
-  # Re-serialise so two structures compare as text with a canonical key order,
-  # independent of the order the fixture file happens to use.
-  def canonical(value)
-    Lunora.stable_stringify(value)
-  end
-end
 
 class TestWireCodec < Minitest::Test
   include FixtureLoader
@@ -121,6 +91,27 @@ class TestRpc < Minitest::Test
     end
   end
 
+  # An empty shard key is the DEFAULT shard to this client (Lunora.same_shard?
+  # merges it with nil for the drain predicate and the subscription lookup), but
+  # a NAMED shard with its own Durable Object to the runtime. Sending it would
+  # make a write submitted with "" drain on the default shard's flush and then
+  # replay against a different shard from the subscription its overlay updated.
+  def test_an_empty_shard_key_is_omitted_from_the_wire
+    ConformanceManifest.covers("rpc_request_bodies")
+
+    body = Lunora.build_rpc_body("messages:send", { "text" => "hi" }, "")
+
+    refute body.key?("shardKey")
+    assert_equal canonical(Lunora.build_rpc_body("messages:send", { "text" => "hi" })), canonical(body)
+
+    url = Lunora::Client.new("https://app.example").send(:ws_url, "")
+
+    refute_includes url, "shard="
+    # A real named shard still rides both.
+    assert_equal "room-1", Lunora.build_rpc_body("messages:send", {}, "room-1")["shardKey"]
+    assert_includes Lunora::Client.new("https://app.example").send(:ws_url, "room-1"), "shard=room-1"
+  end
+
   # protocol/README.md §4.2: a non-2xx whose body carries no +error+ envelope is
   # an INTERNAL transport error. Without the status check the call returns nil and
   # raises nothing, so the caller believes its mutation committed.
@@ -183,6 +174,30 @@ class TestWsFrames < Minitest::Test
         assert_equal expect["code"], errors.first.code
       end
     end
+  end
+
+  # The Enumerator form of a live query: same subscription, same decode, same
+  # order as the callback form.
+  def test_a_subscription_streams_its_frame_values_in_order
+    ConformanceManifest.covers("subscription_stream_yields_frame_values_in_order")
+
+    case_data = fixture("ws-frames.json")["stream"]
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+
+    values, stop = client.stream("messages:list", { "channel" => "general" })
+    seen = []
+
+    case_data["frames"].each do |frame|
+      client.handle_frame(JSON.generate(frame))
+      seen << values.next
+    end
+
+    # Stopping tears the subscription down, so nothing is left registered against
+    # a client the consumer has finished with.
+    stop.call
+
+    assert_equal canonical(case_data["yielded"]), canonical(seen)
   end
 
   def test_shape_subscribe_frame

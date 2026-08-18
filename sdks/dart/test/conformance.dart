@@ -44,6 +44,7 @@ Future<void> main() async {
   await run(caseNon2xxWithoutErrorEnvelopeFails);
   await run(caseClientFrameBuilders);
   await run(caseServerFrameConsumer);
+  await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
@@ -56,6 +57,30 @@ Future<void> main() async {
   await run(caseHydrateAfterConnectingStillReplays);
   await run(caseCloseDuringAFlushSettlesDrainedWrites);
   await run(caseRestoredWriteVerdictsReachTheObserver);
+
+  // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
+  // which every port asserts the same values from — the manifest names below
+  // are covered here.
+  await run(caseGoldenOptimisticRebase);
+  await run(caseGoldenOptimisticCommitCursorDrop);
+  await run(caseGoldenOptimisticSettledFrameDrop);
+  await run(caseGoldenOptimisticDecliningLayerSkipped);
+  await run(caseGoldenOptimisticConfirmWithoutCursor);
+  await run(caseGoldenOptimisticConstantMask);
+  await run(caseGoldenOptimisticRollback);
+  await run(caseGoldenOptimisticCursorlessFrame);
+  await run(caseGoldenOfflineQueueFifo);
+  await run(caseGoldenOfflineQueueShardDrain);
+  await run(caseGoldenOfflineFlushBatchesMultipleWrites);
+  await run(caseGoldenOfflineQueueRequeue);
+  await run(caseGoldenOfflineQueueClear);
+  await run(caseGoldenOfflineQueueOverflow);
+  await run(caseGoldenOfflineQueuePrecondition);
+  await run(caseGoldenOfflineQueueHydrate);
+  await run(caseGoldenOfflineQueueHydrateOverflow);
+  await run(caseGoldenOfflineQueueIdentityGate);
+  await run(caseGoldenOfflineFlushReplay);
+  await run(caseGoldenOfflineFlushUnencodableWrite);
 
   await run(caseOptimisticLayerRebasesOntoAServerFrame);
   await run(caseOptimisticLayerDropsOnItsCommitCursor);

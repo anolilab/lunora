@@ -47,6 +47,28 @@ class TestRpcVerbs(unittest.TestCase):
 
         self.assertEqual(calls[-1]["headers"]["x-lunora-mutation-id"], "m1")
 
+    def test_the_default_client_id_is_minted_per_instance(self):
+        calls, post = _record()
+        first = LunoraClient("https://app.example", http_post=post)
+        second = LunoraClient("https://app.example", http_post=post)
+
+        asyncio.run(first.mutation("messages:send", {"text": "hi"}, mutation_id="order-1"))
+        asyncio.run(second.mutation("messages:send", {"text": "hi"}, mutation_id="order-1"))
+
+        # The shard namespaces an anonymous caller's idempotency rows by this
+        # header. Shared across every client in the language, two unauthenticated
+        # users passing the same mutation_id collide and the second write
+        # short-circuits to the first user's cached result without ever running.
+        self.assertNotEqual(calls[0]["headers"]["x-lunora-client-id"], calls[1]["headers"]["x-lunora-client-id"])
+        self.assertEqual(calls[0]["headers"]["x-lunora-client-id"], first.client_id)
+
+        pinned = LunoraClient("https://app.example", client_id="device-7", http_post=post)
+        asyncio.run(pinned.mutation("messages:send", {"text": "hi"}, mutation_id="order-1"))
+
+        # Still pinnable: a durable queue wants a stable per-device id, because a
+        # replayed write namespaces under the id that issued it.
+        self.assertEqual(calls[-1]["headers"]["x-lunora-client-id"], "device-7")
+
     def test_non_2xx_without_an_error_envelope_raises(self):
         # protocol/README.md §4.2. Without the status check this returned None
         # and no exception — a caller would believe its mutation committed.

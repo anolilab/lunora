@@ -7,6 +7,10 @@ Implements the transport documented in ``protocol/README.md``:
   ``resume``/``settled`` frames.
 - ``subscribe_shape`` over the poke (``pokeStart``/``pokePart``/``pokeEnd``) path.
 - An async WS token provider mirroring the TS ``WsTokenProvider``.
+- ``submit`` — the offline-capable write path: optimistic layers over the live
+  subscriptions (``lunora.optimistic``) plus the durable replay queue
+  (``lunora.offline``). It lives in ``lunora.submit``; this file keeps the
+  socket, the subscription registry and the frame dispatch.
 
 The wire framing (frame builders + the inbound-frame dispatcher) is factored into
 pure functions/methods so it is unit-testable against the shared golden fixtures
@@ -21,13 +25,27 @@ import inspect
 import json
 import threading
 import urllib.request
-from collections.abc import Awaitable
+from collections.abc import AsyncIterator, Awaitable
 from functools import partial
 from typing import Any, Callable, Optional, Union
 
+from .errors import LunoraError, SubscriptionError
+from .offline import OfflineQueue, random_id
+from .optimistic import drop_confirmed_layers, fold_optimistic
+from .submit import (
+    FlushReport,
+    MutationOutcome,
+    MutationSettled,
+    SubmitOptions,
+    close_queue,
+    flush_queue,
+    hydrate_queue,
+    submit_write,
+)
 from .wire import decode_wire, encode_wire, stable_wire_key
 
 RPC_PATH = "/_lunora/rpc"
+RPC_BATCH_PATH = "/_lunora/rpc-batch"
 WS_PATH = "/_lunora/ws"
 
 # `urllib.request.urlopen`'s own default is no timeout at all — the socket
@@ -40,41 +58,40 @@ DEFAULT_HTTP_TIMEOUT = 30.0
 WsToken = Union[str, Callable[[], Union[str, Awaitable[Optional[str]], None]], None]
 
 Callback = Callable[[Any], None]
-ErrorCallback = Callable[["SubscriptionError"], None]
+ErrorCallback = Callable[[SubscriptionError], None]
 Unsubscribe = Callable[[], None]
-
-
-class LunoraError(Exception):
-    """A coded error raised from an RPC ``{ "error": { code, message, data } }`` envelope."""
-
-    def __init__(self, code: str, message: str, data: Any = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.data = data
-
-
-class SubscriptionError:
-    """A subscription-scoped error frame the server pushed."""
-
-    def __init__(self, message: str, code: Optional[str] = None) -> None:
-        self.message = message
-        self.code = code
-
-    def __repr__(self) -> str:  # pragma: no cover - trivial
-        return f"SubscriptionError(code={self.code!r}, message={self.message!r})"
 
 
 # --- Pure framing helpers (no I/O; fixture-tested) --------------------------
 
 
 def build_rpc_body(function_path: str, args: Any, shard_key: Optional[str] = None) -> dict:
-    """Build the ``POST /_lunora/rpc`` JSON body. ``shard_key`` is omitted when ``None``."""
+    """Build the ``POST /_lunora/rpc`` JSON body. ``shard_key`` is omitted when empty.
+
+    Empty means absent, not "the shard named ``''``". The runtime disagrees — it
+    takes any string as a named shard and routes ``""`` to its own Durable Object
+    (``packages/runtime/src/create-worker.ts``) — while this client treats ``""``
+    and ``None`` as one shard everywhere it matches a subscription or drains the
+    queue. Sending it would split those two views: a write submitted with ``""``
+    would replay against a different shard than the subscription it updated.
+    """
 
     body: dict[str, Any] = {"args": encode_wire(args if args is not None else {}), "functionPath": function_path}
-    if shard_key is not None:
+    if shard_key:
         body["shardKey"] = shard_key
     return body
+
+
+def parse_commit_cursor(body: dict) -> Optional[int]:
+    """The CDC cursor a write committed at, echoed on a mutation's response.
+
+    ``None`` when the shard has CDC off (or the call was a read), which is the
+    degraded case the optimistic engine falls back to one-shot behaviour for.
+    """
+
+    cursor = body.get("commitCursor")
+
+    return cursor if isinstance(cursor, int) and not isinstance(cursor, bool) else None
 
 
 def parse_rpc_response(body: dict, status: int) -> Any:
@@ -174,7 +191,17 @@ class _Subscription:
         self.acked = False
         self.server_cursor: Optional[int] = None
         self.server_epoch: Optional[str] = None
+        #: The authoritative server value, with NO optimistic overlay. Tracks
+        #: ``last_value`` exactly while no layer is active, and is what the
+        #: layers fold onto when one is.
+        self.server_base: Any = None
+        #: The DISPLAYED value: ``server_base`` folded through
+        #: ``optimistic_layers``.
         self.last_value: Any = None
+        #: Active optimistic layers, in application order. Empty for the common
+        #: case — no pending optimistic write — where this subscription behaves
+        #: exactly as a plain server-value assignment.
+        self.optimistic_layers: list = []
         self.callbacks: list[Callback] = []
         self.error_callbacks: list[ErrorCallback] = []
 
@@ -199,18 +226,42 @@ class LunoraClient:
         ws_url: Optional[str] = None,
         auth_token: Optional[str] = None,
         ws_token: WsToken = None,
-        client_id: str = "python-client",
+        client_id: Optional[str] = None,
         http_post: Optional[Callable[[str, dict, bytes], tuple[int, dict]]] = None,
         timeout: float = DEFAULT_HTTP_TIMEOUT,
+        offline_queue: Optional[OfflineQueue] = None,
+        identity: Optional[str] = None,
     ) -> None:
         self.url = url
         self.ws_url = ws_url if ws_url is not None else _join(_derive_ws_url(url), WS_PATH)
         self.auth_token = auth_token
         self.ws_token = ws_token
-        self.client_id = client_id
+        #: Minted PER INSTANCE when not given, from the same helper that mints
+        #: mutation ids. It is not cosmetic: the shard namespaces an anonymous
+        #: caller's idempotency rows by this value, so a constant shared by every
+        #: client in the language means two unauthenticated users submitting the
+        #: same caller-supplied ``mutation_id`` collide — the second write
+        #: short-circuits to the first user's cached result and never runs.
+        #:
+        #: Pin one when the offline queue is DURABLE: a write replays under the
+        #: id that issued it (the record carries it), and a stable per-device id
+        #: keeps a restored write in the same namespace it was submitted in.
+        self.client_id = client_id if client_id is not None else f"client-{random_id()}"
         # `timeout` only applies to the default transport: a caller who injects
         # their own `http_post` keeps whatever timeout semantics it already has.
         self._http_post = http_post if http_post is not None else partial(_urllib_post, timeout=timeout)
+        #: The durable write queue. Pass one preconfigured (capacity, persistence
+        #: adapter, app version) or take the in-memory default.
+        self.offline_queue = offline_queue if offline_queue is not None else OfflineQueue()
+        #: An opaque, stable, NON-SECRET stamp for whoever is signed in — a user
+        #: id, not a bearer token. It is persisted alongside every queued write
+        #: and re-checked before the write replays, so a restart cannot push one
+        #: user's queued writes as another. ``None`` means signed out, which is
+        #: itself an identity a write can be stamped with.
+        self.identity = identity
+        self._settled_listeners: list[Callable[[MutationSettled], None]] = []
+        self._was_ever_connected = False
+        self._closed = False
         self._subs: dict[str, _Subscription] = {}
         self._shapes: dict[str, _ShapeSubscription] = {}
         self._poke_buffers: dict[str, dict] = {}
@@ -234,12 +285,79 @@ class LunoraClient:
         # `RuntimeError: dictionary changed size during iteration` outright.
         self._lock = threading.Lock()
 
+    # --- Socket lifecycle ---------------------------------------------------
+
+    def attach_socket(self, send: Callable[[dict], None]) -> None:
+        """Register the sender subscription frames go out on; marks the client online.
+
+        Also latches "has connected at least once", which is what the offline
+        queue gates on: writes made before the FIRST connect fail fast by default,
+        so a misconfigured endpoint surfaces on the first write instead of
+        silently accumulating a queue that will never flush. Opt out with
+        ``OfflineQueue(queue_before_first_connect=True)``.
+        """
+
+        with self._lock:
+            self._send = send
+            self._was_ever_connected = True
+
+    def detach_socket(self) -> None:
+        """Forget the sender; marks the client offline so writes queue."""
+
+        with self._lock:
+            self._send = None
+
+    @property
+    def online(self) -> bool:
+        with self._lock:
+            return self._send is not None
+
+    @property
+    def pending_mutation_count(self) -> int:
+        """How many writes are waiting for the socket."""
+
+        with self._lock:
+            return self.offline_queue.size
+
+    def on_mutation_settled(self, listener: Callable[[MutationSettled], None]) -> Callable[[], None]:
+        """Observe every queued write's terminal verdict; returns an unsubscribe.
+
+        This is the ONLY report a write restored from durable storage produces —
+        its original caller did not survive the restart.
+        """
+
+        with self._lock:
+            self._settled_listeners.append(listener)
+
+        def remove() -> None:
+            with self._lock:
+                if listener in self._settled_listeners:
+                    self._settled_listeners.remove(listener)
+
+        return remove
+
+    def close(self) -> None:
+        """Reject every queued write so no caller waits on a dead client.
+
+        Durable storage is untouched: the next session restores those writes.
+        """
+
+        close_queue(self)
+
     # --- HTTP RPC -----------------------------------------------------------
 
     async def query(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
         return await self._rpc(function_path, args, shard_key, mutation_id=None)
 
     async def mutation(self, function_path: str, args: Any = None, shard_key: Optional[str] = None, mutation_id: Optional[str] = None) -> Any:
+        """Invoke a mutation over HTTP, right now.
+
+        This is the direct write path and it fails when the deployment is
+        unreachable. For a write that should survive a dropped socket — queued,
+        replayed in order, optionally with an optimistic overlay — use
+        :meth:`submit`.
+        """
+
         return await self._rpc(function_path, args, shard_key, mutation_id=mutation_id)
 
     async def action(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> Any:
@@ -254,14 +372,77 @@ class LunoraClient:
         return await self._rpc(function_path, args, shard_key, mutation_id=None)
 
     async def _rpc(self, function_path: str, args: Any, shard_key: Optional[str], mutation_id: Optional[str]) -> Any:
+        value, _ = await self._rpc_full(function_path, args, shard_key, mutation_id)
+        return value
+
+    async def _rpc_full(
+        self,
+        function_path: str,
+        args: Any,
+        shard_key: Optional[str],
+        mutation_id: Optional[str],
+        client_id: Optional[str] = None,
+    ) -> tuple:
+        """One RPC round-trip, returning ``(result, commit_cursor)``.
+
+        The commit cursor is what gates an optimistic overlay's removal, so it
+        must survive the call rather than be discarded by ``parse_rpc_response``.
+        """
+
         headers = {"content-type": "application/json"}
         if self.auth_token:
             headers["authorization"] = f"Bearer {self.auth_token}"
         if mutation_id is not None:
             headers["x-lunora-mutation-id"] = mutation_id
+            # Rides WITH the idempotency key, never alone. An anonymous caller has
+            # no server-minted user id, so the shard namespaces its de-duplication
+            # rows by this client id instead; without one every anonymous client
+            # shares a single key space and a colliding mutation id suppresses
+            # another client's write.
+            headers["x-lunora-client-id"] = client_id if client_id is not None else self.client_id
         body = json.dumps(build_rpc_body(function_path, args, shard_key)).encode("utf-8")
         status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_PATH), headers, body))
-        return parse_rpc_response(parsed, status)
+        return parse_rpc_response(parsed, status), parse_commit_cursor(parsed)
+
+    async def _rpc_batch(self, calls: list) -> dict:
+        """POST one ``/_lunora/rpc-batch`` chunk, returning the parsed body.
+
+        No ``x-lunora-mutation-id`` on the request: a batch is ONE transport hop
+        carrying independent calls, so each entry carries its own idempotency key
+        and client id in the body. A single outer header would name one write and
+        de-duplicate the whole chunk against it.
+        """
+
+        headers = {"content-type": "application/json"}
+        if self.auth_token:
+            headers["authorization"] = f"Bearer {self.auth_token}"
+        body = json.dumps({"calls": calls}).encode("utf-8")
+        _status, parsed = await asyncio.get_event_loop().run_in_executor(None, lambda: self._http_post(_join(self.url, RPC_BATCH_PATH), headers, body))
+        return parsed if isinstance(parsed, dict) else {}
+
+    # --- Offline-capable writes ---------------------------------------------
+    #
+    # The write path itself lives in `lunora.submit` — it is a third of this
+    # client and has its own locking discipline (see that module's docstring).
+
+    async def submit(self, options: SubmitOptions) -> MutationOutcome:
+        """Write, sending it now or queueing it until the socket is back.
+
+        See :class:`~lunora.submit.SubmitOptions` for the per-write knobs and
+        :func:`~lunora.submit.submit_write` for what each outcome means.
+        """
+
+        return await submit_write(self, options)
+
+    def hydrate_offline_queue(self) -> list:
+        """Restore writes persisted in a prior session; returns their shard keys."""
+
+        return hydrate_queue(self)
+
+    async def flush_offline_queue(self, shard_key: Optional[str] = None) -> FlushReport:
+        """Replay one shard's queued writes, in order, over HTTP."""
+
+        return await flush_queue(self, shard_key)
 
     # --- WS credential ------------------------------------------------------
 
@@ -278,7 +459,8 @@ class LunoraClient:
 
     def ws_url_for(self, shard_key: Optional[str], token: Optional[str]) -> str:
         params = []
-        if shard_key is not None:
+        # Empty is absent, matching `build_rpc_body` — see its docstring.
+        if shard_key:
             params.append("shard=" + _percent(shard_key))
         if token is not None:
             params.append("token=" + _percent(token))
@@ -321,6 +503,39 @@ class LunoraClient:
                 sender(build_unsubscribe_frame(sub_id))
 
         return unsubscribe
+
+    def stream(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
+        """A live query as an async generator, for ``async for`` and the loops built on it.
+
+        Each call opens its OWN subscription — at CALL time, not at first
+        ``__anext__``, so a frame arriving before the loop starts is not lost —
+        and tears it down when the generator is closed: breaking out of the loop,
+        cancelling the task, or calling ``aclose()``. A consumer never holds an
+        unsubscribe handle. Use :meth:`subscribe` directly when the value
+        outlives one loop.
+
+        A subscription error is raised into the loop rather than delivered as a
+        value, which is what stops a caller from mistaking it for data.
+
+        Frames must be dispatched on the running loop (which :meth:`connect`
+        does): the buffer is an :class:`asyncio.Queue`, filled from
+        :meth:`handle_frame` without a hop.
+        """
+
+        values: asyncio.Queue = asyncio.Queue()
+        unsubscribe = self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key)
+
+        async def iterate() -> AsyncIterator:
+            try:
+                while True:
+                    value = await values.get()
+                    if isinstance(value, SubscriptionError):
+                        raise LunoraError(value.code if value.code is not None else "INTERNAL", value.message)
+                    yield value
+            finally:
+                unsubscribe()
+
+        return iterate()
 
     def subscribe_shape(
         self,
@@ -418,10 +633,10 @@ class LunoraClient:
             return self._handle_error(frame, deferred)
 
         if kind == "resume":
-            return self._advance(frame, "resume")
+            return self._advance(frame, "resume", deferred)
 
         if kind == "settled":
-            desc = self._advance(frame, "settled")
+            desc = self._advance(frame, "settled", deferred)
             if "lastMutationId" in frame:
                 desc["lastMutationId"] = frame["lastMutationId"]
             return desc
@@ -456,14 +671,28 @@ class LunoraClient:
         # fallback and keeps the SDK dependency-free).
         has_data = "data" in frame and frame["data"] is not None
         value = decode_wire(frame["data"]) if has_data else decode_wire(frame.get("delta"))
+        displayed = value
         if sub is not None:
-            sub.last_value = value
-            if "cursor" in frame:
+            sub.server_base = value
+            # Only an integer cursor advances the tracked one. A frame that omits
+            # it, or sends an explicit null, must LEAVE it where it was — the
+            # tracked cursor is what a write's commit cursor is compared against,
+            # so clearing it strands every pending layer.
+            if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:
                 sub.server_epoch = frame["epoch"]
-            deferred.extend(partial(cb, value) for cb in sub.callbacks)
-        desc = {"kind": "data", "id": frame.get("id"), "value": value}
+            # Drop the overlays this frame has caught up with, then RE-FOLD the
+            # rest onto the new authoritative base rather than clobbering them:
+            # a still-queued write's predicted value has to survive an unrelated
+            # delta on the same query.
+            drop_confirmed_layers(sub, sub.server_cursor)
+            displayed = fold_optimistic(sub.server_base, sub.optimistic_layers)
+            sub.last_value = displayed
+            deferred.extend(partial(cb, displayed) for cb in sub.callbacks)
+        # ``value`` is the authoritative server value and ``displayed`` is what a
+        # subscriber saw; they differ only while an optimistic layer is pending.
+        desc = {"kind": "data", "id": frame.get("id"), "value": value, "displayed": displayed}
         if "cursor" in frame:
             desc["cursor"] = frame["cursor"]
         if "epoch" in frame:
@@ -484,14 +713,24 @@ class LunoraClient:
             deferred.extend(partial(cb, error) for cb in shape.error_callbacks)
         return {"kind": "error", "id": sub_id, "code": code, "message": message}
 
-    def _advance(self, frame: dict, kind: str) -> dict:
+    def _advance(self, frame: dict, kind: str, deferred: list) -> dict:
         sub = self._subs.get(frame.get("id"))
         if sub is not None:
             sub.acked = True
-            if "cursor" in frame:
+            if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:
                 sub.server_epoch = frame["epoch"]
+            # A resume/settled frame advances the cursor without a value change —
+            # but a write whose result was byte-identical for this query still
+            # committed at or under this cursor, so its overlay is confirmed.
+            # Sweep here too, not just on data frames, or a no-visible-change
+            # write leaves its prediction on screen until some unrelated write
+            # happens to produce a data frame — indefinitely on a quiet query.
+            if drop_confirmed_layers(sub, sub.server_cursor):
+                displayed = fold_optimistic(sub.server_base, sub.optimistic_layers)
+                sub.last_value = displayed
+                deferred.extend(partial(cb, displayed) for cb in sub.callbacks)
         desc = {"kind": kind, "id": frame.get("id")}
         if "cursor" in frame:
             desc["cursor"] = frame["cursor"]
@@ -539,8 +778,7 @@ class LunoraClient:
             def send(frame: dict) -> None:
                 queue.append(frame)
 
-            with self._lock:
-                self._send = send
+            self.attach_socket(send)
             send(build_connect_frame(self.client_id, context))
             self.resend_subscriptions()
 
@@ -548,16 +786,28 @@ class LunoraClient:
                 while queue:
                     await socket.send(json.dumps(queue.pop(0)))
 
-            await flush()
-            async for raw in socket:
-                if raw == "lunora-pong":
-                    continue
-                try:
-                    frame = json.loads(raw)
-                except (ValueError, TypeError):
-                    continue
-                self.handle_frame(frame)
+            try:
                 await flush()
+                # The socket is back, so the backlog replays now — among itself in
+                # submission order. It is NOT ordered against concurrent writes:
+                # `attach_socket` above has already cleared the queue-it decision,
+                # so a `submit` racing this flush goes straight over HTTP and can
+                # land ahead of the backlog still replaying. The reference client
+                # has the same window; closing it needs a flushing flag in the
+                # queue-it decision, which is a protocol change, not a port fix.
+                await self.flush_offline_queue(shard_key)
+                async for raw in socket:
+                    if raw == "lunora-pong":
+                        continue
+                    try:
+                        frame = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    self.handle_frame(frame)
+                    await flush()
+            finally:
+                # Writes submitted after this point queue instead of failing.
+                self.detach_socket()
 
 
 def _percent(value: str) -> str:

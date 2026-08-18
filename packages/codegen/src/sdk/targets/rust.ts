@@ -216,8 +216,10 @@ const renderSubscribe = (method: SdkMethod): string => {
         `        on_error: ErrorHandler,`,
         `        shard_key: Option<&str>,`,
         `    ) -> Result<String, ClientError> {`,
-        `        let _ = shard_key;`,
-        `        Ok(self.client.subscribe("${stringLiteral(method.functionPath)}", ${payload}, on_data, on_error))`,
+        // `subscribe_on_shard`, never `subscribe`: the shard key is what a write's
+        // optimistic overlay matches a subscription on, and dropping it here made
+        // every overlay a silent no-op on a sharded app (`None != Some("room-1")`).
+        `        Ok(self.client.subscribe_on_shard("${stringLiteral(method.functionPath)}", ${payload}, on_data, on_error, shard_key))`,
         `    }`,
     ].join("\n");
 };

@@ -9,10 +9,25 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
+    StreamEvent,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::wire::{decode_wire, encode_wire, from_model_json, WireValue, MAX_BIGINT_DIGITS, MAX_DEPTH, TAG};
 use serde_json::{json, Value};
+
+// The optimistic-layer and offline-queue cases live in their own file, dispatched
+// from the manifest arm below like every other case. A subdirectory module, not a
+// second `tests/*.rs`, because cargo would compile that as its own test binary
+// with no `#[test]` in it — the manifest must stay the only entry point.
+mod offline_cases;
+
+use offline_cases::{
+    offline_flush_batches_multiple_writes, offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal,
+    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
+    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
+    offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+};
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
 fn fixtures_dir() -> PathBuf {
@@ -83,9 +98,25 @@ fn conformance_manifest_is_covered() {
             "non_2xx_without_error_envelope_fails" => non_2xx_without_error_envelope_fails(),
             "client_frame_builders" => client_frame_builders(),
             "server_frame_consumer" => server_frame_consumer(),
+            "subscription_stream_yields_frame_values_in_order" => subscription_stream_yields_frame_values_in_order(),
             "shape_subscribe_frame" => shape_subscribe_frame(),
             "poke_sequence_materialises_rows" => poke_sequence_materialises_rows(),
             "poke_parts_do_not_apply_before_poke_end" => poke_parts_do_not_apply_before_poke_end(),
+            "optimistic_layer_rebases_onto_server_frame" => optimistic_layer_rebases_onto_server_frame(),
+            "optimistic_layer_drops_on_commit_cursor" => optimistic_layer_drops_on_commit_cursor(),
+            "optimistic_layer_drops_on_settled_frame" => optimistic_layer_drops_on_settled_frame(),
+            "optimistic_layer_rolls_back_on_failure" => optimistic_layer_rolls_back_on_failure(),
+            "offline_queue_fifo_replay_order" => offline_queue_fifo_replay_order(),
+            "offline_queue_drains_only_the_named_shard" => offline_queue_drains_only_the_named_shard(),
+            "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
+            "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
+            "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
+            "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
+            "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
+            "offline_flush_batches_multiple_writes" => offline_flush_batches_multiple_writes(),
+            "optimistic_cursorless_frame_preserves_cursor" => optimistic_cursorless_frame_preserves_cursor(),
+            "offline_queue_hydrate_overflow_settles_discarded" => offline_queue_hydrate_overflow_settles_discarded(),
+            "offline_flush_unencodable_write_settles_terminal" => offline_flush_unencodable_write_settles_terminal(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -227,6 +258,38 @@ fn rpc_request_bodies() {
     }
 }
 
+/// An EMPTY shard key is absent, not the shard named `""`.
+///
+/// Not a shared fixture case — only some ports ever sent it — but the one place
+/// where getting it wrong is worse than the bug it replaced: this client treats
+/// `""` and `None` as one shard wherever it matches a subscription or drains the
+/// queue, so a `""` that reached the wire would route the write to a DIFFERENT
+/// Durable Object than the subscription it updated. Both builders that carry a
+/// shard key are asserted, because normalising one and not the other is the same
+/// split.
+#[test]
+fn empty_shard_key_is_the_default_shard() {
+    let body = build_rpc_body("messages:send", &WireValue::Object(Vec::new()), Some("")).expect("build");
+
+    assert!(body.get("shardKey").is_none(), "an empty shard key is omitted from the body");
+    assert_eq!(
+        canonical(&body),
+        canonical(&build_rpc_body("messages:send", &WireValue::Object(Vec::new()), None).expect("build")),
+        "and is byte-identical to sending none"
+    );
+
+    let client = Client::new("https://app.example", None);
+
+    assert!(!client.ws_url(Some(""), None).contains("shard="), "nor does it name a shard on the socket");
+    assert_eq!(client.ws_url(Some(""), None), client.ws_url(None, None));
+    // A real key still rides both, or the normalisation would have eaten sharding.
+    assert!(client.ws_url(Some("room-1"), None).contains("shard=room%2D1"));
+    assert_eq!(
+        build_rpc_body("messages:send", &WireValue::Object(Vec::new()), Some("room-1")).expect("build")["shardKey"],
+        json!("room-1")
+    );
+}
+
 fn rpc_responses() {
     let document = fixture("rpc.json");
 
@@ -324,6 +387,39 @@ fn server_frame_consumer() {
             assert_eq!(errors[0].code.as_deref(), expect["code"].as_str(), "{name}");
         }
     }
+}
+
+/// The channel form of a live query: same subscription, same decode, same order
+/// as the callback form.
+fn subscription_stream_yields_frame_values_in_order() {
+    let document = fixture("ws-frames.json");
+    let case = &document["stream"];
+    let mut client = Client::new("https://app.example", None);
+
+    client.attach_socket(Box::new(|_frame| {}));
+
+    let (events, id) = client.stream(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        None,
+    );
+    let mut seen = Vec::new();
+
+    for frame in case["frames"].as_array().expect("frames") {
+        client.handle_frame(&frame.to_string()).expect("handle");
+
+        match events.recv().expect("a streamed event") {
+            StreamEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
+            StreamEvent::Error(error) => panic!("stream error: {}", error.message),
+        }
+    }
+
+    // Unsubscribing drops the sender, which is what ends the iteration — a
+    // consumer that only drops its receiver leaves the subscription open.
+    client.unsubscribe(&id);
+
+    assert_eq!(canonical(&json!(seen)), canonical(&case["yielded"]));
+    assert!(events.recv().is_err(), "the stream ends once the subscription is dropped");
 }
 
 fn shape_subscribe_frame() {

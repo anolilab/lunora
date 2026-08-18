@@ -9,6 +9,519 @@ import 'package:lunora/lunora.dart';
 
 import 'harness.dart';
 
+/// One named scenario from the `offlineQueue` block of
+/// `protocol/fixtures/offline-optimistic.json`.
+///
+/// The manifest cases below read every expectation from there rather than
+/// writing their own, so this port and the seven siblings assert the same
+/// values instead of each documenting its own behaviour.
+Map<String, Object?> _scenario(String name) => (fixture('offline-optimistic.json')['offlineQueue']! as Map<String, Object?>)[name]! as Map<String, Object?>;
+
+/// A [MemoryPersistence] that also records which ids were appended and removed,
+/// because the fixtures assert the durable calls and not only the queue depth.
+class _RecordingPersistence extends MemoryPersistence {
+  final List<String> appended = <String>[];
+  final List<String> removed = <String>[];
+
+  @override
+  Future<void> append(PersistedMutation mutation) {
+    appended.add(mutation.id);
+
+    return super.append(mutation);
+  }
+
+  @override
+  Future<void> remove(String id) {
+    removed.add(id);
+
+    return super.remove(id);
+  }
+}
+
+/// A queued write with nothing attached but its id — the fixtures identify
+/// entries by id and care about ordering, not payloads.
+QueuedMutation _entry(String id, {String? shardKey, bool Function()? precondition}) =>
+    QueuedMutation(id: id, functionPath: 'messages:send', args: const <String, Object?>{}, shardKey: shardKey, precondition: precondition);
+
+List<String> _ids(List<QueuedMutation> items) => <String>[for (final item in items) item.id];
+
+/// The ids the fixture lists under [key], as a plain list of strings.
+List<String> _expected(Map<String, Object?> case_, String key) => (case_[key]! as List<Object?>).cast<String>();
+
+// ─── Offline queue: the shared golden scenarios ──────────────────────────────
+
+/// Writes replay in the order they were submitted.
+void caseGoldenOfflineQueueFifo() {
+  covers('offline_queue_fifo_replay_order');
+
+  final case_ = _scenario('fifo');
+  final queue = OfflineQueue();
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  equals(queue.size, case_['sizeAfterEnqueue'], 'every write is queued');
+
+  final drained = queue.drain();
+
+  equals(canonical(_ids(drained)), canonical(case_['drained']), 'writes drain oldest first');
+  equals(queue.size, case_['sizeAfterDrain'], 'the queue is empty afterwards');
+}
+
+/// A drain takes ONE shard's writes and leaves the rest queued, in order.
+///
+/// The entry the fixture keys on is the one submitted with `''`: an empty shard
+/// key and an absent one name the same shard, so it has to drain on the default
+/// shard's flush. A port comparing the two strictly leaves it queued forever,
+/// because nothing ever flushes a shard named `''`.
+void caseGoldenOfflineQueueShardDrain() {
+  covers('offline_queue_drains_only_the_named_shard');
+
+  final case_ = _scenario('shardDrain');
+  final queue = OfflineQueue();
+
+  for (final entry in (case_['entries']! as List<Object?>).cast<Map<String, Object?>>()) {
+    queue.enqueue(_entry(entry['id']! as String, shardKey: entry['shardKey'] as String?));
+  }
+
+  final shardKey = case_['drainShardKey'] as String?;
+  final drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
+
+  equals(canonical(_ids(drained)), canonical(case_['drained']), "only the named shard's writes drain");
+  equals(canonical(_ids(queue.items)), canonical(case_['remaining']), 'the other shards keep their order');
+}
+
+/// A flush that aborts on a transient failure returns its unreplayed writes to
+/// the FRONT of the queue, in order, without re-persisting them.
+///
+/// Read from the fixture rather than asserted against numbers written here: this
+/// port already drives the behaviour end to end through `setConnected`, but a
+/// port that documents its own expectations is exactly what the shared file
+/// exists to prevent.
+Future<void> caseGoldenOfflineQueueRequeue() async {
+  covers('offline_queue_fifo_replay_order');
+
+  final case_ = _scenario('requeue');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  await Future<void>.delayed(Duration.zero);
+
+  final requeued = _expected(case_, 'requeued');
+
+  queue.requeue(queue.drain().where((item) => requeued.contains(item.id)).toList());
+
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterRequeue']), 'requeued writes return to the front, in order');
+  equals(store.appended.length, case_['persistAppendCalls'], 'and a requeue does not re-persist them');
+}
+
+/// Closing hands every pending write back so no caller hangs — and leaves
+/// durable storage INTACT, because the next session restores from it.
+Future<void> caseGoldenOfflineQueueClear() async {
+  covers('offline_queue_fifo_replay_order');
+
+  final case_ = _scenario('clear');
+  final store = _RecordingPersistence();
+  final rejected = <String, Object?>{};
+  final queue = OfflineQueue(persistence: store, onSettled: (entry, error) => rejected[entry.id] = error);
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  queue.clear();
+
+  equals(canonical(rejected.keys.toList()), canonical(case_['rejected']), 'every pending write is handed back');
+  equals(queue.size, 0, 'and the queue is empty');
+
+  for (final id in _expected(case_, 'rejected')) {
+    final error = rejected[id];
+
+    equals(error is LunoraApiException ? error.code : null, case_['code'], 'each carries the documented code');
+  }
+
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'closing does not purge durable storage');
+  equals(store.records.length, _expected(case_, 'enqueue').length, 'the next session restores them');
+}
+
+/// Bounded FIFO: past capacity the OLDEST entry is evicted, un-persisted and
+/// reported with a coded reason.
+Future<void> caseGoldenOfflineQueueOverflow() async {
+  covers('offline_queue_overflow_evicts_oldest');
+
+  final case_ = _scenario('overflow');
+  final store = _RecordingPersistence();
+  final settled = <String, Object?>{};
+  final queue = OfflineQueue(
+    maxItems: case_['maxItems']! as int,
+    persistence: store,
+    onSettled: (entry, error) => settled[entry.id] = error,
+  );
+
+  for (final id in _expected(case_, 'enqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  // The unawaited durable writes are queued as microtasks; let them land before
+  // reading what the store was asked to do.
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(_ids(queue.items)), canonical(case_['remaining']), 'the newest writes survive');
+  equals(canonical(settled.keys.toList()), canonical(case_['evicted']), 'only the oldest was settled');
+
+  for (final id in _expected(case_, 'evicted')) {
+    final error = settled[id];
+
+    equals(error is LunoraApiException ? error.code : null, case_['code'], 'the eviction carries its coded reason');
+  }
+
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'the evicted write is un-persisted');
+}
+
+/// A write whose assumptions no longer hold is dropped before replay, and the
+/// valid ones keep their order.
+void caseGoldenOfflineQueuePrecondition() {
+  covers('offline_queue_precondition_drops_stale_write');
+
+  final case_ = _scenario('precondition');
+  final settled = <String, Object?>{};
+  final queue = OfflineQueue(onSettled: (entry, error) => settled[entry.id] = error);
+
+  for (final record in objectList(case_['entries'])) {
+    final holds = record['precondition']! as bool;
+
+    queue.enqueue(_entry(record['id']! as String, precondition: () => holds));
+  }
+
+  final conflicted = queue.drainConflict();
+
+  equals(canonical(_ids(conflicted)), canonical(case_['conflicted']), 'the stale write is drained out');
+  equals(canonical(_ids(queue.items)), canonical(case_['remaining']), 'the valid writes keep their FIFO order');
+
+  for (final id in _expected(case_, 'conflicted')) {
+    final error = settled[id];
+
+    equals(error is LunoraApiException ? error.code : null, case_['code'], 'the drop carries its coded reason');
+  }
+}
+
+/// Restored records are unshifted AHEAD of anything queued during the boot
+/// window, and a record stamped under another app version is purged rather than
+/// replayed against the current schema.
+Future<void> caseGoldenOfflineQueueHydrate() async {
+  covers('offline_queue_hydrates_persisted_writes');
+
+  final case_ = _scenario('hydrate');
+  final store = _RecordingPersistence();
+
+  for (final record in objectList(case_['persisted'])) {
+    await store.append(
+      PersistedMutation(
+        id: record['id']! as String,
+        functionPath: 'messages:send',
+        args: const <String, Object?>{},
+        shardKey: record['shardKey'] as String?,
+        version: record['version'] as String?,
+      ),
+    );
+  }
+
+  store.removed.clear();
+
+  final queue = OfflineQueue(persistence: store, version: case_['version'] as String?);
+
+  for (final id in _expected(case_, 'liveEnqueue')) {
+    queue.enqueue(_entry(id));
+  }
+
+  await queue.hydrate();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterHydrate']), 'restored writes are older than this session\'s and replay first');
+  equals(canonical(store.removed), canonical(case_['purged']), 'the version-mismatched record is purged, not replayed');
+}
+
+/// A write stamped under one identity must never replay under another. `null` is
+/// the signed-out identity and a real value; a record with NO stamp — persisted
+/// before stamping existed — replays ambiently.
+void caseGoldenOfflineQueueIdentityGate() {
+  covers('offline_queue_identity_gate_rejects_replay');
+
+  final case_ = _scenario('identityGate');
+
+  for (final row in objectList(case_['cases'])) {
+    final stamped = row['stamped'];
+    final name = row['name']! as String;
+
+    // Round-tripped through the persisted form on purpose: the three states are
+    // carried on the wire by the PRESENCE of the `identity` key, so building the
+    // entry from a map is what proves absent and signed-out stay apart.
+    final record = PersistedMutation.fromJson(<String, Object?>{
+      'id': name,
+      'functionPath': 'messages:send',
+      'args': const <String, Object?>{},
+      if (stamped != 'absent') 'identity': stamped,
+    });
+    final entry = QueuedMutation(
+      id: record.id,
+      functionPath: record.functionPath,
+      args: record.args,
+      identity: record.identity,
+      identityStamped: record.identityStamped,
+    );
+
+    equals(entry.identityAllowsReplay(row['current'] as String?), row['replays'], 'identity gate: $name');
+  }
+
+  equals(offlineIdentityChanged, case_['code'], 'the refusal carries the shared code');
+}
+
+/// The end-to-end reconnect path: each write replays under its own idempotency
+/// key, a coded verdict is terminal, an unanswered write is re-queued, and the
+/// successful write's overlay is confirmed against the ECHOED commit cursor.
+Future<void> caseGoldenOfflineFlushReplay() async {
+  covers('offline_flush_replays_and_confirms_optimistic');
+
+  final case_ = _scenario('flushReplay');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+  final poster = Poster();
+  final transport = LunoraTransport(url: 'https://app.example', post: poster.call);
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
+
+  final committed = <String>[];
+  final rejected = <String>[];
+  final cursors = <String, int?>{};
+
+  for (final id in _expected(case_, 'queued')) {
+    queue.enqueue(
+      QueuedMutation(
+        id: id,
+        functionPath: 'messages:send',
+        args: const <String, Object?>{},
+        onCommit: (cursor) {
+          committed.add(id);
+          cursors[id] = cursor;
+        },
+        onReject: (_) => rejected.add(id),
+      ),
+    );
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  store.removed.clear();
+
+  // The three fixture outcomes, as this transport expresses them. `ok` and
+  // `coded-error` are slots; `transport-error` is an ABSENT slot — a batch is one
+  // hop, so a per-entry transport failure is the server not answering for that
+  // entry, and an unanswered write is retried under its original idempotency key
+  // exactly as an uncoded throw re-queues on the single-call path.
+  final responses = objectList(case_['responses']);
+  final slots = <String>[
+    for (final (index, response) in responses.indexed)
+      if (response['outcome'] == 'ok')
+        '{"id":$index,"body":{"result":null,"commitCursor":${response['commitCursor']}}}'
+      else if (response['outcome'] == 'coded-error')
+        '{"id":$index,"body":{"error":{"code":"${response['code']}","message":"gone"}}}',
+  ];
+
+  poster.batchReply = '{"results":[${slots.join(',')}]}';
+
+  await replayer.flush();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(committed), canonical(case_['committed']), 'the successful write commits');
+  equals(canonical(rejected), canonical(case_['rejected']), 'the coded verdict is terminal');
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterFlush']), 'the unanswered write is re-queued');
+  equals(cursors[_expected(case_, 'committed').first], case_['confirmedCommitCursor'], 'the overlay confirms on the echoed commit cursor');
+
+  final sent = <String>[for (final call in poster.callsAt(0)) call['mutationId']! as String];
+
+  equals(canonical(sent), canonical(case_['mutationIdHeaders']), 'every write replays under the key its original call minted');
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'only the settled writes are un-persisted');
+}
+
+/// A durable store holding more than `maxItems` must not bypass the cap, and the
+/// eviction must be REPORTED: a restored record has no awaiter, so a discard
+/// carried only by the entry's own reject handler reaches nobody and the durable
+/// write vanishes silently.
+Future<void> caseGoldenOfflineQueueHydrateOverflow() async {
+  covers('offline_queue_hydrate_overflow_settles_discarded');
+
+  final case_ = _scenario('hydrateOverflow');
+  final store = _RecordingPersistence();
+
+  for (final record in objectList(case_['persisted'])) {
+    await store.append(
+      PersistedMutation(
+        id: record['id']! as String,
+        functionPath: 'messages:send',
+        args: const <String, Object?>{},
+        shardKey: record['shardKey'] as String?,
+        version: record['version'] as String?,
+      ),
+    );
+  }
+
+  final settled = <String>[];
+  final codes = <String, String?>{};
+  final awaiters = <String, bool>{};
+  final queue = OfflineQueue(
+    maxItems: case_['maxItems']! as int,
+    persistence: store,
+    version: case_['version'] as String?,
+    onSettled: (entry, error) {
+      settled.add(entry.id);
+      codes[entry.id] = error is LunoraApiException ? error.code : null;
+      awaiters[entry.id] = entry.hasAwaiter;
+    },
+  );
+
+  await queue.hydrate();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterHydrate']), 'hydrate evicts from the front exactly as enqueue does');
+  equals(canonical(settled), canonical(case_['settledFromClient']), 'the evicted record is reported, not dropped in silence');
+
+  for (final id in _expected(case_, 'evicted')) {
+    equals(codes[id], case_['settledCode'], 'the eviction carries its coded reason');
+    equals(awaiters[id], case_['settledHadAwaiter'], 'a restored write has no awaiter, and the report says so');
+  }
+}
+
+/// Two or more queued writes coalesce into ONE `/_lunora/rpc-batch` round trip,
+/// and each slot is classified exactly as a whole single-call response is.
+Future<void> caseGoldenOfflineFlushBatchesMultipleWrites() async {
+  covers('offline_flush_batches_multiple_writes');
+
+  final case_ = _scenario('batchReplay');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+  final poster = Poster();
+  final transport = LunoraTransport(url: 'https://app.example', post: poster.call, clientId: 'c-1');
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
+
+  final committed = <String>[];
+  final rejected = <String>[];
+  final cursors = <String, int?>{};
+
+  for (final id in _expected(case_, 'queued')) {
+    queue.enqueue(
+      QueuedMutation(
+        id: id,
+        functionPath: 'messages:send',
+        args: const <String, Object?>{},
+        onCommit: (cursor) {
+          committed.add(id);
+          cursors[id] = cursor;
+        },
+        onReject: (_) => rejected.add(id),
+      ),
+    );
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  store.removed.clear();
+
+  final slots = <String>[
+    for (final slot in objectList(case_['slots']))
+      if (slot['outcome'] == 'ok')
+        '{"id":${slot['id']},"body":{"result":null,"commitCursor":${slot['commitCursor']}}}'
+      else
+        '{"id":${slot['id']},"body":{"error":{"code":"${slot['code']}","message":"slot failed"}}}',
+  ];
+
+  poster.batchReply = '{"results":[${slots.join(',')}]}';
+
+  await replayer.flush();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(poster.batchRequests, case_['requests'], 'the whole flush is one batch hop');
+  equals(poster.urls.first.endsWith(case_['path']! as String), true, 'sent to the batch endpoint');
+  // The idempotency key and the client id ride in the ENTRY, not in a request
+  // header: a batch is one hop carrying independent calls, and a single outer
+  // header would de-duplicate the whole chunk against one id.
+  equals(
+    canonical(<Object?>[
+      for (final call in poster.callsAt(0))
+        <String, Object?>{'clientId': call['clientId'], 'functionPath': call['functionPath'], 'id': call['id'], 'mutationId': call['mutationId']},
+    ]),
+    canonical(case_['calls']),
+    'every entry carries its own slot id, idempotency key and client id',
+  );
+  equals(canonical(committed), canonical(case_['committed']), 'the successful slot commits');
+  // A transient shard code in a slot is not a verdict, so that write goes back
+  // on the queue instead of being reported as failed — and so does the slot the
+  // server never returned at all.
+  equals(canonical(rejected), canonical(case_['rejected']), 'only the coded verdict is terminal');
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterFlush']), 'the transient and unanswered writes are re-queued, in order');
+  equals(cursors[_expected(case_, 'committed').first], case_['confirmedCommitCursor'], 'the overlay confirms on the echoed commit cursor');
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'only the settled writes are un-persisted');
+}
+
+/// A write whose args cannot be wire-encoded can never succeed, so it settles
+/// TERMINALLY on the first flush instead of re-queueing forever ahead of every
+/// write behind it — a codec error carries no code, and the transient rule would
+/// otherwise loop it.
+Future<void> caseGoldenOfflineFlushUnencodableWrite() async {
+  covers('offline_flush_unencodable_write_settles_terminal');
+
+  final case_ = _scenario('unencodableWrite');
+  final store = _RecordingPersistence();
+  final queue = OfflineQueue(persistence: store);
+  final poster = Poster(commitCursor: 7, result: 'null');
+  final transport = LunoraTransport(url: 'https://app.example', post: poster.call);
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
+
+  final committed = <String>[];
+  final rejected = <String>[];
+  final codes = <String, String?>{};
+  final unencodable = _expected(case_, 'unencodable').toSet();
+
+  for (final id in _expected(case_, 'queued')) {
+    queue.enqueue(
+      QueuedMutation(
+        id: id,
+        functionPath: 'messages:send',
+        // `Object()` has no wire representation, so `encodeWire` throws — and the
+        // throw carries no code, which is exactly what would classify it as a
+        // transport blip and re-queue it.
+        args: unencodable.contains(id) ? <String, Object?>{'payload': Object()} : const <String, Object?>{},
+        onCommit: (_) => committed.add(id),
+        onReject: (error) {
+          rejected.add(id);
+          codes[id] = error is LunoraApiException ? error.code : null;
+        },
+      ),
+    );
+  }
+
+  await Future<void>.delayed(Duration.zero);
+  store.removed.clear();
+
+  await replayer.flush();
+  await Future<void>.delayed(Duration.zero);
+
+  equals(canonical(rejected), canonical(case_['rejected']), 'the unencodable write settles terminally');
+  equals(canonical(committed), canonical(case_['committed']), 'the write behind it still goes out');
+  equals(canonical(_ids(queue.items)), canonical(case_['queuedAfterFlush']), 'nothing loops back onto the queue');
+
+  for (final id in _expected(case_, 'rejected')) {
+    equals(codes[id], case_['code'], 'the drop carries a code rather than the raw codec exception');
+  }
+
+  final sent = <String>[for (final headers in poster.headers) headers['x-lunora-mutation-id']!];
+
+  equals(canonical(sent), canonical(case_['mutationIdHeaders']), 'the unencodable write is never sent');
+  equals(canonical(store.removed), canonical(case_['persistRemoveCalls']), 'both settled writes are un-persisted');
+}
+
 // ─── Offline queue ───────────────────────────────────────────────────────────
 
 /// The core promise: a write issued while disconnected is held, and replays in

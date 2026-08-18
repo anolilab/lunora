@@ -1,11 +1,22 @@
 package dev.lunora;
 
+import dev.lunora.Offline.OfflineQueue;
+import dev.lunora.Optimistic.QueryEntry;
+import dev.lunora.Submit.FlushReport;
+import dev.lunora.Submit.MutationOutcome;
+import dev.lunora.Submit.MutationSettled;
+import dev.lunora.Submit.SubmitOptions;
+
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -18,6 +29,9 @@ import java.util.function.Consumer;
 public final class Client {
     /** The single endpoint every query/mutation/action posts to. */
     public static final String RPC_PATH = "/_lunora/rpc";
+
+    /** Where a flush of two or more queued writes goes: one hop carrying independent calls. */
+    public static final String RPC_BATCH_PATH = "/_lunora/rpc-batch";
 
     /** The live-subscription endpoint. */
     public static final String WS_PATH = "/_lunora/ws";
@@ -82,9 +96,9 @@ public final class Client {
      * consumer owns, and holding the lock across a callback would let one slow consumer stall the
      * socket reader.
      */
-    private final Object lock = new Object();
+    final Object lock = new Object();
 
-    private FrameSender sender;
+    FrameSender sender;
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, Map<String, List<Map<String, Object>>>> pokes = new LinkedHashMap<>();
@@ -94,20 +108,40 @@ public final class Client {
     private static final class Subscription {
         final String functionPath;
         final Object args;
+
+        /**
+         * The stable wire key of {@code args}, computed once at subscribe time so a write's
+         * optimistic targeting can compare without re-serialising every subscription's args on
+         * every write.
+         */
+        final String argsKey;
+
+        final String shardKey;
         final Consumer<Object> onData;
         final Consumer<SubscriptionError> onError;
         Object cursor;
         Object epoch;
 
+        /** The displayed value and its optimistic overlays. See {@link Optimistic}. */
+        final Optimistic.State state = new Optimistic.State(null);
+
         Subscription(
                 String functionPath,
                 Object args,
+                String shardKey,
                 Consumer<Object> onData,
                 Consumer<SubscriptionError> onError) {
             this.functionPath = functionPath;
             this.args = args;
+            this.argsKey =
+                    Key.stableWireKey(args == null ? new LinkedHashMap<String, Object>() : args);
+            this.shardKey = shardKey;
             this.onData = onData;
             this.onError = onError;
+
+            if (onData != null) {
+                state.callbacks.add(onData);
+            }
         }
     }
 
@@ -125,19 +159,136 @@ public final class Client {
         }
     }
 
+    /**
+     * Identifies this client to the shard. It rides every write that carries an idempotency key,
+     * because an anonymous caller has no server-minted user id to namespace its de-duplication rows
+     * by.
+     *
+     * <p>Minted PER INSTANCE, from the same generator that mints mutation ids. A per-language
+     * constant would put every anonymous client in the process — and in every other process running
+     * this SDK — into ONE de-duplication namespace: two signed-out users calling the same mutation
+     * with the same caller-supplied mutation id would collide, and the second write would
+     * short-circuit to the first user's cached result without ever running.
+     *
+     * <p>Assign it to pin a stable per-device id, which a consumer using a DURABLE offline queue
+     * should do: a write replays under the id that ISSUED it, so an id that changes every process
+     * start makes each restored write its own namespace.
+     */
+    public volatile String clientId = Offline.randomId();
+
+    /**
+     * An opaque, stable, NON-SECRET stamp for whoever is signed in — a user id, not a bearer token.
+     * It is persisted alongside every queued write and re-checked before that write replays, so a
+     * restart cannot push one user's queued writes as another. Null means signed out, which is
+     * itself an identity a write can be stamped with.
+     */
+    public volatile String identity;
+
+    OfflineQueue offlineQueue = new OfflineQueue();
+    boolean wasEverConnected;
+    boolean closed;
+    final List<Consumer<MutationSettled>> settledListeners = new ArrayList<>();
+
     public Client(String baseUrl, HttpPoster poster) {
         this.baseUrl = baseUrl;
         this.poster = poster;
     }
 
-    /** Registers the sender used for subscription frames. Call once the socket is open. */
+    /**
+     * Registers the sender used for subscription frames. Call once the socket is open.
+     *
+     * <p>It also latches "has connected at least once", which is what the write queue gates on: a
+     * write made before the FIRST connect fails fast by default, so a misconfigured endpoint
+     * surfaces on the first write instead of silently filling a queue that will never flush.
+     */
     public void attachSocket(FrameSender sender) {
         synchronized (lock) {
             this.sender = sender;
+            this.wasEverConnected = true;
         }
     }
 
-    /** Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when null. */
+    /** Forgets the sender, so subsequent writes queue rather than fail. */
+    public void detachSocket() {
+        synchronized (lock) {
+            this.sender = null;
+        }
+    }
+
+    /** Whether a socket is currently attached. */
+    public boolean online() {
+        synchronized (lock) {
+            return sender != null;
+        }
+    }
+
+    /** The durable write queue backing {@link #submit}. */
+    public OfflineQueue offlineQueue() {
+        synchronized (lock) {
+            return offlineQueue;
+        }
+    }
+
+    /** Replaces the write queue — to configure capacity, persistence, or an app version. */
+    public void offlineQueue(OfflineQueue queue) {
+        synchronized (lock) {
+            this.offlineQueue = queue;
+        }
+    }
+
+    /** How many writes are waiting for the socket. */
+    public int pendingMutationCount() {
+        synchronized (lock) {
+            return offlineQueue.size();
+        }
+    }
+
+    /**
+     * Observes every queued write's terminal verdict; returns an unsubscribe.
+     *
+     * <p>This is the ONLY report a write restored from durable storage produces — its original
+     * caller did not survive the restart.
+     */
+    public Runnable onMutationSettled(Consumer<MutationSettled> listener) {
+        synchronized (lock) {
+            settledListeners.add(listener);
+        }
+
+        return () -> {
+            synchronized (lock) {
+                settledListeners.remove(listener);
+            }
+        };
+    }
+
+    /**
+     * Rejects every queued write so no caller waits on a dead client. Durable storage is untouched:
+     * the next session restores those writes.
+     */
+    public void close() {
+        List<Offline.Discarded> discarded;
+
+        // Emptied under the monitor, settled outside it: `clear` mutates the same list every other
+        // queue call does, while settling rolls optimistic layers back and notifies listeners.
+        synchronized (lock) {
+            closed = true;
+            sender = null;
+            discarded = offlineQueue.clear();
+        }
+
+        Submit.reportDiscarded(this, discarded);
+    }
+
+    /**
+     * Builds the {@code POST /_lunora/rpc} body. {@code shardKey} is omitted when absent OR empty.
+     *
+     * <p>Empty as well as null, because the two are the same shard to this client (see {@link
+     * Offline#sameShard}) but NOT to the runtime, which treats {@code ""} as a valid named shard
+     * and routes it to its own Durable Object. Sending it through would mean a write that drains on
+     * the default shard's flush lands on a different shard from the subscription whose overlay it
+     * just updated — so the client resolves the ambiguity at the wire boundary, once, where every
+     * call goes past.
+     */
     public static Map<String, Object> buildRpcBody(
             String functionPath, Object args, String shardKey) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -145,7 +296,7 @@ public final class Client {
         body.put("args", Wire.encode(args == null ? new LinkedHashMap<String, Object>() : args));
         body.put("functionPath", functionPath);
 
-        if (shardKey != null) {
+        if (shardKey != null && !shardKey.isEmpty()) {
             body.put("shardKey", shardKey);
         }
 
@@ -210,8 +361,27 @@ public final class Client {
         };
     }
 
-    @SuppressWarnings("unchecked")
     private Object rpc(String functionPath, Object args, String shardKey, String mutationId) {
+        return rpcFull(functionPath, args, shardKey, mutationId, null).result();
+    }
+
+    /** One RPC round-trip: the decoded result plus the commit cursor the response echoed. */
+    public record RpcReply(Object result, Long commitCursor) {}
+
+    /**
+     * One round-trip, keeping the echoed {@code commitCursor}.
+     *
+     * <p>The cursor is what gates an optimistic overlay's removal, so it has to survive the call
+     * rather than be discarded by {@link #parseRpcResponse}. {@code clientId} overrides this
+     * session's, so a replayed write namespaces server-side under the id that ISSUED it.
+     */
+    @SuppressWarnings("unchecked")
+    RpcReply rpcFull(
+            String functionPath,
+            Object args,
+            String shardKey,
+            String mutationId,
+            String issuingClientId) {
         if (poster == null) {
             throw new ApiException("INTERNAL", "no HTTP poster configured", null);
         }
@@ -226,14 +396,66 @@ public final class Client {
 
         if (mutationId != null) {
             headers.put("x-lunora-mutation-id", mutationId);
+            // Rides WITH the idempotency key, never alone. An anonymous caller has no
+            // server-minted user id, so the shard namespaces its de-duplication rows by this
+            // client id instead; without one every anonymous client shares a single key space and
+            // a colliding mutation id suppresses another client's write.
+            headers.put("x-lunora-client-id", issuingClientId != null ? issuingClientId : clientId);
         }
 
         String payload = Json.write(buildRpcBody(functionPath, args, shardKey));
         Response response =
                 poster.post(join(RPC_PATH), headers, payload.getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> body = (Map<String, Object>) Json.parse(response.body());
 
-        return parseRpcResponse(
-                (Map<String, Object>) Json.parse(response.body()), response.status());
+        return new RpcReply(parseRpcResponse(body, response.status()), parseCommitCursor(body));
+    }
+
+    /**
+     * POST one {@code /_lunora/rpc-batch} chunk, returning the parsed body.
+     *
+     * <p>No {@code x-lunora-mutation-id} on the request: a batch is ONE transport hop carrying
+     * independent calls, so each entry carries its own idempotency key and client id in the body. A
+     * single outer header would name one write and de-duplicate the whole chunk against it.
+     */
+    @SuppressWarnings("unchecked")
+    Map<String, Object> rpcBatch(List<Object> calls) {
+        if (poster == null) {
+            throw new ApiException("INTERNAL", "no HTTP poster configured", null);
+        }
+
+        Map<String, String> headers = new LinkedHashMap<>();
+
+        headers.put("content-type", "application/json");
+
+        if (authToken != null) {
+            headers.put("authorization", "Bearer " + authToken);
+        }
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+
+        envelope.put("calls", calls);
+
+        Response response =
+                poster.post(
+                        join(RPC_BATCH_PATH),
+                        headers,
+                        Json.write(envelope).getBytes(StandardCharsets.UTF_8));
+        Object body = Json.parse(response.body());
+
+        return body instanceof Map<?, ?> map ? (Map<String, Object>) map : new LinkedHashMap<>();
+    }
+
+    /**
+     * The CDC cursor a write committed at, echoed on a mutation's response.
+     *
+     * <p>Null when the call was a read, or when the shard has CDC off — the degraded case the
+     * optimistic engine falls back to one-shot behaviour for.
+     */
+    public static Long parseCommitCursor(Map<String, Object> body) {
+        Object cursor = body.get("commitCursor");
+
+        return cursor instanceof Number number ? number.longValue() : null;
     }
 
     public static Map<String, Object> buildConnectFrame(
@@ -350,7 +572,7 @@ public final class Client {
             nextId++;
             id = "sub_" + nextId;
 
-            subscriptions.put(id, new Subscription(functionPath, args, onData, onError));
+            subscriptions.put(id, new Subscription(functionPath, args, shardKey, onData, onError));
             socket = sender;
         }
 
@@ -370,6 +592,104 @@ public final class Client {
                 current.send(buildUnsubscribeFrame(id));
             }
         };
+    }
+
+    /**
+     * One item delivered by {@link #stream}: a value, or the subscription error the server pushed.
+     *
+     * <p>One queue carrying both, rather than a value queue plus an error queue: a consumer polling
+     * two of them can read them out of order, and the whole point of a stream is that what arrived
+     * first is delivered first.
+     */
+    public record StreamEvent(Object value, SubscriptionError error) {}
+
+    /**
+     * A live query as a closeable {@link Iterable}, for {@code for (var event : stream)}.
+     *
+     * <p>{@link #iterator} BLOCKS waiting for the next frame, which is what makes the loop the
+     * whole consumer. {@link #close} unsubscribes and ends the loop, so it belongs in a
+     * try-with-resources — otherwise the subscription outlives the loop and the iterator blocks
+     * forever.
+     */
+    public static final class Stream implements Iterable<StreamEvent>, AutoCloseable {
+        // Unbounded, so the frame dispatcher never blocks on a slow consumer; the trade is that one
+        // which stops reading without closing grows the buffer.
+        private final LinkedBlockingQueue<StreamEvent> events = new LinkedBlockingQueue<>();
+        // The sentinel the iterator stops on. A distinct instance rather than a null, because
+        // LinkedBlockingQueue rejects nulls outright.
+        private final StreamEvent end = new StreamEvent(null, null);
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private Runnable unsubscribe = () -> {};
+
+        private Stream() {}
+
+        @Override
+        public Iterator<StreamEvent> iterator() {
+            return new Iterator<>() {
+                private StreamEvent next;
+
+                @Override
+                public boolean hasNext() {
+                    if (next != null) {
+                        return true;
+                    }
+
+                    try {
+                        next = events.take();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+
+                        return false;
+                    }
+
+                    return next != end;
+                }
+
+                @Override
+                public StreamEvent next() {
+                    if (!hasNext()) {
+                        throw new NoSuchElementException("the stream is closed");
+                    }
+
+                    StreamEvent value = next;
+
+                    next = null;
+
+                    return value;
+                }
+            };
+        }
+
+        @Override
+        public void close() {
+            if (closed.compareAndSet(false, true)) {
+                unsubscribe.run();
+                // Wakes a consumer blocked in `take()` so the loop ends instead of hanging on a
+                // subscription nothing will ever deliver to again.
+                events.add(end);
+            }
+        }
+    }
+
+    /**
+     * Opens a live query as a {@link Stream}.
+     *
+     * <p>Each call opens its OWN subscription — at CALL time, so a frame arriving before the loop
+     * starts is not lost — and {@link Stream#close} tears it down. Use {@link #subscribe} directly
+     * when the value outlives one loop.
+     */
+    public Stream stream(String functionPath, Object args, String shardKey) {
+        Stream stream = new Stream();
+
+        stream.unsubscribe =
+                subscribe(
+                        functionPath,
+                        args,
+                        value -> stream.events.add(new StreamEvent(value, null)),
+                        error -> stream.events.add(new StreamEvent(null, error)),
+                        shardKey);
+
+        return stream;
     }
 
     /**
@@ -501,7 +821,7 @@ public final class Client {
                     return kind;
                 }
 
-                Consumer<Object> onData;
+                List<Runnable> deferred = new ArrayList<>();
 
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
@@ -511,21 +831,60 @@ public final class Client {
                     }
 
                     advance(entry, frame);
-                    onData = entry.onData;
+                    entry.state.serverBase = value;
+
+                    // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
+                    // tracked cursor where it was. Nulling it strands every pending layer: the
+                    // tracked cursor is what a write's commitCursor is compared against, so a
+                    // confirm that should drop the overlay keeps it instead and the write renders
+                    // twice until some later cursored frame happens to land.
+                    if (frame.get("cursor") instanceof Number number) {
+                        entry.state.serverCursor = number.longValue();
+                    }
+
+                    // Drop the overlays this frame has caught up with, then RE-FOLD the rest onto
+                    // the new authoritative base rather than clobbering them: a still-queued
+                    // write's predicted value has to survive an unrelated delta on this query.
+                    Optimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor);
+                    Optimistic.notifySubscription(
+                            entry.state,
+                            Optimistic.fold(entry.state.serverBase, entry.state.layers),
+                            deferred);
                 }
 
-                if (onData != null) {
-                    onData.accept(value);
-                }
+                runDeferred(deferred);
             }
             case "resume", "settled" -> {
+                List<Runnable> deferred = new ArrayList<>();
+
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
 
-                    if (entry != null) {
-                        advance(entry, frame);
+                    if (entry == null) {
+                        return kind;
+                    }
+
+                    advance(entry, frame);
+
+                    // A resume/settled frame advances the cursor without a value change — but a
+                    // write whose result was byte-identical for this query still committed at or
+                    // under this cursor, so its overlay is confirmed. Sweep here too, not just on
+                    // data frames, or a no-visible-change write leaves its prediction on screen
+                    // until some unrelated write happens to produce a data frame — indefinitely on
+                    // a quiet query.
+                    if (frame.get("cursor") instanceof Number number) {
+                        entry.state.serverCursor = number.longValue();
+                    }
+
+                    if (Optimistic.dropConfirmedLayers(entry.state, entry.state.serverCursor)) {
+                        Optimistic.notifySubscription(
+                                entry.state,
+                                Optimistic.fold(entry.state.serverBase, entry.state.layers),
+                                deferred);
                     }
                 }
+
+                runDeferred(deferred);
             }
             case "error" -> {
                 Map<String, Object> envelope =
@@ -731,6 +1090,11 @@ public final class Client {
     /**
      * The socket URL: the origin with its scheme swapped, plus the shard and credential query
      * parameters when present.
+     *
+     * <p>{@code shard=} is omitted for an empty key as well as an absent one, for the same reason
+     * {@link #buildRpcBody} omits it: {@code ""} is the default shard here and a distinct named
+     * shard to the runtime, and a socket opened against the wrong one would deliver frames for a
+     * shard the writes never reach.
      */
     public String wsUrl(String shardKey, String token) {
         String endpoint = join(WS_PATH);
@@ -743,7 +1107,7 @@ public final class Client {
 
         List<String> params = new ArrayList<>();
 
-        if (shardKey != null) {
+        if (shardKey != null && !shardKey.isEmpty()) {
             params.add("shard=" + URLEncoder.encode(shardKey, StandardCharsets.UTF_8));
         }
 
@@ -756,6 +1120,117 @@ public final class Client {
         }
 
         return endpoint + (endpoint.contains("?") ? "&" : "?") + String.join("&", params);
+    }
+
+    // --- Offline-capable writes ------------------------------------------------------------
+    //
+    // The write path itself lives in {@link Submit}; what follows is the client-facing surface it
+    // hangs off, plus the two lookups it needs into the subscription registry.
+
+    /**
+     * Writes, sending it now or queueing it until the socket is back.
+     *
+     * <p>It returns as soon as the write is either committed or durably queued. A queued write's
+     * optimistic overlay stays displayed until the replay's commit cursor is reached by a server
+     * frame; a failed one rolls back.
+     */
+    public MutationOutcome submit(SubmitOptions options) {
+        return Submit.submit(this, options);
+    }
+
+    /**
+     * Restores writes persisted in a prior session; returns their shard keys.
+     *
+     * <p>Open a socket for each returned key and flush it to replay them. A restored write has no
+     * live caller, so its verdict arrives only through {@link #onMutationSettled}.
+     */
+    public List<String> hydrateOfflineQueue() {
+        return Submit.hydrate(this);
+    }
+
+    /**
+     * Replays one shard's queued writes, in order, over HTTP. Call it when that shard's socket
+     * comes back.
+     *
+     * <p>Each write replays under its own idempotency key, so one the server already committed is
+     * de-duplicated rather than applied twice. Per write: success confirms its optimistic overlay
+     * against the ECHOED commit cursor; a coded verdict is terminal; a transient failure — a raw
+     * transport error, or one of {@link Offline#TRANSIENT_ERROR_CODES} — stops the flush and
+     * re-queues that write and every unreplayed one, in order, for the next attempt.
+     */
+    public FlushReport flushOfflineQueue(String shardKey) {
+        return Submit.flush(this, shardKey);
+    }
+
+    /** One matching subscription's layer state, paired with the value it displays right now. */
+    record StateSnapshot(Optimistic.State state, Object value) {}
+
+    /**
+     * Every subscription registered under exactly this (path, args, shard), with what it displays.
+     *
+     * <p>A linear scan, unlike {@code @lunora/client}'s keyed registry, and deliberately: this
+     * client does not de-duplicate subscriptions, so several can share one triple and all of them
+     * must receive the overlay. The scan is over a handful of entries on the write path, never the
+     * frame path.
+     *
+     * <p>The displayed value is read HERE, under the monitor, rather than by the caller afterwards:
+     * the write path runs a consumer's transform against it with the monitor released, and a value
+     * read outside would be torn against a concurrent frame rather than merely stale.
+     */
+    List<StateSnapshot> snapshotStates(String functionPath, Object args, String shardKey) {
+        String argsKey =
+                Key.stableWireKey(args == null ? new LinkedHashMap<String, Object>() : args);
+        List<StateSnapshot> matches = new ArrayList<>();
+
+        synchronized (lock) {
+            for (Subscription entry : subscriptions.values()) {
+                if (entry.functionPath.equals(functionPath)
+                        && entry.argsKey.equals(argsKey)
+                        && Offline.sameShard(entry.shardKey, shardKey)) {
+                    matches.add(new StateSnapshot(entry.state, entry.state.lastValue));
+                }
+            }
+        }
+
+        return matches;
+    }
+
+    /** Every subscribed query on {@code functionPath}, whatever args it was subscribed under. */
+    List<QueryEntry> matchingQueries(String functionPath, String shardKey) {
+        List<QueryEntry> matches = new ArrayList<>();
+
+        synchronized (lock) {
+            for (Subscription entry : subscriptions.values()) {
+                if (entry.functionPath.equals(functionPath)
+                        && Offline.sameShard(entry.shardKey, shardKey)) {
+                    matches.add(new QueryEntry(entry.args, entry.state.lastValue));
+                }
+            }
+        }
+
+        return matches;
+    }
+
+    /**
+     * The layered value behind one subscription id, or null when it is gone.
+     *
+     * <p>Package-private, for the conformance suite: the tracked cursor and the pending-layer count
+     * are internal state with no consumer-facing accessor, and asserting on them is what holds the
+     * real frame handler to the shared fixture rather than a transcription of it.
+     */
+    Optimistic.State subscriptionState(String id) {
+        synchronized (lock) {
+            Subscription entry = subscriptions.get(id);
+
+            return entry == null ? null : entry.state;
+        }
+    }
+
+    /** Runs the notifications queued while the monitor was held. */
+    static void runDeferred(List<Runnable> deferred) {
+        for (Runnable call : deferred) {
+            call.run();
+        }
     }
 
     private String join(String path) {

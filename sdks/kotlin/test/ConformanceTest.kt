@@ -20,14 +20,15 @@ private var checks = 0
  */
 private val covered = linkedSetOf<String>()
 
-private fun check(condition: Boolean, message: String) {
+/** Internal, not file-private, so the sibling case file shares one counter. */
+internal fun check(condition: Boolean, message: String) {
     checks++
 
     if (!condition) throw AssertionError(message)
 }
 
 /** Records that the running case exercises the manifest case [name]. */
-private fun covers(name: String) {
+internal fun covers(name: String) {
     covered.add(name)
 }
 
@@ -54,7 +55,7 @@ private fun assertManifestCovered() {
     )
 }
 
-private fun fixturesDir(): File {
+internal fun fixturesDir(): File {
     var directory = File("").absoluteFile
 
     repeat(8) {
@@ -68,7 +69,7 @@ private fun fixturesDir(): File {
     error("could not locate protocol/fixtures")
 }
 
-private fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), name).readText()) as Map<*, *>
+internal fun fixture(name: String): Map<*, *> = Json.parse(File(fixturesDir(), name).readText()) as Map<*, *>
 
 /** Canonical text form so two structures compare independent of key order. */
 private fun canonical(value: Any?): String = Key.stableStringify(value)
@@ -319,6 +320,39 @@ private fun serverFrameConsumer() {
     }
 }
 
+/**
+ * The Sequence form of a live query: same subscription, same decode, same order
+ * as the callback form.
+ */
+private fun subscriptionStreamYieldsFrameValuesInOrder() {
+    covers("subscription_stream_yields_frame_values_in_order")
+
+    val case = fixture("ws-frames.json")["stream"] as Map<*, *>
+    val client = Client("https://app.example")
+
+    client.attachSocket { }
+
+    // Closed at the end rather than in a `use { }`: the frames are fed from this
+    // same thread, so the loop has to be driven one `next()` at a time.
+    val stream = client.stream("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
+    val events = stream.iterator()
+    val seen = mutableListOf<WireValue>()
+
+    for (frame in case["frames"] as List<*>) {
+        client.handleFrame(Json.write(frame))
+
+        val event = events.next()
+
+        check(event.error == null, "a streamed event carries a value, not an error")
+        seen.add(checkNotNull(event.value))
+    }
+
+    stream.close()
+
+    check(canonical(Wire.encode(WireValue.Arr(seen))) == canonical(case["yielded"]), "the stream yields the frames' values, in order")
+    check(!events.hasNext(), "and closing ends the loop rather than blocking it forever")
+}
+
 private fun shapeSubscribeFrame() {
     covers("shape_subscribe_frame")
 
@@ -430,10 +464,15 @@ fun main() {
     non2xxWithoutEnvelopeThrows()
     clientFrameBuilders()
     serverFrameConsumer()
+    subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     pokeSequenceMaterialisesRows()
     pokePartsDoNotApplyBeforePokeEnd()
     concurrentSubscribeAndHandleFrame()
+
+    // The optimistic-layer and offline-queue cases, in their own file so this one
+    // stays the wire-protocol suite it has always been.
+    runOptimisticOfflineCases()
 
     assertManifestCovered()
 

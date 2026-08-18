@@ -6,6 +6,13 @@ One hand-written transport per language, plus a generated surface produced by
 Browser and Node consumers should use `@lunora/client`, which is hand-written,
 richer than anything generated, and not covered here.
 
+This file is the CONTRIBUTOR side: how the three layers fit together, where the
+ports deliberately differ, and what the gates are. For using one transport —
+wiring, examples, its own wire-type table — read that language's own README:
+[python](./python/README.md) · [go](./go/README.md) · [ruby](./ruby/README.md) ·
+[rust](./rust/README.md) · [swift](./swift/README.md) · [java](./java/README.md)
+· [kotlin](./kotlin/README.md) · [dart](./dart/README.md).
+
 ## The three layers
 
 | Layer          | Where                                        | Generated?                                     |
@@ -125,16 +132,25 @@ change that adds or removes a capability.
 | Typed argument models         | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Typed result models           | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Concurrency-safe client       | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Subscription as a Stream      | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Subscription as a stream      | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
 | Unset `v.optional()` omitted  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
-| Required `v.nullable()` sent  | ✅     | ✅  | ❌   | ❌   | ❌    | ✅   | ✅     | ✅   |
-| Optimistic updates            | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
-| Offline mutation queue        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
-| Durable offline queue         | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅¹  |
-| Batched offline replay        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
+| Required `v.nullable()` sent  | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Optimistic updates            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Offline mutation queue        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Durable offline queue         | ✅²    | ✅² | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
+| Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Batched offline replay        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 
-¹ Through an injected adapter, like HTTP and the socket — see below.
+¹ Each in the language's own PULL type, not one shape forced onto eight — an
+async generator in Python, a receive channel in Go, an `Enumerator` in Ruby, an
+`mpsc::Receiver` in Rust, an `AsyncStream` in Swift, a closeable `Iterable` in
+Java, a closeable `Sequence` in Kotlin, a `Stream` in Dart. The values and their
+order are the same everywhere, which is what
+`subscription_stream_yields_frame_values_in_order` asserts.
+
+² Through an injected adapter, like HTTP and the socket — see below.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the
@@ -199,41 +215,30 @@ the subscription and there is no `dispose()` override to forget. The
 callback-shaped `subscribe`/`subscribeX` every sibling has is still there, for a
 value whose lifetime is not a widget's.
 
-**Optimistic updates and the offline queue, dart.** The three rows the other
-seven do not have, ported from `packages/client`'s `optimistic-layers.ts`,
-`local-store.ts` and `offline-queue.ts`. They are what the row above is for: a
-mobile client is disconnected routinely rather than exceptionally, so a write it
-cannot send yet and a value it can show before the server confirms are the
-difference between a usable app and one that spins.
+**Optimistic updates and the offline queue, dart.** All eight ports carry these
+now — the shared behaviour, and the six places every port departs from
+`@lunora/client`, are one section down under
+[Optimistic updates and the offline write queue](#optimistic-updates-and-the-offline-write-queue).
+Dart landed them first, and it is the target that most needs them: a mobile
+client is disconnected routinely rather than exceptionally, so a write it cannot
+send yet and a value it can show before the server confirms are the difference
+between a usable app and one that spins.
 
-The layer model is the reference client's exactly, not a re-invention. A
-prediction is a LAYER on the subscription, so an unrelated frame re-folds it onto
-the new base instead of clobbering it, and it drops the moment a frame reaches
-the write's committed CDC cursor — never on the RPC response, which races the
-WebSocket broadcast. A throwing layer is skipped rather than blanking the query;
-a throwing multi-query update unwinds only its own writes and never fails the
-mutation. The queue is bounded FIFO, evicts the OLDEST on overflow, replays under
-the idempotency key the original call minted so the server deduplicates a write
-it already committed, and classifies a replay failure the way the reference does:
-a CODED error is the server's answer and terminal, an uncoded throw is a
-transport failure and re-queues that write and every one behind it, in order.
+Three things are Dart's alone, and each follows from this transport's own shape
+rather than from taste:
 
-Three things differ, and each follows from this transport's own shape rather
-than from taste:
-
-- **Connectivity is told, not observed.** The other clients own their socket and
-  can watch it; this one does not, so `setConnected(true|false)` is how it
-  learns, and the transition to connected is what flushes the queue. It sits
-  beside `attachSocket` and `resendSubscriptions` in the same reconnect recipe.
-- **Durability is injected.** `LunoraPersistence` is four methods a consumer
-  implements over `shared_preferences`, `sqflite`, Drift, a file — whichever the
-  app already has. Building one in would mean picking a storage dependency for
-  every consumer, which is the one thing this package does not do.
-  `MemoryPersistence` ships for tests. With no adapter the queue survives a
-  dropped socket but not a restart.
-- **There is no per-shard drain.** The reference queue drains one shard at a
-  time because its sockets are per-shard; here the shard rides the socket URL
-  and there is a single connectivity signal, so one reconnect drains everything.
+- **Connectivity is told, not observed.** The other seven flush on the socket
+  attach/detach they are already handed; this one does not take a socket, so
+  `setConnected(true|false)` is how it learns, and the transition to connected is
+  what flushes the queue. It sits beside `attachSocket` and `resendSubscriptions`
+  in the same reconnect recipe.
+- **Persistence is ASYNCHRONOUS.** `LunoraPersistence` is four `Future`-returning
+  methods a consumer implements over `shared_preferences`, `sqflite`, Drift, a
+  file — whichever the app already has; the sibling ports take a synchronous
+  adapter. Dart's async-by-default IO is why, and the queue does not await an
+  `append`, so an adapter that reorders can let a `remove` land before the append
+  it cancels. `MemoryPersistence` ships for tests. With no adapter the queue
+  survives a dropped socket but not a restart.
 
 **The targeting rule for a per-call `optimistic` is a trap worth stating.** It
 patches the subscription opened under the MUTATION's own path and args — not
@@ -256,9 +261,9 @@ the proven one. The three rules that make it safe for a DURABLE write —
 retried under its original idempotency key, and a body with no `results` is a
 whole-batch outcome — are in §4.3 and asserted here.
 
-It is deliberately NOT in `conformance-cases.json`. The endpoint is optional, so
-requiring it would fail the seven ports that correctly do not implement it; the
-capability row above is where that difference belongs.
+`offline_flush_batches_multiple_writes` in `conformance-cases.json` is what keeps
+the eight agreeing about it: the round-trip count, the per-entry envelope, and
+the transient-slot rule that only a batch can express.
 
 Deliberately not ported, and none of it is a gap a mobile client feels: cross-tab
 leader election and the `BroadcastChannel` mirror (there are no tabs), the
@@ -315,7 +320,6 @@ enum's entry reads `"kind": kindValues.reverse[kind]`, which does not begin with
 its field at all); a class whose two blocks do not line up is left alone rather
 than half-rewritten, and that failure is loud because `sdks/smoke/dart` asserts
 an unset optional never reaches the wire.
-
 **Typed models, JVM.** The two JVM targets are the only ones whose models are NOT
 rendered by quicktype, and the exception is measured rather than stylistic:
 quicktype's Java and Kotlin backends rename properties (a wire `channelId` becomes
@@ -387,6 +391,162 @@ so a Rust handler must not re-lock the client it was called from.
 **HTTP and sockets are injected in every language, deliberately.** The
 conformance suites run with no network, and a consumer keeps its own transport,
 timeouts, retries and socket library rather than inheriting ours.
+
+## Optimistic updates and the offline write queue
+
+The three ✅ write rows above are the client-side write features, ported from
+`@lunora/client` (`packages/client/src/optimistic-layers.ts` and
+`offline-queue.ts`) into `optimistic.*` and `offline.*` in every transport. Both
+are held to `protocol/fixtures/offline-optimistic.json`, which carries the values
+and orderings all eight ports must agree on — the same shape as the wire
+fixtures, for the same reason.
+
+**Optimistic updates are cursor-gated and rebaseable.** A transform is recorded
+as a LAYER on its subscription rather than written once and forgotten, so the
+displayed value is always the authoritative server value folded through the
+active layers. An incoming frame therefore re-folds the still-pending layers onto
+the new base instead of clobbering them (a queued write's predicted value
+survives an unrelated delta on the same query), and a layer drops the moment a
+frame whose `cursor` has reached the write's echoed `commitCursor` arrives — so
+the confirming frame cannot double-count it. The drop keys on the server's
+cursor, never on RPC-response timing, which races the socket broadcast.
+
+**The offline queue is a bounded, optionally durable FIFO.** Writes submitted
+while the socket is down replay in submission order once it is back, each under
+its own `x-lunora-mutation-id` so the server de-duplicates one it already
+committed. Overflow evicts the OLDEST entry; a stale precondition drops a write
+before it replays; an identity change refuses one; and a flush classifies each
+reply — success confirms the overlay, a coded verdict is terminal, a transient
+failure re-queues that write and every unreplayed one, in order.
+
+### Where the ports deliberately differ from `@lunora/client`
+
+Each of these is forced by what these SDKs are rather than chosen:
+
+| Divergence                                                                                                                                                                                                                                                                                                  | Why                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **`submit` is a NEW method; `mutation` is unchanged.** `mutation` stays one direct HTTP round-trip that fails when the deployment is unreachable, because the generated surface calls it and a typed wrapper must keep returning a typed result. `submit` is the write path that survives a dropped socket. | Changing `mutation`'s contract under the generated code would turn "this write failed" into "this write is queued" for every existing caller.                                                                                                          |
+| **`submit` returns immediately with a `status` of `committed` or `queued`.** The browser client's `mutation()` returns a promise that stays PENDING until a queued write finally replays; the eventual verdict here arrives through `onSettled` (per write) or `onMutationSettled` (per client).            | A pending promise is fine in a browser event loop and bad on a goroutine, a Ruby thread or a JVM thread pool. A caller that must not report success early checks `status`.                                                                             |
+| **The persistence adapter is SYNCHRONOUS** in the seven non-Dart ports. The browser client's is async because IndexedDB is, and Dart's stays async because its IO is.                                                                                                                                       | A consumer injects whatever it likes — a file, SQLite, a key-value store — and owns its own threading, exactly as it already does for the HTTP poster and the frame sender.                                                                            |
+| **The identity stamp is an opaque string the CONSUMER sets** (`client.identity`), not a fingerprint derived from an auth token.                                                                                                                                                                             | These SDKs do not manage auth sessions, and a derived stamp would mean persisting a hash of a bearer token in the consumer's storage. Put a stable, non-secret subject (a user id) there.                                                              |
+| **A transient replay failure is classified by code**, not merely by "is it coded at all": a raw transport error or `SHARD_ERROR`/`SHARD_UNAVAILABLE` re-queues, everything else coded is terminal.                                                                                                          | This is the reference client's own BATCH classification. Its single-call path drops on any coded error, which loses a durable write to a shard blip; the ports take the better of its two.                                                             |
+| **Every fold notifies.** The TypeScript engine suppresses a notification whose folded result is reference-identical to the value already displayed.                                                                                                                                                         | Reference identity has no portable meaning across eight languages. A consumer sees at most a few redundant callbacks carrying the same value, never a missing one.                                                                                     |
+| **A persistence failure is SILENT unless you wire `on_persistence_error`.** The browser client falls back to `console.warn` when no handler is set.                                                                                                                                                         | There is no console in a Ruby worker or a JVM service, and writing to stderr from a library is its own bad default. The cost is real, so wire the handler: without it a durable store that has started failing looks exactly like one that is working. |
+| **An unencodable queued write settles with the coded verdict `OFFLINE_WRITE_UNENCODABLE`.** The reference settles the caller with the raw codec exception.                                                                                                                                                  | Every other terminal drop in these ports carries a code, and a consumer classifying by exception type would need to know seven languages' codec error hierarchies to spot this one.                                                                    |
+
+**Multi-tab leader election** is the one browser-only half no port has — a Web
+Lock deciding which tab hydrates the shared durable queue, and there are no tabs
+here.
+
+### The queue never calls back; it returns what it let go of
+
+In all seven ports, every queue method that lets go of a write — an overflow
+eviction, a failed precondition, a close — **returns** the discarded entry with a
+coded reason instead of rejecting it in place. The client settles those once it
+has released its lock.
+
+This is not stylistic. The queue is called with the owning client's lock held (it
+carries none of its own, deliberately), and settling a write rolls its optimistic
+layers back — which needs that same lock. Rejecting inside the queue therefore
+re-enters it, and the four lock flavours across these ports fail four different
+ways:
+
+| Lock                                    | What rejecting in place did                                                                                                                                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Go `sync.Mutex`, non-reentrant          | **Self-deadlock.** The second offline write past capacity hung the calling goroutine outright.                                                                     |
+| Ruby `Mutex`, non-reentrant             | **Silently swallowed.** It raised `ThreadError`, which the queue's own `rescue StandardError` then ate — so the evicted write never rolled back and never settled. |
+| Java / Kotlin `synchronized`, reentrant | No hang, but a consumer's callback ran inside the critical section guarding the subscription registry.                                                             |
+| Rust `&mut self`, Swift `NSLock`        | Never expressible — which is why those two were written this way first, and why the other five now match.                                                          |
+
+The Ruby failure is the instructive one: the mechanism that was supposed to stop
+an eviction dropping a durable write in silence was itself dropping it in silence.
+Every port now has a case asserting that an eviction raised from inside `submit`
+settles exactly once, with the documented code.
+
+The same rule is what makes the rest of the write path safe, so all seven ports
+hold to it: **on the write path, nothing you supply runs while the client holds
+its lock.** The optimistic transform is run against a snapshot and its result
+recorded; a queued write's `precondition` is evaluated on a snapshot too; the
+lock is then taken only to install what came back. Settle handlers, `on_settled`,
+and every subscription and error callback are likewise deferred and invoked after
+the lock is released. Four of the seven use a non-reentrant lock, so without this
+a callback reading `pending_mutation_count` would deadlock its own thread — a
+hazard the reference client cannot have, because it has no lock at all.
+
+Two things you supply do still run under the lock, in every port, and both are
+deliberate rather than missed:
+
+- **An optimistic transform re-run when an incoming frame re-folds the pending
+  layers.** That fold IS the value the frame delivers, and it has to see a base
+  nothing else is mutating, so it cannot be moved out. The callbacks it feeds are
+  still deferred; only the transform itself runs inside.
+- **The injected `PersistenceAdapter`, and the queue's `on_size_change` /
+  `on_persistence_error` observers.** These fire from inside `enqueue` / `drain` /
+  `hydrate` / `unpersist`, and the rule above requires those to hold the lock —
+  you cannot mutate the queue under the lock and keep its durable mirror outside
+  it. Note the practical consequence: your adapter's `append` and `remove` are on
+  the critical path, so a slow store makes every other thread wait on it.
+
+So the consumer rule is narrower than "your callbacks may re-enter the client":
+**an optimistic transform must be a pure function of the value it is handed, and
+neither it, your persistence adapter, nor a queue observer may call back into the
+client.** Settle handlers, `on_settled`, subscription and error callbacks may. Note where a violation
+surfaces — a re-entering transform passes `submit` cleanly and deadlocks on the
+next frame, which is a considerably worse place to find out.
+
+Making those two lock-free needs per-state locking rather than one client lock,
+which is a larger change than this one; they are recorded here so the next port
+does not quietly assume otherwise.
+
+A discarded write is likewise reported to the client-level settled listener
+**whether or not it has a per-entry handler**. A write restored from durable
+storage never has one — nobody is awaiting a write submitted in a previous
+process — so a port that reported discards only through the entry's own handler
+would drop a hydrated write on overflow in total silence, un-persisting it on the
+way out. The `hadAwaiter` flag on the settled event is how a consumer tells a
+restored write's only report from a live caller's second one.
+
+### Pin the client id if your queue is durable
+
+The client id defaults to a **freshly generated random string per client
+instance**, matching the reference. It is not decorative: writes carrying
+`x-lunora-mutation-id` also carry `x-lunora-client-id`, and for an unauthenticated
+caller the server namespaces its idempotency cache by exactly that value. A
+constant shared by every process would put all of them in one keyspace, where one
+caller's `mutation_id` can suppress another's write without ever running it.
+
+A durable queue needs nothing extra for this to keep working across a restart:
+the persisted record carries the id of the client that ISSUED the write, and the
+replay sends that one rather than the new process's, so a write queued before a
+crash still de-duplicates against the copy the server may already hold.
+
+Pinning matters for the other case — **caller-supplied mutation ids that mean
+something** (`"order-1"` rather than a generated key). Those are only de-duplicated
+against writes in the same namespace, so the same semantic id submitted before and
+after a restart is two different writes unless the client id is stable. Pin a
+per-device id if you rely on that; leave it alone if your mutation ids are
+generated.
+
+Two ports carry one further shape change apiece, and both are the language talking
+rather than a decision:
+
+- **Rust** hands out a `(subscription id, layer id)` pair instead of a settle
+  object, because storing a `&mut` borrow of the subscription for later use is
+  exactly what the borrow checker exists to reject; a `Transform` returns
+  `Option<WireValue>` rather than throwing, because Rust has no exceptions and a
+  layer that cannot produce a value already has a value for saying so. The
+  multi-query patch set is declared up front (`optimistic_queries`) and read with
+  `query_value` / `all_queries` beforehand, rather than through a callback handed a
+  `&mut` store.
+- **Swift**'s `LunoraOfflineQueue` is likewise not internally locked, because the
+  client already holds a non-recursive `NSLock` over the registry the queue is
+  settled against.
+
+Everywhere except Rust, the optimistic engine also never invokes a callback
+itself: it appends thunks to a `deferred` list the caller drains once it has left
+the critical section, which is the discipline the frame handlers already use. Rust
+needs no such thing — its client carries no lock, because `&mut self` is the
+exclusion.
 
 ## Lint and format
 
@@ -464,6 +624,15 @@ same files the TypeScript client is tested against.
 `protocol/conformance-cases.json` lists the cases each suite must exercise —
 coverage drifted badly before that list existed, leaving the decode-side bounds
 unasserted in two ports for several commits with every gate green.
+
+The `optimistic_*` and `offline_*` names in that list cover the client-side write
+features rather than the wire, and assert against
+`protocol/fixtures/offline-optimistic.json`. Nothing
+in that file goes on a socket: it is the values and orderings eight independently
+hand-written ports must agree on — which value is displayed after a rebase, which
+cursor drops an overlay, which queue entry an overflow evicts, what a flush leaves
+queued. The mechanics are hand-coded per language (a transform is a closure, and
+closures are not data), but every assertion reads its expectation from there.
 
 **All eight suites read that file at run time and fail if the run did not cover
 it**, so adding a name there turns every language red until it is covered. The

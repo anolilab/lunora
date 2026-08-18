@@ -3,6 +3,7 @@
 /// Part of the conformance suite; `conformance.dart` owns `main()`.
 library;
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:lunora/lunora.dart';
@@ -67,6 +68,32 @@ void caseServerFrameConsumer() {
       equals(errors.first.code, expect['code'], 'error code for ${testCase['name']}');
     }
   }
+}
+
+/// The `Stream` form of a live query: same subscription, same decode, same order
+/// as the callback form.
+Future<void> caseSubscriptionStreamYieldsFrameValuesInOrder() async {
+  covers('subscription_stream_yields_frame_values_in_order');
+
+  final case_ = fixture('ws-frames.json')['stream']! as Map<String, Object?>;
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  // A queued iterator, not `await for`: the frames are fed from this same
+  // isolate, so the loop has to be driven one `moveNext()` at a time.
+  final events = StreamIterator<Object?>(client.watch('messages:list', args: <String, Object?>{'channel': 'general'}));
+  final seen = <Object?>[];
+
+  for (final frame in case_['frames']! as List<Object?>) {
+    client.handleFrame(jsonEncode(frame));
+
+    equals(await events.moveNext(), true, 'the stream delivers a value per frame');
+    seen.add(events.current);
+  }
+
+  // Cancelling tears the subscription down, so nothing is left registered
+  // against a client the consumer has finished with.
+  await events.cancel();
+
+  equals(canonical(encodeWire(seen)), canonical(case_['yielded']), "the stream yields the frames' values, in order");
 }
 
 // ─── Shapes ──────────────────────────────────────────────────────────────────

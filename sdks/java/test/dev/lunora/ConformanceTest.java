@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -47,17 +48,23 @@ public final class ConformanceTest {
         non2xxWithoutEnvelopeThrows();
         clientFrameBuilders();
         serverFrameConsumer();
+        subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         concurrentSubscribeAndHandleFrame();
+
+        // The optimistic-layer and offline-queue cases, in their own file so this one
+        // stays the wire-protocol suite it has always been.
+        OptimisticOfflineTest.run();
 
         assertManifestCovered();
 
         System.out.println("OK — " + checks + " assertions");
     }
 
-    private static void check(boolean condition, String message) {
+    /** Package-private so the sibling case files in this suite share one counter. */
+    static void check(boolean condition, String message) {
         checks++;
 
         if (!condition) {
@@ -66,7 +73,7 @@ public final class ConformanceTest {
     }
 
     /** Records that the running case exercises the manifest case {@code name}. */
-    private static void covers(String name) {
+    static void covers(String name) {
         covered.add(name);
     }
 
@@ -102,7 +109,7 @@ public final class ConformanceTest {
                         + " (add a covers() call to the case that asserts it)");
     }
 
-    private static Path fixturesDir() {
+    static Path fixturesDir() {
         Path directory = Path.of("").toAbsolutePath();
 
         for (int depth = 0; depth < 8; depth++) {
@@ -125,7 +132,7 @@ public final class ConformanceTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> fixture(String name) throws IOException {
+    static Map<String, Object> fixture(String name) throws IOException {
         return (Map<String, Object>) Json.parse(Files.readString(fixturesDir().resolve(name)));
     }
 
@@ -485,6 +492,48 @@ public final class ConformanceTest {
                         "error code");
             }
         }
+    }
+
+    /**
+     * The Iterable form of a live query: same subscription, same decode, same order as the callback
+     * form.
+     */
+    @SuppressWarnings("unchecked")
+    private static void subscriptionStreamYieldsFrameValuesInOrder() throws IOException {
+        covers("subscription_stream_yields_frame_values_in_order");
+
+        Map<String, Object> testCase =
+                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("channel", "general");
+
+        List<Object> seen = new ArrayList<>();
+
+        // Closed at the end rather than in a try-with-resources: the frames are fed from this same
+        // thread, so the loop has to be driven one `next()` at a time.
+        Client.Stream stream = client.stream("messages:list", args, null);
+        Iterator<Client.StreamEvent> events = stream.iterator();
+
+        for (Object raw : (List<Object>) testCase.get("frames")) {
+            client.handleFrame(Json.write(raw));
+
+            Client.StreamEvent event = events.next();
+
+            check(event.error() == null, "a streamed event carries a value, not an error");
+            seen.add(event.value());
+        }
+
+        stream.close();
+
+        check(
+                canonical(Wire.encode(seen)).equals(canonical(testCase.get("yielded"))),
+                "the stream yields the frames' values, in order");
+        check(!events.hasNext(), "and closing ends the loop rather than blocking it forever");
     }
 
     @SuppressWarnings("unchecked")

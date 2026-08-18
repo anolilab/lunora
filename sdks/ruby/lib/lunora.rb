@@ -10,6 +10,8 @@
 
 require_relative "lunora/client"
 require_relative "lunora/key"
+require_relative "lunora/offline"
+require_relative "lunora/optimistic"
 require_relative "lunora/wire"
 
 module Lunora
