@@ -1,7 +1,7 @@
 # Plan 363 — Close nine gaps in the Studio's data/SQL surface
 
 **Baseline:** `9a0b5263a` (2026-08-18)
-**Status:** IN PROGRESS — W1, W3, W6, W7, W8 shipped; W2, W4, W9, W10 open; W5 spun out to [364](364-studio-conversational-assistant.md)
+**Status:** DONE — W1–W4, W6–W10 all shipped; W5 spun out to [364](364-studio-conversational-assistant.md)
 
 ## 0. Headline finding
 
@@ -136,11 +136,21 @@ design review before code.
     picker still works with no AI binding. Gate: a dashboard widget saved with
     `kind: "line"` renders a line chart with the assistant unavailable.
 
-- **W2 (M) — Three more widget kinds.** `kpi` (single scalar + label, from the
-  first cell of the first row), `text` (markdown), `table` (reuse the console's
-  result table). Plus drag-to-reorder over the existing persisted array. Gate: a
-  dashboard mixing all four kinds round-trips through `localStorage` and
-  reorders.
+- **W2 (M) — Done.** Shipped as `59e2f59b9`. The two card components are
+  SEPARATE rather than one with a branch, which the plan did not anticipate: a
+  text tile must not mount the query hook, a conditional hook is not available,
+  and a text tile that still issues `runSql` is a query nobody asked for on every
+  dashboard render. The note is plain text, not markdown — the studio ships no
+  markdown renderer and a dashboard note does not justify adding one. The KPI
+  reads the first cell positionally; asking the operator to also name the column
+  would add a field that can only disagree with the query they just wrote.
+  Original text follows.
+
+    **Three more widget kinds.** `kpi` (single scalar + label, from the
+    first cell of the first row), `text` (markdown), `table` (reuse the console's
+    result table). Plus drag-to-reorder over the existing persisted array. Gate: a
+    dashboard mixing all four kinds round-trips through `localStorage` and
+    reorders.
 
 - **W3 (M) — Done.** Shipped as `f55f0b06e` + `a6d5cdeb9` (regeneration).
   **Two corrections to this plan.** First, there are FOUR declarations of the
@@ -169,13 +179,28 @@ design review before code.
     column renders a dropdown; golden codegen fixtures + example `_generated`
     regenerated; `api:update` after a fresh build.
 
-- **W4 (M) — Multi-statement scripts as N gated runs.** Split on statement
-  boundaries in the editor using the comment scanner already in
-  `features/sql/sql-context.ts`, classify each part with `classifyStatement`,
-  submit sequentially, and tab the results. `useRunSql` returns a list; a single
-  statement is a one-element list so no caller special-cases. Gate: a script whose
-  second statement fails the gate shows the first result _and_ the rejection,
-  and the server never receives a `;`-joined string.
+- **W4 (M) — Done.** Shipped as `32810ed98`. **One correction to this plan:** it
+  said `useRunSql` would return a list. It does not — the console has its own
+  `run` in `sql-editor-panel.tsx` and `useRunSql` is the DASHBOARD's hook, so
+  putting a list there would have forced `results[0]` on every tile, which is the
+  special-casing the plan wanted to avoid. `script` sits alongside `result`
+  instead, so the chart, export menu and row count gained no list handling.
+
+    **Found and deliberately NOT fixed:** `classifyStatement`'s batch check is a
+    bare `indexOf(";")` with no literal masking, so `SELECT ';' AS a` has always
+    been refused as a batch. That is a false positive in the server's enforcement
+    rule, it predates this work, and relaxing it is exactly what §8's STOP
+    condition forbids doing in passing — it needs its own change and its own
+    review. A test pins the current behaviour so the next reader knows the refusal
+    is the gate's, not the split's. Original text follows.
+
+    **Multi-statement scripts as N gated runs.** Split on statement
+    boundaries in the editor using the comment scanner already in
+    `features/sql/sql-context.ts`, classify each part with `classifyStatement`,
+    submit sequentially, and tab the results. `useRunSql` returns a list; a single
+    statement is a one-element list so no caller special-cases. Gate: a script whose
+    second statement fails the gate shows the first result _and_ the rejection,
+    and the server never receives a `;`-joined string.
 
 - **W5 (L) — Spun out.** Its own plan, as this one required: see
   [364-studio-conversational-assistant.md](364-studio-conversational-assistant.md).
@@ -221,21 +246,37 @@ design review before code.
     signed URL the way `file-gallery.tsx:40` does and render the image. Gate: a
     `v.storage()` column shows a thumbnail; a non-image object still shows text.
 
-- **W9 (S) — A real settings panel + keymap.** Extend
-  `features/settings/settings-panel.tsx` from read-only deploy facts to actual
-  preferences, with the shortcut bindings (`command-palette.tsx:114`,
-  `use-console-shortcut.ts:24`) read from that store rather than hardcoded.
-  W7's history toggle lands here. Gate: a rebound palette shortcut survives a
-  reload and the default is restorable.
+- **W9 (S) — Done.** Shipped as `126774903`. The bindings live in a
+  module-level store behind `useSyncExternalStore`, not a `usePersistedValue` per
+  consumer: the palette, the console and the settings pane are three components,
+  so three `useState`s would not see each other's writes and a rebinding would
+  only take effect on the next reload. Only the KEY is rebindable, never the
+  modifiers — the console is Ctrl-only because macOS owns ⌘`, so offering the
+  modifier would offer bindings that silently never fire. W7's history toggle
+  stayed in the SQL sidebar, as that workstream's note predicted. Original text
+  follows.
 
-- **W10 (S) — Column type icons in the grid header.** Split out of W3, which
-  named it and did not build it. The declared type per column is already on the
-  wire (`ColumnMeta.type`); the work is threading `columnMeta` from
-  `data-browser.tsx` through the page and `DataBrowserTableView` to
-  `GridHeaderCell`, and picking a glyph per validator kind. Deliberately last:
-  three new props for decoration, and nothing here can fail a gate. Gate: a
-  numeric and a string column render distinguishable header glyphs, and a column
-  with no metadata renders none.
+    **A real settings panel + keymap.** Extend
+    `features/settings/settings-panel.tsx` from read-only deploy facts to actual
+    preferences, with the shortcut bindings (`command-palette.tsx:114`,
+    `use-console-shortcut.ts:24`) read from that store rather than hardcoded.
+    W7's history toggle lands here. Gate: a rebound palette shortcut survives a
+    reload and the default is restorable.
+
+- **W10 (S) — Done.** Shipped as `18a048e91`. A one-character glyph rather than
+  an icon set — the header is dense and a validator kind is a label, not a
+  picture. A kind with no established glyph renders nothing, as does a page
+  column the schema does not describe (`__id__` among them). Original text
+  follows.
+
+    **Column type icons in the grid header.** Split out of W3, which
+    named it and did not build it. The declared type per column is already on the
+    wire (`ColumnMeta.type`); the work is threading `columnMeta` from
+    `data-browser.tsx` through the page and `DataBrowserTableView` to
+    `GridHeaderCell`, and picking a glyph per validator kind. Deliberately last:
+    three new props for decoration, and nothing here can fail a gate. Gate: a
+    numeric and a string column render distinguishable header glyphs, and a column
+    with no metadata renders none.
 
 ## 6. Platform parity
 
@@ -294,6 +335,24 @@ before measuring anything in it (stale `dist` is the usual false failure), and
   an action, measure concurrent `runSql` p99 during a conversation; that number
   is the whole point of keeping it off the admin dispatch.
 
+## 8b. Found while executing, not fixed here
+
+- **`classifyStatement` refuses a semicolon inside a string literal.** The batch
+  check is `single.indexOf(";")` (`shared/sql-readonly.ts:148-150`) over text
+  whose comments are stripped but whose string literals are not, so
+  `SELECT ';' AS a` — a legal read-only query — has always been rejected as a
+  multi-statement batch. Pre-existing, on the server's enforcement path, and
+  therefore not something W4 was allowed to touch on its way past. Worth its own
+  plan: the fix is to mask literals before the scan, and the risk is that the
+  gate is the one thing standing between the console and a raw write.
+- **The data browser re-issues its admin reads under a remount-heavy suite.**
+  `describeTables` / `listTables` / `aiAvailable` / `maskPolicies` each trip the
+  studio's own "possible request loop" warning during
+  `data-browser.test.tsx`. Verified pre-existing by running the same file with
+  `origin/alpha`'s `data-browser.tsx` swapped in — identical count — so it is not
+  a regression from this wave, but nobody has looked at whether it also happens
+  in a real session.
+
 ## 9. Open questions (answer during execution)
 
 1. ~~Does a literal union survive to `emit.ts` with populated `members`?~~
@@ -304,8 +363,10 @@ before measuring anything in it (stale `dist` is the usual false failure), and
 2. Should a mixed union (`v.union(v.literal("a"), v.string())`) get a dropdown
    with a free-text escape, or fall back to plain text? Leaning fall back —
    a dropdown that silently forbids a legal value is worse than no dropdown.
-3. W4: does the console show one result tab per statement, or one tab per
-   _result-producing_ statement? An `EXPLAIN`-only script is the case that decides it.
+3. ~~W4: one result tab per statement, or per result-producing statement?~~
+   **Answered by building it: one per statement.** A refused or failing statement
+   needs a place to report itself, and a strip that silently omits it would make
+   a three-statement script look like a two-statement one.
 4. W5: `@lunora/agent` over Workflows, or a plain action with client-held history?
    The first gets durability and HITL approvals for free; the second is far less
    machinery for a console session nobody resumes.
