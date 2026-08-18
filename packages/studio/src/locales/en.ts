@@ -74,6 +74,7 @@ const MESSAGE_IDS = [
     "Synced customers, subscriptions, and webhook events.",
     "{count} messages",
     "{count} pending changes",
+    "{count} pasted cells were skipped",
     "{count} running",
     "{name} ({rowCount})",
     "{rangeStart}-{rangeEnd} of {total}",
@@ -576,6 +577,7 @@ const MESSAGE_IDS = [
     "History",
     "Format",
     "Clear history",
+    "Keep history on this browser",
     "No numeric column to chart.",
     "Click Run to execute your query.",
     // SQL editor — autocomplete + multiple editor tabs.

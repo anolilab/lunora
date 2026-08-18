@@ -307,6 +307,19 @@ export const DataBrowser = ({
 
     const client = useLunora();
 
+    // The `v.storage(...)` columns of the table on screen. Their values are R2
+    // object keys, which is what lets an expanded cell show the object instead of
+    // the key — every other column's value IS the value.
+    const storageColumns = new Set((columnsByTable[selectedTable ?? ""] ?? []).filter((meta) => meta.isStorage === true).map((meta) => meta.name));
+
+    // No bucket is passed: `ColumnMeta` does not carry the one `v.storage(bucket)`
+    // named, so this resolves against the deployment's default bucket. A project
+    // with a single bucket — the common case — is right; a multi-bucket project
+    // whose key is not in the default one fails the fetch and the preview simply
+    // does not render, which is the same outcome as not having the feature.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is an effect dependency in `StoragePreview`, and a fresh closure per render would re-fetch the signed URL on every keystroke elsewhere in the browser
+    const resolveStorageUrl = useCallback(async (key: string): Promise<string> => client.signedStorageUrl(key), [client]);
+
     // Fetch the table list for a given shard key — used by the ShardExplorer to
     // show a live table/row-count summary when the operator picks a recent shard.
     const onFetchShardTables = async (targetShard: string): Promise<ReadonlyArray<TableInfo> | undefined> => {
@@ -442,7 +455,14 @@ export const DataBrowser = ({
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />
             )}
 
-            {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
+            {expandedCell !== null && (
+                <CellDetailDialog
+                    column={expandedCell.column}
+                    onClose={closeExpandedCell}
+                    resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
+                    value={expandedCell.value}
+                />
+            )}
 
             {generateOpen && selectedTable !== null && columnMeta !== undefined && (
                 <GenerateRowsDialog

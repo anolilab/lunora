@@ -1,6 +1,6 @@
 import type { Column, Table } from "@tanstack/react-table";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-import { copyToClipboard, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
+import { copyToClipboard, fireAndForget, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
@@ -350,13 +350,92 @@ const SelectionBar = ({
 
 // ── Cell detail (expand + copy) ─────────────────────────────────────────────────
 
+/** Keys the studio will try to render inline. Mirrors the file gallery's test, minus the content-type half a cell has no access to. */
+const IMAGE_KEY_RE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/iu;
+
+/**
+ * The image half of {@link CellDetailDialog}, for a `v.storage(...)` column whose
+ * value is an object key.
+ *
+ * The signed URL is resolved lazily on mount and cancelled on unmount, the same
+ * shape the storage gallery's `Thumbnail` uses — a cell is opened and closed far
+ * more often than an object is fetched, so nothing is resolved until the operator
+ * actually expands one. A resolve failure or a broken image renders nothing at
+ * all rather than a placeholder: the raw key is directly below, which is the more
+ * useful answer when the object cannot be shown.
+ */
+const StoragePreview = ({
+    objectKey,
+    resolveUrl,
+}: {
+    readonly objectKey: string;
+    readonly resolveUrl: (key: string) => Promise<string>;
+}): ReactElement | null => {
+    const [url, setUrl] = useState<null | string>(null);
+    const [failed, setFailed] = useState<boolean>(false);
+
+    useEffect(() => {
+        // Object flag (not a `let`) so the cancel check isn't narrowed away.
+        const token = { cancelled: false };
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const resolved = await resolveUrl(objectKey);
+
+                    if (!token.cancelled) {
+                        setUrl(resolved);
+                    }
+                } catch {
+                    if (!token.cancelled) {
+                        setFailed(true);
+                    }
+                }
+            })(),
+        );
+
+        return () => {
+            token.cancelled = true;
+        };
+    }, [objectKey, resolveUrl]);
+
+    const onError = (): void => {
+        setFailed(true);
+    };
+
+    if (url === null || failed) {
+        return null;
+    }
+
+    return (
+        <div className="flex max-h-64 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/30">
+            <img alt={objectKey} className="max-h-64 object-contain" data-testid="grid-cell-image" onError={onError} src={url} />
+        </div>
+    );
+};
+
 /**
  * A modal panel showing a single cell's full value (the column name as title, the
  * value in a scrollable code block) with a Copy button — the "expand cell" action
  * a dense grid needs so a truncated value is fully readable and copyable. The
  * backdrop/Escape dismiss is owned by {@link ModalShell}.
+ *
+ * `resolveUrl` is supplied only for a `v.storage(...)` column, so its presence is
+ * what says "this value is an object key, not text" — one prop rather than a
+ * boolean plus a resolver that could disagree with it.
  */
-const CellDetailDialog = ({ column, onClose, value }: { readonly column: string; readonly onClose: () => void; readonly value: unknown }): ReactElement => {
+const CellDetailDialog = ({
+    column,
+    onClose,
+    resolveUrl,
+    value,
+}: {
+    readonly column: string;
+    readonly onClose: () => void;
+    /** Resolve a viewable URL for a storage key. Absent for every ordinary column. */
+    readonly resolveUrl?: (key: string) => Promise<string>;
+    readonly value: unknown;
+}): ReactElement => {
     const t = useT();
     const [copied, setCopied] = useState<boolean>(false);
     const text = formatCell(value);
@@ -387,6 +466,7 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
                     </button>
                 </div>
             </div>
+            {resolveUrl !== undefined && typeof value === "string" && IMAGE_KEY_RE.test(value) && <StoragePreview objectKey={value} resolveUrl={resolveUrl} />}
             <pre
                 className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap"
                 data-testid="grid-cell-value"

@@ -631,6 +631,64 @@ describe("dataBrowser — editable", () => {
         await screen.findByTestId("db-page");
     };
 
+    /** Fire a clipboard paste carrying `text` at the grid's scroll container. */
+    const pasteIntoGrid = (text: string): void => {
+        fireEvent.paste(screen.getByTestId("db-scroll"), { clipboardData: { getData: () => text } });
+    };
+
+    it("stages a pasted TSV block and reports the cells it skipped", async () => {
+        expect.assertions(3);
+
+        await openMessages(createEditableClient());
+
+        // The focus anchor defaults to the first cell, which is the primary key —
+        // so each line's first value lands on a column nothing may write.
+        pasteIntoGrid("ignored\tfirst\nignored\tsecond");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(2);
+        expect(staged.textContent).toContain("second");
+        // Reported, not silent: a paste that quietly dropped half its block would
+        // read as a clean apply.
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("2");
+    });
+
+    it("refuses a pasted value that does not fit a numeric column", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "scores", rowCount: 2 }];
+                }
+
+                return {
+                    columns: ["__id__", "points"],
+                    rows: [
+                        { __id__: "s1", points: 1 },
+                        { __id__: "s2", points: 2 },
+                    ],
+                    total: 2,
+                };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-scores"));
+        await screen.findByTestId("db-page");
+
+        pasteIntoGrid("ignored\t7\nignored\tn/a");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        // The parseable one stages; "n/a" does not become the string "n/a" in a
+        // numeric column, which is what a plain inline edit would have allowed.
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(1);
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("3");
+    });
+
     it("hides edit controls unless `editable` is set", async () => {
         expect.assertions(2);
 
@@ -1322,6 +1380,57 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         fireEvent.click(screen.getByTestId("grid-cell-close"));
 
         expect(screen.queryByTestId("grid-cell-dialog")).toBeNull();
+    });
+
+    it("previews a v.storage() cell as an image, and leaves an ordinary cell as text", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "files", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            files: [
+                                { isStorage: true, name: "avatar", optional: false, type: "storage" },
+                                { name: "note", optional: false, type: "string" },
+                            ],
+                        },
+                    };
+                }
+
+                const { table } = args as { table: string };
+
+                if (table !== "files") {
+                    throw new Error(`unknown table: ${table}`);
+                }
+
+                return { columns: ["__id__", "avatar", "note"], rows: [{ __id__: "f1", avatar: "avatars/ada.png", note: "not a key" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-files"));
+        await screen.findByTestId("db-rows");
+
+        fireEvent.click(screen.getByTestId("db-expand-avatar"));
+
+        const image = await screen.findByTestId("grid-cell-image");
+
+        expect(image.getAttribute("src")).toBe("https://mock.example/avatars/ada.png?sig=test");
+        // The key stays visible under the preview — it is what an operator copies.
+        expect(screen.getByTestId("grid-cell-value").textContent).toBe("avatars/ada.png");
+
+        fireEvent.click(screen.getByTestId("grid-cell-close"));
+        fireEvent.click(screen.getByTestId("db-expand-note"));
+        await screen.findByTestId("grid-cell-value");
+
+        // A plain column is never fetched as an object, whatever its value looks like.
+        expect(screen.queryByTestId("grid-cell-image")).toBeNull();
     });
 
     it("hides a column via the Columns menu", async () => {

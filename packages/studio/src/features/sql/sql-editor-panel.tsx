@@ -196,7 +196,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 onNew={library.newQuery}
                 onSearchChange={library.onSearchChange}
                 onSelect={library.selectQuery}
+                onToggleRememberHistory={library.setRememberHistory}
                 queries={library.queries}
+                rememberHistory={library.rememberHistory}
                 search={library.search}
             />
 

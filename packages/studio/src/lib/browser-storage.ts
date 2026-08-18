@@ -47,6 +47,15 @@ export const saveJson = (key: string, value: unknown, kind: StorageKind = "local
     }
 };
 
+/** Delete `key` from the given storage area; silently no-ops when storage is unavailable or the delete throws. */
+export const removeJson = (key: string, kind: StorageKind = "local"): void => {
+    try {
+        storageOf(kind)?.removeItem(key);
+    } catch {
+        /* disabled storage — nothing was persisted to remove */
+    }
+};
+
 /**
  * A {@link useState} whose array value is mirrored to `localStorage` under `key`:
  * lazily seeded from storage on mount, then written back (best-effort, guarded)
@@ -54,25 +63,30 @@ export const saveJson = (key: string, value: unknown, kind: StorageKind = "local
  * triad the SQL editor and dashboards panels would otherwise each duplicate — and,
  * unlike those, never lets a `setItem` quota/privacy throw escape into the render.
  */
-export const usePersistedList = function <T>(key: string): [T[], Dispatch<SetStateAction<T[]>>] {
-    const [value, setValue] = useState<T[]>(() => loadJsonArray<T>(key));
-    // The `key` the current in-memory `value` was loaded/persisted under. When `key`
-    // changes across renders we must NOT write the old key's value under the new key
-    // (that would clobber whatever was persisted there) — instead reload from the new
-    // key so the state reflects it, and let the next render persist normally.
-    const keyRef = useRef(key);
+export const usePersistedList = function <T>(key: string, kind: StorageKind = "local"): [T[], Dispatch<SetStateAction<T[]>>] {
+    const [value, setValue] = useState<T[]>(() => loadJsonArray<T>(key, kind));
+    // The `key` AND AREA the current in-memory `value` was loaded/persisted under.
+    // When either changes across renders we must NOT write the old slot's value into
+    // the new one (that would clobber whatever was persisted there) — instead reload
+    // from the new slot so the state reflects it, and let the next render persist
+    // normally. The area is part of the identity because a caller can move a list
+    // between `localStorage` and `sessionStorage` at runtime (the SQL history's
+    // "remember on this browser" toggle does exactly that).
+    const slotRef = useRef(`${kind}:${key}`);
 
     useEffect(() => {
-        if (keyRef.current !== key) {
-            keyRef.current = key;
-            // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- the write and the persisted-value update are deliberately separate: one is React state, the other is localStorage, and they cannot be one update
-            setValue(loadJsonArray<T>(key));
+        const slot = `${kind}:${key}`;
+
+        if (slotRef.current !== slot) {
+            slotRef.current = slot;
+            // react-doctor-disable-next-line react-doctor/no-chain-state-updates -- the write and the persisted-value update are deliberately separate: one is React state, the other is web storage, and they cannot be one update
+            setValue(loadJsonArray<T>(key, kind));
 
             return;
         }
 
-        saveJson(key, value);
-    }, [key, value]);
+        saveJson(key, value, kind);
+    }, [key, kind, value]);
 
     return [value, setValue];
 };
@@ -84,8 +98,8 @@ export const usePersistedList = function <T>(key: string): [T[], Dispatch<SetSta
  * updaters like {@link useState}. The canonical home for "one persisted value"
  * so panels stop hand-rolling the one-element-list wrapper.
  */
-export const usePersistedValue = function <T>(key: string, fallback: T): [T, Dispatch<SetStateAction<T>>] {
-    const [list, setList] = usePersistedList<T>(key);
+export const usePersistedValue = function <T>(key: string, fallback: T, kind: StorageKind = "local"): [T, Dispatch<SetStateAction<T>>] {
+    const [list, setList] = usePersistedList<T>(key, kind);
 
     const setValue: Dispatch<SetStateAction<T>> = (action) => {
         setList((current) => {

@@ -35,6 +35,10 @@ const ROW_HEIGHT = 36;
  */
 const SCROLL_STYLE: CSSProperties = { flex: "1 1 0%", minHeight: 0, overflow: "auto", position: "relative" };
 const ROWS_STYLE: CSSProperties = { width: "100%" };
+
+/** The newline a spreadsheet leaves after its last row — dropped so a paste has no phantom trailing line. */
+const TRAILING_NEWLINE = /\n$/u;
+
 // Virtualized rows are taken out of table flow (absolute + translateY), so the
 // row lays its cells out with flexbox rather than table-cell sizing — otherwise
 // the `<td>`s collapse onto each other. The header row shares the same flex
@@ -143,6 +147,85 @@ const rowId = (row: TableRow): null | string => {
     }
 
     return null;
+};
+
+/**
+ * The value a pasted cell should stage, or `undefined` when it must be skipped.
+ *
+ * `coerceCellValue` falls back to the raw string when it cannot parse, which is
+ * the right call for the one hand-typed cell an operator is looking at and the
+ * wrong one for a block nobody reads row by row: a hundred "n/a"s pasted into a
+ * numeric column would be a hundred silently-corrupted cells at commit time.
+ */
+const stagedPasteValue = (raw: string, original: unknown): undefined | { value: unknown } => {
+    const coerced = coerceCellValue(raw, original);
+
+    return typeof original === "number" && typeof coerced !== "number" ? undefined : { value: coerced };
+};
+
+/** One cell a paste would stage. */
+interface PastedEdit {
+    readonly column: string;
+    readonly rowId: string;
+    readonly value: unknown;
+}
+
+/**
+ * Turn a clipboard block (TSV — what a spreadsheet and every SQL client put on
+ * the clipboard) into staged edits, anchored at `anchor` and expanding right and
+ * down over the loaded page.
+ *
+ * Pure, and separate from the handler, because what a paste DECIDES is the part
+ * worth asserting: cells past the last row or column, cells in a column nothing
+ * may write (a primary key, a masked column), and cells that do not fit the
+ * column's type are all counted rather than applied — a paste that quietly
+ * dropped half its block would read as a clean apply.
+ */
+const planPastedEdits = ({
+    anchor,
+    columnIds,
+    editableColumn,
+    rows,
+    text,
+}: {
+    readonly anchor: { col: number; row: number };
+    readonly columnIds: string[];
+    readonly editableColumn: (column: string) => boolean;
+    readonly rows: TableRow[];
+    readonly text: string;
+}): { edits: PastedEdit[]; skipped: number } => {
+    // A trailing newline is what a spreadsheet's last row leaves behind; it is not
+    // an extra (empty) row to paste.
+    const lines = text.replaceAll("\r\n", "\n").replace(TRAILING_NEWLINE, "").split("\n");
+    const edits: PastedEdit[] = [];
+    let skipped = 0;
+
+    for (const [rowOffset, line] of lines.entries()) {
+        const row = rows[anchor.row + rowOffset];
+        const id = row === undefined ? null : rowId(row);
+        const cells = line.split("\t");
+
+        // Past the last loaded row, or a row with no addressable primary key: the
+        // whole line is unwritable, so count it and move on.
+        if (row === undefined || id === null) {
+            skipped += cells.length;
+
+            continue;
+        }
+
+        for (const [colOffset, raw] of cells.entries()) {
+            const column = columnIds[anchor.col + colOffset];
+            const staged = column === undefined || !editableColumn(column) ? undefined : stagedPasteValue(raw, row[column]);
+
+            if (column === undefined || staged === undefined) {
+                skipped += 1;
+            } else {
+                edits.push({ column, rowId: id, value: staged.value });
+            }
+        }
+    }
+
+    return { edits, skipped };
 };
 
 /**
@@ -733,6 +816,7 @@ const DataBrowserTableView = ({
      */
     tableModel: DataBrowserTableModel;
 }): ReactElement => {
+    const t = useT();
     const { attachScroll, scrollLeft, scrollToIndex, table, tableRows, tbodyStyle, viewportWidth, virtualRows } = tableModel;
 
     // Carries the column id being dragged between a header's dragstart and the
@@ -742,6 +826,9 @@ const DataBrowserTableView = ({
     // The keyboard-focused cell (row index + visible-column index). Arrow keys
     // move it; Enter opens the inline editor for an editable cell.
     const [active, setActive] = useState<null | { col: number; row: number }>(null);
+    // Cells the last paste declined, so a partial paste reports itself instead of
+    // looking like it applied cleanly.
+    const [pasteSkipped, setPasteSkipped] = useState<number>(0);
     const columnCount = table.getVisibleLeafColumns().length;
 
     const onGridKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -796,6 +883,35 @@ const DataBrowserTableView = ({
         }
 
         setActive({ col, row });
+    };
+
+    /**
+     * Paste a clipboard block into the grid as STAGED edits, anchored at the
+     * focused cell. The planning is {@link planPastedEdits}; this only reads the
+     * clipboard and applies the plan.
+     */
+    const onGridPaste = (event: React.ClipboardEvent<HTMLDivElement>): void => {
+        const text = edit.editable ? event.clipboardData.getData("text/plain") : "";
+
+        if (text === "") {
+            return;
+        }
+
+        event.preventDefault();
+
+        const plan = planPastedEdits({
+            anchor: active ?? { col: 0, row: 0 },
+            columnIds: table.getVisibleLeafColumns().map((column) => column.id),
+            editableColumn: edit.editableColumn,
+            rows: tableRows.map((row) => row.original),
+            text,
+        });
+
+        for (const change of plan.edits) {
+            edit.stage(change.rowId, change.column, change.value);
+        }
+
+        setPasteSkipped(plan.skipped);
     };
 
     // Keep the focused row in view as it moves past the virtual window's edge.
@@ -912,7 +1028,12 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer layout="fill">
-            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
+            {pasteSkipped > 0 && (
+                <p className="border-b border-warning/40 bg-warning/5 px-3 py-1.5 text-xs text-warning" data-testid="db-paste-skipped">
+                    {t("{count} pasted cells were skipped", { count: pasteSkipped })}
+                </p>
+            )}
+            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} onPaste={onGridPaste} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
