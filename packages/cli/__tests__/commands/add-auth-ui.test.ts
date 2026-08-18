@@ -104,6 +104,24 @@ describe("detectAuthUiItem", () => {
         expect(isSolid2Project({ "solid-js": "^1.9.14" })).toBe(false);
         expect(detectAuthUiItem({ "@lunora/solid": "1.0.0", "solid-js": "^1.9.14" })).toBe("auth-ui-solid");
     });
+
+    it("reads the range's floor rather than its first digit", () => {
+        expect.assertions(6);
+
+        // `>1` is `>=2.0.0`: the first number in a range is not its floor.
+        expect(isSolid2Project({ "solid-js": ">1" })).toBe(true);
+        expect(isSolid2Project({ "solid-js": ">=2" })).toBe(true);
+
+        // A union floors at its lowest alternative regardless of the order it is
+        // written in, so a range spanning both majors is not a Solid 2 signal.
+        expect(isSolid2Project({ "solid-js": "^1.9.0 || ^2.0.0-rc.0" })).toBe(false);
+        expect(isSolid2Project({ "solid-js": "2 || 1" })).toBe(false);
+
+        // Specifiers npm cannot parse as a range decide nothing on their own —
+        // the project falls through to the rest of the ladder.
+        expect(isSolid2Project({ "solid-js": "workspace:*" })).toBe(false);
+        expect(isSolid2Project({ "@solidjs/web": "workspace:*", "solid-js": "workspace:*" })).toBe(true);
+    });
 });
 
 describe("runAddFeature (auth-ui)", () => {

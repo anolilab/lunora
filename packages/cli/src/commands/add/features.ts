@@ -5,6 +5,7 @@
  * the registry — behind both front doors.
  */
 import type { SelectOption } from "@lunora/config";
+import { minVersion, validRange } from "semver";
 
 /**
  * The per-framework auth-UI registry items (`auth-ui` resolves to one of these).
@@ -70,18 +71,30 @@ const isReactNativeProject = (dependencies: Readonly<Record<string, string>>): b
     Object.hasOwn(dependencies, "react-native") || Object.hasOwn(dependencies, "@lunora/react-native") || Object.hasOwn(dependencies, "expo");
 
 /**
- * Matches the leading major of a semver range (`^2.0.0-rc.0` → `2`). Nothing follows
- * the digits: npm accepts partial ranges, so `2`, `^2`, and `2 || 1` are all valid
- * ways to ask for Solid 2 and none of them has a dot after the major. Hoisted so
- * it isn't recompiled per call.
+ * The lowest major a semver range admits — `^2.0.0-rc.0` → `2`, `>1` → `2`,
+ * `^1.9.0 || ^2.0.0-rc.0` → `1`.
+ *
+ * `minVersion` rather than a leading-digit regex, because the first number in a
+ * range is not its floor: `>1` means `>=2.0.0`, and a `||` union floors at
+ * whichever alternative is lowest regardless of the order it is written in, so
+ * `2 || 1` admits Solid 1.
+ *
+ * A range spanning both majors therefore reports `1`. That is deliberate rather
+ * than exact — nothing in the manifest says which side the install resolved to,
+ * so the caller keeps its pre-existing default instead of guessing, and a real
+ * Solid 2 project is still recognised by its `@solidjs/web` dependency.
+ *
+ * Returns `undefined` for anything npm can't parse as a range (`workspace:*`,
+ * `catalog:`, a git URL), so callers fall through to their own default.
  */
-const LEADING_MAJOR = /^\D*(\d+)/;
+const minimumMajor = (range: string | undefined): number | undefined => {
+    // `validRange` first: `minVersion` throws on anything it can't parse, and a
+    // manifest read off disk can hold `workspace:*`, `catalog:`, or a git URL.
+    if (range === undefined || validRange(range) === null) {
+        return undefined;
+    }
 
-/** Leading major of a semver range like `^2.0.0-rc.0`, or `undefined` when it can't be read. */
-const leadingMajor = (range: string | undefined): number | undefined => {
-    const match = LEADING_MAJOR.exec(range?.trim() ?? "");
-
-    return match ? Number(match[1]) : undefined;
+    return minVersion(range)?.major;
 };
 
 /**
@@ -98,7 +111,7 @@ const leadingMajor = (range: string | undefined): number | undefined => {
  * an explicit `solid-js` major, so a project cannot land here by accident.
  */
 const isSolid2Project = (dependencies: Readonly<Record<string, string>>): boolean =>
-    Object.hasOwn(dependencies, "@solidjs/web") || (leadingMajor(dependencies["solid-js"]) ?? 0) >= 2;
+    Object.hasOwn(dependencies, "@solidjs/web") || (minimumMajor(dependencies["solid-js"]) ?? 0) >= 2;
 
 /**
  * Detect which auth-UI item fits a project from its package.json dependencies.

@@ -94,6 +94,7 @@
         "magic-string": "catalog:cli",
         "react": "catalog:frontend",
         "react-reconciler": "catalog:cli",
+        "semver": "catalog:node",
         "smol-toml": "catalog:cli",
         "ts-morph": "catalog:tooling"
     },
@@ -102,6 +103,7 @@
         "@lunora/testing": "1.0.0-alpha.113",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
+        "@types/semver": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",

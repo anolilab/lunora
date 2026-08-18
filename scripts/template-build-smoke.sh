@@ -666,7 +666,10 @@ for tname in "${TEMPLATES[@]}"; do
         const p = require('$scaffold_dir/package.json');
         const d = { ...p.dependencies, ...p.devDependencies };
         const has = (n) => Object.hasOwn(d, n);
-        const major = (r) => { const m = /^\D*(\d+)/.exec((r ?? '').trim()); return m ? Number(m[1]) : 0; };
+        // Mirrors \`minimumMajor\`: the lowest major the range admits, not its
+        // first digit — \`>1\` floors at 2 and \`2 || 1\` floors at 1.
+        const { minVersion, validRange } = require('$REPO_ROOT/packages/cli/node_modules/semver');
+        const major = (r) => (r && validRange(r) !== null ? (minVersion(r)?.major ?? 0) : 0);
         // React Native is not a DOM target: the react payload would not work there.
         if (has('react-native') || has('@lunora/react-native')) process.stdout.write('');
         // Solid 2 gets its own payload. Checked before the framework matches,

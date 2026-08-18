@@ -601,6 +601,9 @@ catalogs:
     '@types/node':
       specifier: 26.2.0
       version: 26.2.0
+    '@types/semver':
+      specifier: ^7.7.1
+      version: 7.8.0
   ui:
     '@base-ui/react':
       specifier: 1.7.0
@@ -2916,6 +2919,9 @@ importers:
       react-reconciler:
         specifier: catalog:cli
         version: 0.33.0(react@19.2.8)
+      semver:
+        specifier: catalog:node
+        version: 7.8.5
       smol-toml:
         specifier: catalog:cli
         version: 1.7.1
@@ -2935,6 +2941,9 @@ importers:
       '@types/react':
         specifier: catalog:frontend
         version: 19.2.18
+      '@types/semver':
+        specifier: catalog:types
+        version: 7.8.0
       '@visulima/packem':
         specifier: catalog:build
         version: 2.0.0(5954291fe26e638080a19493b4026c94)
@@ -12813,6 +12822,9 @@ packages:
 
   '@types/retry@0.12.2':
     resolution: {integrity: sha512-XISRgDJ2Tc5q4TRqvgJtzsRkFYNJzZrhTdtMoGVBttwzzQJkPnS3WWTFc7kuDRoPtPakl+T+OfdEUjYJj7Jbow==}
+
+  '@types/semver@7.8.0':
+    resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
   '@types/ssh2@1.15.5':
     resolution: {integrity: sha512-N1ASjp/nXH3ovBHddRJpli4ozpk6UdDYIX4RJWFa9L1YKnzdhTlVmiGHm4DZnj/jLbqZpes4aeR30EFGQtvhQQ==}
@@ -33436,6 +33448,8 @@ snapshots:
   '@types/resolve@1.20.2': {}
 
   '@types/retry@0.12.2': {}
+
+  '@types/semver@7.8.0': {}
 
   '@types/ssh2@1.15.5':
     dependencies:

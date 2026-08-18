@@ -293,6 +293,7 @@ catalogs:
     "@standard-schema/spec": 1.1.0
     "@types/dockerode": ^4.0.1
     "@types/node": 26.2.0
+    "@types/semver": ^7.7.1
   cloudflare:
     "@cloudflare/containers": ^0.3.7
     # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
