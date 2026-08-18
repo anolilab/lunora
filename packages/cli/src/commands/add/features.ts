@@ -5,7 +5,6 @@
  * the registry — behind both front doors.
  */
 import type { SelectOption } from "@lunora/config";
-// eslint-disable-next-line import/no-extraneous-dependencies -- semver is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { minVersion, validRange } from "semver";
 
 /**
