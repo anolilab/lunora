@@ -1,21 +1,12 @@
+import { bm25Idf, bm25TermScore, tokenize, tokenizeQuery } from "./bm25";
+import matchesMetadataFilter from "./metadata-filter";
 import type { LexicalMatch, RagLexicalStore } from "./types";
-
-/**
- * Okapi BM25 term-saturation constant. 1.5 is the standard default — higher
- * values reward repeated terms more, lower values saturate sooner.
- */
-const BM25_K1 = 1.5;
-/** Okapi BM25 length-normalization constant (0 = off, 1 = full). 0.75 is the standard default. */
-const BM25_B = 0.75;
-
-/** Lowercase and split into `[a-z0-9]+` tokens — dependency-free, adequate for keyword recall. */
-const TOKEN_PATTERN = /[a-z0-9]+/g;
-
-const tokenize = (text: string): string[] => text.toLowerCase().match(TOKEN_PATTERN) ?? [];
 
 /** One indexed chunk in a namespace's BM25 state. */
 interface Bm25Document {
     length: number;
+    /** The chunk's source metadata, kept so a filtered search can evaluate the predicate. */
+    metadata?: Record<string, unknown>;
     termFrequency: ReadonlyMap<string, number>;
     text: string;
 }
@@ -28,9 +19,6 @@ interface NamespaceState {
     totalLength: number;
 }
 
-/** Already-warned reference stores (deduped per instance) — a one-time dev signal, not per-query spam. */
-const filterWarned = new WeakSet<object>();
-
 /**
  * An **in-memory** Okapi BM25 lexical store — the reference adapter behind
  * `RagConfig.lexicalStore`, giving hybrid retrieval its keyword leg with zero
@@ -40,13 +28,16 @@ const filterWarned = new WeakSet<object>();
  * {@link RagLexicalStore} (a DO-SQLite inverted index, D1, or an external search
  * service) behind the same seam.
  *
- * Tenant isolation is by `namespace` (each namespace keeps its own index). This
- * store holds **no metadata**, so it cannot evaluate a metadata `filter`
- * (including an `rlsFilter` result): when `search` is called with a non-empty
- * filter it **fails closed** — returns no lexical hits and warns once — rather
- * than risk surfacing a row the filter would exclude. If your RLS is
- * metadata-based (not namespace-based) and you want a lexical leg, fold the RLS
- * dimension into the `namespace` or plug a filter-aware store.
+ * Tenant isolation is by `namespace` (each namespace keeps its own index), and
+ * each chunk's source `metadata` is stored alongside it so `search` evaluates
+ * the **same** metadata predicate the vector leg receives — including an
+ * `rlsFilter` result. A hit the filter excludes never reaches fusion.
+ *
+ * That matters because the filter carries the tenant/RBAC scope: a lexical leg
+ * that ignored it would leak excluded chunk text into the fused result no
+ * matter what the vector leg returned. This store previously had no metadata to
+ * check and so refused every filtered query, which made hybrid search and
+ * metadata-based RLS mutually exclusive.
  * @experimental
  */
 const bm25LexicalStore = (): RagLexicalStore => {
@@ -120,7 +111,12 @@ const bm25LexicalStore = (): RagLexicalStore => {
                     posting.set(chunk.id, frequency);
                 }
 
-                state.documents.set(chunk.id, { length: tokens.length, termFrequency, text: chunk.text });
+                state.documents.set(chunk.id, {
+                    length: tokens.length,
+                    termFrequency,
+                    text: chunk.text,
+                    ...(chunk.metadata === undefined ? {} : { metadata: chunk.metadata }),
+                });
                 state.totalLength += tokens.length;
             }
 
@@ -134,27 +130,6 @@ const bm25LexicalStore = (): RagLexicalStore => {
             return Promise.resolve();
         },
         search: (query, options) => {
-            // No metadata here → cannot honour a metadata/RLS filter. Fail closed on
-            // ANY non-empty filter — including a flat-equality filter (the exact
-            // shape `rlsFilter` produces), which must not be exempted: it is the
-            // canonical tenant-scoping predicate, and running the BM25 search over
-            // the whole namespace anyway would leak other tenants'/RLS-excluded
-            // chunk text into the fused retrieval result.
-            if (options.filter && Object.keys(options.filter).length > 0) {
-                if (!filterWarned.has(store)) {
-                    filterWarned.add(store);
-
-                    // eslint-disable-next-line no-console
-                    console.warn(
-                        "[@lunora/ai/rag] bm25LexicalStore cannot evaluate a metadata filter (it stores no metadata);\n" +
-                            "the lexical leg is skipped for filtered queries. Fold the RLS dimension into `namespace`,\n" +
-                            "or plug a filter-aware RagLexicalStore, to keep a lexical leg under metadata-based RLS.",
-                    );
-                }
-
-                return Promise.resolve([]);
-            }
-
             const state = stateFor(options.namespace);
             const documentCount = state.documents.size;
 
@@ -162,7 +137,7 @@ const bm25LexicalStore = (): RagLexicalStore => {
                 return Promise.resolve([]);
             }
 
-            const queryTerms = [...new Set(tokenize(query))];
+            const queryTerms = tokenizeQuery(query);
 
             if (queryTerms.length === 0) {
                 return Promise.resolve([]);
@@ -179,8 +154,7 @@ const bm25LexicalStore = (): RagLexicalStore => {
                 }
 
                 const documentFrequency = posting.size;
-                // BM25 "plus" IDF — always non-negative, so a common term never subtracts score.
-                const idf = Math.log(1 + (documentCount - documentFrequency + 0.5) / (documentFrequency + 0.5));
+                const idf = bm25Idf(documentCount, documentFrequency);
 
                 for (const [id, frequency] of posting) {
                     const document = state.documents.get(id);
@@ -189,10 +163,16 @@ const bm25LexicalStore = (): RagLexicalStore => {
                         continue;
                     }
 
-                    const denominator = frequency + BM25_K1 * (1 - BM25_B + (BM25_B * document.length) / averageLength);
-                    const contribution = idf * ((frequency * (BM25_K1 + 1)) / denominator);
+                    // Honour the same metadata predicate the vector leg gets.
+                    // A lexical hit that the filter excludes must never reach
+                    // fusion: the filter carries the tenant/RBAC scope, and
+                    // surfacing the chunk here would leak its text regardless of
+                    // what the vector leg returned.
+                    if (!matchesMetadataFilter(document.metadata, options.filter)) {
+                        continue;
+                    }
 
-                    scores.set(id, (scores.get(id) ?? 0) + contribution);
+                    scores.set(id, (scores.get(id) ?? 0) + bm25TermScore(idf, frequency, document.length, averageLength));
                 }
             }
 

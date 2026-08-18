@@ -125,11 +125,11 @@ What you get beyond the manual loop:
   on the trace waterfall. A hand-built context without `ctx.trace` embeds untraced.
 
 Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
-capped at 20, 10 KiB of metadata per vector). For long documents or deeper
+capped at 50, 10 KiB of metadata per vector). For long documents or deeper
 retrieval, supply a `textStore` (`{ put, getMany, remove? }`: a DO table, KV,
 …): text moves out of metadata and the `topK` ceiling lifts to 100. The default
-chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
-token/sentence/semantic strategies.
+chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for the
+sentence, Markdown, or token strategies below.
 
 The 10 KiB is Vectorize's, and it covers the **whole** metadata object: chunk
 text, Lunora's bookkeeping keys, and any `metadata` you attach. `defineRag`
@@ -139,8 +139,168 @@ cause. It also rejects an unworkable `chunkSize` up front, though that earlier
 check can only compare characters against a byte ceiling; multibyte text costs
 up to three bytes each, so the index-time measurement is the one that holds.
 
-The `topK` 20 is **Lunora's** cap, not Vectorize's: Vectorize allows 50 with
-full metadata. Ours is a legacy-V1 holdover.
+The `topK` 50 is Vectorize V2's own ceiling for full-metadata queries. **Legacy
+V1 indexes cap at 20** and will reject a larger `topK` remotely; a binding
+handle does not expose its index version, so the check cannot branch on it.
+
+### Chunking strategies
+
+`chunkSize`/`chunkOverlap` drive the built-in fixed character window. For real
+documents, pass `chunk` one of the structure-aware chunkers instead — a chunk
+that starts mid-clause embeds to a worse vector than the same prose split where
+the author ended a thought:
+
+```ts
+import { defineRag, markdownChunker, sentenceChunker, tokenChunker } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    chunk: markdownChunker({ overlap: 200, size: 1000 }),
+    index: "docs",
+});
+```
+
+- **`sentenceChunker({ size, overlap })`** — packs whole sentences into
+  `size`-bounded windows. The default choice for prose.
+- **`markdownChunker({ size, overlap })`** — splits at ATX headings (code fences
+  are tracked, so a `#` comment inside a fence never starts a section), then
+  packs each section's sentences. Every chunk is prefixed with its **heading
+  trail** (`# Guide > ## Auth > ### OAuth`), so a chunk from deep inside a long
+  document still carries what it is about — which is what makes it retrievable
+  by a query naming its section rather than its prose.
+- **`tokenChunker({ countTokens, maxTokens, overlapTokens })`** — bounds chunks
+  by a real token count, for when the embedding model's context window is the
+  binding constraint (anything longer is silently truncated, so the tail is
+  embedded as if it were never written). `countTokens` is **required and
+  injected**: `@lunora/ai` will not add a tokenizer dependency or pretend a
+  characters-per-token constant is a token count. Pass `js-tiktoken`,
+  `gpt-tokenizer`, or your provider's counter.
+
+None of them can exceed `size`: an atom too large to fit falls back to a hard
+character split rather than emitting a chunk the store would reject.
+
+### Embedding batching and caching
+
+Indexing embeds a whole document in **one** `embedMany` call rather than one
+call per chunk: the per-chunk `embed` callbacks `ctx.vectors.upsert` invokes
+resolve from that batch. A 200-chunk document collapses from 200 round-trips to
+a handful. It is best-effort — a provider that rejects the batch falls back to
+per-chunk embeds rather than failing the index — and identical chunks dedupe to
+a single embed.
+
+Retrieval re-embeds the query on every call. Set `cacheEmbeddings` to retain
+embeddings across calls on a bound context:
+
+```ts
+export const docs = defineRag({ cacheEmbeddings: 32, index: "docs" });
+```
+
+Sized in entries but budget in bytes: one 1536-dimension embedding is ~12 KB, so
+100 entries is over a megabyte held in the isolate. Keep it small. The cache is
+scoped to the bound context, never module level, so it cannot outlive the
+request that built it.
+
+### Embedding dimensions
+
+Vectorize stores at most **1536 dimensions** per vector, which rules out most
+current large embedding models (`text-embedding-3-large` and Gemini embedding at
+3072, Qwen3-Embedding at 4096). `defineRag` measures the first embedding each
+bound context produces and refuses a wider one, naming the ceiling and both
+escapes — rather than letting the upsert fail at Vectorize with nothing saying
+why:
+
+```ts
+import { openai } from "@ai-sdk/openai";
+
+export const docs = defineRag({
+    // Matryoshka truncation keeps a large model under the ceiling:
+    embeddingModel: openai.textEmbeddingModel("text-embedding-3-large", { dimensions: 1536 }),
+    index: "docs",
+});
+```
+
+Set `maxEmbeddingDimensions: false` to disable the check when the index is not
+Vectorize-backed, or give it a number to enforce a different store's ceiling.
+The check runs once per bound context, not once per chunk.
+
+### Bring your own vector store
+
+`defineRag` used to hard-code Vectorize's limits — its `topK` ceilings, its
+10 KiB metadata budget, its 1536-dimension cap — which made every RAG index a
+Cloudflare index. A store now declares its own capabilities and `defineRag`
+reads them, so a backend without those constraints is not held to them:
+
+```ts
+import { defineRag } from "@lunora/ai/rag";
+import type { RagVectorStore } from "@lunora/ai/rag";
+
+const pgStore = (ctx: { sql: SqlClient }): RagVectorStore => ({
+    capabilities: {
+        maxDimensions: false, // pgvector has no 1536 ceiling
+        maxMetadataBytes: false, // nor a 10 KiB metadata budget
+        maxTopK: 1000,
+        maxTopKWithMetadata: 1000,
+    },
+    deleteByIds: (ids, namespace) => ctx.sql`delete from chunks where id = any(${ids}) ...`,
+    getByIds: (ids, namespace) => ctx.sql`select ... `,
+    query: (input) => ctx.sql`select ... order by embedding <=> ${vector} limit ${input.topK}`,
+    upsert: (input) => ctx.sql`insert into chunks ... on conflict (id) do update ...`,
+});
+
+export const docs = defineRag({ index: "docs", store: (ctx) => pgStore(ctx) });
+```
+
+`store` is called **once per bound context** with that context, so a store
+needing per-request state — a Hyperdrive connection off `ctx.sql`, a shard's own
+SQLite — builds itself from it.
+
+Omit `store` and the bound `ctx.vectors` is wrapped by `vectorizeStore`, which
+declares exactly the limits listed above. That is the default and its behaviour
+is unchanged.
+
+An explicit `maxEmbeddingDimensions` still wins over the store's own
+`maxDimensions`, so you can tighten a permissive backend; leave it unset and the
+store speaks for itself.
+
+#### Shipped: a SQLite-backed store
+
+`sqliteVectorStore` runs a RAG index on any SQL engine reachable through an
+injected executor — a Durable Object's SQLite, D1, or `node:sqlite`. **No
+Vectorize, no extra Cloudflare product.**
+
+```ts
+import type { RagSqlExec } from "@lunora/ai/rag";
+import { defineRag, sqliteVectorStore } from "@lunora/ai/rag";
+
+// Whatever your engine exposes. On D1:
+const exec: RagSqlExec = async (sql, parameters) =>
+    (
+        await env.DB.prepare(sql)
+            .bind(...parameters)
+            .all()
+    ).results;
+// Inside a Durable Object it is `(sql, parameters) => state.storage.sql.exec(sql, ...parameters).toArray()`.
+
+export const docs = defineRag({
+    index: "docs",
+    store: () => sqliteVectorStore({ exec }),
+});
+```
+
+`ctx.vectors` is not needed here — with a `store` configured it is never read,
+and `RagContext.vectors` is optional, so an app with no Vectorize index type-
+checks.
+
+When the executor is a shard's own SQLite, the shard **is** the tenant
+boundary — so the account-global-namespace hazard that Vectorize forces you to
+guard against does not exist here, rather than being filtered away.
+
+**Search is brute force.** Every vector in the namespace is read and scored in
+JS; there is no ANN index, because SQLite has no vector type and `sqlite-vec` is
+not loadable inside workerd. That is linear in namespace size, so this suits
+**many small per-tenant indexes** — the shape most sharded apps already have —
+and not one large shared corpus. A namespace past `maxScan` (default 50,000)
+throws a named error rather than letting a Worker get killed on CPU with nothing
+explaining why.
 
 ### Bring your own embeddings — no `env.AI` binding
 
@@ -208,13 +368,100 @@ export const docs = defineRag({
 });
 ```
 
-`bm25LexicalStore()` is an **in-memory** Okapi BM25 reference adapter: it lives in
-the worker isolate, so it is not durable and not shared across isolates; use it
-for tests, local dev, and single-isolate workloads. In production plug a durable
-`RagLexicalStore` (`{ index, remove?, search }`) backed by a DO-SQLite inverted
-index, D1, or an external search service; the index/remove/hybrid-fusion plumbing
-is identical. Indexing mirrors chunks into the lexical store automatically, and
-removals fan out to it too.
+Both legs fetch a deeper candidate pool than `topK` (`topK × 4` by default,
+tunable with `candidates`) and the fused list is trimmed to `topK` afterwards.
+That widening is what makes the lexical leg useful at all: its job is to surface
+a chunk the vector leg ranked _below_ `topK`, which it cannot do if it was never
+asked for more than `topK`.
+
+Two lexical stores ship:
+
+- **`bm25LexicalStore()`** — in-memory. It lives in the worker isolate, so it is
+  not durable and not shared across isolates: restart the isolate and the
+  keyword leg silently returns nothing until every source is re-indexed. Use it
+  for tests, local dev, and single-isolate workloads.
+- **`sqlLexicalStore({ exec })`** — a **durable** inverted index over the same
+  injected SQL executor `sqliteVectorStore` takes, so hybrid search survives a
+  deploy.
+
+```ts
+import { defineRag, sqlLexicalStore } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    index: "docs",
+    lexicalStore: sqlLexicalStore({ exec }), // the same `exec` as above
+});
+```
+
+Attaching a lexical store to a corpus that is **already** indexed needs one pass
+with `index({ …, reindex: true })`: an ordinary re-sync short-circuits on the
+content hash before it reaches the new store, so the keyword leg would stay
+empty.
+
+Both score through the same BM25 kernel, so swapping one for the other does not
+move the ranking — asserted directly in the test suite. Indexing mirrors chunks
+into the lexical store automatically, and removals fan out to it too.
+
+### Reranking
+
+Vector search embeds a passage without ever seeing the query, so it cannot tell
+which of two topically-similar chunks actually answers _this_ question. A
+cross-encoder sees both at once. `rerank` runs over the candidate pool after
+fusion and before the trim to `topK`, and its output order is final:
+
+```ts
+import { defineRag, scoreReranker } from "@lunora/ai/rag";
+
+export const docs = defineRag({
+    candidates: 40, // pool the reranker gets to work with (default: topK × 4)
+    index: "docs",
+    rerank: scoreReranker({
+        minScore: 0.2, // also *reject* weak matches, not just reorder
+        score: async (query, text) => {
+            const result = await ctx.ai.run("@cf/baai/bge-reranker-base", { contexts: [{ text }], query });
+            return result.response[0].score;
+        },
+    }),
+});
+```
+
+The scorer is **injected** — `@lunora/ai` takes no provider dependency to make a
+model call. `scoreReranker` calls it once per candidate with bounded
+concurrency; `batchReranker` hands the whole pool to a batch endpoint in one
+call (and refuses a score list that does not line up with the passages, rather
+than zipping scores onto the wrong ones). Pass `{ rerank: false }` on a single
+`retrieve()` to skip the round-trip on a latency-sensitive path.
+
+### Query transformation
+
+The raw user query is often the worst possible search string. A conversational
+follow-up ("what about the other one?") carries its meaning in the preceding
+turns, and a short question shares few terms with the long passage answering it.
+
+`transformQuery` rewrites it — or expands it into several, each searched
+independently and fused with RRF, recovering passages any single phrasing would
+miss:
+
+```ts
+export const docs = defineRag({
+    index: "docs",
+    // Return a string to rewrite, or an array for multi-query retrieval.
+    transformQuery: async (query, { conversationId }) => {
+        const { text } = await generateText({
+            model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+            prompt: `Rewrite this search query to be self-contained: ${query}`,
+        });
+        return text;
+    },
+});
+```
+
+It receives `conversationId` from the bound context, so a follow-up can be
+rewritten against its thread. Also injected, for the same reason as `rerank`:
+every useful strategy (HyDE, multi-query expansion, follow-up rewriting) needs a
+language model, and this package does not pick one for you. Returning the query
+unchanged — or nothing usable — falls back to the original rather than searching
+for an empty string. Pass `{ transformQuery: false }` to skip it per call.
 
 ### RLS-filtered retrieval
 
@@ -237,10 +484,108 @@ const { chunks } = await docs(ctx).retrieve(question, { topK: 5 });
 ```
 
 The filter applies to both the vector and lexical legs, and only to retrieval;
-indexing stays a trusted server path. The reference `bm25LexicalStore` holds no
-metadata, so it **fails closed** on a metadata filter it cannot evaluate (skips
-its leg and warns once); fold the RLS dimension into `namespace`, or plug a
-filter-aware lexical store, to keep a lexical leg under metadata-based RLS.
+indexing stays a trusted server path.
+
+Each chunk's source `metadata` is mirrored into the lexical store at index time
+(`StoredRagChunk.metadata`), so `bm25LexicalStore` evaluates the **same**
+predicate the vector leg is given — hybrid search and metadata-based RLS
+compose. A lexical hit the filter excludes never reaches fusion, which matters
+because the filter carries the tenant/RBAC scope: a lexical leg that ignored it
+would leak excluded chunk text no matter what the vector leg returned.
+
+`matchesMetadataFilter` is exported if you are writing your own store. It
+covers implicit equality, `$eq` / `$ne` / `$lt` / `$lte` / `$gt` / `$gte`,
+`$in` / `$nin`, and dot-notation paths into nested objects — and **fails
+closed** on anything it does not recognise, including a range predicate over an
+incomparable value and a chunk indexed with no metadata at all. Guessing at an
+unknown operator risks admitting a row RLS meant to exclude, and the failure
+mode there is a cross-tenant leak, not a missing result.
+
+### Bulk ingestion — `defineRagSource`
+
+`rag.index()` takes one document's text, which leaves the whole crawl — list the
+objects, fetch each, extract text, index it, notice the ones that were deleted —
+as something every app writes for itself. This is the one axis on which
+Cloudflare's managed AutoRAG pipeline is genuinely more convenient.
+
+```ts
+import { defineRagSource } from "@lunora/ai/rag";
+
+const ingest = defineRagSource(docs(ctx), { namespace: ctx.shardKey });
+
+const report = await ingest.sync(
+    {
+        list: async function* () {
+            for await (const object of bucket.list()) {
+                yield { key: object.key, contentType: object.httpMetadata?.contentType, metadata: { url: object.key } };
+            }
+        },
+        get: async (object) => (await bucket.get(object.key))?.text(),
+    },
+    // Optional. What you already indexed — anything here that this pass does
+    // not list is deleted from the index.
+    { knownKeys: await loadIndexedKeys() },
+);
+// → { indexed: [...], unchanged: [...], skipped: [...], pruned: [...] }
+```
+
+The object source is **injected**, so this runs over an R2 bucket, S3, a
+filesystem, or a database table without `@lunora/ai` depending on any of them.
+`list` may be an async generator, so the caller decides how to page a large
+bucket. One pass collects the keys it yields — it needs the full current set to
+work out what disappeared — but never more than one object's body at a time.
+
+**Re-syncing is free.** `rag.index` short-circuits on a content hash, so an
+unchanged object costs one `get` and no embedding — which makes running this on
+a cron the normal way to use it.
+
+**Pruning keeps the index a mirror**, and it is the caller's set. Pass
+`knownKeys` — the keys you believe the index holds — and anything missing from
+this pass's `list()` is removed, because a document deleted upstream but left
+indexed keeps being retrieved and cited. Omit it and nothing is pruned.
+
+It is explicit because nothing else can hold that set honestly: the shape above
+builds the source per request, from a per-request `docs(ctx)`, so a set
+remembered inside the instance would be empty every time — a prune that
+defaulted on would in practice never run and never say so. Persist the keys (a
+table, a KV entry, the bucket listing itself) and hand them in.
+
+**Extractors are injected too**, keyed by content type with `"*"` as a fallback.
+Parsing PDF is a large dependency, and pulling one in for everybody to serve the
+users who need it is the wrong trade. Plain-text types (`text/plain`,
+`text/markdown`, `text/csv`, `application/json`) need no extractor; anything
+else without one is **skipped**, never indexed as raw bytes — a PDF's binary or
+an HTML file's markup embeds to something that matches nothing.
+
+## Cost telemetry without an AI Gateway
+
+Per-request dollar cost used to reach a span only when a Cloudflare AI Gateway
+put it in `providerMetadata`. Call the same model through `@ai-sdk/openai`
+directly, or run on a non-Cloudflare host, and spend visibility disappeared.
+
+`estimateModelCost` derives it from token usage and a price table instead, and
+`defineRag`'s embed span falls back to it automatically:
+
+```ts
+import { estimateModelCost } from "@lunora/ai";
+
+estimateModelCost("text-embedding-3-small", { inputTokens: 1_000_000 }); // → 0.02
+```
+
+**An estimate is never presented as a measurement.** A provider-reported cost
+always wins, and the span records which it got:
+
+| Attribute                  | Value                         |
+| -------------------------- | ----------------------------- |
+| `gen_ai.usage.cost`        | the cost in USD               |
+| `lunora.usage.cost.source` | `"provider"` or `"estimated"` |
+
+The shipped table is **indicative, not authoritative** — a hand-maintained
+snapshot, and providers change prices without warning. It is deliberately small,
+because a table trying to cover every model is a table that is wrong about most
+of them; anything it does not cover returns `undefined` rather than a guess, and
+an unpriced model yields no attribute rather than a `0` that would quietly sum
+into a total. Pass your own `prices` for anything you are invoicing against.
 
 ## Outside an action
 

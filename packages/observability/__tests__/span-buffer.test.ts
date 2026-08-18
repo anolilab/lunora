@@ -151,6 +151,42 @@ describe("foldTraces", () => {
         expect(row).not.toHaveProperty("events");
     });
 
+    it("emits nested parallel subtrees in pre-order when every span shares an offset", () => {
+        expect.assertions(2);
+
+        // Two sibling subtrees, each one level deep, all starting at the same
+        // instant — the normal case on Workers, where `Date.now()` is pinned to
+        // the last I/O and so does not advance across pure computation.
+        //
+        // Ordering by `(offsetMs, depth)` groups the tree by LEVEL rather than
+        // by branch: `root, a, b, a1, b1`. Indenting by `depth` then draws `a1`
+        // beneath `b`, a parent it does not belong to.
+        const { traces } = foldTraces([
+            span({ name: "a1", parentSpanId: "a", spanId: "a1" }),
+            span({ name: "b1", parentSpanId: "b", spanId: "b1" }),
+            span({ name: "a", parentSpanId: "root", spanId: "a" }),
+            span({ name: "b", parentSpanId: "root", spanId: "b" }),
+            span({ name: "root", spanId: "root" }),
+        ]);
+
+        expect(traces[0]?.spans.map((row) => row.name)).toStrictEqual(["root", "a", "a1", "b", "b1"]);
+        expect(traces[0]?.spans.map((row) => row.depth)).toStrictEqual([0, 1, 2, 1, 2]);
+    });
+
+    it("orders siblings by start time", () => {
+        expect.assertions(1);
+
+        // Within one parent, the earlier branch comes first — the walk restores
+        // the tree, it must not discard the timeline inside a level.
+        const { traces } = foldTraces([
+            span({ name: "late", parentSpanId: "root", spanId: "late", startTs: 1020 }),
+            span({ name: "early", parentSpanId: "root", spanId: "early", startTs: 1005 }),
+            span({ name: "root", spanId: "root" }),
+        ]);
+
+        expect(traces[0]?.spans.map((row) => row.name)).toStrictEqual(["root", "early", "late"]);
+    });
+
     it("still folds a trace whose root span is missing", () => {
         expect.assertions(2);
 

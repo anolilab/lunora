@@ -367,3 +367,66 @@ test("password reset email carries a working link", async () => {
 | `pollMs`       | `250`        | Poll interval in ms.                                |
 | `timeoutMs`    | `10000`      | Give up after this many ms.                         |
 | `fetch`        | `globalThis` | Inject a `fetch` implementation (e.g. a stub).      |
+
+## Evals — scoring model output
+
+`evaluate` runs a dataset through a producer and scores each output. The
+built-in scorers are heuristic (`containsScorer`, `regexScorer`,
+`exactMatchScorer`, `keywordScorer`) plus `llmScorer`, an LLM-as-judge whose
+`judge` is **injected** — a `(prompt) => Promise<string>` you wire to your own
+model — so this package stays model-agnostic and the judge is mockable.
+
+```ts
+import { evaluate, keywordScorer } from "@lunora/testing";
+
+const result = await evaluate(
+    [{ expected: "shipped", input: "where is my order?" }],
+    async (input) => (await harness.run({ input, threadKey: input })).text ?? "",
+    [keywordScorer(["shipped"])],
+);
+
+expect(result.average).toBeGreaterThan(0.5);
+```
+
+### Retrieval scorers
+
+Scoring only the final answer tells you it was wrong, not which half broke:
+whether retrieval never surfaced the right passage, or surfaced it and the
+model ignored it. Those have opposite fixes — chunking and hybrid search versus
+the prompt — so an answer-only eval sends you to the wrong one half the time.
+
+The retrieval scorers judge the ranked ids instead. The producer returns
+`{ output, metadata }` so it can report what it actually retrieved; that
+metadata is merged over the case's own, which declares the gold set:
+
+```ts
+import { evaluate, groundednessScorer, mrrScorer, ndcgAtK, recallAtK } from "@lunora/testing";
+
+const result = await evaluate(
+    [{ input: "how do I rotate keys?", metadata: { relevant: ["security#3"] } }],
+    async (input) => {
+        const { chunks, context } = await docs(ctx).retrieve(input);
+
+        return { metadata: { context, retrieved: chunks.map((chunk) => chunk.id) }, output: context };
+    },
+    [recallAtK(5), ndcgAtK(5), mrrScorer()],
+);
+```
+
+| Scorer                        | Measures                                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `recallAtK(k?)`               | Fraction of gold passages inside the top `k`. The ceiling on everything downstream.                |
+| `precisionAtK(k?)`            | Fraction of the top `k` that is gold. The counterweight — padding `topK` buys recall with noise.   |
+| `mrrScorer()`                 | `1 / rank` of the first gold passage. The metric that notices **ordering**, which recall cannot.   |
+| `ndcgAtK(k?)`                 | Rank-discounted gain over the ideal arrangement. Gate on this when comparing retrieval strategies. |
+| `groundednessScorer({judge})` | Whether the answer asserts only what the retrieved context supports.                               |
+
+All of them **fail closed**: a case with no gold ids scores 0 with a reason,
+never 1. A mis-wired eval that reads as a perfect score is the most dangerous
+failure a quality gate has.
+
+`recallAtK` and `ndcgAtK` answer different questions and you generally want
+both. Recall@10 cannot distinguish a gold passage at rank 1 from one at rank 10,
+but only the first survives a context-window trim — that difference is exactly
+what nDCG and MRR measure, and it is how you tell whether a reranker or a
+hybrid leg actually helped rather than just moved results around.

@@ -138,7 +138,10 @@ export const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
     name: "Cloudflare",
     features: {
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
-        globalTables: { level: "native", note: "D1 with Sessions API" },
+        globalTables: {
+            level: "native",
+            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
+        },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",

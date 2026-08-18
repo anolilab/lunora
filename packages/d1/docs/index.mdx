@@ -58,7 +58,9 @@ const bookmark = session.getBookmark();
 ```
 
 `session.prepare(sql)` returns the raw prepared statement when you need the
-`.bind(...).all()` / `.run()` / `.raw()` chain directly.
+`.bind(...).all()` / `.run()` / `.raw()` chain directly — unretried, like
+everything on `D1Client`. See [Transient failures and
+retries](#transient-failures-and-retries).
 
 ## `D1DatabaseLike` / `D1PreparedStatementLike` / `D1SessionLike`
 
@@ -100,6 +102,142 @@ interface Migration {
 A migration must be a single SQL statement (a trailing `;` is allowed). The
 runner parses with a quote- and comment-aware lexer and throws if it finds a
 second statement; split multi-statement DDL across separate `Migration` entries.
+
+## Transient failures and retries
+
+**D1 has a documented, expected, non-zero baseline error rate.** Cloudflare's own
+team describes a handful of errors every few hours as "not unexpected" even on a
+healthy database, and their guidance is to "retry their query and unless there is
+an underlying issue with the database, it should eventually work". The failures
+are infrastructural, not query-shaped:
+
+| Error                                                                      | Cause                                       |
+| -------------------------------------------------------------------------- | ------------------------------------------- |
+| `D1 DB storage operation exceeded timeout which caused object to be reset` | Storage object recycled mid-operation       |
+| `D1_ERROR: Network connection lost`                                        | Dropped connection — the most common        |
+| `Internal error while starting up D1 DB storage caused object to be reset` | Storage object failed to come up            |
+| `D1 DB's isolate exceeded its memory limit and was reset`                  | Isolate evicted; no query rewrite avoids it |
+
+The last two are judgement calls rather than certainties: an isolate over its
+memory limit, or a storage operation past its timeout, is transient when the
+runtime recycled it under unrelated load and deterministic when the query is
+simply too big for D1 to serve. In the second case the retries are wasted work
+before the same failure surfaces — if you see them repeat on one query, the
+query is the problem.
+
+An application that does not retry has adopted that error rate as its own, so
+Lunora retries for you — with exponential backoff and full jitter, so a fleet of
+Workers that hit the same blip does not re-converge on the recovering database as
+one synchronised wave.
+
+### Where the retry actually is
+
+`.global()` tables read through an executor Lunora builds over your D1 binding,
+and that executor retries. Nothing else does automatically:
+
+| Path                                                 | Retries                   |
+| ---------------------------------------------------- | ------------------------- |
+| `ctx.db` on a `.global()` table                      | yes, read-only statements |
+| `session.all(...)` / `session.first(...)`            | yes, read-only statements |
+| `session.run(...)`                                   | no                        |
+| `client.prepare` / `client.drizzle` / `client.batch` | no                        |
+
+`D1Client`'s own methods hand back the underlying D1 surface untouched — the
+drizzle handles included. Wrap those in `withD1Retry` yourself when you want it,
+and only for an operation that is safe to run twice.
+
+### Retrying without a timeout makes a stall worse
+
+D1's reported failure mode is not only a fast error — it is a **stall**.
+Operators report the storage object hanging for 30+ seconds before resetting,
+several times a day, on databases holding tens of megabytes of data with simple
+queries.
+
+A retry loop wrapped around a stall _amplifies_ it: three attempts at 30 seconds
+each is a 90-second request instead of a 30-second one. So when you call
+`withD1Retry` yourself, bound it:
+
+```ts
+await withD1Retry(() => session.all("SELECT * FROM reports"), {
+    timeoutMs: 2000, // abandon an attempt that has clearly hung
+    deadlineMs: 5000, // and bound the whole operation
+});
+```
+
+`timeoutMs` bounds one attempt; `deadlineMs` bounds the operation — including an
+attempt still in flight when the budget runs out, and the backoff before the next
+one — so `attempts × timeoutMs` plus backoff cannot compound past what a request
+handler can afford. An abandoned attempt throws `D1TimeoutError` — its own class,
+so "D1 hung" is distinguishable from "D1 returned an error"; those have different
+remedies and collapsing them hides which one you have.
+
+Neither has a default. A legitimate analytical query and a stalled one look
+identical from outside, so the value has to come from what your workload needs.
+With neither set — which is how the automatic paths run — a failure that took
+longer than two seconds is treated as a stall and **not** retried, so the
+unconfigured case cannot compound one hang into three.
+
+<strong>A timeout abandons the wait, not the work.</strong> There is no way to cancel an in-flight D1 operation from a Worker, so the subrequest continues and
+still counts against the request's subrequest budget. What you buy is that *your* request stops waiting — the difference between a fast error and a user
+watching a spinner for half a minute.
+
+### Retries are not enough on a critical write path
+
+If a write must not surface a 500 to a user, retrying harder is the wrong lever.
+Cloudflare's own guidance is to **decouple the write from the HTTP response**:
+accept the request, enqueue the write, and let the queue consumer absorb the
+storage event.
+
+```ts
+// The user-facing handler never touches D1.
+export const captureLead = action.input({ email: v.string() }).action(async ({ ctx, args }) => {
+    await ctx.queues.leads.send(args);
+
+    return { accepted: true };
+});
+```
+
+`@lunora/queue` retries the consumer independently of the request, so a D1 stall
+costs a delayed write rather than a failed signup. Use this for anything where
+losing the request is worse than applying it late — lead capture, audit trails,
+webhook side effects.
+
+### Read-only statements retry; everything else does not
+
+Every error above is **ambiguous about whether the statement applied**. "The
+connection dropped" does not say whether it dropped before or after the write
+committed, and D1 has no interactive transactions to resolve it. Silently
+re-running `UPDATE accounts SET balance = balance - 10` because the response was
+lost is how a retry layer turns a transient blip into a corrupted balance.
+
+**The method is not the signal — the statement is.** D1 runs
+`UPDATE … RETURNING` through `.all()` exactly like `.run()`, and Lunora's own
+optimistic-concurrency check does precisely that. So the automatic paths retry
+only when the statement's leading keyword is `SELECT`, `PRAGMA` or `EXPLAIN`.
+Anything else — including a `WITH …` whose tail cannot be proven read-only —
+runs once and surfaces its error.
+
+Writes that are genuinely idempotent — an upsert keyed on a primary key, a
+delete by id, an `INSERT OR IGNORE` — can opt in per call:
+
+```ts
+import { withD1Retry } from "@lunora/d1";
+
+const session = client.withSession(bookmark);
+
+await withD1Retry(() => session.run("INSERT OR IGNORE INTO seen (id) VALUES (?)", id));
+```
+
+`withD1Retry` takes `attempts`, `timeoutMs` and `deadlineMs`. There is no
+per-client retry configuration: the automatic paths run the defaults, and a
+caller who needs different behaviour is already calling `withD1Retry` directly.
+
+`isTransientD1Error` is exported if you are classifying errors yourself. It is
+deliberately conservative: only the specific messages in the table above are
+transient, and anything else — a constraint violation, a syntax error, a missing
+table, `internal error: too many SQL variables` — is treated as **permanent** and
+surfaces immediately, because re-running one turns a single fast failure into
+three slow ones and hides the cause.
 
 ## Atomicity
 

@@ -437,6 +437,34 @@ integration's `recordInputs` / `recordOutputs` it also carries the prompt /
 completion (off by default). The Lunora cloud reads these to show the model,
 token counts, and cost on the Traces waterfall.
 
+### Span durations on Workers
+
+**A `0 ms` span means "no I/O happened here", not "this was fast".**
+
+The Workers runtime pins `Date.now()` to the time of the last I/O operation. It
+is a Spectre mitigation — a high-resolution timer is half of a cache-timing
+side channel — so it is a deliberate security property of the platform, not a
+bug, and it applies to `performance.now()` equally. Every duration Lunora
+records is `Date.now() - startTs`, so:
+
+- A span wrapping **pure computation** reports `0`, whether that computation
+  took a microsecond or forty milliseconds.
+- A parent span whose child performed no I/O shares the child's exact start and
+  end, so the two tie on the waterfall.
+- Durations across an `await` that actually does I/O — a `ctx.db` read, a
+  `ctx.fetch`, a model call, a Durable Object hop — **are** real. Those are the
+  spans worth reading, and in practice they are the ones that cost anything.
+
+There is no workaround at the framework level: no clock available to a Worker
+advances without I/O. What you can do is make the spans you care about wrap
+I/O, and read a `0 ms` CPU span as "unmeasurable" rather than "free".
+
+**This is invisible in local development.** `wrangler dev` and Miniflare run
+workerd _without_ the production mitigation, so locally the clock advances
+normally and a CPU-only span shows a plausible non-zero duration. The same span
+collapses to `0 ms` in production. A timing profile that looks fine locally is
+not evidence that it will hold.
+
 ## Trace sampling
 
 At real traffic, exporting every trace is mostly paying to store the same

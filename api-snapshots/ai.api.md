@@ -41,6 +41,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `DEFAULT_MODEL_PRICES` (const)
+
+```ts
+const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>>;
+```
+
 ### `EmbeddingModel` (type)
 
 Re-exported from `ai` — signature tracked at its source.
@@ -64,6 +70,24 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `ModelInput` (type)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `ModelPrice` (interface)
+
+```ts
+interface ModelPrice {
+    input: number;
+    output?: number;
+}
+```
+
+### `ModelUsage` (interface)
+
+```ts
+interface ModelUsage {
+    inputTokens?: number;
+    outputTokens?: number;
+}
+```
 
 ### `ResolvedAiGateway` (interface)
 
@@ -93,6 +117,10 @@ Re-exported from `ai` — signature tracked at its source.
 
 Re-exported from `ai` — signature tracked at its source.
 
+### `estimateModelCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `generateObject` (function)
 
 Re-exported from `ai` — signature tracked at its source.
@@ -108,6 +136,10 @@ Re-exported from `ai` — signature tracked at its source.
 ### `jsonSchema` (function)
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
+
+### `lookupModelPrice` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `resolveAiGateway` (const)
 
@@ -126,6 +158,24 @@ Re-exported from `ai` — signature tracked at its source.
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 ## `@lunora/ai/rag`
+
+### `BatchRerankerOptions` (interface)
+
+```ts
+interface BatchRerankerOptions {
+    minScore?: number;
+    scoreAll: (query: string, texts: ReadonlyArray<string>) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
+}
+```
+
+### `ChunkerOptions` (interface)
+
+```ts
+interface ChunkerOptions {
+    overlap?: number;
+    size?: number;
+}
+```
 
 ### `IndexInput` (interface)
 
@@ -155,6 +205,12 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagExtractor` (type)
+
+```ts
+type RagExtractor = (raw: string, object: RagSourceObject) => Promise<string | undefined> | string | undefined;
+```
+
 ### `RagLexicalStore` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -163,9 +219,65 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `RagObjectSource` (interface)
+
+```ts
+interface RagObjectSource {
+    get: (object: RagSourceObject) => Promise<string | undefined> | string | undefined;
+    list: () => AsyncIterable<RagSourceObject> | Iterable<RagSourceObject>;
+}
+```
+
+### `RagQueryTransform` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagReranker` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `RagSource` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagSourceObject` (interface)
+
+```ts
+interface RagSourceObject {
+    contentType?: string;
+    key: string;
+    metadata?: Record<string, unknown>;
+}
+```
+
+### `RagSourceOptions` (interface)
+
+```ts
+interface RagSourceOptions {
+    concurrency?: number;
+    extractors?: Record<string, RagExtractor>;
+    namespace?: string;
+    onObject?: (info: {
+        chunks: number;
+        key: string;
+        status: "indexed" | "skipped" | "unchanged";
+    }) => void;
+}
+```
+
+### `RagSourceSync` (interface)
+
+```ts
+interface RagSourceSync {
+    sync: (source: RagObjectSource, passOptions?: RagSyncPassOptions) => Promise<RagSyncReport>;
+}
+```
+
+### `RagSqlExec` (type)
+
+```ts
+type RagSqlExec = (sql: string, parameters: ReadonlyArray<unknown>) => Promise<ReadonlyArray<Record<string, unknown>>> | ReadonlyArray<Record<string, unknown>>;
+```
 
 ### `RagSyncActionReference` (interface)
 
@@ -196,6 +308,25 @@ interface RagSyncOptions<Document extends Record<string, unknown> = Record<strin
 }
 ```
 
+### `RagSyncPassOptions` (interface)
+
+```ts
+interface RagSyncPassOptions {
+    knownKeys?: Iterable<string>;
+}
+```
+
+### `RagSyncReport` (interface)
+
+```ts
+interface RagSyncReport {
+    indexed: string[];
+    pruned: string[];
+    skipped: string[];
+    unchanged: string[];
+}
+```
+
 ### `RagTextStore` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -219,6 +350,30 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ### `RagVectorRecord` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `RagVectorStore` (interface)
+
+```ts
+interface RagVectorStore {
+    capabilities: RagVectorStoreCapabilities;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
+    query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
+    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+}
+```
+
+### `RagVectorStoreCapabilities` (interface)
+
+```ts
+interface RagVectorStoreCapabilities {
+    maxDimensions: number | false;
+    maxIdBytes: number | false;
+    maxMetadataBytes: number | false;
+    maxTopK: number;
+    maxTopKWithMetadata: number;
+}
+```
 
 ### `RagVectorUpsertInput` (interface)
 
@@ -244,7 +399,56 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `ScoreRerankerOptions` (interface)
+
+```ts
+interface ScoreRerankerOptions {
+    minScore?: number;
+    score: (query: string, text: string) => Promise<number> | number;
+}
+```
+
+### `SqlLexicalStoreOptions` (interface)
+
+```ts
+interface SqlLexicalStoreOptions {
+    exec: RagSqlExec;
+    table?: string;
+}
+```
+
+### `SqliteVectorStoreOptions` (interface)
+
+```ts
+interface SqliteVectorStoreOptions {
+    exec: RagSqlExec;
+    maxDimensions?: number | false;
+    maxScan?: number;
+    table?: string;
+}
+```
+
 ### `StoredRagChunk` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `TokenChunkerOptions` (interface)
+
+```ts
+interface TokenChunkerOptions {
+    countTokens: (text: string) => number;
+    maxTokens?: number;
+    overlapTokens?: number;
+}
+```
+
+### `VECTORIZE_CAPABILITIES` (const)
+
+```ts
+const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities;
+```
+
+### `batchReranker` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -262,6 +466,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 const defineRag: (config: RagConfig) => ((context: RagContext) => Rag);
 ```
 
+### `defineRagSource` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `fixedWindowChunks` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -274,6 +482,16 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `markdownChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `matchesMetadataFilter` (const)
+
+```ts
+const matchesMetadataFilter: (metadata: Record<string, unknown> | undefined, filter: Record<string, unknown> | undefined) => boolean;
+```
+
 ### `ragSyncTriggers` (const)
 
 ```ts
@@ -283,3 +501,31 @@ const ragSyncTriggers: <Document extends Record<string, unknown> = Record<string
     afterUpdate: RagSyncHandler;
 };
 ```
+
+### `scoreReranker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `sentenceChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `sqlLexicalStore` (const)
+
+```ts
+const sqlLexicalStore: (options: SqlLexicalStoreOptions) => RagLexicalStore;
+```
+
+### `sqliteVectorStore` (const)
+
+```ts
+const sqliteVectorStore: (options: SqliteVectorStoreOptions) => RagVectorStore;
+```
+
+### `tokenChunker` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `vectorizeStore` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._

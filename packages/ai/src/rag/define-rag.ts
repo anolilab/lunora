@@ -1,7 +1,8 @@
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
-import { embed as aiEmbed, jsonSchema, tool } from "ai";
+import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
+import { estimateModelCost } from "../pricing";
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
 import { contentHash } from "./helpers";
@@ -19,23 +20,30 @@ import type {
     RetrieveOptions,
     RetrieveResult,
 } from "./types";
+import type { RagVectorStore } from "./vector-store";
+import { VECTORIZE_CAPABILITIES, vectorizeStore } from "./vector-store";
 
 const DEFAULT_CHUNK_SIZE = 1000;
 
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
 
-/** Vectorize `topK` ceiling when full metadata is requested (metadata mode). */
-const MAX_TOP_K_FULL_METADATA = 20;
-/** Vectorize `topK` ceiling otherwise (text-store mode). */
-const MAX_TOP_K = 100;
+/**
+ * Default candidate-pool multiplier when fusion or reranking is active:
+ * retrieve `topK * 4` per leg, reorder, keep `topK`. Reordering can only work
+ * with what retrieval already found, so a pool no deeper than `topK` gives it
+ * nothing to do.
+ */
+const CANDIDATE_POOL_FACTOR = 4;
 
 /**
- * Vectorize's per-vector metadata ceiling, in bytes. It covers the WHOLE
- * metadata object, not the chunk text alone; a `textStore` moves the text out
- * and lifts the constraint entirely.
+ * Vectorize's per-vector metadata ceiling, in bytes — used only for the
+ * define-time `chunkSize` sanity check, which runs before any context (and so
+ * any store) exists. The check that actually holds reads the bound store's own
+ * `maxMetadataBytes`, and is skipped entirely when a custom `store` is
+ * configured, since its budget is unknown until then.
  */
-const VECTORIZE_METADATA_BYTES = 10 * 1024;
+const VECTORIZE_METADATA_BYTES = VECTORIZE_CAPABILITIES.maxMetadataBytes === false ? Number.POSITIVE_INFINITY : VECTORIZE_CAPABILITIES.maxMetadataBytes;
 
 /**
  * Room held back from {@link VECTORIZE_METADATA_BYTES} for everything in the
@@ -82,10 +90,14 @@ const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_
  * counts. Without this the upsert fails at the far side with nothing naming the
  * cause, which is the failure this whole check exists to replace.
  */
-const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string): void => {
+const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: number, sourceId: string, budget: number | false): void => {
+    if (budget === false) {
+        return;
+    }
+
     const bytes = new TextEncoder().encode(JSON.stringify(metadata)).length;
 
-    if (bytes <= VECTORIZE_METADATA_BYTES) {
+    if (bytes <= budget) {
         return;
     }
 
@@ -97,7 +109,34 @@ const assertMetadataFits = (metadata: Record<string, unknown>, chunkIndex: numbe
 
     throw new LunoraError(
         "BAD_REQUEST",
-        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte per-vector ceiling — ${remedy}`,
+        `@lunora/ai/rag: chunk ${String(chunkIndex)} of "${sourceId}" carries ${String(bytes)} bytes of metadata, over the store's ${String(budget)}-byte per-vector ceiling — ${remedy}`,
+    );
+};
+
+/**
+ * Refuse a chunk id over the store's per-id ceiling, naming what it is made of.
+ *
+ * The sibling of {@link assertMetadataFits}, and reachable the same way: a chunk
+ * id is `${namespace}#${sourceId}#${index}`, and a caller who passes a bucket
+ * key as the source id (which `defineRagSource` does by construction) has an id
+ * whose length they never chose. Vectorize rejects the upsert at the far side
+ * with nothing naming the cause.
+ */
+const assertIdFits = (id: string, sourceId: string, budget: number | false): void => {
+    if (budget === false) {
+        return;
+    }
+
+    const bytes = new TextEncoder().encode(id).length;
+
+    if (bytes <= budget) {
+        return;
+    }
+
+    throw new LunoraError(
+        "BAD_REQUEST",
+        `@lunora/ai/rag: chunk id "${id}" for source "${sourceId}" is ${String(bytes)} bytes, over the store's ${String(budget)}-byte per-vector id ceiling — ` +
+            "shorten the source id (hash long keys before indexing them) or shorten the `namespace`, which is prefixed onto every chunk id",
     );
 };
 
@@ -136,6 +175,9 @@ const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkI
 };
 
 const sha256Hex = async (text: string): Promise<string> => contentHash(new TextEncoder().encode(text));
+
+/** Keep only chunks scoring at or above `minScore`. */
+const aboveScore = (chunks: ReadonlyArray<RetrievedChunk>, minScore: number): RetrievedChunk[] => chunks.filter((chunk) => chunk.score >= minScore);
 
 /** Split stored metadata into the caller's fields (internal `__rag*` keys stripped). */
 const userMetadataOf = (metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
@@ -219,8 +261,9 @@ const resolveEmbeddingModel = (input: RagConfig["embeddingModel"], ai: RagContex
  * ```
  *
  * Pure composition — no new binding, no I/O until a method runs. Chunk text
- * lives in vector metadata by default (`topK` ≤ 20); supply `textStore` to move
- * it into your own storage and lift the ceiling to 100 — see `RagTextStore`.
+ * lives in vector metadata by default (`topK` ≤ 50 on Vectorize); supply
+ * `textStore` to move it into your own storage and lift the ceiling to 100 —
+ * see `RagTextStore`.
  *
  * `ctx.ai` is only needed to resolve a Workers AI `embeddingModel` id. Pass a
  * direct AI SDK `EmbeddingModel` object (`@ai-sdk/openai`, …) and the helper
@@ -282,6 +325,24 @@ const embedCostOf = (providerMetadata: unknown): number | undefined => {
     return undefined;
 };
 
+/**
+ * The bound context's Vectorize facade, or a directed error. `vectors` is
+ * optional on {@link RagContext} because a configured `store` never reads it;
+ * without one it is the store, and its absence is a wiring mistake worth
+ * naming rather than a `cannot read 'query' of undefined` three calls later.
+ */
+const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext["vectors"]> => {
+    if (vectors === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/ai/rag: the bound context has no `vectors` (env.VECTORIZE) and no `store` is configured — " +
+                "bind a context whose `ctx.vectors` is wired, or configure `store` (e.g. `sqliteVectorStore`) to back this index without Vectorize.",
+        );
+    }
+
+    return vectors;
+};
+
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
@@ -310,7 +371,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     // never work.
     const chunkTextBudget = VECTORIZE_METADATA_BYTES - METADATA_OVERHEAD_RESERVE;
 
-    if (!config.chunk && !config.textStore && chunkSize > chunkTextBudget) {
+    if (!config.chunk && !config.textStore && !config.store && chunkSize > chunkTextBudget) {
         throw new LunoraError(
             "BAD_REQUEST",
             `@lunora/ai/rag: \`chunkSize\` of ${String(chunkSize)} leaves no room under Vectorize's ${String(VECTORIZE_METADATA_BYTES)}-byte metadata limit, which also carries this chunk's bookkeeping and any \`metadata\` you attach — keep it under ${String(chunkTextBudget)}, or supply \`textStore\` to move chunk text out of metadata entirely`,
@@ -323,6 +384,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `topK` must be a positive integer");
     }
 
+    if (
+        config.maxEmbeddingDimensions !== undefined &&
+        config.maxEmbeddingDimensions !== false &&
+        (!Number.isInteger(config.maxEmbeddingDimensions) || config.maxEmbeddingDimensions < 1)
+    ) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `maxEmbeddingDimensions` must be a positive integer, or `false` to disable the check");
+    }
+
     if (config.embeddingModelVersion !== undefined && !MODEL_VERSION_PATTERN.test(config.embeddingModelVersion)) {
         throw new LunoraError(
             "BAD_REQUEST",
@@ -330,9 +399,23 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         );
     }
 
+    if (config.candidates !== undefined && (!Number.isInteger(config.candidates) || config.candidates < 1)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `candidates` must be a positive integer");
+    }
+
+    if (config.cacheEmbeddings !== undefined && (!Number.isInteger(config.cacheEmbeddings) || config.cacheEmbeddings < 0)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `cacheEmbeddings` must be a non-negative integer");
+    }
+
+    /**
+     * Cross-call embedding retention. Governs only what SURVIVES a call — the
+     * index-path batch seeds a separate, unbounded, request-scoped map, so
+     * batching never depends on this being set and never evicts what is.
+     */
+    const cacheLimit = config.cacheEmbeddings ?? 0;
+    const reranker = config.rerank;
     const splitter = config.chunk ?? ((text: string): ReadonlyArray<string> => fixedWindowChunks(text, chunkSize, chunkOverlap));
     const { textStore } = config;
-    const topKCeiling = textStore ? MAX_TOP_K : MAX_TOP_K_FULL_METADATA;
 
     // The embedding-model version tag partitions the vector space by folding into
     // the *effective* namespace: `withModelTag` maps the caller's (tenant)
@@ -349,6 +432,18 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     };
 
     return (context: RagContext): Rag => {
+        // The store is what decides the limits from here on. Absent a custom
+        // one this wraps `ctx.vectors` and declares exactly the Vectorize
+        // constants the retrieval code used to hard-code, so the default path
+        // is unchanged.
+        const store: RagVectorStore = config.store ? config.store(context) : vectorizeStore(requireVectors(context.vectors), config.index);
+        const topKCeiling = textStore ? store.capabilities.maxTopK : store.capabilities.maxTopKWithMetadata;
+
+        // An explicit `maxEmbeddingDimensions` always wins; otherwise the store
+        // speaks for itself. That is what lets a pgvector store accept a
+        // 3072-dimension model without the caller opting out of a Vectorize
+        // ceiling it never had.
+        const maxDimensions = config.maxEmbeddingDimensions ?? store.capabilities.maxDimensions;
         // Resolved once per bound ctx, lazily — so a misconfigured model only
         // throws when a RAG method actually runs, and index/retrieve can never
         // drift onto different models within one request.
@@ -359,7 +454,86 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         // embeds run untraced. Narrowed from `unknown` — see `RagContext.trace`.
         const tracer = typeof context.trace === "function" ? (context.trace as EmbedTracer) : undefined;
 
+        // The dimension check runs on the FIRST embedding this bound context
+        // produces, then never again: a model's dimensionality is fixed, so
+        // re-measuring every chunk of a 500-chunk document is pure overhead.
+        let dimensionsChecked = maxDimensions === false;
+
+        /**
+         * Refuse an embedding wider than the store can hold, naming both
+         * escapes. Runs against the vector actually produced rather than a
+         * declared dimension count — the model id alone does not reveal it, and
+         * a provider's Matryoshka `dimensions` option changes it.
+         */
+        const assertDimensionsFit = (dimensions: number, embeddingModel: EmbeddingModel): void => {
+            if (dimensionsChecked) {
+                return;
+            }
+
+            dimensionsChecked = true;
+
+            if (maxDimensions === false || dimensions <= maxDimensions) {
+                return;
+            }
+
+            const named = modelIdOf(embeddingModel);
+
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/ai/rag: embedding model${named === undefined ? "" : ` "${named}"`} produces ${String(dimensions)}-dimension vectors, over the ${String(maxDimensions)}-dimension ceiling of index "${config.index}" — ` +
+                    "either truncate them with the provider's `dimensions` option (Matryoshka models such as text-embedding-3-large support this), " +
+                    "or set `maxEmbeddingDimensions: false` if this index is not Vectorize-backed",
+            );
+        };
+
+        /**
+         * Cross-call query cache (`cacheEmbeddings`), keyed by text. Matters
+         * because `retrieve()` re-embeds the same question every time it is
+         * asked. Bounded by {@link cacheLimit}, and empty when that is 0.
+         *
+         * Safe to share: an embedding is a pure function of (model, text), and a
+         * hit requires already holding the exact text, so nothing leaks that the
+         * caller did not supply. Scoped to the bound context — never module
+         * level — so it cannot outlive the request that built it.
+         */
+        const embedCache = new Map<string, ReadonlyArray<number>>();
+
+        /**
+         * Embeddings produced by the in-flight `index()` batch. Deliberately
+         * UNBOUNDED and separate from {@link embedCache}: the batch seeds one
+         * entry per chunk of the document being indexed, and the per-chunk
+         * `embed` callbacks `store.upsert` invokes must all hit it — otherwise
+         * every chunk is embedded a second time and the batch is pure cost.
+         * Cleared when `index()` returns, so it never grows past one document.
+         */
+        const batchEmbeddings = new Map<string, ReadonlyArray<number>>();
+
+        /** Evict oldest-first once the cache passes its bound (insertion-ordered Map). */
+        const rememberEmbedding = (text: string, embedding: ReadonlyArray<number>): void => {
+            if (cacheLimit === 0) {
+                return;
+            }
+
+            embedCache.set(text, embedding);
+
+            while (embedCache.size > cacheLimit) {
+                const oldest = embedCache.keys().next();
+
+                if (oldest.done === true) {
+                    break;
+                }
+
+                embedCache.delete(oldest.value);
+            }
+        };
+
         const embedText = async (text: string): Promise<ReadonlyArray<number>> => {
+            const cached = embedCache.get(text) ?? batchEmbeddings.get(text);
+
+            if (cached !== undefined) {
+                return cached;
+            }
+
             // Resolve once and bind to a local `const`, so the nested `run` closure
             // sees a non-nullable model without a cast.
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
@@ -371,6 +545,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             const run = async (span?: EmbedSpan): Promise<ReadonlyArray<number>> => {
                 const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
 
+                assertDimensionsFit(embedding.length, resolvedModel);
+
                 if (span !== undefined) {
                     // `usage.tokens` is typed non-optional by the AI SDK; the
                     // typeof/finite guard stays defensive against a provider that
@@ -381,12 +557,25 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                         span.setAttribute("gen_ai.usage.input_tokens", inputTokens);
                     }
 
-                    const cost = embedCostOf(providerMetadata);
+                    // A provider-reported cost always wins. Falling back to an
+                    // estimate is what keeps spend visible without an AI
+                    // Gateway — but the two are never conflated: the source is
+                    // stamped alongside, so a dashboard can tell a measured
+                    // cost from a derived one.
+                    const reported = embedCostOf(providerMetadata);
+                    const cost =
+                        reported ??
+                        estimateModelCost(modelIdOf(resolvedModel), {
+                            inputTokens: typeof inputTokens === "number" ? inputTokens : undefined,
+                        });
 
                     if (cost !== undefined) {
                         span.setAttribute("gen_ai.usage.cost", cost);
+                        span.setAttribute("lunora.usage.cost.source", reported === undefined ? "estimated" : "provider");
                     }
                 }
+
+                rememberEmbedding(text, embedding);
 
                 return embedding;
             };
@@ -404,6 +593,73 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 // Session/thread grouping — absent unless a conversation id was set.
                 ...(conversationId === undefined ? {} : { "gen_ai.conversation.id": conversationId }),
             });
+        };
+
+        /**
+         * Resolve the queries a retrieval actually searches for: the caller's,
+         * or whatever {@link RagConfig.transformQuery} rewrote it into.
+         *
+         * Always returns at least one non-empty query — a transform that
+         * returns nothing usable (an empty array, blank strings, a rejected
+         * promise is the caller's problem) falls back to the original rather
+         * than searching for `""`, which matches everything and nothing.
+         */
+        const resolveQueries = async (query: string, options: RetrieveOptions | undefined, namespace: string | undefined): Promise<string[]> => {
+            if (!config.transformQuery || options?.transformQuery === false) {
+                return [query];
+            }
+
+            const conversationId = typeof context.conversationId === "string" && context.conversationId.length > 0 ? context.conversationId : undefined;
+            const transformed = await config.transformQuery(query, { conversationId, namespace });
+            const candidates = (typeof transformed === "string" ? [transformed] : [...transformed])
+                .map((entry) => entry.trim())
+                .filter((entry) => entry.length > 0);
+
+            return candidates.length > 0 ? candidates : [query];
+        };
+
+        /**
+         * Embed `texts` in one batched call and seed {@link batchEmbeddings}, so
+         * the per-chunk `embed` callbacks that follow resolve without further
+         * I/O.
+         *
+         * Best-effort: a provider that rejects the batch (or an AI SDK build
+         * without `embedMany`) leaves the map empty and every chunk falls back
+         * to its own single embed — the pre-existing path. A batching
+         * optimisation must never be the reason indexing fails.
+         */
+        const prefillEmbeddings = async (texts: ReadonlyArray<string>): Promise<void> => {
+            const pending = [...new Set(texts.filter((text) => !embedCache.has(text) && !batchEmbeddings.has(text)))];
+
+            if (pending.length < 2) {
+                return;
+            }
+
+            model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
+
+            try {
+                const { embeddings } = await aiEmbedMany({ model, values: pending });
+
+                if (embeddings.length !== pending.length) {
+                    return;
+                }
+
+                const [first] = embeddings;
+
+                if (first !== undefined) {
+                    assertDimensionsFit(first.length, model);
+                }
+
+                for (const [position, text] of pending.entries()) {
+                    batchEmbeddings.set(text, embeddings[position] as ReadonlyArray<number>);
+                }
+            } catch (error) {
+                // A dimension breach is a real configuration error and must
+                // surface, not be swallowed as a failed optimisation.
+                if (isLunoraError(error)) {
+                    throw error;
+                }
+            }
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
@@ -425,7 +681,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
         /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
         const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
-            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(namespace, sourceId, 0)], namespace);
+            const [head] = await store.getByIds([chunkVectorId(namespace, sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];
             const chunks = head?.metadata?.[COUNT_KEY];
 
@@ -442,7 +698,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return;
             }
 
-            await context.vectors.deleteByIds(config.index, ids, namespace);
+            await store.deleteByIds(ids, namespace);
             await textStore?.remove?.(ids, { namespace });
             await config.lexicalStore?.remove?.(ids, { namespace });
         };
@@ -462,7 +718,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // and every write. (Vectorize applies mutations asynchronously, so
             // a hash written moments ago may not be visible yet — the worst
             // case is a redundant, idempotent re-index.)
-            if (previous.hash === hash && previous.chunks !== undefined) {
+            if (input.reindex !== true && previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
                     ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex)),
@@ -472,6 +728,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const pieces = splitter(input.text);
             const ids = pieces.map((_, chunkIndex) => chunkVectorId(effectiveNamespace, input.id, chunkIndex));
+            const longestId = ids.at(-1);
+
+            // Every id of a source shares its prefix and differs only in the
+            // chunk-index suffix, so the last one is the longest — checking it
+            // covers them all, before anything is embedded or written.
+            if (longestId !== undefined) {
+                assertIdFits(longestId, input.id, store.capabilities.maxIdBytes);
+            }
 
             if (pieces.length === 0 && input.allowEmptySources === false) {
                 throw new LunoraError("BAD_REQUEST", `@lunora/ai/rag: source "${input.id}" produced zero chunks — set allowEmptySources: true to allow this`);
@@ -482,8 +746,18 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // orphaned text after a failed upsert — is harmless and converges
             // on the (idempotent) retry.
             if (pieces.length > 0) {
+                // `metadata` rides along so a filter-aware lexical store can
+                // evaluate the same predicate the vector leg gets — see
+                // `StoredRagChunk.metadata`. Undefined when the source carried
+                // none, so a store that ignores it is unaffected.
                 const storedChunks = pieces.map((text, chunkIndex) => {
-                    return { chunkIndex, id: ids[chunkIndex] as string, sourceId: input.id, text };
+                    return {
+                        chunkIndex,
+                        id: ids[chunkIndex] as string,
+                        sourceId: input.id,
+                        text,
+                        ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+                    };
                 });
 
                 if (textStore) {
@@ -497,48 +771,62 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 }
             }
 
-            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
-                const id = ids[chunkIndex] as string;
-                const metadata: Record<string, unknown> = {
-                    ...input.metadata,
-                    [CHUNK_INDEX_KEY]: chunkIndex,
-                    [SOURCE_KEY]: input.id,
-                };
+            // One `embedMany` for the whole document instead of N single embeds:
+            // `ctx.vectors.upsert` invokes `embed` per chunk, and those calls now
+            // hit the pre-filled batch map. A provider without a real batch
+            // endpoint still fans out internally, so this is never worse — and
+            // with one it collapses a 200-chunk document from 200 round-trips to
+            // a handful.
+            await prefillEmbeddings(pieces);
 
-                if (!textStore) {
-                    metadata[TEXT_KEY] = piece;
-                }
+            try {
+                await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+                    const id = ids[chunkIndex] as string;
+                    const metadata: Record<string, unknown> = {
+                        ...input.metadata,
+                        [CHUNK_INDEX_KEY]: chunkIndex,
+                        [SOURCE_KEY]: input.id,
+                    };
 
-                if (input.importance !== undefined) {
-                    metadata[IMPORTANCE_KEY] = input.importance;
-                }
-
-                // Chunk #0 carries the source's bookkeeping so re-index and
-                // remove() need no external record of the previous state.
-                if (chunkIndex === 0) {
-                    metadata[HASH_KEY] = hash;
-                    metadata[COUNT_KEY] = pieces.length;
-
-                    if (modelTag !== undefined) {
-                        metadata[MODEL_KEY] = modelTag;
+                    if (!textStore) {
+                        metadata[TEXT_KEY] = piece;
                     }
-                }
 
-                assertMetadataFits(metadata, chunkIndex, input.id);
+                    if (input.importance !== undefined) {
+                        metadata[IMPORTANCE_KEY] = input.importance;
+                    }
 
-                // Vector upsert
-                await context.vectors.upsert(config.index, {
-                    embed: embedText,
-                    id,
-                    input: piece,
-                    metadata,
-                    namespace: effectiveNamespace,
+                    // Chunk #0 carries the source's bookkeeping so re-index and
+                    // remove() need no external record of the previous state.
+                    if (chunkIndex === 0) {
+                        metadata[HASH_KEY] = hash;
+                        metadata[COUNT_KEY] = pieces.length;
+
+                        if (modelTag !== undefined) {
+                            metadata[MODEL_KEY] = modelTag;
+                        }
+                    }
+
+                    assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
+
+                    // Vector upsert
+                    await store.upsert({
+                        embed: embedText,
+                        id,
+                        input: piece,
+                        metadata,
+                        namespace: effectiveNamespace,
+                    });
+
+                    // Progress callback — fires after the upsert so callers see a
+                    // consistent state when the callback runs.
+                    input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
                 });
-
-                // Progress callback — fires after the upsert so callers see a
-                // consistent state when the callback runs.
-                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
-            });
+            } finally {
+                // Request-scoped by construction: one document's worth of
+                // embeddings, released the moment its upserts are done.
+                batchEmbeddings.clear();
+            }
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,
@@ -587,7 +875,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return texts;
             }
 
-            const records = await context.vectors.getByIds(config.index, ids, namespace);
+            const records = await store.getByIds(ids, namespace);
 
             for (const record of records) {
                 const text = record.metadata?.[TEXT_KEY];
@@ -713,7 +1001,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const ids = chunks.map((chunk) => chunk.id);
-            const [texts, records] = await Promise.all([textsByIds(ids, namespace), context.vectors.getByIds(config.index, ids, namespace)]);
+            const [texts, records] = await Promise.all([textsByIds(ids, namespace), store.getByIds(ids, namespace)]);
             const fullMetadataById = new Map(records.map((record) => [record.id, record.metadata]));
 
             return chunks.flatMap((chunk) => {
@@ -755,35 +1043,58 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             const effectiveFilter = rlsFilter ? { ...resolvedFilter, ...rlsFilter } : resolvedFilter;
             const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
 
-            // Vector query (primary, semantic leg)
-            const vectorResult = await context.vectors.query(config.index, {
-                embed: embedText,
-                filter: effectiveFilter,
-                input: query,
-                namespace: effectiveNamespace,
-                returnMetadata: textStore ? "indexed" : "all",
-                topK,
-            });
+            // Query transformation: rewrite the raw query, or expand it into
+            // several that are searched independently and fused. The FIRST
+            // query is the canonical one — it drives the lexical leg and is
+            // what `onRetrieve` reports.
+            const searchQueries = await resolveQueries(query, options, effectiveNamespace);
+            const primaryQuery = searchQueries[0] as string;
 
-            let chunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
+            // Anything that reorders downstream — a lexical leg, multi-query
+            // expansion, a reranker — can only work with what retrieval found,
+            // so each leg fetches a deeper pool than the caller's `topK` and the
+            // trim happens after. Fetching only `topK` per leg would defeat the
+            // lexical leg entirely: its job is to surface a chunk the vector leg
+            // ranked below `topK`.
+            const rerankActive = reranker !== undefined && options?.rerank !== false;
+            const widenPool = rerankActive || config.lexicalStore !== undefined || searchQueries.length > 1;
+            const candidateK = widenPool ? Math.min(config.candidates ?? topK * CANDIDATE_POOL_FACTOR, topKCeiling) : topK;
 
             const minScore = options?.minScore;
 
-            // Apply `minScore` to the vector leg here, before any hybrid
-            // fusion — its score is the cosine (importance-adjusted) scale the
-            // option is documented against. When a lexical (BM25) leg is also
-            // configured, this is the ONLY place `minScore` is applied: after
-            // fusion the chunk set mixes this cosine-scale score with the
-            // lexical leg's raw, unbounded BM25 score for lexical-only hits
-            // (scores that, per `hybridRank`'s own docs, "are not comparable
-            // across different search methods"), so filtering that mixed set
-            // against one cosine-scale threshold would arbitrarily keep/drop
-            // chunks depending on which leg happened to surface them. Non-
-            // hybrid retrieval is unaffected: it never reaches the fusion
-            // branch below, and filtering here selects the exact same set as
-            // filtering after the later re-sort would.
-            if (minScore !== undefined) {
-                chunks = chunks.filter((chunk) => chunk.score >= minScore);
+            const runVectorLeg = async (searchQuery: string): Promise<RetrievedChunk[]> => {
+                const vectorResult = await store.query({
+                    embed: embedText,
+                    filter: effectiveFilter,
+                    input: searchQuery,
+                    namespace: effectiveNamespace,
+                    returnMetadata: textStore ? "indexed" : "all",
+                    topK: candidateK,
+                });
+
+                const legChunks = await hydrateFromStore(parseMatches(vectorResult, effectiveNamespace), effectiveNamespace);
+
+                // `minScore` is applied HERE, per leg, and nowhere else: this is
+                // the only point where a chunk's score is still the cosine
+                // (importance-adjusted) scale the option is documented against.
+                // Every fusion below — multi-query or lexical — replaces `score`
+                // with an RRF score, and thresholding an RRF score against a
+                // cosine-scale number would keep or drop chunks essentially at
+                // random. Filtering each leg before fusion is also the stricter
+                // reading: a chunk too weak to pass on its own does not get in
+                // by being surfaced twice.
+                return minScore === undefined ? legChunks : aboveScore(legChunks, minScore);
+            };
+
+            // Multi-query expansion: each rewrite is its own ranking, fused by
+            // RRF. Sequential rather than concurrent on purpose — each leg
+            // embeds and queries, and a Worker's subrequest budget is the
+            // binding constraint on a fan-out the caller controls the width of.
+            let chunks = await runVectorLeg(primaryQuery);
+
+            for (const extraQuery of searchQueries.slice(1)) {
+                // eslint-disable-next-line no-await-in-loop -- bounded, caller-sized fan-out over a subrequest budget
+                chunks = [...hybridRank(chunks, await runVectorLeg(extraQuery))];
             }
 
             // Hybrid search: also rank via the lexical (BM25) leg and fuse the
@@ -791,10 +1102,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // misses. Lexical-only hits carry no stored metadata/importance; a hit
             // shared with the vector leg keeps the (richer) vector chunk in RRF.
             if (config.lexicalStore) {
-                const lexicalMatches = await config.lexicalStore.search(query, {
+                const lexicalMatches = await config.lexicalStore.search(primaryQuery, {
                     filter: effectiveFilter,
                     namespace: effectiveNamespace,
-                    topK: config.lexicalTopK ?? topK,
+                    topK: config.lexicalTopK ?? candidateK,
                 });
 
                 const lexicalChunks: RetrievedChunk[] = lexicalMatches.map((match) => {
@@ -816,6 +1127,19 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             // Importance weighting can reorder; re-rank on the adjusted score.
             chunks.sort((a, b) => b.score - a.score);
+
+            // Reranking sees the full candidate pool and returns the final
+            // order — so it runs after fusion, and its output is NOT re-sorted.
+            if (rerankActive) {
+                chunks = [...(await reranker(primaryQuery, chunks))];
+            }
+
+            // Trim to what the caller actually asked for. Each retrieval leg is
+            // bounded by `candidateK`, but fusion returns their UNION — so a
+            // hybrid or multi-query retrieval reaches here with more chunks than
+            // `topK`, and without this a caller asking for 5 gets the whole
+            // union, blowing out the prompt context that `topK` exists to bound.
+            chunks = chunks.slice(0, topK);
 
             chunks = [...(await expandChunks(chunks, options, effectiveNamespace))];
 
