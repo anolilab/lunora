@@ -38,7 +38,6 @@ async def main() -> None:
         url=url,
         auth_token=os.environ.get("LUNORA_TOKEN"),
         ws_token=ws_token_provider,
-        client_id="python-example",
     )
 
     # --- HTTP RPC round-trips ------------------------------------------------

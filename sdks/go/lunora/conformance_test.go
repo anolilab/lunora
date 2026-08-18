@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,25 @@ func loadFixture(t *testing.T, name string) map[string]any {
 	}
 
 	return parsed
+}
+
+// fixtureScenario is one named scenario from a section of offline-optimistic.json.
+// The `optimistic` and `offlineQueue` blocks are read identically, so they share
+// one loader rather than two that drift.
+func fixtureScenario(t *testing.T, section string, name string) map[string]any {
+	t.Helper()
+
+	block, ok := loadFixture(t, "offline-optimistic.json")[section].(map[string]any)
+	if !ok {
+		t.Fatalf("offline-optimistic.json has no %s block", section)
+	}
+
+	scenario, ok := block[name].(map[string]any)
+	if !ok {
+		t.Fatalf("offline-optimistic.json has no %s scenario %q", section, name)
+	}
+
+	return scenario
 }
 
 // canonical re-marshals a decoded tree so two structures can be compared as
@@ -174,6 +194,41 @@ func TestRPCRequestBodies(t *testing.T) {
 	}
 }
 
+// TestEmptyShardKeyNeverReachesTheWire pins the one place "" and absent must NOT
+// be merged.
+//
+// This package spells the default shard "", and merges it with an absent key
+// everywhere it MATCHES one — the queue's drain predicate, the subscription
+// lookup. The runtime does not: an empty string there is a real named shard
+// (packages/runtime/src/create-worker.ts:1945-1947 says so). So sending it splits
+// the two views, and the write replays against a different Durable Object than
+// the subscription it just updated.
+func TestEmptyShardKeyNeverReachesTheWire(t *testing.T) {
+	var sent map[string]any
+
+	client := NewClient("https://app.example", func(_ string, _ map[string]string, body []byte) (int, []byte, error) {
+		if err := json.Unmarshal(body, &sent); err != nil {
+			return 0, nil, err
+		}
+
+		return 200, []byte(`{"result":null}`), nil
+	})
+
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	if _, err := client.Submit(SubmitOptions{Args: map[string]any{}, FunctionPath: "messages:send"}); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if _, present := sent["shardKey"]; present {
+		t.Errorf("body carries shardKey %#v, want the key absent for the default shard", sent["shardKey"])
+	}
+
+	if url := client.WSURL("", ""); strings.Contains(url, "shard=") {
+		t.Errorf("socket URL %q carries a shard parameter, want none for the default shard", url)
+	}
+}
+
 func TestRPCResponses(t *testing.T) {
 	covers("rpc_responses")
 
@@ -274,6 +329,53 @@ func TestClientFrameBuilders(t *testing.T) {
 
 	assertFrame(t, resume, "subscribe-resume")
 	assertFrame(t, BuildUnsubscribeFrame("sub_1"), "unsubscribe")
+}
+
+// TestSubscriptionStreamYieldsFrameValuesInOrder pins the channel form of a live
+// query: same subscription, same decode, same order as the callback form.
+func TestSubscriptionStreamYieldsFrameValuesInOrder(t *testing.T) {
+	covers("subscription_stream_yields_frame_values_in_order")
+
+	streamCase, ok := loadFixture(t, "ws-frames.json")["stream"].(map[string]any)
+	if !ok {
+		t.Fatal("ws-frames.json has no stream block")
+	}
+
+	frames, _ := streamCase["frames"].([]any)
+	client := NewClient("https://app.example", nil)
+
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	events, unsubscribe := client.Stream("messages:list", map[string]any{"channel": "general"}, "")
+
+	defer unsubscribe()
+
+	var seen []any
+
+	for _, raw := range frames {
+		frame, err := json.Marshal(raw)
+		if err != nil {
+			t.Fatalf("marshal frame: %v", err)
+		}
+
+		if _, err := client.HandleFrame(frame); err != nil {
+			t.Fatalf("handle frame: %v", err)
+		}
+
+		event := <-events
+
+		if event.Err != nil {
+			t.Fatalf("stream error: %v", event.Err)
+		}
+
+		seen = append(seen, event.Value)
+	}
+
+	want, _ := streamCase["yielded"].([]any)
+
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("streamed values: got %v, want %v", seen, want)
+	}
 }
 
 func TestServerFrameConsumer(t *testing.T) {

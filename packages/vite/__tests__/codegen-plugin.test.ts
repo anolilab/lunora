@@ -655,6 +655,127 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // We just need to confirm the build doesn't crash and logs the error.
             expect(errors.some((message) => message.includes("codegen failed"))).toBe(true);
         });
+
+        it("missing schema.ts at buildStart warns but does not call overlay.onError (uninitialised project)", async () => {
+            expect.assertions(2);
+
+            // No `lunora/` dir at all — the normal state before `lunora init` has
+            // run, or a non-Lunora project. A dev server + overlay ARE wired here
+            // (unlike the "build mode" test above) specifically to prove that
+            // `buildStart` never routes through them regardless — see the
+            // overlay-presence guard in `runCodegenSafely`.
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const warnings: string[] = [];
+            // eslint-disable-next-line no-console -- capturing to assert the warn fires
+            const originalWarn = console.warn;
+
+            // eslint-disable-next-line no-console
+            console.warn = (message: string) => warnings.push(message);
+
+            try {
+                await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+            } finally {
+                // eslint-disable-next-line no-console
+                console.warn = originalWarn;
+            }
+
+            expect(warnings.some((message) => message.includes("schema.ts not found"))).toBe(true);
+            expect(send).not.toHaveBeenCalled();
+        });
+
+        it("schema.ts deleted mid watch session → overlay.onError fires with the schema path in the message", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            // Mirrors a real session: schema.ts existed when the dev server started.
+            await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+
+            send.mockClear();
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            // The "unlink"-registered listener — matches how a real chokidar
+            // deletion reaches the plugin (see the tsconfig-deletion test below).
+            const unlinkListener = onChangeCalls.find((args) => args[0] === "unlink")?.[1] as ((file: string) => void) | undefined;
+
+            rmSync(schemaPath);
+            unlinkListener!(schemaPath);
+
+            await vi.runAllTimersAsync();
+
+            expect(send).toHaveBeenCalledTimes(1);
+
+            const payload = send.mock.calls[0]?.[0] as { err: { message: string }; type: string };
+
+            expect(payload.err.message).toContain(schemaPath);
+        });
+
+        it("schema.ts restored after a mid-session deletion → overlay clears and codegen resumes", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const unlinkListener = onChangeCalls.find((args) => args[0] === "unlink")?.[1] as ((file: string) => void) | undefined;
+
+            send.mockClear();
+            clientSend.mockClear();
+
+            // Delete schema.ts — overlay.onError fires.
+            rmSync(schemaPath);
+            unlinkListener!(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(send).toHaveBeenCalledTimes(1);
+
+            // Restore it — the next watcher event runs codegen successfully again,
+            // and because an overlay was showing, the client is reloaded once to
+            // clear it (same recovery path as any other codegen failure).
+            writeFileSync(schemaPath, SCHEMA_SOURCE, "utf8");
+            changeListener!(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(clientSend.mock.calls[0]?.[0]).toMatchObject({ type: "full-reload" });
+        });
+
+        it("ordinary schema-dir edit with schema.ts present never calls overlay.onError", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(send.mock.calls.some((call) => (call[0] as { type?: string }).type === "error")).toBe(false);
+        });
     });
 
     describe("config-drift auto-restart (configureServer)", () => {

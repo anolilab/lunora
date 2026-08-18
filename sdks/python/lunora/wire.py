@@ -20,6 +20,7 @@ See ``protocol/README.md`` §2 for the normative grammar.
 from __future__ import annotations
 
 import base64
+import binascii
 import math
 from dataclasses import dataclass, field
 from typing import Any
@@ -118,7 +119,10 @@ def _b64encode(data: bytes) -> str:
 
 
 def _b64decode(text: str) -> bytes:
-    return base64.b64decode(text)
+    try:
+        return base64.b64decode(text, validate=True)
+    except binascii.Error as error:
+        raise ValueError(f"wire-codec: invalid base64 in bytes tag: {error}") from error
 
 
 def encode_wire(value: Any, depth: int = 0) -> Any:

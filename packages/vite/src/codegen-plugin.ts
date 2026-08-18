@@ -161,6 +161,33 @@ const buildBlockingMessage = (result: Pick<CodegenResult, "advisories" | "platfo
 };
 
 /**
+ * Report a missing `schema.ts`, and — only on a watch-triggered run — escalate
+ * it to the overlay. Extracted to keep {@link runCodegenSafely}'s cognitive
+ * complexity within the repo's lint budget — no other behavior change from
+ * inlining it.
+ *
+ * `overlay` is only ever passed on a watch-triggered run (the debounced
+ * `onChange` callback in `configureServer`) — `buildStart` always calls
+ * {@link runCodegenSafely} with `overlay` omitted, for both `vite build` and
+ * `vite dev`. So its presence here IS the "just lost one" signal: at
+ * `buildStart` a missing schema.ts is the normal state of an uninitialised
+ * project (no `lunora init` yet, or a non-Lunora project) and must stay
+ * silent beyond the warning. During a watch session it means schema.ts
+ * disappeared out from under previously-generated output — `_generated/*`
+ * now references a file that no longer exists — so surface it the same way
+ * every other codegen failure in this function reaches the overlay.
+ */
+const reportMissingSchema = (schemaPath: string, logger: { warn: (message: string) => void }, overlay: OverlayCallbacks | undefined): void => {
+    logger.warn(`${LUNORA_TAG} schema.ts not found at ${schemaPath} — codegen skipped`);
+
+    if (overlay !== undefined) {
+        const message = `schema.ts not found at ${schemaPath} — generated output is now stale`;
+
+        overlay.onError(new Error(message), message);
+    }
+};
+
+/**
  * Run codegen, returning the absolute directory codegen actually wrote to
  * (so callers can invalidate the *real* output, not an independently-guessed
  * path) and — when any advisory/platform diagnostic is ERROR-level — an
@@ -178,7 +205,7 @@ const runCodegenSafely = (
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        logger.warn(`${LUNORA_TAG} schema.ts not found at ${schemaPath} — codegen skipped`);
+        reportMissingSchema(schemaPath, logger, overlay);
 
         return {};
     }

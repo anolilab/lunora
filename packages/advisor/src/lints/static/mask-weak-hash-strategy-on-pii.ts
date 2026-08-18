@@ -1,19 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-
-/**
- * PII-shaped column-name fragments, tested against the column name with all
- * non-alphanumeric characters stripped and lowercased — so `email`, `email_address`,
- * `emailAddress`, `date_of_birth`, and `dateOfBirth` all normalize to a form this
- * matches. Deliberately conservative (substring, not a full NLP classifier):
- * false negatives (an unusual PII column name that slips through) are
- * preferable to false positives on an unrelated column.
- */
-const PII_COLUMN_RE =
-    /address|birthdate|creditcard|dateofbirth|dob|driverslicense|email|firstname|fullname|lastname|nationalid|passport|phone|socialsecurity|ssn|taxid/u;
-
-/** `true` when `column`, normalized (non-alphanumeric stripped, lowercased), matches {@link PII_COLUMN_RE}. */
-const isPiiColumn = (column: string): boolean => PII_COLUMN_RE.test(column.replaceAll(/[^a-z0-9]/giu, "").toLowerCase());
+import { isPiiColumn } from "../helpers";
 
 /**
  * Flags a `mask(policies)` column whose strategy is the literal `"hash"` and

@@ -86,7 +86,22 @@ const POOL_PREFIX = "pool:";
 // Mirrors the alarm path's existing `limit: 100` bound (:417-420 below) so the
 // whole file has one bounded-page convention.
 const DEFAULT_LIST_LIMIT = 100;
+
+/**
+ * Retries allowed after the original attempt before {@link SchedulerDO.recordRetry}
+ * parks a record in the dead-letter (`dead:`) prefix. Overridable per job via
+ * {@link RetryPolicy.maxAttempts}. Exported so test doubles of the scheduler
+ * (`@lunora/testing`'s fake scheduler) model the same budget instead of
+ * duplicating the number.
+ */
 const MAX_RETRY_ATTEMPTS = 5;
+
+/**
+ * Backoff before the first retry, in milliseconds; doubles on each subsequent
+ * retry under the default `"exponential"` backoff (`baseMs * 2 ** (attempts - 1)`).
+ * Overridable per job via {@link RetryPolicy.baseMs}. Exported alongside
+ * {@link MAX_RETRY_ATTEMPTS} for the same reason.
+ */
 const RETRY_BASE_DELAY_MS = 30_000;
 // When a pooled job can't run because its pool is at `maxConcurrency`, it is
 // re-armed this far in the future so a later alarm drains it as slots free.
@@ -1289,5 +1304,5 @@ class SchedulerDO {
     }
 }
 
-export { SchedulerDO };
+export { MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY_MS, SchedulerDO };
 export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStatus };

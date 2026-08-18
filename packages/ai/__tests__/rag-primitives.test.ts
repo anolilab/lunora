@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { defineRag, fixedWindowChunks, hybridRank } from "../src/rag";
-import { concurrentMap } from "../src/rag/concurrent";
+import { concurrentForEach, concurrentMap } from "../src/rag/concurrent";
 import type { RagContext, RagVectors, RagVectorUpsertInput, RetrievedChunk } from "../src/rag/types";
 
 // The defineRag wiring test embeds through the AI SDK — stub `embed` with a
@@ -193,6 +193,153 @@ describe(concurrentMap, () => {
     });
 });
 
+describe(concurrentForEach, () => {
+    it("never exceeds the concurrency limit", async () => {
+        expect.assertions(1);
+
+        let inFlight = 0;
+        let peak = 0;
+
+        await concurrentForEach(
+            Array.from({ length: 12 }, (_, index) => index),
+            3,
+            async () => {
+                inFlight += 1;
+                peak = Math.max(peak, inFlight);
+
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 5);
+                });
+
+                inFlight -= 1;
+            },
+        );
+
+        expect(peak).toBe(3);
+    });
+
+    it("pulls from a generator only as capacity frees", async () => {
+        expect.assertions(2);
+
+        const seen: number[] = [];
+        let pulled = 0;
+        let widestGap = 0;
+
+        const listing = function* (): Generator<number> {
+            for (let index = 0; index < 10; index += 1) {
+                pulled += 1;
+                widestGap = Math.max(widestGap, pulled - seen.length);
+
+                yield index;
+            }
+        };
+
+        await concurrentForEach(listing(), 2, async (item) => {
+            await Promise.resolve();
+
+            seen.push(item);
+        });
+
+        // Draining the iterable up front would open the gap to all 10 — the
+        // whole point is that a large source is never materialised.
+        expect(widestGap).toBeLessThanOrEqual(2);
+        expect(seen).toHaveLength(10);
+    });
+
+    it("serializes next() so overlapping pulls never reach the iterator", async () => {
+        expect.assertions(1);
+
+        let inNext = 0;
+        let overlapped = false;
+
+        // A generator throws "already running" on a re-entrant `next()`, but
+        // only for a SYNCHRONOUS overlap. This records any overlap at all,
+        // which is what 8 workers pulling as they free up would produce.
+        const listing = {
+            [Symbol.asyncIterator]: (): AsyncIterator<number> => {
+                let index = 0;
+
+                return {
+                    next: async (): Promise<IteratorResult<number>> => {
+                        inNext += 1;
+                        overlapped ||= inNext > 1;
+
+                        await new Promise((resolve) => {
+                            setTimeout(resolve, 1);
+                        });
+
+                        inNext -= 1;
+                        index += 1;
+
+                        return index > 12 ? { done: true, value: undefined } : { done: false, value: index };
+                    },
+                };
+            },
+        };
+
+        await concurrentForEach(listing, 8, async () => {
+            await Promise.resolve();
+        });
+
+        expect(overlapped).toBe(false);
+    });
+
+    it("stops pulling new items after the first rejection, but lets in-flight calls settle", async () => {
+        expect.assertions(4);
+
+        const started: number[] = [];
+        const processed: number[] = [];
+        let closed = false;
+
+        const listing = async function* (): AsyncGenerator<number> {
+            try {
+                for (let index = 0; index < 6; index += 1) {
+                    yield index;
+                }
+            } finally {
+                closed = true;
+            }
+        };
+
+        const run = concurrentForEach(listing(), 2, async (item) => {
+            started.push(item);
+
+            if (item === 0) {
+                // Fail only once the sibling worker has pulled and started item
+                // 1, so this asserts that in-flight work is quiesced rather
+                // than which pull happened to win the race.
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 1);
+                });
+
+                throw new Error("boom");
+            }
+
+            await new Promise((resolve) => {
+                setTimeout(resolve, 10);
+            });
+
+            processed.push(item);
+        });
+
+        await expect(run).rejects.toThrow("boom");
+
+        // Same contract as `concurrentMap`: item 1 was already in flight when
+        // item 0 rejected, so it settles rather than being cancelled, and
+        // nothing after them starts. `return()` on the way out is what lets a
+        // generator source run its `finally` and release what it holds.
+        expect(started.toSorted((a, b) => a - b)).toStrictEqual([0, 1]);
+        expect(processed).toStrictEqual([1]);
+        expect(closed).toBe(true);
+    });
+
+    it("rejects an invalid limit", async () => {
+        expect.assertions(2);
+        await expect(concurrentForEach([1], 0, async () => {})).rejects.toThrow(RangeError);
+        await expect(concurrentForEach([1], 1.5, async () => {})).rejects.toThrow(RangeError);
+    });
+});
+
 describe(hybridRank, () => {
     it("scores each chunk by summed reciprocal ranks across both lists", () => {
         expect.assertions(1);
@@ -207,15 +354,54 @@ describe(hybridRank, () => {
         expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1", "doc#2"]);
     });
 
-    it("keeps the vector-leg chunk object for ids present in both lists", () => {
-        expect.assertions(1);
+    it("keeps the vector-leg chunk's payload for ids present in both lists", () => {
+        expect.assertions(2);
 
         const vectorChunk = chunk("doc#0", { metadata: { title: "rich" }, score: 0.9 });
         const lexicalChunk = chunk("doc#0", { metadata: undefined, score: 3.2 });
 
         const [winner] = hybridRank([vectorChunk], [lexicalChunk]);
 
-        expect(winner).toBe(vectorChunk);
+        // The richer vector-leg chunk survives — the lexical leg carries no
+        // stored metadata. Asserted on the payload, not by reference: the
+        // returned chunk is a copy carrying the fused score (see below).
+        expect(winner?.metadata).toStrictEqual({ title: "rich" });
+        expect(winner?.text).toBe(vectorChunk.text);
+    });
+
+    it("writes the fused score back so a caller re-sorting by score keeps the fusion", () => {
+        expect.assertions(3);
+
+        // The regression this guards: hybridRank used to return chunks still
+        // carrying their raw cosine / BM25 scores. `retrieve()` re-sorts by
+        // `score` to apply importance weighting, so the fusion was computed and
+        // then immediately discarded — and since BM25 is unbounded while cosine
+        // is [0, 1], every lexical-only hit was promoted above every vector hit.
+        const vectorChunk = chunk("doc#0", { score: 0.9 });
+        const lexicalOnly = chunk("doc#1", { score: 3.2 });
+
+        const fused = hybridRank([vectorChunk], [lexicalOnly]);
+
+        // Both appear once in each leg at rank 0, so both fuse to 1/60.
+        for (const entry of fused) {
+            expect(entry.score).toBeCloseTo(1 / 60, 10);
+        }
+
+        // Re-sorting by score, as retrieve() does, preserves the fused order.
+        expect(fused.toSorted((a, b) => b.score - a.score).map((entry) => entry.id)).toStrictEqual(fused.map((entry) => entry.id));
+    });
+
+    it("multiplies importance into the fused score", () => {
+        expect.assertions(1);
+
+        const heavy = chunk("doc#0", { importance: 1, score: 0.5 });
+        const light = chunk("doc#1", { importance: 0.1, score: 0.9 });
+
+        // `light` ranks first in the vector leg, so on rank alone it would win.
+        // Its 0.1 importance has to pull it under `heavy`.
+        const fused = hybridRank([light, heavy], []);
+
+        expect(fused.map((entry) => entry.id)).toStrictEqual(["doc#0", "doc#1"]);
     });
 
     it("breaks exact ties in favour of the better vector rank", () => {

@@ -68,6 +68,18 @@ interface McpToolsOptions {
     /** Identify this client to the server on connect. Default `"lunora-agent"`. */
     name?: string;
 
+    /**
+     * Gate an adapted tool's call behind a human approval. Defaults to
+     * **unattended** (no gate) — matching today's behavior. An MCP tool's
+     * result feeds back into the model's context (`adaptMcpResult`), so a
+     * hostile downstream server can pair indirect prompt injection with an
+     * unattended mutating tool call; pass a boolean to gate every adapted
+     * tool the same way, or a predicate `(toolName, input) => boolean` to
+     * gate per tool (evaluated from replay-stable input, so keep it
+     * deterministic).
+     */
+    needsApproval?: ((toolName: string, input: Record<string, unknown>) => boolean) | boolean;
+
     /** Only adapt these tool names (default: every tool the server lists). */
     only?: ReadonlyArray<string>;
 
@@ -113,7 +125,11 @@ const adaptMcpResult = (result: McpCallResult): unknown => {
 };
 
 /** Build a durable-step-friendly {@link AgentToolDefinition} that calls one MCP tool. */
-const adaptMcpTool = (client: McpClientLike, info: McpToolInfo): AgentToolDefinition<Record<string, unknown>> => {
+const adaptMcpTool = (
+    client: McpClientLike,
+    info: McpToolInfo,
+    needsApproval: McpToolsOptions["needsApproval"],
+): AgentToolDefinition<Record<string, unknown>> => {
     return {
         description: info.description ?? `MCP tool "${info.name}".`,
         // Runs inside the loop's `tool:NAME:CALL_ID` durable step: a completed
@@ -122,6 +138,9 @@ const adaptMcpTool = (client: McpClientLike, info: McpToolInfo): AgentToolDefini
         execute: async (input) => adaptMcpResult(await client.callTool({ arguments: input, name: info.name })),
         inputSchema: jsonSchema<Record<string, unknown>>(info.inputSchema),
         isLunoraAgentTool: true,
+        ...(needsApproval === undefined
+            ? {}
+            : { needsApproval: typeof needsApproval === "function" ? (input: Record<string, unknown>) => needsApproval(info.name, input) : needsApproval }),
     };
 };
 
@@ -185,6 +204,9 @@ const connectClient = async (options: McpToolsOptions): Promise<McpClientLike> =
  * every call. In the Workers runtime only the HTTP/SSE transports run (stdio
  * does not) — pass `url`, or inject an already-connected `client` for a custom
  * transport (also the test seam).
+ *
+ * Every adapted tool runs UNATTENDED by default (no approval gate) — pass
+ * `opts.needsApproval` to change that; see {@link McpToolsOptions.needsApproval}.
  * @experimental
  */
 const mcpTools = async (options: McpToolsOptions): Promise<Record<string, AgentToolDefinition<Record<string, unknown>>>> => {
@@ -198,7 +220,7 @@ const mcpTools = async (options: McpToolsOptions): Promise<Record<string, AgentT
             continue;
         }
 
-        record[`${options.prefix ?? ""}${info.name}`] = adaptMcpTool(client, info);
+        record[`${options.prefix ?? ""}${info.name}`] = adaptMcpTool(client, info, options.needsApproval);
     }
 
     return record;

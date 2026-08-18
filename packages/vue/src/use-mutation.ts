@@ -1,5 +1,5 @@
 import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@lunora/client";
-import { createMutationRunner } from "@lunora/client";
+import { createCallRunner } from "@lunora/client";
 import type { Ref } from "vue";
 import { ref, shallowRef } from "vue";
 
@@ -37,8 +37,12 @@ export interface MutationHandle<F extends FunctionReference> {
  * `pending` is ref-counted across overlapping invocations of THIS handle, so it
  * flips back to `false` only once every concurrent call has settled. The
  * ref-counted pending + error-normalize orchestration is the shared
- * `createMutationRunner` from `@lunora/client`; only the refs are
- * adapter-specific.
+ * `createCallRunner` from `@lunora/client`; only the refs are adapter-specific.
+ *
+ * `data`/`error` follow the adapter-wide contract: both track the LATEST
+ * invocation (an earlier call settling later cannot clobber a newer one), a
+ * success clears `error`, and a failure leaves the previous `data` in place.
+ * `reset()` clears both; it does not cancel an in-flight call.
  */
 export const useMutation = <F extends FunctionReference>(function_: F): MutationHandle<F> => {
     const client = useLunora();
@@ -52,18 +56,21 @@ export const useMutation = <F extends FunctionReference>(function_: F): Mutation
         error.value = undefined;
     };
 
-    const mutate = createMutationRunner<F>(client, function_, {
-        setError: (next) => {
-            error.value = next;
+    const mutate = createCallRunner(
+        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => client.mutation(function_, args, options),
+        {
+            setError: (next) => {
+                error.value = next;
+            },
+            setPending: (next) => {
+                pending.value = next;
+            },
+            setResult: (result) => {
+                data.value = result;
+                error.value = undefined;
+            },
         },
-        setPending: (next) => {
-            pending.value = next;
-        },
-        setResult: (result) => {
-            data.value = result;
-            error.value = undefined;
-        },
-    });
+    );
 
     return { data, error, mutate, pending, reset };
 };

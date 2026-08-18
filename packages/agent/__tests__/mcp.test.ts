@@ -4,7 +4,7 @@ import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent } from "../src/define-agent";
 import type { McpCallResult, McpClientLike, McpToolInfo } from "../src/mcp";
 import { adaptMcpResult, mcpTools } from "../src/mcp";
-import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, toolTurn } from "./loop-harness";
+import { DurableStepJournal, loopDefaults, memoryRuntime, passthroughStep, scriptedGenerate, toolTurn } from "./loop-harness";
 
 /** A mock MCP client: canned tool list + a `callTool` recording its calls. */
 const mockClient = (
@@ -79,6 +79,59 @@ describe(mcpTools, () => {
         expect(all["get_time"]?.description).toBe('MCP tool "get_time".');
     });
 
+    it("leaves needsApproval unset by default (unattended, matching today's behavior)", async () => {
+        const client = mockClient([weatherTool], () => {
+            return { content: [{ text: "ok", type: "text" }] };
+        });
+
+        const tools = await mcpTools({ client });
+
+        expect(tools["get_weather"]?.needsApproval).toBeUndefined();
+    });
+
+    it("gates every adapted tool when needsApproval is a boolean", async () => {
+        const client = mockClient([weatherTool, timeTool], () => {
+            return { content: [{ text: "ok", type: "text" }] };
+        });
+
+        const gated = await mcpTools({ client, needsApproval: true });
+
+        expect(gated["get_weather"]?.needsApproval).toBe(true);
+        expect(gated["get_time"]?.needsApproval).toBe(true);
+
+        const ungated = await mcpTools({ client, needsApproval: false });
+
+        expect(ungated["get_weather"]?.needsApproval).toBe(false);
+        expect(ungated["get_time"]?.needsApproval).toBe(false);
+    });
+
+    it("consults a needsApproval predicate per tool name, passing the call's input through", async () => {
+        const client = mockClient([weatherTool, timeTool], () => {
+            return { content: [{ text: "ok", type: "text" }] };
+        });
+        const seen: { input: unknown; toolName: string }[] = [];
+
+        const tools = await mcpTools({
+            client,
+            needsApproval: (toolName, input) => {
+                seen.push({ input, toolName });
+
+                return toolName === "get_weather";
+            },
+        });
+
+        const weatherGate = tools["get_weather"]?.needsApproval;
+        const timeGate = tools["get_time"]?.needsApproval;
+
+        expect(weatherGate).toBeTypeOf("function");
+        expect(typeof weatherGate === "function" && (await weatherGate({ city: "Berlin" }, {} as never))).toBe(true);
+        expect(typeof timeGate === "function" && (await timeGate({}, {} as never))).toBe(false);
+        expect(seen).toStrictEqual([
+            { input: { city: "Berlin" }, toolName: "get_weather" },
+            { input: {}, toolName: "get_time" },
+        ]);
+    });
+
     it("execute calls the MCP tool and returns the adapted result", async () => {
         const client = mockClient([weatherTool], (_name, args) => {
             return { content: [{ text: `sunny in ${String(args?.["city"])}`, type: "text" }] };
@@ -94,6 +147,7 @@ describe(mcpTools, () => {
                 reportProgress: () => {},
                 run: async () => null,
                 setState: async () => {},
+                step: passthroughStep,
                 threadKey: "thread-1",
                 toolCallId: "call_1",
             },

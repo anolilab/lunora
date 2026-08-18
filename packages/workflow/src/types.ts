@@ -291,6 +291,60 @@ export type WorkflowRunStepFunction = <A extends StepArgsValidator, Result>(
     options?: RunStepOptions,
 ) => Promise<Result>;
 
+// --- Declared external events (`ctx.waitForEvent` / `instance.sendEvent`) ---
+
+/**
+ * A `defineWorkflowEvent` result — the single source of truth for one external
+ * event's wire `type` and payload shape. Both ends of the exchange import the same
+ * definition (`ctx.waitForEvent(orderApproved)` inside the workflow,
+ * `workflows.get(w).sendEvent(id, orderApproved, payload)` from the caller), so
+ * there is no string to typo and no second place to update on a rename, and the
+ * payload is parsed at both ends instead of crossing as `unknown`.
+ *
+ * It does NOT make every mismatch a compile error: two definitions with the same
+ * payload shape are mutually assignable, so sending `orderRejected` where the
+ * workflow awaits `orderApproved` still type-checks (and still hibernates until
+ * the timeout). What it removes is the hand-matched literal.
+ */
+export interface WorkflowEventDefinition<Payload = unknown> {
+    /** Runtime brand check (see `isWorkflowEventDefinition`). */
+    readonly isLunoraWorkflowEvent: true;
+    /** Validator for the event payload — parsed on send and again on receive. */
+    readonly payload: Validator<Payload>;
+    /** The wire event type Cloudflare matches `sendEvent` against `waitForEvent`. */
+    readonly type: string;
+}
+
+/** Per-call options for {@link WorkflowWaitForEventFunction}. */
+export interface WaitForEventOptions {
+    /**
+     * The durable step label, defaulting to `event:<type>`.
+     *
+     * Cloudflare identifies a memoized step by this name, so the default couples
+     * step identity to the wire type: renaming the event type also renames the
+     * step, and an instance that already recorded the wait replays into a *fresh*
+     * one that nothing will ever satisfy. Pass a stable `name` on any wait that can
+     * outlive a deploy (an approval held for days), and to tell two waits on the
+     * same event type apart in the timeline.
+     */
+    name?: string;
+    /** How long to wait before the wait rejects. Defaults to Cloudflare's 24h. */
+    timeout?: number | string;
+}
+
+/**
+ * Hibernate until a declared event is delivered to this instance, then resolve
+ * with its validated payload. The typed wrapper over
+ * {@link WorkflowStepLike.waitForEvent}: the event's `type` comes from the
+ * definition instead of a hand-written string, and the payload is parsed through
+ * the definition's validator before the workflow resumes on it.
+ *
+ * ```ts
+ * const { approvedBy } = await ctx.waitForEvent(orderApproved, { timeout: "1 hour" });
+ * ```
+ */
+export type WorkflowWaitForEventFunction = <Payload>(event: WorkflowEventDefinition<Payload>, options?: WaitForEventOptions) => Promise<Payload>;
+
 // --- Fan-out: child-workflow isolation (`ctx.parallel` / `ctx.spawn`) -------
 
 /**
@@ -400,6 +454,8 @@ export interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly spawn: WorkflowSpawnFunction;
     /** The native Cloudflare Workflows durable-step API. */
     readonly step: WorkflowStepLike;
+    /** Hibernate until a declared external event arrives; resolves with its validated payload. */
+    readonly waitForEvent: WorkflowWaitForEventFunction;
 }
 
 /** The workflow body. Receives a {@link WorkflowRunContext}, returns the output. */
@@ -438,7 +494,8 @@ export interface WorkflowDefinition<Params = Record<string, unknown>, Output = u
 
 /**
  * A typed handle to one declared workflow, addressable from `ctx.workflows`.
- * Thin pass-through over the Cloudflare `Workflow` binding.
+ * Thin pass-through over the Cloudflare `Workflow` binding, plus the declared-event
+ * send (which the raw binding cannot type).
  */
 export interface WorkflowHandle<Params = Record<string, unknown>> {
     /** Start a new instance (optionally with an id + params). */
@@ -447,6 +504,18 @@ export interface WorkflowHandle<Params = Record<string, unknown>> {
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstanceLike>;
+
+    /**
+     * Deliver a declared event to one instance of this workflow — the typed
+     * counterpart of the workflow body's `ctx.waitForEvent`. The wire type comes
+     * from the definition (never a hand-written string) and the payload is parsed
+     * through the definition's validator **before** the send, so a bad value fails
+     * the caller's request instead of waking the workflow on garbage.
+     *
+     * Mirrors `ctx.agents.<name>.sendEvent(id, …)`: the instance is addressed by
+     * id rather than by holding an instance handle, so the common case is one call.
+     */
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 
 /**

@@ -49,6 +49,16 @@
             "type": "unsubscribe"
         }
     },
+    "stream": {
+        "$comment": "A live query consumed as the language's own PULL type — an async generator, a channel, an Enumerator, an Iterator, an AsyncStream — yields exactly the values the callback form delivers, in frame order, and stops delivering once the consumer stops. Same subscription, same decode: the values arrive wire-encoded on the frames and are decoded on the way out, so a port that hands the raw frame payload to its stream fails here rather than in a consumer. `sub_1` is the id every port mints for a first subscription.",
+        "subscriptionId": "sub_1",
+        "frames": [
+            { "id": "sub_1", "type": "data", "data": { "n": 1 }, "cursor": 1 },
+            { "id": "sub_1", "type": "data", "data": { "n": 2 }, "cursor": 2 },
+            { "id": "sub_1", "type": "data", "data": { "n": 3 }, "cursor": 3 }
+        ],
+        "yielded": [{ "n": 1 }, { "n": 2 }, { "n": 3 }]
+    },
     "serverFrames": [
         {
             "name": "ack",

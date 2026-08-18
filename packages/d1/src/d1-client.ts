@@ -5,6 +5,7 @@ import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { isReadOnlyD1Sql, withD1Retry } from "./retry";
 
 /**
  * D1 client wrapping the workers `env.DB` binding. The recommended path is
@@ -65,7 +66,23 @@ const prepareCached = (
  */
 const D1_FIRST_UNCONSTRAINED = "first-unconstrained";
 
-/** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
+/**
+ * Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing.
+ *
+ * `all` and `first` retry D1's expected transient failures — but only for a
+ * statement that is provably read-only. D1 produces a documented
+ * baseline of infrastructural errors even when healthy (Cloudflare's team calls
+ * a handful every few hours "not unexpected") and their guidance is to retry;
+ * a client that does not has adopted that error rate as the application's own.
+ *
+ * Nothing else on this class or on {@link D1Client} retries. `run` is the write
+ * path, and every transient D1 error is ambiguous about whether the statement
+ * applied — re-running a non-idempotent write after a lost response
+ * double-applies it. `all` is not a read path either: D1 runs
+ * `UPDATE … RETURNING` through it, so the retry is gated on the statement's
+ * leading keyword rather than on the method name. Wrap a genuinely idempotent
+ * write in {@link withD1Retry} yourself, per call.
+ */
 class D1Session {
     private readonly session: D1SessionLike;
 
@@ -80,6 +97,10 @@ class D1Session {
         return prepareCached(this.stmtCache, (text) => this.session.prepare(text), sql);
     }
 
+    /**
+     * Execute a statement. **Not retried** — `run` is the write path, and a
+     * transient D1 error does not say whether the write applied.
+     */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
         return this.prepare(sql)
@@ -87,17 +108,29 @@ class D1Session {
             .run<T>();
     }
 
+    /**
+     * Read all rows, retrying D1's transient failures when `sql` is a
+     * read-only statement. An `UPDATE … RETURNING` runs through here too and is
+     * left unretried.
+     */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .all<T>();
+        const run = async (): Promise<{ results: T[]; success: boolean }> =>
+            this.prepare(sql)
+                .bind(...binds)
+                .all<T>();
+
+        return isReadOnlyD1Sql(sql) ? withD1Retry(run) : run();
     }
 
+    /** Read the first row, retrying under the same read-only rule as {@link all}. */
     public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .first<T>();
+        const run = async (): Promise<T | null> =>
+            this.prepare(sql)
+                .bind(...binds)
+                .first<T>();
+
+        return isReadOnlyD1Sql(sql) ? withD1Retry(run) : run();
     }
 
     /**
@@ -109,6 +142,16 @@ class D1Session {
     }
 }
 
+/**
+ * A D1 handle: prepared-statement caching, Sessions-API sessions, and the
+ * drizzle-typed accessors.
+ *
+ * **Nothing on this class retries.** `prepare`, `drizzle`, `drizzleSession`,
+ * `batch` and `raw` all hand back the underlying D1 surface untouched. The
+ * automatic retry lives on {@link D1Session.all} / {@link D1Session.first} and
+ * on `retryingExec` (the seam `.global()` tables read through); wrap anything
+ * else in {@link withD1Retry} yourself, and only when it is safe to run twice.
+ */
 class D1Client {
     private readonly db: D1DatabaseLike;
 
@@ -213,5 +256,4 @@ class D1Client {
 }
 
 export { D1Client, D1Session };
-
 export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";

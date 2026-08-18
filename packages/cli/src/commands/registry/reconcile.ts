@@ -6,7 +6,7 @@
  * Also handles `entrypointReexports` — injecting `export * from "./lunora/<module>"`
  * into the class-B/C worker entry file.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import { LunoraError } from "@lunora/errors";
@@ -29,9 +29,25 @@ const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
  * the file is code. Non-umbrella projects (and non-code files) get the bytes
  * verbatim. Centralizes the read so the written content and the lock hash are
  * always the post-rewrite form (3-way upgrades stay consistent across runs).
+ *
+ * Refuses to read through a symlink: a hostile registry source could ship a
+ * symlink at a manifest-declared `file.from` path and have the CLI read
+ * through it — printing (`view`) or writing into the project (`add`) whatever
+ * host file the link targets, e.g. `~/.ssh/id_rsa`. Registry manifests declare
+ * each file explicitly, so refusing (rather than `init`'s silent skip) is
+ * correct here: skipping would silently produce a broken install.
+ *
+ * Exported so `registry view` reads item files through the same guard — a
+ * pasted copy of it drifted from this one once already.
  */
-const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean): string => {
-    const source = readFileSync(join(itemDirectory, file.from), "utf8");
+const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean, itemKey: string): string => {
+    const sourcePath = join(itemDirectory, file.from);
+
+    if (lstatSync(sourcePath).isSymbolicLink()) {
+        throw new LunoraError("INTERNAL", `registry item "${itemKey}": refusing to read "${file.from}" — it is a symlink, not a regular file`);
+    }
+
+    const source = readFileSync(sourcePath, "utf8");
 
     return useUmbrella && CODE_FILE_RE.test(file.to) ? rewriteUmbrellaImports(source) : source;
 };
@@ -64,7 +80,7 @@ const reconcileSchemaExtension = (
 
     if (!existsSync(destinationPath)) {
         mkdirSync(dirname(destinationPath), { recursive: true });
-        writeFileSync(destinationPath, readItemFile(itemDirectory, file, useUmbrella), "utf8");
+        writeFileSync(destinationPath, readItemFile(itemDirectory, file, useUmbrella, itemKey), "utf8");
     }
 
     const baseModule = useUmbrella ? "lunorash/server" : "@lunora/server";
@@ -130,7 +146,7 @@ const reconcileWholeFile = (
     useUmbrella: boolean,
 ): ReconcileOutcome => {
     const destinationPath = join(projectRoot, file.to);
-    const incoming = readItemFile(itemDirectory, file, useUmbrella);
+    const incoming = readItemFile(itemDirectory, file, useUmbrella, itemKey);
     const exists = existsSync(destinationPath);
     const current = exists ? readFileSync(destinationPath, "utf8") : "";
 
@@ -441,4 +457,4 @@ const reconcileItems = (
     return { bindings: bindingsApplied, deps: depsAdded, skipped, written };
 };
 
-export default reconcileItems;
+export { readItemFile, reconcileItems };

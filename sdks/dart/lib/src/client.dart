@@ -98,7 +98,7 @@ class LunoraClient {
   LunoraClient({required String url, LunoraHttpPoster? post, String? authToken, String? authSubject, String? clientId, OfflineQueue? offlineQueue})
       : transport = LunoraTransport(url: url, post: post, authToken: authToken, authSubject: authSubject, clientId: clientId),
         _queue = offlineQueue ?? OfflineQueue() {
-    _replayer = OfflineReplayer(transport: transport, queue: _queue, isClosed: () => _closed, isConnected: () => _connected);
+    _replayer = OfflineReplayer(transport: transport, queue: _queue, isClosed: () => _closed, isConnected: connectedTo);
   }
 
   /// Where this deployment lives, who is calling, and how a request is made.
@@ -142,7 +142,13 @@ class LunoraClient {
   final Map<String, _Subscription> _subscriptions = <String, _Subscription>{};
   final ShapeRegistry _shapeRegistry = ShapeRegistry();
   int _nextId = 0;
-  bool _connected = false;
+
+  /// The shards whose socket is currently up, normalised so `null` and `''` are
+  /// the one default shard (see `sameShard`). A SET rather than one flag: an app
+  /// sharded by room or tenant holds several sockets, and treating a single
+  /// reconnect as "connected" would replay every shard's writes down whichever
+  /// connection happened to come back.
+  final Set<String> _connectedShards = <String>{};
   bool _wasEverConnected = false;
   bool _closed = false;
 
@@ -173,24 +179,31 @@ class LunoraClient {
   /// Kept separate from [resendSubscriptions] rather than folded into it,
   /// because the two are independently useful and a client that did both would
   /// double-send for the callers already invoking the latter.
-  void setConnected(bool connected) {
-    if (connected == _connected) {
+  void setConnected(bool connected, {String? shardKey}) {
+    final shard = shardKey ?? '';
+
+    if (connected == _connectedShards.contains(shard)) {
       return;
     }
-
-    _connected = connected;
 
     if (!connected) {
+      _connectedShards.remove(shard);
+
       return;
     }
 
+    _connectedShards.add(shard);
     _wasEverConnected = true;
 
-    unawaited(flushOfflineQueue());
+    unawaited(flushOfflineQueue(shardKey: shardKey));
   }
 
-  /// Whether the client currently believes its socket is up.
-  bool get connected => _connected;
+  /// Whether ANY shard's socket is up. A sharded app wanting one shard's answer
+  /// asks [connectedTo].
+  bool get connected => _connectedShards.isNotEmpty;
+
+  /// Whether the socket for one shard is up. `null` and `''` are the same shard.
+  bool connectedTo(String? shardKey) => _connectedShards.contains(shardKey ?? '');
 
   /// How many writes are queued for replay. Drives a "N pending" indicator; see
   /// `OfflineQueue.onSizeChange` for a push-based version.
@@ -213,8 +226,17 @@ class LunoraClient {
   Future<int> hydrate() async {
     final restored = await _queue.hydrate();
 
-    if (restored > 0 && _connected) {
-      unawaited(flushOfflineQueue());
+    if (restored == 0) {
+      return restored;
+    }
+
+    // One flush per SHARD the restored writes belong to, and only for the ones
+    // already connected. A single global flush would drain another shard's
+    // writes down this shard's connection.
+    for (final shard in <String>{for (final item in _queue.items) item.shardKey ?? ''}) {
+      if (_connectedShards.contains(shard)) {
+        unawaited(flushOfflineQueue(shardKey: shard.isEmpty ? null : shard));
+      }
     }
 
     return restored;
@@ -235,7 +257,7 @@ class LunoraClient {
   /// discard writes the next session will restore.
   void close() {
     _closed = true;
-    _connected = false;
+    _connectedShards.clear();
     _send = null;
     _subscriptions.clear();
     _shapeRegistry.clear();
@@ -284,7 +306,10 @@ class LunoraClient {
     final id = mutationId ?? nextMutationId();
     final handles = _applyOptimistic(functionPath, args, optimistic, optimisticUpdate);
 
-    if (!_connected && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
+    // Per SHARD: a write for a shard whose socket is down queues even while
+    // another shard is connected, because the connection that is up cannot
+    // reach it.
+    if (!connectedTo(shardKey) && _queue.acceptsWhileDisconnected(everConnected: _wasEverConnected)) {
       return _enqueue(functionPath, args, shardKey, id, handles, precondition);
     }
 
@@ -571,12 +596,12 @@ class LunoraClient {
     }
   }
 
-  /// Replay every queued write, oldest first.
+  /// Replay one shard's queued writes, oldest first.
   ///
   /// Called for you on the transition to connected; public because a caller that
   /// knows connectivity came back some other way may want to trigger it. See
   /// [OfflineReplayer], which owns the ordering and classification rules.
-  Future<void> flushOfflineQueue() => _replayer.flush();
+  Future<void> flushOfflineQueue({String? shardKey}) => _replayer.flush(shardKey: shardKey);
 
   // ─── Optimistic updates ───────────────────────────────────────────────────
 

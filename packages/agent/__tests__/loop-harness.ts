@@ -1,6 +1,6 @@
 import type { runAgentLoop } from "../src/agent-loop";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
-import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentRunFunction } from "../src/types";
+import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentRunFunction, AgentStepLike } from "../src/types";
 
 export interface StoredMessage {
     content: string;
@@ -60,6 +60,22 @@ export class DurableStepJournal {
         return new Promise<{ payload: T; type: string }>(() => {});
     }
 }
+
+/**
+ * A pass-through {@link AgentStepLike} for suites that drive a tool's `execute`
+ * (or `runToolScript`) directly, outside the loop: `do` just runs the callback,
+ * with no memoization and no journal. `AgentToolContext.step` is REQUIRED —
+ * production always threads a real handle — so a hand-built context supplies
+ * this instead of omitting the field.
+ */
+export const passthroughStep: AgentStepLike = {
+    do: <T>(_name: string, callback: () => Promise<T>): Promise<T> => callback(),
+
+    // Mirrors AgentStepLike.waitForEvent's generic host signature so the double stays assignable.
+    waitForEvent: <T>(): Promise<{ payload: Readonly<T>; type: string }> =>
+        // These suites never gate a tool on approval; hibernate forever if reached.
+        new Promise<{ payload: Readonly<T>; type: string }>(() => {}),
+};
 
 /**
  * In-memory double of the agent runtime functions (`agents:*`), dispatched by

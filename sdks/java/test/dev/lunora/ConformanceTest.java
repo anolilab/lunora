@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -36,6 +37,7 @@ public final class ConformanceTest {
         wireCodecRoundTrip();
         undefinedIsDistinctFromNull();
         overLongBigIntRejected();
+        malformedBytesRejected();
         depthCapEnforced();
         stableWireKeyFixtures();
         formatNumberMatchesEcmaScript();
@@ -46,17 +48,23 @@ public final class ConformanceTest {
         non2xxWithoutEnvelopeThrows();
         clientFrameBuilders();
         serverFrameConsumer();
+        subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         pokeSequenceMaterialisesRows();
         pokePartsDoNotApplyBeforePokeEnd();
         concurrentSubscribeAndHandleFrame();
+
+        // The optimistic-layer and offline-queue cases, in their own file so this one
+        // stays the wire-protocol suite it has always been.
+        OptimisticOfflineTest.run();
 
         assertManifestCovered();
 
         System.out.println("OK — " + checks + " assertions");
     }
 
-    private static void check(boolean condition, String message) {
+    /** Package-private so the sibling case files in this suite share one counter. */
+    static void check(boolean condition, String message) {
         checks++;
 
         if (!condition) {
@@ -65,7 +73,7 @@ public final class ConformanceTest {
     }
 
     /** Records that the running case exercises the manifest case {@code name}. */
-    private static void covers(String name) {
+    static void covers(String name) {
         covered.add(name);
     }
 
@@ -101,7 +109,7 @@ public final class ConformanceTest {
                         + " (add a covers() call to the case that asserts it)");
     }
 
-    private static Path fixturesDir() {
+    static Path fixturesDir() {
         Path directory = Path.of("").toAbsolutePath();
 
         for (int depth = 0; depth < 8; depth++) {
@@ -124,7 +132,7 @@ public final class ConformanceTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> fixture(String name) throws IOException {
+    static Map<String, Object> fixture(String name) throws IOException {
         return (Map<String, Object>) Json.parse(Files.readString(fixturesDir().resolve(name)));
     }
 
@@ -195,12 +203,56 @@ public final class ConformanceTest {
                 "-42 should decode");
     }
 
+    /**
+     * A malformed {@code bytes} tag must be rejected at decode, and the rejection must reach a live
+     * subscription's error callback rather than escape {@link Client#handleFrame} — a bare {@code
+     * Wire.decode} throw out of the frame dispatcher would crash whatever thread runs the caller's
+     * socket read loop instead of surfacing a recoverable error.
+     */
+    private static void malformedBytesRejected() throws IOException {
+        covers("malformed_bytes_rejected");
+
+        check(
+                throwsWireError(List.of(Wire.TAG, "bytes", "not@@base64!!")),
+                "malformed base64 in a bytes tag must be rejected");
+
+        Object decoded = Wire.decode(List.of(Wire.TAG, "bytes", "AQID"));
+
+        check(
+                decoded instanceof byte[] bytes && bytes.length == 3,
+                "well-formed bytes must still decode");
+
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        List<Object> seen = new ArrayList<>();
+        List<Client.SubscriptionError> errors = new ArrayList<>();
+
+        client.subscribe("messages:list", null, seen::add, errors::add, null);
+
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("type", "data");
+        frame.put("id", "sub_1");
+        frame.put("data", List.of(Wire.TAG, "bytes", "not@@base64!!"));
+
+        String kind = client.handleFrame(Json.write(frame));
+
+        check("data".equals(kind), "handleFrame must return normally rather than throw");
+        check(seen.isEmpty(), "a malformed value must not reach onData");
+        check(errors.size() == 1, "a malformed value must surface via onError");
+    }
+
     private static boolean throwsWireError(Object value) {
         try {
             Wire.decode(value);
 
             return false;
-        } catch (Wire.WireFormatException error) {
+        } catch (RuntimeException error) {
+            // Wire.decode's own bounds (bigint length, depth) throw its typed
+            // WireFormatException; a nested decoder (Base64 on a malformed bytes
+            // tag) throws its own unwrapped RuntimeException. Both are a rejection.
             return true;
         }
     }
@@ -440,6 +492,48 @@ public final class ConformanceTest {
                         "error code");
             }
         }
+    }
+
+    /**
+     * The Iterable form of a live query: same subscription, same decode, same order as the callback
+     * form.
+     */
+    @SuppressWarnings("unchecked")
+    private static void subscriptionStreamYieldsFrameValuesInOrder() throws IOException {
+        covers("subscription_stream_yields_frame_values_in_order");
+
+        Map<String, Object> testCase =
+                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(frame -> {});
+
+        Map<String, Object> args = new LinkedHashMap<>();
+
+        args.put("channel", "general");
+
+        List<Object> seen = new ArrayList<>();
+
+        // Closed at the end rather than in a try-with-resources: the frames are fed from this same
+        // thread, so the loop has to be driven one `next()` at a time.
+        Client.Stream stream = client.stream("messages:list", args, null);
+        Iterator<Client.StreamEvent> events = stream.iterator();
+
+        for (Object raw : (List<Object>) testCase.get("frames")) {
+            client.handleFrame(Json.write(raw));
+
+            Client.StreamEvent event = events.next();
+
+            check(event.error() == null, "a streamed event carries a value, not an error");
+            seen.add(event.value());
+        }
+
+        stream.close();
+
+        check(
+                canonical(Wire.encode(seen)).equals(canonical(testCase.get("yielded"))),
+                "the stream yields the frames' values, in order");
+        check(!events.hasNext(), "and closing ends the loop rather than blocking it forever");
     }
 
     @SuppressWarnings("unchecked")

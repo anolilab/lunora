@@ -590,6 +590,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return registered.handler(ctx, args);
         }
 
+        // Only a `mutation` may enter the base class's single-writer gate for
+        // mutation-replay dedup — it is `blockConcurrencyWhile`, so gating an
+        // action would stall every other dispatch on the shard for the length of
+        // its outbound I/O, on nothing but a caller-supplied header. Unregistered
+        // paths answer `false`; `handleRpc` above rejects them anyway.
+        protected override isMutationFunction(functionPath: string): boolean {
+            return LUNORA_FUNCTIONS[functionPath]?.kind === "mutation";
+        }
+
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ ranges?: Map<string, KeyRange[]>; result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 

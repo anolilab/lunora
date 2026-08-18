@@ -17,8 +17,8 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-/** The primitive an eval attaches to a span: a numeric score or a string label. */
-type EvaluationAttributeValue = number | string;
+import type { EvaluationAttributeValue } from "../../../shared/evaluation-attributes";
+import { evaluationAttributes as sharedEvaluationAttributes, sanitizeEvaluationName } from "../../../shared/evaluation-attributes";
 
 /**
  * Structural slice of the post-hoc span handle `ctx.trace` hands its body (see the
@@ -75,42 +75,30 @@ interface RecordEvaluationInput {
     span?: EvaluationSpanHandle;
 }
 
-/** Characters allowed unescaped in an evaluation-name key segment. */
-const SAFE_NAME_CHAR = /[\w.-]/u;
-
-/** Replace every character outside the OTEL-safe set with `_`. */
-const sanitizeName = (name: string): string => {
-    let out = "";
-
-    for (const char of name) {
-        out += SAFE_NAME_CHAR.test(char) ? char : "_";
-    }
-
-    return out;
-};
-
 /**
  * Build the `gen_ai.evaluation.NAME.*` attribute bag for one eval verdict — the
  * `.score` (number) always, the `.label` (string) when a label is given. Exported
  * so a caller can emit the score as a standalone event/metric without a span.
+ *
+ * Delegates to the shared `shared/evaluation-attributes.ts` builder so
+ * `@lunora/testing`'s scorers and the runtime's own `recordEvaluation` emit the
+ * identical wire format — only the thrown error type differs, wrapped here as a
+ * `LunoraError` to match this package's public error contract.
  */
 const evaluationAttributes = (input: Pick<RecordEvaluationInput, "label" | "name" | "score">): Record<string, EvaluationAttributeValue> => {
-    if (typeof input.name !== "string" || input.name.length === 0) {
-        throw new LunoraError("BAD_REQUEST", "@lunora/testing: recordEvaluation requires a non-empty `name`");
+    try {
+        return sharedEvaluationAttributes(input);
+    } catch (error) {
+        // ONLY the builder's documented misuse errors become `BAD_REQUEST`. A
+        // blanket re-wrap would turn any future internal failure into a
+        // caller-blaming code with a spliced-together message, hiding the real
+        // fault behind an error the caller cannot act on.
+        if (!(error instanceof TypeError)) {
+            throw error;
+        }
+
+        throw new LunoraError("BAD_REQUEST", `@lunora/testing: ${error.message}`);
     }
-
-    if (typeof input.score !== "number" || !Number.isFinite(input.score)) {
-        throw new LunoraError("BAD_REQUEST", "@lunora/testing: recordEvaluation `score` must be a finite number");
-    }
-
-    const key = sanitizeName(input.name);
-    const attributes: Record<string, EvaluationAttributeValue> = { [`gen_ai.evaluation.${key}.score`]: input.score };
-
-    if (input.label !== undefined) {
-        attributes[`gen_ai.evaluation.${key}.label`] = input.label;
-    }
-
-    return attributes;
 };
 
 /**
@@ -126,10 +114,16 @@ const recordEvaluation = (input: RecordEvaluationInput): Record<string, Evaluati
     input.span?.setAttributes(attributes);
     // The same key as the span attribute, so the live view (trace ring) and the
     // durable trend (metric buckets) name the eval identically.
-    input.metrics?.gauge(`gen_ai.evaluation.${sanitizeName(input.name)}.score`, input.score, input.label === undefined ? undefined : { label: input.label });
+    input.metrics?.gauge(
+        `gen_ai.evaluation.${sanitizeEvaluationName(input.name)}.score`,
+        input.score,
+        input.label === undefined ? undefined : { label: input.label },
+    );
 
     return attributes;
 };
 
-export type { EvaluationAttributeValue, EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput };
+export type { EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput };
 export { evaluationAttributes, recordEvaluation };
+
+export { type EvaluationAttributeValue } from "../../../shared/evaluation-attributes";

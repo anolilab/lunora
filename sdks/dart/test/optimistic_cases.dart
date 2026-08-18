@@ -10,6 +10,256 @@ import 'package:lunora/lunora.dart';
 
 import 'harness.dart';
 
+/// One named scenario from the `optimistic` block of
+/// `protocol/fixtures/offline-optimistic.json`.
+///
+/// The manifest cases below read every expectation from there rather than
+/// writing their own, so this port and the seven siblings assert the same
+/// values instead of each documenting its own behaviour.
+Map<String, Object?> _scenario(String name) => (fixture('offline-optimistic.json')['optimistic']! as Map<String, Object?>)[name]! as Map<String, Object?>;
+
+/// The minimal [OptimisticTarget] the engine folds over — the same shape the
+/// client's subscription presents, with none of its bookkeeping.
+///
+/// The fixture asserts LAYER COUNTS as well as displayed values, and a layer
+/// count is engine state the client does not expose. So the manifest cases drive
+/// the engine directly, exactly as the sibling ports' do; the client-level cases
+/// further down cover the wiring.
+class _Target implements OptimisticTarget {
+  _Target(this.serverBase) : lastValue = serverBase;
+
+  @override
+  Object? serverBase;
+
+  @override
+  Object? lastValue;
+
+  @override
+  bool delivered = false;
+
+  @override
+  int? serverCursor;
+
+  @override
+  List<OptimisticLayer> layers = <OptimisticLayer>[];
+
+  final List<Object?> seen = <Object?>[];
+
+  @override
+  void deliver(Object? value) => seen.add(value);
+}
+
+/// The one transform primitive the fixtures use: push onto a COPY of the list.
+///
+/// A copy, not an in-place add: a transform is re-run on every rebase, so one
+/// that mutated its input would compound its own effect on each server frame.
+LunoraOptimistic _appender(Object? item) => (current) => <Object?>[...(current as List<Object?>? ?? const <Object?>[]), item];
+
+/// Apply one server `data` frame the way the client's frame handler does.
+void _frame(_Target target, Map<String, Object?> frame) {
+  target
+    ..serverBase = frame['data']
+    ..serverCursor = frame['cursor'] as int?;
+  dropConfirmedLayers(target, target.serverCursor);
+  notifyTarget(target, foldOptimistic(target.serverBase, target.layers));
+}
+
+// ─── Optimistic updates: the shared golden scenarios ─────────────────────────
+
+/// A pending layer is re-folded onto each new authoritative base rather than
+/// clobbered by it.
+void caseGoldenOptimisticRebase() {
+  covers('optimistic_layer_rebases_onto_server_frame');
+
+  final case_ = _scenario('rebase');
+  final target = _Target(case_['base']);
+
+  applyOptimisticLayer(target, _appender(case_['appended']));
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterApply']), 'the optimistic value shows immediately');
+
+  _frame(target, case_['frame']! as Map<String, Object?>);
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterFrame']), 'the pending layer rebases onto the new base');
+  equals(target.layers.length, case_['layersAfterFrame'], 'an unconfirmed layer survives the frame');
+}
+
+/// The overlay drops on the server-confirmed CDC cursor, never on RPC-response
+/// timing — and gaplessly, so the confirming frame does not double-count.
+void caseGoldenOptimisticCommitCursorDrop() {
+  covers('optimistic_layer_drops_on_commit_cursor');
+
+  final case_ = _scenario('commitCursorDrop');
+  final target = _Target(case_['base']);
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the layer applies');
+  handle!.confirm(case_['commitCursor'] as int?);
+
+  _frame(target, case_['belowFrame']! as Map<String, Object?>);
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterBelowFrame']), 'a frame short of the commit cursor keeps the overlay');
+  equals(target.layers.length, case_['layersAfterBelowFrame'], 'and keeps the layer');
+
+  _frame(target, case_['atFrame']! as Map<String, Object?>);
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterAtFrame']), 'the confirming frame drops the overlay with no double-count');
+  equals(target.layers.length, case_['layersAfterAtFrame'], 'and the layer is gone');
+}
+
+/// A byte-identical write yields a `settled` frame, never a `data` frame.
+///
+/// Driven through the real client, because that is where the sweep lives:
+/// dropping confirmed layers on data/delta frames ALONE leaves the prediction on
+/// screen until some unrelated write happens to change this query — on a quiet
+/// query, forever, and permanently across a reconnect, since the resume
+/// watermark has already advanced past the write.
+Future<void> caseGoldenOptimisticSettledFrameDrop() async {
+  covers('optimistic_layer_drops_on_settled_frame');
+
+  final case_ = _scenario('settledFrameDrop');
+  final gate = Completer<void>();
+  final seen = <Object?>[];
+
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    await gate.future;
+
+    return LunoraHttpResponse(200, '{"result":null,"commitCursor":${case_['commitCursor']}}');
+  }
+
+  final client = LunoraClient(url: 'https://app.example', post: post)
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  client.subscribe('counter:value', onData: seen.add);
+  pushData(client, 'sub_1', case_['base'], cursor: 1);
+
+  final write = client.mutation('counter:value', optimistic: _appender(case_['appended']));
+
+  gate.complete();
+  await write;
+
+  final below = case_['belowFrame']! as Map<String, Object?>;
+  final at = case_['atFrame']! as Map<String, Object?>;
+
+  pushCursorFrame(client, 'sub_1', 'settled', cursor: below['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterBelowFrame']), 'a settled frame short of the commit cursor keeps the overlay');
+
+  pushCursorFrame(client, 'sub_1', 'settled', cursor: at['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterAtFrame']), 'the settled frame reaching the commit cursor drops the overlay');
+}
+
+/// A transform that declines the value it is handed is SKIPPED by the fold, not
+/// fatal to it: one buggy optimistic update must not blank the query for every
+/// other layer.
+///
+/// The declining layer is registered directly rather than through
+/// [applyOptimisticLayer], which refuses a transform that declines on FIRST
+/// application. This is the other case — one that worked once and declines on a
+/// later rebase.
+void caseGoldenOptimisticDecliningLayerSkipped() {
+  covers('optimistic_layer_rebases_onto_server_frame');
+
+  final case_ = _scenario('throwingLayerSkipped');
+  final target = _Target(case_['base']);
+
+  target.layers.add(OptimisticLayer((_) => throw StateError('buggy optimistic update')));
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the good layer still applies');
+  equals(target.layers.length, case_['layers'], 'the declining layer is kept');
+  equals(canonical(target.lastValue), canonical(case_['displayed']), 'and skipped by the fold');
+}
+
+/// A shard with CDC off echoes no commit cursor. The layer is removed but the
+/// display is NOT re-folded: confirm runs on SUCCESS, so re-folding would
+/// visibly revert a write that just committed until the authoritative frame
+/// lands.
+void caseGoldenOptimisticConfirmWithoutCursor() {
+  covers('optimistic_layer_drops_on_commit_cursor');
+
+  final case_ = _scenario('confirmWithoutCursor');
+  final target = _Target(case_['base']);
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the layer applies');
+  handle!.confirm(null);
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterConfirm']), 'confirming with no cursor does not revert');
+  equals(target.layers.length, case_['layersAfterConfirm'], 'but does drop the layer');
+}
+
+/// Failure re-folds, so the bad value disappears immediately.
+void caseGoldenOptimisticRollback() {
+  covers('optimistic_layer_rolls_back_on_failure');
+
+  final case_ = _scenario('rollback');
+  final target = _Target(case_['base']);
+
+  final handle = applyOptimisticLayer(target, _appender(case_['appended']));
+
+  check(handle != null, 'the layer applies');
+  handle!.rollback();
+
+  equals(canonical(target.lastValue), canonical(case_['displayedAfterRollback']), 'the failed write rolls its overlay back');
+  equals(target.layers.length, case_['layersAfterRollback'], 'and leaves no layer behind');
+}
+
+/// `cursor` is OPTIONAL on a data frame, and one that omits it must LEAVE the
+/// tracked cursor where it was.
+///
+/// Driven through the real client rather than the engine: the guard is in the
+/// frame handler, and nulling the cursor there strands every pending layer —
+/// the tracked cursor is what a later `commitCursor` is compared against, so a
+/// confirm that should drop the overlay keeps it and the write renders twice.
+/// The proof is that confirm drops it, which is only possible if the cursor
+/// survived the cursorless frame.
+Future<void> caseGoldenOptimisticCursorlessFrame() async {
+  covers('optimistic_cursorless_frame_preserves_cursor');
+
+  final case_ = _scenario('cursorlessFrame');
+  final gate = Completer<void>();
+  final seen = <Object?>[];
+
+  // A poster that holds the mutation's response open, so the frames below land
+  // while the write is still in flight and its layer still pending.
+  Future<LunoraHttpResponse> post(String url, Map<String, String> headers, String body) async {
+    await gate.future;
+
+    return LunoraHttpResponse(200, '{"result":null,"commitCursor":${case_['commitCursor']}}');
+  }
+
+  final client = LunoraClient(url: 'https://app.example', post: post)
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  client.subscribe('counter:value', onData: seen.add);
+  pushData(client, 'sub_1', case_['base'], cursor: 1);
+
+  final write = client.mutation('counter:value', optimistic: _appender(case_['appended']));
+
+  final cursored = case_['cursoredFrame']! as Map<String, Object?>;
+  final cursorless = case_['cursorlessFrame']! as Map<String, Object?>;
+
+  pushData(client, 'sub_1', cursored['data'], cursor: cursored['cursor'] as int?);
+  pushData(client, 'sub_1', cursorless['data']);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterCursorlessFrame']), 'the pending layer still folds onto the cursorless frame');
+
+  gate.complete();
+  await write;
+
+  // If the cursorless frame had reset the tracked cursor, this confirm would
+  // have nothing to compare against, the layer would survive, and the display
+  // would still carry the doubled value asserted above.
+  equals(canonical(seen.last), canonical(cursorless['data']), 'the confirm drops the overlay, so the cursorless frame preserved the cursor');
+}
+
 // ─── Optimistic updates ──────────────────────────────────────────────────────
 
 /// A layer must survive an unrelated server frame, re-derived from the new base
@@ -141,6 +391,46 @@ Future<void> caseOptimisticUpdatePatchesManyQueries() async {
 
   equals(canonical(list.last), canonical(<Object?>['a', 'new']), 'the list query is patched');
   equals(unread.last, 4, 'the count query is patched in the same write');
+}
+
+/// A `setQuery` override is ABSOLUTE while pending: it re-clamps to its
+/// predicted value on every frame, masking a concurrent server change to that
+/// query rather than merging with it. Rolling it back reveals what the server
+/// had said all along.
+Future<void> caseGoldenOptimisticConstantMask() async {
+  covers('optimistic_layer_rolls_back_on_failure');
+
+  final case_ = _scenario('constantMask');
+  final poster = Poster(result: 'null')..transportFailures = 1;
+  final client = LunoraClient(url: 'https://app.example', post: poster.call)
+    ..attachSocket((_) {})
+    ..setConnected(true);
+  final seen = <Object?>[];
+
+  client.subscribe('messages:list', onData: seen.add);
+  pushData(client, 'sub_1', case_['base'], cursor: 1);
+
+  // Offline, so the write queues and its override stays pending across the frame.
+  client.setConnected(false);
+
+  final pending = client.mutation(
+    'messages:send',
+    optimisticUpdate: (store, _) => store.setQuery('messages:list', case_['value']),
+  );
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterApply']), 'the override displays immediately');
+
+  final frame = case_['frame']! as Map<String, Object?>;
+
+  pushData(client, 'sub_1', frame['data'], cursor: frame['cursor'] as int?);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterFrame']), 'and masks the concurrent server change');
+
+  client.close();
+
+  await pending.catchError((Object _) => null);
+
+  equals(canonical(seen.last), canonical(case_['displayedAfterRollback']), 'rolling back reveals the server value');
 }
 
 /// A buggy update must not fail the mutation, and must not leave half a patch.

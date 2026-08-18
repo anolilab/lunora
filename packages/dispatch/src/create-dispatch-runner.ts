@@ -49,12 +49,34 @@ const trimTrailingSlashes = (value: string): string => {
  */
 const DISPATCH_FAILURE_BRAND = Symbol("lunoraDispatchFailure");
 
-/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} and return it. */
-const markAsDispatchFailure = (error: LunoraError): LunoraError => {
+/**
+ * Non-enumerable slot carrying {@link RunFunctionOptions.messageId} onto a
+ * dispatch-failure error, when the caller supplied one. Read back via
+ * {@link getDispatchMessageId} — a batching consumer (`@lunora/queue`) uses it
+ * to attribute a deterministic failure to the one item that caused it.
+ */
+// eslint-disable-next-line no-secrets/no-secrets -- false positive: a Symbol description identifying this slot, not a credential
+const DISPATCH_MESSAGE_ID = Symbol("lunoraDispatchMessageId");
+
+/** Stamp `error` with {@link DISPATCH_FAILURE_BRAND} (and {@link DISPATCH_MESSAGE_ID}, when given) and return it. */
+const markAsDispatchFailure = (error: LunoraError, messageId?: string): LunoraError => {
     Object.defineProperty(error, DISPATCH_FAILURE_BRAND, { value: true });
+
+    if (messageId !== undefined) {
+        Object.defineProperty(error, DISPATCH_MESSAGE_ID, { value: messageId });
+    }
 
     return error;
 };
+
+/**
+ * Read back the {@link RunFunctionOptions.messageId} a dispatch call was
+ * scoped to, if any. `undefined` for an error not built by
+ * {@link toDispatchError}, or for one whose caller never supplied a
+ * `messageId` — both are treated identically by a consumer: unattributed.
+ */
+const getDispatchMessageId = (error: unknown): string | undefined =>
+    isLunoraError(error) ? (error as { [DISPATCH_MESSAGE_ID]?: string })[DISPATCH_MESSAGE_ID] : undefined;
 
 /**
  * Turn a non-ok dispatch response into a {@link LunoraError}. The runtime
@@ -67,14 +89,17 @@ const markAsDispatchFailure = (error: LunoraError): LunoraError => {
  * `DETERMINISTIC_DISPATCH_STATUSES`) from a transient one.
  * `@lunora/workflow`'s `createRunStep` consumes this to convert a deterministic
  * failure into a non-retryable step failure instead of burning its retry budget
- * on a call that can never succeed. `@lunora/queue`'s consumer does not yet act
- * on it — `dispatchQueueBatch`'s retry unit is the whole batch, and turning a
- * deterministic per-message failure into an ack-without-retry needs its own
- * redelivery-semantics change. An unparseable or unrecognized body falls back to
- * a generic `INTERNAL` carrying the HTTP status and the raw text (never
- * deterministic, since it isn't in the allowlist).
+ * on a call that can never succeed. `@lunora/queue`'s consumer acks the one
+ * attributed message (via {@link getDispatchMessageId}) instead of retrying the
+ * whole batch, when the handler scoped its `ctx.run` call with a `messageId`.
+ * An unparseable or unrecognized body falls back to a generic `INTERNAL`
+ * carrying the HTTP status and the raw text (never deterministic, since it
+ * isn't in the allowlist). `messageId`, when the caller
+ * supplied one via {@link RunFunctionOptions.messageId}, is stamped onto the
+ * built error via {@link markAsDispatchFailure} for {@link getDispatchMessageId}
+ * to read back.
  */
-const toDispatchError = (label: string, status: number, rawBody: string): LunoraError => {
+const toDispatchError = (label: string, status: number, rawBody: string, messageId: string | undefined): LunoraError => {
     try {
         const parsed = JSON.parse(rawBody) as { error?: unknown } | null;
         const errorBody = parsed?.error;
@@ -82,13 +107,13 @@ const toDispatchError = (label: string, status: number, rawBody: string): Lunora
         if (typeof errorBody === "object" && errorBody !== null && typeof (errorBody as { code?: unknown }).code === "string") {
             const { code, data, message } = errorBody as { code: string; data?: unknown; message?: unknown };
 
-            return markAsDispatchFailure(new LunoraError(code, typeof message === "string" ? message : undefined, { data, status }));
+            return markAsDispatchFailure(new LunoraError(code, typeof message === "string" ? message : undefined, { data, status }), messageId);
         }
     } catch {
         // Not JSON / not the expected envelope — fall through to the generic error.
     }
 
-    return markAsDispatchFailure(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }));
+    return markAsDispatchFailure(new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(status)}): ${rawBody}`, { status }), messageId);
 };
 
 /**
@@ -253,7 +278,7 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
                 return rethrowAsTimeoutOrOriginal(error);
             }
 
-            throw toDispatchError(label, response.status, errorBody);
+            throw toDispatchError(label, response.status, errorBody, runOptions.messageId);
         }
 
         let text: string;
@@ -282,4 +307,4 @@ const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRunFuncti
     };
 };
 
-export { createDispatchRunner, isDeterministicDispatchFailure };
+export { createDispatchRunner, getDispatchMessageId, isDeterministicDispatchFailure };

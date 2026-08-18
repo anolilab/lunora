@@ -431,3 +431,240 @@ describe("dispatchQueueBatch capture", () => {
         }
     });
 });
+
+/**
+ * Fake `fetch` for `ctx.run`'s dispatch POST: fails with `status`/`code` for
+ * the call whose `args.id === failFor`, succeeds for every other call. Models
+ * a handler that scopes each `ctx.run` call to one message (§1a's "adjacent
+ * read and call" shape), so attribution comes from the explicit `messageId`
+ * option the handler passes — never from inference over the request.
+ */
+const dispatchFetchFailingFor = (failFor: string, status: number, code: string) => async (_url: RequestInfo | URL, init?: RequestInit) => {
+    const { args } = JSON.parse((init?.body ?? "{}") as string) as { args?: { id?: string } };
+
+    if (args?.id === failFor) {
+        return Response.json({ error: { code, message: `dispatch failed for ${failFor}` } }, { status });
+    }
+
+    return Response.json({ ok: true });
+};
+
+/** A handler that scopes its own `ctx.run` call per message via `messageId` — the shape attribution requires. */
+const scopedDispatchQueue = defineQueue({
+    handler: async (context, b) => {
+        for (const m of b.messages) {
+            // eslint-disable-next-line no-await-in-loop -- each message's dispatch must be scoped (messageId) before the next starts, mirroring §1a's adjacent read/call shape
+            await context.run({ __lunoraRef: "fn" }, { id: m.id }, { messageId: m.id });
+        }
+    },
+});
+
+/**
+ * Like {@link scopedDispatchQueue}, but explicitly acks each message right
+ * after its own dispatch succeeds — models a handler that commits
+ * per-message as it goes, so an earlier message's disposition is already
+ * DECIDED (not merely "its `ctx.run` happened to succeed") by the time a
+ * later message's dispatch throws.
+ */
+const scopedDispatchQueueAckingAsItGoes = defineQueue({
+    handler: async (context, b) => {
+        for (const m of b.messages) {
+            // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
+            await context.run({ __lunoraRef: "fn" }, { id: m.id }, { messageId: m.id });
+            m.ack();
+        }
+    },
+});
+
+/**
+ * The shape a real handler writes: `message.run(...)`, with no knowledge of the
+ * `{ messageId }` option. The per-message runner pins the id itself, so the
+ * failure comes back attributed without the handler doing anything.
+ */
+const perMessageRunQueue = defineQueue({
+    handler: async (_context, b) => {
+        for (const m of b.messages) {
+            // eslint-disable-next-line no-await-in-loop -- see scopedDispatchQueue
+            await m.run({ __lunoraRef: "fn" }, { id: m.id });
+        }
+    },
+});
+
+const DISPATCH_ENV = { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" };
+
+describe("dispatchQueueBatch — poison message isolation (deterministic dispatch failure)", () => {
+    it("acks the one attributed message on a branded 404 and retries every other UNDECIDED message (never processed, so never lost)", async () => {
+        expect.assertions(5);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+            ),
+        ).resolves.toBeUndefined();
+
+        // The handler's loop stops at m2 — it never explicitly acks m1 (its own
+        // `ctx.run` merely resolved) and never even reaches m3. Both are
+        // undecided, so both must be RETRIED (redelivered), matching what the
+        // old whole-batch rethrow would have given them. Only m2, the
+        // attributed message, is acked.
+        expect(m2.acked).toBe(true);
+        expect(m1.retried).toBe(true);
+        expect(m3.retried).toBe(true);
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+        const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
+
+        expect(byId).toMatchObject({
+            m1: { outcome: "retry" },
+            m2: { error: expect.stringContaining("dispatch failed for m2"), outcome: "error" },
+            m3: { outcome: "retry" },
+        });
+    });
+
+    it("keeps an explicit ack the handler already made and only retries the genuinely undecided message", async () => {
+        expect.assertions(5);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: scopedDispatchQueueAckingAsItGoes, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+            ),
+        ).resolves.toBeUndefined();
+
+        // m1 was explicitly acked by the handler before m2's dispatch threw —
+        // that decision stands. m2 is the attributed poison message. m3 was
+        // never reached, so it must be retried, not silently acked.
+        expect(m1.acked).toBe(true);
+        expect(m2.acked).toBe(true);
+        expect(m3.retried).toBe(true);
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+        const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
+
+        expect(byId).toMatchObject({
+            m1: { outcome: "ack" },
+            m2: { outcome: "error" },
+            m3: { outcome: "retry" },
+        });
+    });
+
+    it("still rethrows the whole batch for a non-deterministic (500) failure — unchanged", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 500, "INTERNAL") },
+            ),
+        ).rejects.toThrow(/dispatch failed for m2/);
+
+        expect(m2.acked).toBe(false);
+    });
+
+    it("still rethrows the whole batch for a 429 (transient — guards against widening the deterministic set)", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: scopedDispatchQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 429, "RATE_LIMITED") },
+            ),
+        ).rejects.toThrow(/dispatch failed for m2/);
+
+        expect(m2.acked).toBe(false);
+    });
+
+    it("isolates the poison message for a handler that only uses `message.run` — no capture sink, no messageId option", async () => {
+        expect.assertions(4);
+
+        const m1 = captureMessage({ id: "m1" }, { id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { id: "m2" });
+        const m3 = captureMessage({ id: "m3" }, { id: "m3" });
+
+        // The public path a real app takes: the handler calls `message.run(...)`
+        // and knows nothing about `{ messageId }`, and production runs with NO
+        // capture sink. Attribution used to require both, so this batch
+        // dead-lettered wholesale — one bad message retrying all its siblings.
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2, m3]),
+                { q: { definition: perMessageRunQueue, exportName: "q" } },
+                { env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 404, "NOT_FOUND") },
+            ),
+        ).resolves.toBeUndefined();
+
+        expect(m2.acked).toBe(true);
+        expect(m1.retried).toBe(true);
+        expect(m3.retried).toBe(true);
+    });
+
+    it("records the attributed message's own disposition (error, never dead-lettered) alongside its siblings' retries", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        // `attempts: 9` is past `maxRetries: 3`: a retried sibling at that point
+        // IS dead-lettered, but the attributed message was acked, so the broker
+        // never redelivers it and it must not be flagged.
+        const m1 = captureMessage({ id: "m1" }, { attempts: 9, id: "m1" });
+        const m2 = captureMessage({ id: "m2" }, { attempts: 9, id: "m2" });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [m1, m2]),
+                { q: { definition: perMessageRunQueue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV, fetchImpl: dispatchFetchFailingFor("m2", 422, "INVALID_ARGUMENT") },
+            ),
+        ).resolves.toBeUndefined();
+
+        const [records] = capture.mock.calls[0] as [CapturedQueueMessage[]];
+        const byId = Object.fromEntries(records.map((record) => [record.messageId, record]));
+
+        expect(byId).toStrictEqual({
+            m1: expect.objectContaining({ deadLettered: true, error: undefined, outcome: "retry" }),
+            m2: expect.objectContaining({ deadLettered: false, error: expect.stringContaining("dispatch failed for m2"), outcome: "error" }),
+        });
+    });
+
+    it("still rethrows when the handler throws undefined (not a LunoraError, so never attributable)", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn<QueueCaptureSink>();
+        const queue = defineQueue({
+            handler: () => {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercise the falsy-throw path: a non-error throw can never satisfy isDeterministicDispatchFailure, so it must stay on the whole-batch rethrow
+                throw undefined;
+            },
+        });
+
+        await expect(
+            dispatchQueueBatch(
+                batch("q", [captureMessage({ id: "m1" }, { id: "m1" })]),
+                { q: { definition: queue, exportName: "q" } },
+                { capture, env: DISPATCH_ENV },
+            ),
+        ).rejects.toBeUndefined();
+    });
+});

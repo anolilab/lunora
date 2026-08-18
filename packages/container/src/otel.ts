@@ -36,7 +36,6 @@ import { detectHostResource, detectServiceResource, mergeResourceAttributes } fr
 
 /**
  * An attribute value carried on a span or log.
- * @experimental
  */
 type ContainerAttributeValue = boolean | number | string;
 
@@ -46,7 +45,6 @@ type ContainerAttributeValue = boolean | number | string;
  * cancels the response `body` so Node/undici can release the socket for
  * keep-alive reuse instead of leaving it occupied by an unread stream. It reads
  * `ok`/`status` to detect a rejected export and nothing else from the response.
- * @experimental
  */
 type OtelFetchLike = (
     input: string,
@@ -55,7 +53,6 @@ type OtelFetchLike = (
 
 /**
  * A single span the container process asks the exporter to record.
- * @experimental
  */
 interface ContainerSpanInput {
     /** Attributes attached to the span (rendered under the OTLP `attributes` list). */
@@ -72,7 +69,6 @@ interface ContainerSpanInput {
 
 /**
  * A single log line the container process asks the exporter to record.
- * @experimental
  */
 interface ContainerLogInput {
     /** Attributes attached to the log record. */
@@ -87,7 +83,6 @@ interface ContainerLogInput {
 
 /**
  * Options for {@link createContainerTelemetry}.
- * @experimental
  */
 interface ContainerTelemetryOptions {
     /**
@@ -161,7 +156,6 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * The exporter handle {@link createContainerTelemetry} returns.
- * @experimental
  */
 interface ContainerTelemetry {
     /** Record one log line (no-op when disabled). */
@@ -283,7 +277,6 @@ const logBody = (log: ContainerLogInput, serviceName: string, nowMs: number, res
  * `serviceName`, `traceparent`) always fall back to their `LUNORA_*` env var;
  * resource fields (`serviceVersion`, `deploymentEnvironment`) only do so under
  * `detectResources: true`.
- * @experimental
  */
 const createContainerTelemetry = (options: ContainerTelemetryOptions = {}): ContainerTelemetry => {
     const endpoint = options.endpoint ?? readEnv("LUNORA_OTLP_ENDPOINT");

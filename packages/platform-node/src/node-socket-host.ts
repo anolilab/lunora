@@ -155,6 +155,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
     const socket: SocketHost = {
         accept: (raw, attachment, tags) => {
+            if (!database.open) {
+                throw new Error("platform closed: cannot accept a socket");
+            }
+
             const id = crypto.randomUUID();
             const tagSet = new Set(tags);
             const state: NodeSocket = {
@@ -170,10 +174,8 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
 
             runtimeSockets.set(id, state);
 
-            if (database.open) {
-                // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
-                upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
-            }
+            // eslint-disable-next-line unicorn/no-null -- see `persistAttachment`: SQL NULL for an absent attachment
+            upsertRow.run(id, attachment === undefined ? null : serialize(attachment), JSON.stringify([...tagSet]));
 
             return createHandle(state);
         },
@@ -200,6 +202,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             return id;
         },
         removeTag: (handle, tag) => {
+            if (!database.open) {
+                throw new Error("platform closed: cannot remove a tag");
+            }
+
             const state = runtimeSockets.get(handleIds.get(handle) ?? "");
 
             if (state === undefined) {
@@ -215,6 +221,10 @@ export const createNodeSocketHost = (database: Database.Database): NodeSocketHos
             persistTags(state.id, state.tags);
         },
         setTag: (handle, tag) => {
+            if (!database.open) {
+                throw new Error("platform closed: cannot set a tag");
+            }
+
             const state = runtimeSockets.get(handleIds.get(handle) ?? "");
 
             if (state === undefined) {

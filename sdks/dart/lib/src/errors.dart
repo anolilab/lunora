@@ -47,6 +47,15 @@ const String clientClosed = 'CLIENT_CLOSED';
 /// discarded rather than replayed as somebody else.
 const String offlineIdentityChanged = 'OFFLINE_IDENTITY_CHANGED';
 
+/// A queued write's args cannot be wire-encoded, so it can never succeed and was
+/// settled terminally instead of re-queued.
+///
+/// Coded rather than surfaced as the raw codec exception, matching the sibling
+/// ports: every other terminal drop here carries a code, and a consumer
+/// classifying by exception type would need each language's codec error
+/// hierarchy to spot this one.
+const String offlineWriteUnencodable = 'OFFLINE_WRITE_UNENCODABLE';
+
 /// Per-slot codes a batch reply uses for a shard or transport failure rather
 /// than an application verdict — the server never decided anything about the
 /// write.

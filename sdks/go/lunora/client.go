@@ -11,6 +11,9 @@ import (
 const (
 	// RPCPath is the single endpoint every query/mutation/action posts to.
 	RPCPath = "/_lunora/rpc"
+	// RPCBatchPath is where a flush of two or more queued writes goes, as one
+	// hop carrying independent calls.
+	RPCBatchPath = "/_lunora/rpc-batch"
 	// WSPath is the live-subscription endpoint.
 	WSPath = "/_lunora/ws"
 )
@@ -83,20 +86,51 @@ type Client struct {
 	// Post performs the HTTP round-trip.
 	Post HTTPPoster
 
-	// mu guards subscriptions, nextID, and send.
+	// mu guards clientID, identity, subscriptions, nextID, and send.
 	//
 	// Not optional in Go. The normal topology is a socket read loop calling
 	// HandleFrame on one goroutine while application code calls Subscribe on
 	// another, and Go's map runtime answers a concurrent read/write with
 	// `fatal error: concurrent map read and map write` — which no recover()
 	// catches. An unsynchronised map here kills the consumer's process.
-	mu            sync.Mutex
+	mu sync.Mutex
+	// clientID identifies this client to the shard. It rides every write that
+	// carries an idempotency key, because an anonymous caller has no
+	// server-minted user id to namespace its de-duplication rows by. Read it with
+	// ClientID and replace it with SetClientID — both under mu, because the write
+	// path reads it from whichever goroutine called Submit while a sign-in may be
+	// replacing it from another.
+	//
+	// NewClient mints a fresh one per instance, which is what a shared constant
+	// cannot be: the shard namespaces anonymous idempotency by this value, so two
+	// anonymous callers sharing it also share one de-duplication key space, and a
+	// colliding caller-supplied mutation id makes the second write short-circuit
+	// to the first caller's cached result without ever running.
+	//
+	// Pin a stable value with SetClientID when the offline queue is DURABLE: a
+	// write restored after a restart replays under the id that issued it, so a
+	// per-process id would namespace the replay somewhere the original write
+	// never was.
+	clientID string
+	// identity is an opaque, stable, NON-SECRET stamp for whoever is signed in —
+	// a user id, not a bearer token. It is persisted alongside every queued write
+	// and re-checked before that write replays, so a restart cannot push one
+	// user's queued writes as another. nil means signed out, which is itself an
+	// identity a write can be stamped with. See Identity/SetIdentity.
+	identity      *string
 	send          FrameSender
 	subscriptions map[string]*subscription
 	shapes        map[string]*shapeSubscription
 	pokes         map[string]*pokeBuffer
 	nextID        int
 	nextShapeID   int
+
+	// offline holds the writes made while send was nil. Guarded by mu, which is
+	// why OfflineQueue carries no lock of its own.
+	offline          *OfflineQueue
+	wasEverConnected bool
+	closed           bool
+	settledListeners []func(MutationSettled)
 }
 
 // shapeSubscription is a partially-replicated keyed view maintained by pokes.
@@ -126,10 +160,18 @@ type subscription struct {
 	id           string
 	functionPath string
 	args         any
-	onData       DataHandler
-	onError      ErrorHandler
-	cursor       any
-	epoch        any
+	// argsKey is the stable wire key of args, computed once at subscribe time so
+	// a write's optimistic targeting can compare without re-serialising every
+	// subscription's args on every write.
+	argsKey  string
+	shardKey string
+	onData   DataHandler
+	onError  ErrorHandler
+	cursor   any
+	epoch    any
+	// state carries the displayed value and its optimistic overlays. See
+	// optimistic.go.
+	state OptimisticState
 }
 
 // NewClient builds a client for baseURL. post may be nil if only frame building
@@ -137,20 +179,106 @@ type subscription struct {
 func NewClient(baseURL string, post HTTPPoster) *Client {
 	return &Client{
 		BaseURL:       baseURL,
+		clientID:      RandomID(),
 		Post:          post,
+		offline:       NewOfflineQueue(OfflineQueueOptions{}),
 		pokes:         map[string]*pokeBuffer{},
 		shapes:        map[string]*shapeSubscription{},
 		subscriptions: map[string]*subscription{},
 	}
 }
 
+// ClientID returns the id this client namespaces anonymous idempotency under.
+func (c *Client) ClientID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.clientID
+}
+
+// SetClientID replaces it. Call it before the first write: a write already
+// queued keeps the id that ISSUED it, which is what makes a replay after a
+// restart land in the namespace the original write was destined for.
+func (c *Client) SetClientID(clientID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.clientID = clientID
+}
+
+// Identity returns the stamp queued writes are bound to; nil means signed out.
+func (c *Client) Identity() *string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.identity
+}
+
+// SetIdentity records who is signed in. Accessors rather than an exported field:
+// a consumer setting it from a sign-in handler while the socket goroutine is
+// mid-flush is the ordinary case, and an unsynchronised field there is a data
+// race the consumer's own `go test -race` would report against this package.
+func (c *Client) SetIdentity(identity *string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.identity = identity
+}
+
 // AttachSocket registers the sender used for subscription frames. Call it once
 // the socket is open; buffered subscriptions are (re)sent by ResendSubscriptions.
+//
+// It also latches "has connected at least once", which is what the write queue
+// gates on: a write made before the FIRST connect fails fast by default, so a
+// misconfigured endpoint surfaces on the first write instead of silently filling
+// a queue that will never flush.
 func (c *Client) AttachSocket(send FrameSender) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.send = send
+	c.wasEverConnected = true
+}
+
+// DetachSocket forgets the sender, so subsequent writes queue rather than fail.
+// Call it when the socket closes.
+func (c *Client) DetachSocket() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.send = nil
+}
+
+// Online reports whether a socket is currently attached.
+func (c *Client) Online() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.send != nil
+}
+
+// Close rejects every queued write so no caller waits on a dead client. Durable
+// storage is untouched: the next session restores those writes.
+func (c *Client) Close() {
+	c.mu.Lock()
+	c.closed = true
+	c.send = nil
+	discarded := c.offline.Clear()
+	c.mu.Unlock()
+
+	// Settled outside the lock: a rejection rolls optimistic layers back, which
+	// re-acquires it.
+	c.reportDiscarded(discarded)
+}
+
+// argsOrEmpty normalises a nil argument record to the empty object the wire
+// codec and the stable key both expect.
+func argsOrEmpty(args any) any {
+	if args == nil {
+		return map[string]any{}
+	}
+
+	return args
 }
 
 // BuildRPCBody assembles the POST /_lunora/rpc body. shardKey is omitted when
@@ -181,14 +309,27 @@ func BuildRPCBody(functionPath string, args any, shardKey string) (map[string]an
 // error. Without it a 502 with body `{"message":"bad gateway"}` would decode to
 // a nil result and a nil error — a caller would believe its mutation committed.
 func ParseRPCResponse(status int, raw []byte) (any, error) {
+	value, _, err := ParseRPCEnvelope(status, raw)
+
+	return value, err
+}
+
+// ParseRPCEnvelope is ParseRPCResponse plus the echoed commitCursor — the CDC
+// cursor the write committed at.
+//
+// The cursor is what gates an optimistic overlay's removal, so it has to survive
+// the parse rather than be discarded with the rest of the envelope. It is nil for
+// a read, and for a write against a shard with CDC off — the degraded case the
+// optimistic engine falls back to one-shot behaviour for.
+func ParseRPCEnvelope(status int, raw []byte) (any, *int64, error) {
 	var body map[string]any
 
 	if err := json.Unmarshal(raw, &body); err != nil {
 		if status < 200 || status > 299 {
-			return nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status)}
+			return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d with an unparseable body", status)}
 		}
 
-		return nil, fmt.Errorf("lunora: malformed RPC response: %w", err)
+		return nil, nil, fmt.Errorf("lunora: malformed RPC response: %w", err)
 	}
 
 	if envelope, ok := body["error"].(map[string]any); ok {
@@ -208,20 +349,51 @@ func ParseRPCResponse(status int, raw []byte) (any, error) {
 		if payload, present := envelope["data"]; present && payload != nil {
 			decoded, err := DecodeWire(payload)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 
 			data = decoded
 		}
 
-		return nil, APIError{Code: code, Data: data, Message: message}
+		return nil, nil, APIError{Code: code, Data: data, Message: message}
 	}
 
 	if status < 200 || status > 299 {
-		return nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status)}
+		return nil, nil, APIError{Code: "INTERNAL", Message: fmt.Sprintf("HTTP %d without an error envelope", status)}
 	}
 
-	return DecodeWire(body["result"])
+	result, err := DecodeWire(body["result"])
+
+	return result, asCursor(body["commitCursor"]), err
+}
+
+// asCursor narrows a JSON number to the int64 cursors are compared as.
+//
+// encoding/json decodes every number into float64, so a cursor read straight out
+// of the map cannot be ordered against another without this. A non-numeric (or
+// absent) value is nil, which every cursor comparison treats as "no cursor".
+func asCursor(value any) *int64 {
+	switch typed := value.(type) {
+	case float64:
+		cursor := int64(typed)
+
+		return &cursor
+	case int64:
+		return &typed
+	case int:
+		cursor := int64(typed)
+
+		return &cursor
+	case json.Number:
+		cursor, err := typed.Int64()
+		if err != nil {
+			return nil
+		}
+
+		return &cursor
+	default:
+		return nil
+	}
 }
 
 // Query invokes a query.
@@ -245,18 +417,27 @@ func (c *Client) Action(functionPath string, args any, shardKey string) (any, er
 }
 
 func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID string) (any, error) {
+	value, _, err := c.rpcFull(functionPath, args, shardKey, mutationID, "")
+
+	return value, err
+}
+
+// rpcFull performs one round-trip and returns the echoed commit cursor with the
+// result. clientID overrides Client.ClientID, so a replayed write namespaces
+// server-side under the id that ISSUED it rather than whatever this session has.
+func (c *Client) rpcFull(functionPath string, args any, shardKey string, mutationID string, clientID string) (any, *int64, error) {
 	if c.Post == nil {
-		return nil, fmt.Errorf("lunora: no HTTPPoster configured")
+		return nil, nil, fmt.Errorf("lunora: no HTTPPoster configured")
 	}
 
 	body, err := BuildRPCBody(functionPath, args, shardKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	headers := map[string]string{"content-type": "application/json"}
@@ -266,14 +447,63 @@ func (c *Client) rpc(functionPath string, args any, shardKey string, mutationID 
 
 	if mutationID != "" {
 		headers["x-lunora-mutation-id"] = mutationID
+
+		// Rides WITH the idempotency key, never alone. An anonymous caller has no
+		// server-minted user id, so the shard namespaces its de-duplication rows
+		// by this client id instead; without one every anonymous client shares a
+		// single key space and a colliding mutation id suppresses another
+		// client's write.
+		if clientID == "" {
+			clientID = c.ClientID()
+		}
+
+		if clientID != "" {
+			headers["x-lunora-client-id"] = clientID
+		}
 	}
 
 	status, raw, err := c.Post(joinURL(c.BaseURL, RPCPath), headers, payload)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	return ParseRPCEnvelope(status, raw)
+}
+
+// rpcBatch posts one /_lunora/rpc-batch chunk and returns the parsed body.
+//
+// No x-lunora-mutation-id on the request: a batch is ONE transport hop carrying
+// independent calls, so each entry carries its own idempotency key and client id
+// in the body. A single outer header would name one write and de-duplicate the
+// whole chunk against it.
+func (c *Client) rpcBatch(calls []map[string]any) (map[string]any, error) {
+	if c.Post == nil {
+		return nil, fmt.Errorf("lunora: no HTTPPoster configured")
+	}
+
+	payload, err := json.Marshal(map[string]any{"calls": calls})
+	if err != nil {
 		return nil, err
 	}
 
-	return ParseRPCResponse(status, raw)
+	headers := map[string]string{"content-type": "application/json"}
+	if c.AuthToken != "" {
+		headers["authorization"] = "Bearer " + c.AuthToken
+	}
+
+	_, raw, err := c.Post(joinURL(c.BaseURL, RPCBatchPath), headers, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	var body map[string]any
+
+	if err := json.Unmarshal(raw, &body); err != nil {
+		// A non-JSON body, an edge 5xx say. Transient: do not lose the writes.
+		return nil, err
+	}
+
+	return body, nil
 }
 
 // Call invokes functionPath and decodes the result into T.
@@ -421,7 +651,26 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 
 	c.nextID++
 	id := fmt.Sprintf("sub_%d", c.nextID)
-	c.subscriptions[id] = &subscription{args: args, functionPath: functionPath, id: id, onData: onData, onError: onError}
+	// A key that cannot be built (a value outside the wire codec) leaves argsKey
+	// empty, which simply means no optimistic write will target this
+	// subscription — never a wrong match, since a write's key is built the same
+	// way and an unencodable write cannot be sent either.
+	argsKey, _ := StableWireKey(argsOrEmpty(args))
+	entry := &subscription{
+		args:         args,
+		argsKey:      argsKey,
+		functionPath: functionPath,
+		id:           id,
+		onData:       onData,
+		onError:      onError,
+		shardKey:     shardKey,
+	}
+
+	if onData != nil {
+		entry.state.Callbacks = []func(any){func(value any) { onData(value) }}
+	}
+
+	c.subscriptions[id] = entry
 	send := c.send
 	c.mu.Unlock()
 
@@ -444,6 +693,65 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 		}
 	}
 }
+
+// StreamEvent is one item delivered by [Client.Stream]: a value, or the
+// subscription error that ended it.
+//
+// One channel carrying both, rather than a value channel plus an error channel:
+// a consumer selecting on two channels can read them out of order, and the whole
+// point of a stream is that what arrived first is delivered first.
+type StreamEvent struct {
+	Value any
+	Err   error
+}
+
+// Stream opens a live query as a receive channel, for `for event := range …`.
+//
+// Each call opens its OWN subscription, torn down by the returned [Unsubscribe],
+// which also closes the channel. Call it — a `defer` is the usual place — or the
+// subscription outlives the loop.
+//
+// The channel is BUFFERED and its sends BLOCK when it fills. That is deliberate
+// backpressure: dropping a value would make a live query silently wrong, and the
+// sender is the frame dispatcher, so a consumer that stops reading slows frame
+// handling rather than losing data. A consumer that cannot keep up should read
+// on its own goroutine.
+func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
+	events := make(chan StreamEvent, streamBufferSize)
+	done := make(chan struct{})
+
+	// Guarded by `done` rather than sent to blindly: an unsubscribe closes the
+	// channel, and a frame still in flight would otherwise send on a closed
+	// channel and panic in the caller's socket loop.
+	emit := func(event StreamEvent) {
+		select {
+		case <-done:
+		case events <- event:
+		}
+	}
+
+	unsubscribe := c.Subscribe(
+		functionPath,
+		args,
+		func(value any) { emit(StreamEvent{Value: value}) },
+		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
+		shardKey,
+	)
+	var once sync.Once
+
+	return events, func() {
+		once.Do(func() {
+			unsubscribe()
+			close(done)
+			close(events)
+		})
+	}
+}
+
+// streamBufferSize is how many values [Client.Stream] holds before its sends
+// block. Big enough that an ordinary consumer never sees backpressure, small
+// enough that a stalled one is noticed rather than growing without bound.
+const streamBufferSize = 64
 
 // SubscribeShape opens a partially-replicated keyed view. onRows fires once per
 // applied poke with the view's full contents, in insertion order.
@@ -568,17 +876,59 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		}
 
 		if entry != nil {
-			c.advance(entry, frame)
+			var deferred []func()
 
-			if entry.onData != nil {
-				entry.onData(value)
+			c.mu.Lock()
+			c.advanceLocked(entry, frame)
+			entry.state.ServerBase = value
+
+			// `cursor` is OPTIONAL on a data/delta frame, and one that omits it
+			// must LEAVE the tracked cursor where it was. Nulling it strands every
+			// pending layer: the tracked cursor is what a later commitCursor is
+			// compared against, so the confirm that should have dropped the overlay
+			// keeps it and the write renders twice.
+			if cursor := asCursor(frame["cursor"]); cursor != nil {
+				entry.state.ServerCursor = cursor
 			}
+
+			// Drop the overlays this frame has caught up with, then RE-FOLD the
+			// rest onto the new authoritative base rather than clobbering them:
+			// a still-queued write's predicted value has to survive an unrelated
+			// delta on the same query.
+			DropConfirmedLayers(&entry.state, entry.state.ServerCursor)
+			NotifySubscription(&entry.state, FoldOptimistic(entry.state.ServerBase, entry.state.Layers), &deferred)
+			c.mu.Unlock()
+
+			// Handlers run outside the mutex: one that subscribes would otherwise
+			// deadlock on the lock it is already inside.
+			runDeferred(deferred)
 		}
 
 		return kind, nil
 	case "resume", "settled":
 		if entry != nil {
-			c.advance(entry, frame)
+			var deferred []func()
+
+			c.mu.Lock()
+			c.advanceLocked(entry, frame)
+
+			// A resume/settled frame advances the cursor without a value change —
+			// but a write whose result was byte-identical for this query still
+			// committed at or under this cursor, so its overlay is confirmed. Sweep
+			// here too, not just on data frames, or a no-visible-change write leaves
+			// its prediction on screen until some unrelated write happens to produce
+			// a data frame — indefinitely on a quiet query.
+			if cursor := asCursor(frame["cursor"]); cursor != nil {
+				entry.state.ServerCursor = cursor
+			}
+
+			if DropConfirmedLayers(&entry.state, entry.state.ServerCursor) {
+				NotifySubscription(&entry.state, FoldOptimistic(entry.state.ServerBase, entry.state.Layers), &deferred)
+			}
+
+			c.mu.Unlock()
+
+			runDeferred(deferred)
 		}
 
 		return kind, nil
@@ -759,16 +1109,23 @@ func removeKey(keys []string, key string) []string {
 	return keys
 }
 
-func (c *Client) advance(entry *subscription, frame map[string]any) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+// advanceLocked moves the resume point. The caller holds the mutex: every frame
+// path has to update the resume point and the optimistic state in one critical
+// section so a concurrent frame cannot interleave between them.
+func (c *Client) advanceLocked(entry *subscription, frame map[string]any) {
 	if cursor, ok := frame["cursor"]; ok {
 		entry.cursor = cursor
 	}
 
 	if epoch, ok := frame["epoch"]; ok {
 		entry.epoch = epoch
+	}
+}
+
+// runDeferred runs the notifications queued while the mutex was held.
+func runDeferred(deferred []func()) {
+	for _, call := range deferred {
+		call()
 	}
 }
 

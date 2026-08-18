@@ -3,6 +3,73 @@ import type { AdvisorQueryRead } from "../queries";
 import type { AdvisorSchema, AdvisorTable } from "../schema";
 
 /**
+ * Personally-identifiable-information column names. Kept deliberately tight to
+ * unambiguous PII field names — not broad "sounds personal" guesses — to hold
+ * the false-positive rate down. Matched through {@link isPiiColumn}, never by
+ * bare set membership: the spelling a schema actually uses (`emailAddress`,
+ * `home_phone`) is rarely the canonical entry.
+ */
+const PII_FIELD_NAME_LIST = [
+    "address",
+    "birthdate",
+    "creditCard",
+    "dateOfBirth",
+    "dob",
+    "driversLicense",
+    "email",
+    "firstName",
+    "fullName",
+    "lastName",
+    "nationalId",
+    "passport",
+    "phone",
+    "phoneNumber",
+    "socialSecurity",
+    "socialSecurityNumber",
+    "ssn",
+    "taxId",
+] as const;
+
+/** Every character a column name can be spelled with that carries no meaning for matching. */
+const NON_ALPHANUMERIC = /[^a-z0-9]/giu;
+
+/** A lowercase/digit run immediately followed by an uppercase letter — a camelCase word boundary. */
+const CAMEL_BOUNDARY = /([a-z0-9])([A-Z])/gu;
+
+/** Any run of separator characters between words. */
+const WORD_SEPARATOR = /[^a-zA-Z0-9]+/u;
+
+/** `column`, lowercased with every non-alphanumeric character stripped. */
+const normalize = (column: string): string => column.replaceAll(NON_ALPHANUMERIC, "").toLowerCase();
+
+/** Split a column name into lowercase words on camelCase boundaries and non-alphanumeric separators. */
+const tokenize = (column: string): string[] =>
+    column
+        .replaceAll(CAMEL_BOUNDARY, "$1_$2")
+        .split(WORD_SEPARATOR)
+        .filter((token) => token.length > 0)
+        .map((token) => token.toLowerCase());
+
+/**
+ * {@link PII_FIELD_NAME_LIST}, normalized — so a column spelled with a different
+ * separator or casing (`date_of_birth`, `DateOfBirth`) still matches a compound
+ * entry (`dateOfBirth`) by its full name, not just a fragment of it.
+ */
+const NORMALIZED_PII_NAMES: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST.map((name) => normalize(name)));
+
+/**
+ * The {@link PII_FIELD_NAME_LIST} entries that are a single word on their own
+ * (`email`, `phone`, `ssn`, `dob`, `address`, `passport`) — specific enough that
+ * any ONE matching token in a compound column name (`email_address`, `homePhone`)
+ * is reason enough to flag it. A compound PII name (`dateOfBirth`, `phoneNumber`,
+ * `creditCard`) is deliberately excluded here: its individual words (`date`,
+ * `number`, `card`) are common enough on their own that matching them as loose
+ * tokens would flag unrelated columns — a compound name is only matched whole,
+ * via {@link NORMALIZED_PII_NAMES}.
+ */
+const PII_TOKENS: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST.filter((name) => tokenize(name).length === 1).map((name) => name.toLowerCase()));
+
+/**
  * Ownership / tenancy columns whose presence marks a table as holding user- or
  * tenant-scoped rows. Mirrors (does not import — `@lunora/codegen` depends on
  * `@lunora/advisor`, not the reverse) `@lunora/codegen`'s
@@ -25,24 +92,29 @@ export const OWNERSHIP_FIELD_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Personally-identifiable-information columns whose presence marks a table as
- * holding sensitive personal data. Kept deliberately tight to unambiguous PII
- * field names — not broad "sounds personal" guesses — to hold the
- * false-positive rate down, the same exact-name-membership convention as
- * {@link OWNERSHIP_FIELD_NAMES}.
+ * `true` when `column` names PII, judged two ways: the whole column (normalized)
+ * matches a {@link PII_FIELD_NAMES} entry exactly, or one of its words matches a
+ * single-word entry.
+ *
+ * Token-based rather than a substring match, which would match a PII fragment
+ * ANYWHERE in the normalized string — `dob` inside `adobeAssetId`, `ssn` inside
+ * `classSnapshot` — turning unrelated columns into false positives. And
+ * deliberately looser than bare set membership, which misses every real-world
+ * spelling of a listed name (`emailAddress`, `home_phone`, `userSsn`).
+ *
+ * Still conservative in the other direction (not a full NLP classifier): a
+ * genuinely unusual PII column name that shares no word with
+ * {@link PII_FIELD_NAMES} slips through, and that false negative is the cheaper
+ * mistake here.
+ *
+ * This is the package's ONE PII-naming policy. Every lint that asks "is this
+ * column PII?" goes through it — a second, weaker copy beside the set it derives
+ * from is how eight listed names silently stopped being covered once before.
  */
-export const PII_FIELD_NAMES: ReadonlySet<string> = new Set([
-    "address",
-    "dateOfBirth",
-    "dob",
-    "email",
-    "firstName",
-    "lastName",
-    "phone",
-    "phoneNumber",
-    "socialSecurityNumber",
-    "ssn",
-]);
+export const isPiiColumn = (column: string): boolean => NORMALIZED_PII_NAMES.has(normalize(column)) || tokenize(column).some((token) => PII_TOKENS.has(token));
+
+/** The PII column names {@link isPiiColumn} matches against. */
+export const PII_FIELD_NAMES: ReadonlySet<string> = new Set(PII_FIELD_NAME_LIST);
 
 /**
  * Framework-managed columns every table has implicitly. They never appear in a
@@ -58,8 +130,7 @@ export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id
  * lookup table (e.g. `emojis`, `countries`, no such columns) apart from a
  * `.public()` table that actually carries data an RLS opt-out would expose.
  */
-export const ownershipOrPiiColumns = (table: AdvisorTable): string[] =>
-    table.fields.filter((field) => OWNERSHIP_FIELD_NAMES.has(field) || PII_FIELD_NAMES.has(field));
+export const ownershipOrPiiColumns = (table: AdvisorTable): string[] => table.fields.filter((field) => OWNERSHIP_FIELD_NAMES.has(field) || isPiiColumn(field));
 
 /**
  * Build a `Set` of a table's columns (declared + system) once, so repeated

@@ -6,7 +6,16 @@
 import { LunoraError } from "@lunora/errors";
 
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
-import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
+import { eventDefinitionProblem } from "./define-event";
+import type {
+    LunoraWorkflowsOptions,
+    WorkflowBindingLike,
+    WorkflowCreateOptions,
+    WorkflowEventDefinition,
+    WorkflowHandle,
+    WorkflowInstanceLike,
+    Workflows,
+} from "./types";
 
 /**
  * Reject any public create whose params carry the reserved branch-marker key.
@@ -39,6 +48,24 @@ const handleFor = (binding: WorkflowBindingLike): WorkflowHandle => {
             return binding.createBatch(batch);
         },
         get: async (id: string): Promise<WorkflowInstanceLike> => binding.get(id),
+        sendEvent: async <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload): Promise<void> => {
+            // The trust boundary, mirroring `rejectReservedParams` above: the brand
+            // on `WorkflowEventDefinition` is a public boolean, so a definition-shaped
+            // object built from untrusted data would otherwise reach the wire — and a
+            // reserved `lunora:` type could forge a `ctx.parallel` branch outcome into
+            // a parent instance.
+            const problem = eventDefinitionProblem(event);
+
+            if (problem !== undefined) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/workflow: sendEvent ${problem}`);
+            }
+
+            const instance = await binding.get(instanceId);
+
+            // Parse before the send: a bad payload fails the caller's request rather
+            // than waking the workflow on a value its `ctx.waitForEvent` will reject.
+            await instance.sendEvent({ payload: event.payload.parse(payload), type: event.type });
+        },
     };
 };
 

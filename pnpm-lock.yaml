@@ -2378,6 +2378,9 @@ importers:
         specifier: catalog:content
         version: 2.9.0
     devDependencies:
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../container
       '@lunora/dispatch':
         specifier: workspace:*
         version: link:../dispatch
@@ -2424,6 +2427,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 5.20260811.1(patch_hash=dd62a39762b2869c280d5813906dc64ae3b6ed1e0018d5244a1aacb634ddac30)
+      '@lunora/search-core':
+        specifier: workspace:*
+        version: link:../search-core
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -2464,6 +2470,9 @@ importers:
       '@angular/core':
         specifier: catalog:angular
         version: 22.1.1(@angular/compiler@22.1.1)(rxjs@7.8.2)(zone.js@0.16.2)
+      '@angular/platform-browser':
+        specifier: catalog:angular
+        version: 22.1.1(@angular/common@22.1.1(@angular/core@22.1.1(@angular/compiler@22.1.1)(rxjs@7.8.2)(zone.js@0.16.2))(rxjs@7.8.2))(@angular/core@22.1.1(@angular/compiler@22.1.1)(rxjs@7.8.2)(zone.js@0.16.2))
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -2476,6 +2485,9 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.2
+      jsdom:
+        specifier: catalog:frontend
+        version: 30.0.1(@noble/hashes@2.2.0)
       rxjs:
         specifier: catalog:angular
         version: 7.8.2
@@ -3349,13 +3361,13 @@ importers:
         specifier: workspace:*
         version: link:../errors
       '@lunora/observability':
-        specifier: 1.0.0-alpha.29
+        specifier: 1.0.0-alpha.31
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.17
+        specifier: 1.0.0-alpha.19
         version: link:../platform-cloudflare
       '@lunora/shard-engine':
         specifier: workspace:*
@@ -3497,6 +3509,9 @@ importers:
 
   packages/hyperdrive:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
@@ -3516,9 +3531,6 @@ importers:
       '@electric-sql/pglite-socket':
         specifier: catalog:sql
         version: 0.2.7(@electric-sql/pglite-age@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_hashids@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_ivm@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_textsearch@0.0.6(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pg_uuidv7@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgtap@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite-pgvector@0.0.5(@electric-sql/pglite@0.5.4))(@electric-sql/pglite@0.5.4)
-      '@lunora/errors':
-        specifier: workspace:*
-        version: link:../errors
       '@types/node':
         specifier: catalog:types
         version: 26.2.0
@@ -3574,7 +3586,7 @@ importers:
         specifier: workspace:*
         version: link:../flags
       '@lunora/observability':
-        specifier: 1.0.0-alpha.29
+        specifier: 1.0.0-alpha.31
         version: link:../observability
       '@lunora/platform':
         specifier: workspace:*
@@ -3976,7 +3988,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/platform-cloudflare':
-        specifier: 1.0.0-alpha.17
+        specifier: 1.0.0-alpha.19
         version: link:../platform-cloudflare
       '@lunora/runtime':
         specifier: workspace:*
@@ -4885,6 +4897,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -4899,7 +4914,7 @@ importers:
         specifier: workspace:*
         version: link:../do
       '@lunora/observability':
-        specifier: 1.0.0-alpha.29
+        specifier: 1.0.0-alpha.31
         version: link:../observability
       '@types/node':
         specifier: catalog:types
@@ -5073,6 +5088,9 @@ importers:
       '@lunora/dispatch':
         specifier: workspace:*
         version: link:../dispatch
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
       '@types/node':
         specifier: catalog:types
         version: 26.2.0

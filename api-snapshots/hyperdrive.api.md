@@ -148,7 +148,18 @@ type HyperdriveEngine = "mysql" | "postgres";
 ### `Mysql2Execute` (type)
 
 ```ts
-type Mysql2Execute = Mysql2Like;
+type Mysql2Execute = Mysql2Like & {
+    config?: {
+        clientFlags?: number;
+    };
+    pool?: {
+        config?: {
+            connectionConfig?: {
+                clientFlags?: number;
+            };
+        };
+    };
+};
 ```
 
 ### `RowClient` (type)

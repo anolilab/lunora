@@ -59,37 +59,55 @@ to a procedure's `.use(...)` chain. The procedure builders (`mutation`, …) com
 from your app's generated `_generated/server` module, not from a package.
 
 ```ts
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
-const limiter = new RateLimiter({
-    config: {
-        login: { kind: "fixed window", period: 60_000, rate: 5 },
-        send: { kind: "token bucket", period: 1_000, rate: 10 },
-    },
-});
+const config = {
+    login: { kind: "fixed window", period: 60_000, rate: 5 },
+    send: { kind: "token bucket", period: 1_000, rate: 10 },
+};
 
+// `dbRateLimit` builds the limiter per call, backed by a Lunora table via
+// `ctx.db`, so the count is durable. A `RateLimiter` built with no explicit
+// `store` falls back to `createMemoryStore` (a per-instance in-memory Map) —
+// fine for a limit that only ever needs to hold within one Durable Object
+// instance, but a limiter like `login` needs a durable store or it stops
+// enforcing the configured rate the moment the DO instance is sharded,
+// replicated, or recreated.
 // As procedure middleware — throws a structural LunoraError (429/403) on rejection.
-export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
     // …
 });
 ```
 
-Or call the limiter directly:
+Or call the limiter directly, inside a mutation/action so `ctx.db` is available:
 
 ```ts
-const status = await limiter.limit("send", { key: userId });
+import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
-if (!status.ok) {
-    // status.retryAfter is milliseconds until the request would succeed.
-    // status.reason is "rate" or "deny".
-}
+export const login = mutation.mutation(async ({ ctx, args }) => {
+    const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
+    const status = await limiter.limit("login", { key: args.email });
+
+    if (!status.ok) {
+        // Stop here — `limit` returns a failing status by default rather than
+        // throwing, so falling through authenticates the rejected attempt.
+        // status.retryAfter is milliseconds until the request would succeed.
+        // status.reason is "rate" or "deny".
+        throw new RateLimitError(status);
+    }
+
+    await authenticate(args);
+});
 ```
 
 For durable per-DO state inside a procedure, back the limiter with a Lunora
 table via `dbRateLimit(config, name, options)`, or supply a `store`
-(`createMemoryStore` / `createSqlStore` / `createDbStore`).
+(`createSqlStore` / `createDbStore`). `createMemoryStore` stays the default —
+correct inside a single Durable Object — but constructing a `RateLimiter` with
+no explicit `store` now warns once so that choice is visible instead of
+silent.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

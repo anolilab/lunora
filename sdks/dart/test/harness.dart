@@ -202,3 +202,8 @@ class SocketFailure implements Exception {
 void pushData(LunoraClient client, String id, Object? data, {int? cursor}) {
   client.handleFrame(jsonEncode(<String, Object?>{'type': 'data', 'id': id, 'data': data, if (cursor != null) 'cursor': cursor}));
 }
+
+/// A valueless frame — `resume`/`settled` carry a cursor and nothing else.
+void pushCursorFrame(LunoraClient client, String id, String kind, {int? cursor}) {
+  client.handleFrame(jsonEncode(<String, Object?>{'type': kind, 'id': id, if (cursor != null) 'cursor': cursor}));
+}

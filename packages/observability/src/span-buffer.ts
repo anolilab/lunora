@@ -60,12 +60,25 @@ export interface TraceSummary {
     shardKey?: string;
 
     /**
-     * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
-     * Start time alone is not enough to order them: spans are recorded on
-     * completion and `startTs` has millisecond resolution, so a parent and its
-     * child routinely tie. Breaking that tie by depth makes the sequence a valid
-     * pre-order traversal of the span tree, so indenting each row by its `depth`
-     * yields the nesting without a separate tree walk.
+     * Spans in **pre-order**, ready to render as waterfall rows: every span is
+     * immediately followed by its own subtree, siblings in start order. So
+     * indenting each row by its `depth` yields the real nesting — the row above
+     * a `depth`-`n+1` row is genuinely its parent.
+     *
+     * This is a tree walk, not a sort, because no ordering on `(offsetMs,
+     * depth)` can produce it. Given a parent, its child `a`, `a`'s child `a1`
+     * and `a`'s sibling `b` all at offset 0, that comparator yields
+     * `parent, a, b, a1` — which renders `a1` indented beneath `b`, under a
+     * parent it does not belong to.
+     *
+     * **Why they tie is not millisecond resolution.** On the Workers runtime
+     * `Date.now()` is pinned to the time of the last I/O — a Spectre mitigation,
+     * not a bug — so it does not advance at all across pure computation. Every
+     * duration in this package is `Date.now() - startTs`, which means a span
+     * wrapping CPU-only work reports `0`, and a parent whose child performed no
+     * I/O shares its exact start and end. See `docs/concepts/observability`
+     * ("Span durations on Workers"); the practical consequence is that a `0 ms`
+     * span means "no I/O happened here", not "this was fast".
      */
     spans: TraceSpan[];
     startTs: number;
@@ -228,6 +241,102 @@ const depthResolver = (anchor: SpanEvent, byId: ReadonlyMap<string, SpanEvent>):
     };
 };
 
+/**
+ * Bucket `rows` under the parent each one actually hangs off, siblings in start
+ * order.
+ *
+ * Parentage is read back off the resolved `depth` rather than trusted from
+ * `parentSpanId` alone, which keeps the two consistent by construction: a span
+ * whose parent is missing from the trace, is itself, or sits in a cycle has
+ * already been re-parented onto the root by {@link depthResolver}, and lands on
+ * the root here for exactly the same reason.
+ */
+const bucketByParent = (rows: ReadonlyArray<TraceSpan>, rootSpanId: string): { childrenOf: Map<string, TraceSpan[]>; roots: TraceSpan[] } => {
+    const depthById = new Map(rows.map((row) => [row.spanId, row.depth]));
+    const childrenOf = new Map<string, TraceSpan[]>();
+    const roots: TraceSpan[] = [];
+
+    for (const row of rows) {
+        if (row.spanId === rootSpanId) {
+            roots.push(row);
+
+            continue;
+        }
+
+        // A real parent is one that resolved to exactly one level above this
+        // row. Anything else is a row the depth resolver hung off the root.
+        const parentId = depthById.get(row.parentSpanId) === row.depth - 1 ? row.parentSpanId : rootSpanId;
+        const siblings = childrenOf.get(parentId);
+
+        if (siblings === undefined) {
+            childrenOf.set(parentId, [row]);
+        } else {
+            siblings.push(row);
+        }
+    }
+
+    for (const siblings of childrenOf.values()) {
+        // Stable, so siblings that start together keep the order they were
+        // recorded in rather than being shuffled by an arbitrary tie-break.
+        siblings.sort((a, b) => a.offsetMs - b.offsetMs);
+    }
+
+    return { childrenOf, roots };
+};
+
+/**
+ * Order `rows` as a pre-order traversal of the span tree rooted at `rootSpanId`
+ * — each span immediately followed by its whole subtree, siblings in start
+ * order.
+ *
+ * This cannot be a comparator. Pre-order depends on a span's whole ancestor
+ * chain, and `(offsetMs, depth)` sees only the span itself: with a parent, its
+ * child `a`, `a`'s child `a1` and `a`'s sibling `b` all at offset 0, it emits
+ * `parent, a, b, a1`, putting `a1` under the wrong parent in the waterfall.
+ * Offset ties are the normal case here rather than an edge case — see the note
+ * on {@link TraceSummary.spans} about `Date.now()` on Workers — so this is not
+ * a rarity worth tolerating.
+ */
+const preOrderSpans = (rows: ReadonlyArray<TraceSpan>, rootSpanId: string): TraceSpan[] => {
+    const { childrenOf, roots } = bucketByParent(rows, rootSpanId);
+    const ordered: TraceSpan[] = [];
+    const emitted = new Set<TraceSpan>();
+    const stack = roots.toReversed();
+
+    while (stack.length > 0) {
+        const row = stack.pop() as TraceSpan;
+
+        if (emitted.has(row)) {
+            continue;
+        }
+
+        emitted.add(row);
+        ordered.push(row);
+
+        const children = childrenOf.get(row.spanId);
+
+        if (children !== undefined) {
+            for (const child of children.toReversed()) {
+                stack.push(child);
+            }
+        }
+    }
+
+    // Effective parents always sit one depth above their child, so the walk
+    // reaches every row that has a root to descend from. Two spans sharing a
+    // `spanId` are the one case that can strand a row; appending the remainder
+    // keeps a duplicated id from silently deleting a span from the waterfall.
+    if (ordered.length !== rows.length) {
+        for (const row of rows) {
+            if (!emitted.has(row)) {
+                ordered.push(row);
+            }
+        }
+    }
+
+    return ordered;
+};
+
 /** {@link foldTraces} result: the folded waterfalls plus the total distinct traces available before the `limit`. */
 export interface FoldedTraces {
     /**
@@ -274,30 +383,23 @@ export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFA
         const { startTs } = anchor;
         const endTs = Math.max(...group.map((span) => span.startTs + span.durationMs));
 
-        const rows: TraceSpan[] = group
-            .map((span) => {
-                return {
-                    ...(span.attributes === undefined ? {} : { attributes: span.attributes }),
-                    depth: depthOf(span),
-                    durationMs: span.durationMs,
-                    ...(span.error === undefined ? {} : { error: span.error }),
-                    ...(span.events === undefined ? {} : { events: span.events }),
-                    ...(span.kind === undefined ? {} : { kind: span.kind }),
-                    name: span.name,
-                    // Clamped at 0: a child whose parent was evicted can predate the
-                    // anchor, and a negative offset would render as a bar off-canvas.
-                    offsetMs: Math.max(0, span.startTs - startTs),
-                    ok: span.ok,
-                    parentSpanId: span.parentSpanId,
-                    spanId: span.spanId,
-                };
-            })
-            // Start-ordered, then shallowest-first. The depth tie-break is what
-            // makes this a valid pre-order: spans are recorded on *completion*, so
-            // a child is buffered before its parent, and at millisecond resolution
-            // the two routinely share a `startTs` — without it a child would sort
-            // above the parent it belongs under.
-            .toSorted((a, b) => a.offsetMs - b.offsetMs || a.depth - b.depth);
+        const rows: TraceSpan[] = group.map((span) => {
+            return {
+                ...(span.attributes === undefined ? {} : { attributes: span.attributes }),
+                depth: depthOf(span),
+                durationMs: span.durationMs,
+                ...(span.error === undefined ? {} : { error: span.error }),
+                ...(span.events === undefined ? {} : { events: span.events }),
+                ...(span.kind === undefined ? {} : { kind: span.kind }),
+                name: span.name,
+                // Clamped at 0: a child whose parent was evicted can predate the
+                // anchor, and a negative offset would render as a bar off-canvas.
+                offsetMs: Math.max(0, span.startTs - startTs),
+                ok: span.ok,
+                parentSpanId: span.parentSpanId,
+                spanId: span.spanId,
+            };
+        });
 
         summaries.push({
             durationMs: endTs - startTs,
@@ -305,7 +407,7 @@ export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFA
             ok: group.every((span) => span.ok),
             rootName: anchor.name,
             ...(anchor.shardKey === undefined ? {} : { shardKey: anchor.shardKey }),
-            spans: rows,
+            spans: preOrderSpans(rows, anchor.spanId),
             startTs,
             traceId,
         });

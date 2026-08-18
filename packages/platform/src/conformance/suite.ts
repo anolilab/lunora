@@ -30,6 +30,9 @@ type VitestApi = {
  * defineHostContractSuite("reference", createReferenceHost, { describe, expect, it });
  * ```
  */
+/** The message every host raises once `disposeTerminally` has run. */
+const PLATFORM_CLOSED = /platform closed/u;
+
 const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, vitest: VitestApi): void => {
     const { describe, expect, it } = vitest;
 
@@ -786,6 +789,92 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                     expect([...scoped.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["s:a", "s:b"]);
                     expect(all.size).toBe(3);
                 });
+            });
+        });
+
+        describe("post-dispose", () => {
+            // Not every host can be driven through a terminal teardown from
+            // inside a test (Cloudflare's DO storage has no explicit close),
+            // so this leg is opt-in via `disposeTerminally` — see its
+            // docstring on `ConformanceHost`. Where a host declares it, this
+            // is the leg plan 347 added after `ShardHost.asyncSql` turned out
+            // to be an unread contract field and `platform-node`'s
+            // `sockets.accept` turned out not to fail closed post-teardown:
+            // the one-line guard fixed the gap found by inspection, this leg
+            // is what catches the next one mechanically instead of by a
+            // repo-wide grep.
+            it("fails closed on every documented surface once the host is terminally disposed", async (context) => {
+                const host = await createHost();
+
+                if (host.disposeTerminally === undefined) {
+                    context.skip(`${name} has no terminal dispose the suite can drive from inside a test`);
+
+                    return;
+                }
+
+                const { removeTag, setTag } = host.socket;
+                const { scheduler } = host;
+
+                // A live handle to probe setTag/removeTag against, minted
+                // before disposal so the leg exercises "was accepted, then the
+                // platform closed under it" — not "closed before it ever
+                // existed".
+                const handle = host.socket.accept(rawSocket(host), {});
+
+                // Minted before disposal too: `rawSocket` runs the host's own
+                // `createSocket`, which a disposed host may itself refuse. Built
+                // after the teardown, the `accept` leg below would pass on that
+                // throw without ever reaching `accept` — the surface under test.
+                const postDisposeRaw = rawSocket(host);
+
+                host.disposeTerminally();
+
+                // Wrapping in an async closure normalizes a synchronous throw
+                // (the guard shape `platform-node` uses) and a rejected
+                // promise into the same `rejects` assertion, since the
+                // contract allows either.
+                const throwsClosed = async (function_: () => unknown): Promise<void> => {
+                    await expect(async () => {
+                        await function_();
+                    }).rejects.toThrow(PLATFORM_CLOSED);
+                };
+
+                // One list drives BOTH the expected assertion count and the calls
+                // themselves, so the two cannot drift. A hand-summed
+                // `3 + (setTag === undefined ? 0 : 1) + …` has to be re-derived by
+                // whoever adds the next optional leg, and gets it wrong silently.
+                const legs: (() => unknown)[] = [
+                    // No `alarms.get()` leg: fail-closed governs the surfaces that
+                    // DO something. A read of "is an alarm pending" on a dead
+                    // platform has an honest answer — none — and `platform-node`'s
+                    // lifecycle suite pins that answer, using it to prove a
+                    // rejected `set` mutated nothing on its way out.
+                    () => host.shard.alarms.set(Date.now() + 1000),
+                    () => host.shard.alarms.delete(),
+                    () => host.socket.accept(postDisposeRaw, {}),
+                    ...(setTag === undefined
+                        ? []
+                        : [
+                              (): void => {
+                                  setTag(handle, "room-a");
+                              },
+                          ]),
+                    ...(removeTag === undefined
+                        ? []
+                        : [
+                              (): void => {
+                                  removeTag(handle, "room-a");
+                              },
+                          ]),
+                    ...(scheduler === undefined ? [] : [() => scheduler.schedule("tasks/remind", {}, { delayMs: 10 })]),
+                ];
+
+                expect.assertions(legs.length);
+
+                for (const leg of legs) {
+                    // eslint-disable-next-line no-await-in-loop -- each leg asserts against a platform already disposed; running them sequentially keeps a failure attributable to one leg
+                    await throwsClosed(leg);
+                }
             });
         });
     });

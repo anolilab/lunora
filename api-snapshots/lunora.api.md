@@ -905,6 +905,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowEventDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1147,6 +1151,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 ## `lunorash/client`
 
+### `ActionCallOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `ArgsOf` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1352,10 +1360,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationDelta` (interface)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `MutationRunnerSinks` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1623,6 +1627,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `createCallRunner` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `createClientQuery` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1648,10 +1656,6 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createLocalStore` (const)
-
-Re-exported from `@lunora/client` — signature tracked at its source.
-
-### `createMutationRunner` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -3290,10 +3294,6 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `ShardAlarms` (interface)
-
-Re-exported from `@lunora/platform` — signature tracked at its source.
-
-### `ShardAsyncSqlExec` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -5415,6 +5415,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowEventDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7078,6 +7082,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `WorkflowCreateOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WorkflowEventDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

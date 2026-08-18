@@ -9,6 +9,18 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/vue`
 
+### `ActionHandle` (interface)
+
+```ts
+interface ActionHandle<F extends FunctionReference> {
+    call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
+    data: Ref<ReturnOf<F> | undefined>;
+    error: Ref<Error | undefined>;
+    pending: Ref<boolean>;
+    reset: () => void;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -612,6 +624,12 @@ const subscribeToQuery: <F extends FunctionReference, T = ReturnOf<F>>(client: L
     seed?: T;
     shardKey?: string;
 }) => Ref<T | undefined>;
+```
+
+### `useAction` (const)
+
+```ts
+const useAction: <F extends FunctionReference>(function_: F) => ActionHandle<F>;
 ```
 
 ### `useAgent` (const)

@@ -14,7 +14,9 @@ export type {
     TestSubscription,
 } from "./harness";
 export { lunoraTest } from "./harness";
-export type { EvalCase, EvalItemResult, EvalResult, Scorer, ScoreResult, ScorerSample } from "./scorer";
+export type { RetrievalScorerOptions } from "./retrieval-scorer";
+export { groundednessScorer, mrrScorer, ndcgAtK, precisionAtK, recallAtK } from "./retrieval-scorer";
+export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample } from "./scorer";
 export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "./scorer";
 
 /**

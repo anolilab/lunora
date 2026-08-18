@@ -15,7 +15,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-import { copyToClipboard, formatCell, jsonRowReplacer } from "../../lib/internal";
+import { copyToClipboard, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
@@ -72,9 +72,6 @@ const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, js
 
 /** Rows per generated `INSERT` statement — chunked so a large export stays valid under statement-size limits and stays diff-friendly. */
 const SQL_INSERT_BATCH = 500;
-
-/** Quote a SQL identifier (table/column) with double quotes, doubling any embedded quote — handles names like `query-result` that aren't bare identifiers. */
-const sqlIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * Render one value as a SQL literal for an `INSERT`: `NULL` for null/undefined,

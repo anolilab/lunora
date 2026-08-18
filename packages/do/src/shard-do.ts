@@ -655,6 +655,39 @@ interface StmtSample {
 type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
 
 /**
+ * The per-request identity/replay fields a dispatch must run under. Captured
+ * before the mutation-replay gate and re-pinned inside it, because the gate only
+ * delays ENTRY: a sibling `fetch()`'s prologue can overwrite the shared
+ * `currentRequest*` fields while this dispatch waits its turn. Kept as one named
+ * shape so the capture list lives in exactly one place instead of being an
+ * unenforced "remember to add the next field here too" invariant.
+ */
+interface RequestScope {
+    /**
+     * The inbound `x-d1-bookmark`. In the scope for the same reason the identity
+     * fields are: a queued mutation admitted after a sibling's prologue would
+     * otherwise have `getInboundBookmark()` hand its `.global()` reads ANOTHER
+     * request's D1 session pin, which is read-your-writes reading someone else's.
+     */
+    bookmark: string | undefined;
+    clientId: string | undefined;
+    clientSeq: number | undefined;
+    mutationId: string | undefined;
+    mutatorClass: ClientMutationClass | undefined;
+    system: boolean;
+    userId: string | undefined;
+}
+
+/**
+ * How an RPC dispatch resolved: the handler ran (`"ran"`), or the mutation-replay
+ * cache already held this `(identity, mutationId)`'s result (`"cached"`).
+ * Tagged rather than inferred from which half is `undefined`, so a `"cached"`
+ * outcome whose stored value happens to BE `undefined` cannot be misread as a
+ * fresh run.
+ */
+type DispatchOutcome = { cached: { value: unknown }; kind: "cached" } | { kind: "ran"; result: unknown };
+
+/**
  * Optional shard-level configuration passed through `super(state, env, …)`.
  * Reserved as a bag rather than positional args so subclasses don't break
  * when new knobs land. Today the only knob is the reactive cache; future
@@ -2819,6 +2852,36 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether `functionPath` names a registered `mutation` — the only function
+     * kind whose dispatch may enter the single-writer gate.
+     *
+     * The gate is `ShardHost.runSerialized`, which on Cloudflare is
+     * `state.blockConcurrencyWhile`: it stalls EVERY other dispatch on the
+     * shard (queries, WebSocket frames, alarms) for as long as the closure
+     * runs. A mutation already ran inside it — `runInTransaction` composes the
+     * same gate — so wrapping its dedup check costs nothing extra. An action
+     * does not: it is dispatched straight off `handleRpc` and routinely awaits
+     * seconds of outbound I/O (an LLM call, a payment round-trip). Gating one
+     * would let any caller freeze the whole shard for that long, repeatedly and
+     * cheaply, just by attaching an `x-lunora-mutation-id` header — which the
+     * runtime forwards verbatim for every kind. Queries are the same story with
+     * a smaller constant.
+     *
+     * Nothing outside a mutation writes the dedup row either
+     * (`persistIdempotentResult` runs from the mutation transaction's
+     * bookkeeping), so a non-mutation's cache read could only ever miss.
+     *
+     * The base class has no function registry, so the default is `true` — the
+     * conservative answer, preserving the gate wherever the kind is unknown.
+     * The codegen-generated subclass overrides it with the real
+     * `LUNORA_FUNCTIONS` lookup, which is what production dispatch uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isMutationFunction(_functionPath: string): boolean {
+        return true;
+    }
+
+    /**
      * Classify an in-flight custom-mutator push against the shard's stored
      * high-watermark for `currentRequestClientId`. The watermark is the highest
      * per-client sequence the DO has applied, so the push is exactly one of:
@@ -3253,7 +3316,22 @@ abstract class ShardDO {
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
         // JSON.stringify(...) for every (socket, sub) pair.
-        const deltaJson = JSON.stringify(delta);
+        //
+        // Wire-encode first, matching every sibling outbound path
+        // (`pushSubscriptionData`, poke frames, whisper, stream chunks):
+        // `delta.row` is the fully-decoded document a write just applied, which
+        // can carry `bigint`/`Date`/`ArrayBuffer` — a raw `JSON.stringify` drops
+        // an `ArrayBuffer` to `{}` and throws outright on a `bigint`.
+        //
+        // `encodeWire` is STRICT where the old raw `JSON.stringify` was lossy: a
+        // value the wire refuses (a `RegExp`, a class instance) used to broadcast
+        // as `{}` and now throws here. That is deliberate — a subscriber silently
+        // receiving `{}` for a row field is corruption it cannot detect — but it
+        // IS a behaviour change for a subclass or trigger that puts such a value
+        // in a row, and this runs after the write committed, so the throw
+        // surfaces on an otherwise-successful mutation. Keep rows to values the
+        // wire round-trips; every other outbound path already requires that.
+        const deltaJson = JSON.stringify(encodeWire(delta));
 
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
@@ -4295,15 +4373,51 @@ abstract class ShardDO {
 
             attachment.connected = true;
 
+            // `connected` lives on the SAME object the `try` below persists —
+            // if `context` is what made it too large and the whole attachment
+            // fails to serialize, `connected` doesn't survive either, even
+            // though only `context` was ever documented as at-risk. A resent
+            // `connect` (there's no ack frame for this envelope, so a client may
+            // legitimately retry after a timeout) would then re-enter this
+            // branch and re-fire `onConnect` — `webSocketClose` still only fires
+            // `onDisconnect` once, breaking the symmetry the `connected === true`
+            // check above exists to guarantee.
+            //
+            // Retry once with `context` omitted so `connected`/`clientId`/
+            // `pageDeltas` still persist even when `context` alone is what
+            // doesn't fit. Only if THAT also fails is nothing here persistable;
+            // in that case, don't fire `onConnect` at all — an unpersisted
+            // `connected` flag means the next `deserializeAttachment` read sees
+            // `connected: false`, so a resent `connect` frame correctly re-enters
+            // this branch and retries, rather than silently never firing again.
+            let persisted = true;
+
             try {
                 (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
             } catch {
-                // Over-large context can't be persisted; the hook still runs
-                // with the supplied context this turn, but it won't survive
-                // to disconnect. Never throw out of webSocketMessage.
+                const withoutContext: SocketAttachment = { ...attachment };
+
+                delete withoutContext.context;
+
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(withoutContext);
+                } catch {
+                    // Neither attempt persisted. Roll back the in-memory flip so
+                    // this local `attachment` object agrees with what's actually
+                    // in storage — the same defensive move `subscribe`/
+                    // `unsubscribe` above make on their own serialize failure.
+                    attachment.connected = false;
+                    persisted = false;
+                }
             }
 
-            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+            // The in-memory `attachment` still carries `context` regardless of
+            // which serialize attempt (if any) succeeded, so a persisted-retry
+            // still fires the hook with the caller's supplied context THIS turn
+            // — it just won't survive to `onDisconnect` at close.
+            if (persisted) {
+                await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+            }
 
             return;
         }
@@ -4677,17 +4791,105 @@ abstract class ShardDO {
             // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
             // above), the same source `persistIdempotentResult` reads when it
             // records the row after the handler commits.
-            const cached = this.readIdempotentResult(this.currentRequestMutationId);
+            //
+            // For a MUTATION the read and the `handleRpc` call run inside ONE
+            // `ShardHost.runSerialized` span — the same single-writer gate
+            // `ShardRunner.runInTransaction` composes with `transaction` — so two
+            // concurrent dispatches carrying the same `mutationId` can't both
+            // observe a cache miss and both run the handler. A mutation was
+            // already going to hold that gate, so the widened span costs it
+            // nothing.
+            //
+            // An action or query takes the SAME dedup read WITHOUT the gate. The
+            // gate is `blockConcurrencyWhile`: it stalls every other dispatch on
+            // the shard, and an action routinely awaits seconds of outbound I/O
+            // it can never roll back. Gating one would let any caller freeze the
+            // whole shard for that long — repeatedly, and for free — by attaching
+            // an `x-lunora-mutation-id` header the runtime forwards verbatim for
+            // every kind. See {@link isMutationFunction}. The exactly-once
+            // guarantee an action gets is therefore the weaker, pre-gate one:
+            // a sequential replay short-circuits, two genuinely concurrent
+            // dispatches of the same id can both miss.
+            //
+            // `(identity, mutationId)` is captured into a LOCAL scope here and
+            // re-pinned onto the instance fields as the FIRST statement inside
+            // the gated closure. The gate itself only delays entry — while THIS
+            // dispatch waits its turn, another dispatch's prologue (a sibling
+            // `fetch()`, same "concurrent fetches" characteristic the gate exists
+            // to guard against) can run and overwrite these same shared fields
+            // before this closure is admitted. `readIdempotentResult`, and the
+            // write-side calls `handleRpc` makes via `commitMutationBookkeeping`
+            // (persisting the result, advancing the client watermark), all read
+            // them straight off `this`, so without the re-pin a dedup check (or
+            // its commit) could silently run under ANOTHER dispatch's identity —
+            // exactly the kind of corruption this fix exists to close, just moved
+            // one field over. (`dispatchTrace`/`dispatchHeadroom` above capture
+            // the same way, for the same reason, on the other side of `handleRpc`.)
+            const requestScope = this.captureRequestScope();
 
-            if (cached !== undefined) {
-                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
+            // leaves) ONLY for the handler, so `validateArgs` sees real
+            // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
+            // the request log/metrics below (JSON-safe — a raw `bigint` there
+            // would throw `JSON.stringify`).
+            // The outbound bookmark this dispatch's own writes produced, snapshotted
+            // at the last instant the handler owns the shared field. `buildDispatchResponse`
+            // reads `currentResponseBookmark` after the gate has released, and the
+            // handler can still `await` past its final `.global()` write — so a
+            // sibling's prologue could clear the field, or replace it with its own,
+            // between the write and the response. A local closes that window.
+            let outboundBookmark: string | undefined;
+
+            const runHandler = async (): Promise<unknown> => {
+                const handlerResult = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+
+                outboundBookmark = this.currentResponseBookmark;
+
+                return handlerResult;
+            };
+
+            const dedupMutationId = requestScope.mutationId;
+
+            const dedupedDispatch = async (cacheKey: string): Promise<DispatchOutcome> => {
+                const cached = this.readIdempotentResult(cacheKey);
+
+                return cached === undefined ? { kind: "ran", result: await runHandler() } : { cached, kind: "cached" };
+            };
+
+            let dispatchOutcome: DispatchOutcome;
+
+            if (dedupMutationId === undefined) {
+                dispatchOutcome = { kind: "ran", result: await runHandler() };
+            } else if (this.isMutationFunction(payload.functionPath)) {
+                dispatchOutcome = await this.shardHost.runSerialized(async () => {
+                    this.restoreRequestScope(requestScope);
+
+                    return await dedupedDispatch(dedupMutationId);
+                });
+            } else {
+                dispatchOutcome = await dedupedDispatch(dedupMutationId);
             }
 
-            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
-            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
-            // values. `payload.args` stays in wire form for the request log/metrics
-            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
-            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>, dispatchHeadroom);
+            // Re-pin for the TAIL, for the same reason the gated closure re-pins
+            // on the way in: the post-dispatch bookkeeping below (the dedup row
+            // for a non-transactional dispatch, the client-watermark advance)
+            // reads `currentRequest*` straight off `this`, and every await
+            // since the prologue — the handler's own, and the gate's queueing
+            // time — is a window for a sibling `fetch()`'s prologue to have
+            // overwritten them. Without this the tail could commit under another
+            // dispatch's identity.
+            this.restoreRequestScope(requestScope);
+
+            // AFTER the restore, which clears the field on purpose. A cached
+            // outcome never ran a handler, so `undefined` is the right answer
+            // there: it performed no `.global()` write to report.
+            this.currentResponseBookmark = outboundBookmark;
+
+            if (dispatchOutcome.kind === "cached") {
+                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
+            }
+
+            const { result } = dispatchOutcome;
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -4972,6 +5174,42 @@ abstract class ShardDO {
      * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
      * dispatches forwarded under the same client trace accumulate separately.
      */
+
+    /**
+     * Snapshot the per-request identity/replay fields into a {@link RequestScope}.
+     * Paired with {@link ShardDO.restoreRequestScope}; see that type's docstring
+     * for why the dispatch path needs it.
+     */
+    private captureRequestScope(): RequestScope {
+        return {
+            bookmark: this.currentRequestBookmark,
+            clientId: this.currentRequestClientId,
+            clientSeq: this.currentRequestClientSeq,
+            mutationId: this.currentRequestMutationId,
+            mutatorClass: this.currentMutatorClass,
+            system: this.currentRequestSystem,
+            userId: this.currentRequestUserId,
+        };
+    }
+
+    /**
+     * Re-pin a {@link RequestScope} captured by {@link ShardDO.captureRequestScope}.
+     *
+     * Also clears the OUTBOUND bookmark, which is produced rather than captured:
+     * whatever sits in the field on the way in belongs to whichever dispatch ran
+     * during the wait, and echoing it would report a stranger's D1 write position
+     * as this request's. The dispatch path re-pins its own afterwards.
+     */
+    private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestBookmark = scope.bookmark;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestClientId = scope.clientId;
+        this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestMutationId = scope.mutationId;
+        this.currentMutatorClass = scope.mutatorClass;
+        this.currentRequestSystem = scope.system;
+        this.currentRequestUserId = scope.userId;
+    }
 
     /**
      * The dispatch entry's db tally, created on first use. Shares the entry with
@@ -9239,6 +9477,15 @@ abstract class ShardDO {
 
         if (existing?.lastJson === json) {
             existing.tables = outcome.tables;
+            // `ranges` legitimately shifts run-to-run even when the result is
+            // byte-identical (a recency-windowed query is the obvious case) — it's
+            // recomputed per execution from the index slices actually touched, not
+            // derived from the result. Leaving it stale here would violate
+            // `subscription-range-gate`'s "assume touched on any uncertainty" law:
+            // a later write landing in the REFRESHED range but outside the STALE
+            // one would never re-trigger this subscription. Refresh it every run,
+            // suppressed or not — matches the non-suppressed branch below.
+            existing.ranges = outcome.ranges;
 
             // The result is byte-identical to the last frame, so no data/delta
             // frame goes out (frame suppression). But a confirmed write whose

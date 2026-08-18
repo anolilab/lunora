@@ -48,6 +48,17 @@ import { parseValidatorMap, ValidationError } from "@lunora/values";
  * (rather than allow-listing "string") so every string-typed kind — `string`,
  * `storage`, branded `id`, and string `literal`/`union` — still passes.
  * `optional` is included because a required claim cannot be absent.
+ *
+ * Must be kept in sync with `ValidatorKind` in `@lunora/values` — a newly added
+ * concretely-non-string kind belongs here too.
+ *
+ * `"from"` is deliberately NOT in this set even though it is a `ValidatorKind`:
+ * `v.from` is generic over the wrapped Standard Schema
+ * (`packages/values/src/v.ts:1142`), so its inferred type is parametrized rather
+ * than concrete — `v.from(z.string())` is a legitimate string `userId`. Denying
+ * the kind would reject that working configuration alongside the non-string
+ * ones; closing that residual gap needs inspecting the wrapped schema's output,
+ * not a kind-level denial.
  */
 const NON_STRING_USER_ID_KINDS = new Set<string>([
     "array",
@@ -55,6 +66,7 @@ const NON_STRING_USER_ID_KINDS = new Set<string>([
     "boolean",
     "bytes",
     "date",
+    "geoPoint",
     "null",
     "number",
     "object",

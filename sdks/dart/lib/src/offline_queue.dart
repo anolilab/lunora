@@ -25,6 +25,16 @@ import 'dart:math';
 
 import 'errors.dart';
 
+/// Whether two shard keys name the same shard.
+///
+/// An absent key and an empty one are the SAME shard — an empty string names no
+/// shard, so both mean "the default one". Comparing them strictly leaves a write
+/// submitted with `''` queued forever, because nothing ever flushes a shard
+/// named `''`, and makes its optimistic overlay miss the subscription it
+/// targets. `LunoraTransport.buildRpcBody` drops an empty key from the wire for
+/// the same reason.
+bool sameShard(String? left, String? right) => (left ?? '') == (right ?? '');
+
 /// One mutation as it is written to durable storage.
 class PersistedMutation {
   const PersistedMutation({
@@ -34,6 +44,7 @@ class PersistedMutation {
     this.shardKey,
     this.clientId,
     this.identity,
+    this.identityStamped = true,
     this.version,
   });
 
@@ -60,6 +71,17 @@ class PersistedMutation {
   /// restored write can only replay under the identity that queued it.
   final String? identity;
 
+  /// Whether [identity] is a stamp at all, as opposed to a record written
+  /// before stamping existed.
+  ///
+  /// Dart has no `undefined`, so the two states a nullable field would collapse
+  /// are carried apart here: a write queued SIGNED OUT is stamped with a null
+  /// subject and may only replay signed out, while an UNSTAMPED record replays
+  /// ambiently under whatever identity is current. The wire form is the presence
+  /// of the `identity` key, which is what [fromJson] keys on — so a signed-out
+  /// write persists an explicit `"identity": null` rather than omitting it.
+  final bool identityStamped;
+
   /// App/schema version stamped at enqueue. On hydrate a record whose version
   /// does not match the current one is dropped and purged rather than replayed
   /// against a schema it was not written for.
@@ -71,7 +93,10 @@ class PersistedMutation {
         'args': args,
         if (shardKey != null) 'shardKey': shardKey,
         if (clientId != null) 'clientId': clientId,
-        if (identity != null) 'identity': identity,
+        // Written whenever the record is stamped, INCLUDING a null subject: the
+        // key's presence is the only thing that separates "queued signed out"
+        // from "queued before stamps existed".
+        if (identityStamped) 'identity': identity,
         if (version != null) 'version': version,
       };
 
@@ -82,6 +107,7 @@ class PersistedMutation {
         shardKey: json['shardKey'] as String?,
         clientId: json['clientId'] as String?,
         identity: json['identity'] as String?,
+        identityStamped: json.containsKey('identity'),
         version: json['version'] as String?,
       );
 }
@@ -148,6 +174,7 @@ class QueuedMutation {
     this.shardKey,
     this.clientId,
     this.identity,
+    this.identityStamped = true,
     this.completer,
     this.precondition,
     this.onCommit,
@@ -163,6 +190,17 @@ class QueuedMutation {
   final String? clientId;
 
   final String? identity;
+
+  /// See [PersistedMutation.identityStamped]. A LIVE write is always stamped —
+  /// signed out is a stamp — so only a restored record can be unstamped.
+  final bool identityStamped;
+
+  /// Whether this write may replay under [current].
+  ///
+  /// An unstamped record replays ambiently; a stamped one only under the exact
+  /// identity that queued it, where signed-out (null) is an identity like any
+  /// other rather than a wildcard.
+  bool identityAllowsReplay(String? current) => !identityStamped || identity == current;
 
   /// The caller awaiting this write, or null for a record restored from durable
   /// storage — a reload leaves no awaiter, and completing a `Completer` nobody
@@ -218,6 +256,7 @@ class QueuedMutation {
         shardKey: shardKey,
         clientId: clientId,
         identity: identity,
+        identityStamped: identityStamped,
         version: version,
       );
 }
@@ -401,6 +440,7 @@ class OfflineQueue {
           shardKey: record.shardKey,
           clientId: record.clientId,
           identity: record.identity,
+          identityStamped: record.identityStamped,
         )..onSettled = onSettled,
       );
     }
@@ -417,16 +457,37 @@ class OfflineQueue {
     return restored.length;
   }
 
-  /// Remove and return every queued mutation, oldest first.
+  /// Remove and return queued mutations, oldest first.
   ///
-  /// No per-shard predicate, unlike the reference client: there the socket is
-  /// per-shard so one shard can reconnect while others are down, whereas this
-  /// transport has a single injected connection whose shard rides its URL. One
-  /// connectivity signal means one drain.
-  List<QueuedMutation> drain() {
-    final drained = List<QueuedMutation>.of(_items);
+  /// With no predicate this drains everything. With one it drains only the
+  /// matching writes and leaves the rest in order, which is what makes a
+  /// per-shard flush possible: one shard's socket can come back while another
+  /// is still down, and replaying that other shard's writes over a connection
+  /// that cannot reach it would only lose them to a transport failure.
+  List<QueuedMutation> drain([bool Function(QueuedMutation item)? predicate]) {
+    if (predicate == null) {
+      final drained = List<QueuedMutation>.of(_items);
 
-    _items.clear();
+      _items.clear();
+      _notifySize();
+
+      return drained;
+    }
+
+    final drained = <QueuedMutation>[];
+    final kept = <QueuedMutation>[];
+
+    for (final item in _items) {
+      (predicate(item) ? drained : kept).add(item);
+    }
+
+    if (drained.isEmpty) {
+      return drained;
+    }
+
+    _items
+      ..clear()
+      ..addAll(kept);
     _notifySize();
 
     return drained;

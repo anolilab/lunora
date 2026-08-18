@@ -79,6 +79,17 @@ class TestWireEdgeCases < Minitest::Test
     assert_equal(-42, decoded.value)
   end
 
+  def test_malformed_bytes_rejected
+    ConformanceManifest.covers("malformed_bytes_rejected")
+
+    # The lenient MIME decoder discards characters outside the alphabet
+    # instead of raising — a corrupted bytes payload silently became
+    # different, wrong data instead of a loud failure.
+    assert_raises(Lunora::WireFormatError) { Lunora.decode_wire([Lunora::TAG, "bytes", "not@@base64!!"]) }
+
+    assert_equal "\x01\x02\x03".b, Lunora.decode_wire([Lunora::TAG, "bytes", "AQID"])
+  end
+
   def test_depth_cap_enforced
     ConformanceManifest.covers("depth_cap_enforced")
 

@@ -58,6 +58,14 @@ interface QueuedMutation<T = unknown> {
  * eviction), so the client can surface the dropped write on its
  * terminal-verdict observer even when the entry has no live awaiter (a hydrated
  * record). The `error` carries the `OFFLINE_QUEUE_OVERFLOW` code.
+ *
+ * The `sdks/*` ports deliberately do NOT mirror this shape — they return the
+ * discarded entry from `enqueue`/`hydrate`/`drainConflict`/`clear` instead,
+ * because they call the queue with a real lock held and settling a write needs
+ * that same lock, which self-deadlocks a non-reentrant one. Keep the callback
+ * here: this client is single-threaded, so the hazard does not exist, and an
+ * observer the queue fires itself is what covers the case a return value's
+ * consumer can quietly miss — a hydrated entry whose `reject` is a no-op.
  */
 type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) => void;
 

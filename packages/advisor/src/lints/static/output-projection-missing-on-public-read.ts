@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Finding, Lint } from "../../types";
-import { PII_FIELD_NAMES } from "../helpers";
+import { isPiiColumn } from "../helpers";
 
 /**
  * Nudges a `.public()` `query` whose handler returns raw table rows — with no
@@ -43,7 +43,7 @@ const outputProjectionMissingOnPublicRead: Lint = {
         const piiColumnsByTable = new Map<string, string[]>();
 
         for (const table of context.schema.tables) {
-            const piiColumns = table.fields.filter((field) => PII_FIELD_NAMES.has(field));
+            const piiColumns = table.fields.filter((field) => isPiiColumn(field));
 
             if (piiColumns.length > 0) {
                 piiColumnsByTable.set(table.name, piiColumns);

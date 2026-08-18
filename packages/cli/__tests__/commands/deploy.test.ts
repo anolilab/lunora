@@ -98,6 +98,7 @@ const VALID_WRANGLER = `{
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
@@ -123,6 +124,7 @@ const validWranglerWithEnv = (name: string): string => `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }],
     "env": {
         "${name}": {

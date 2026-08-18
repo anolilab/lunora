@@ -554,7 +554,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * middleware (via `ctx.meta`) and tooling can read the same object; absent
      * when the chain never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 
     /**
@@ -673,6 +673,9 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
+
+    /** Static per-procedure metadata attached via `.meta()`. See {@link RegisteredFunction.meta}. */
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly visibility?: FunctionVisibility;
 }
 
@@ -1278,6 +1281,17 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     retention?: { errorRetention?: string; successRetention?: string };
 }
 
+/**
+ * One declared external event a workflow waits on. Mirrors `@lunora/workflow`'s
+ * `WorkflowEventDefinition` — the value `defineWorkflowEvent` returns, taken by
+ * both {@link WorkflowInstance.sendEvent} and the workflow's `ctx.waitForEvent`.
+ */
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+
 /** A live handle to a single workflow instance. Mirrors `@lunora/workflow`'s `WorkflowInstanceLike`. */
 interface WorkflowInstance {
     readonly id: string;
@@ -1300,6 +1314,8 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstance>;
+    /** Deliver a declared event (`defineWorkflowEvent`) to one instance; the payload is validated before the send. */
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 
 /**
@@ -2066,7 +2082,7 @@ interface QueryCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2131,7 +2147,7 @@ interface MutationCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2218,7 +2234,7 @@ interface ActionCtx {
      * enforce (`ctx.meta.rateLimit`, …) instead of having it hard-wired at each
      * `.use()` site; absent when the procedure never called `.meta()`.
      */
-    readonly meta?: Record<string, unknown>;
+    readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
 
     /**
@@ -2366,6 +2382,7 @@ export type {
     VectorSearchReader,
     VectorUpsertInput,
     WorkflowCreateOptions,
+    WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
     WorkflowInstanceStatus,

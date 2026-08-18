@@ -9,6 +9,26 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/solid`
 
+### `ActionClient` (interface)
+
+```ts
+interface ActionClient<F extends FunctionReference> {
+    action: (function_: F, args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
+}
+```
+
+### `ActionHandle` (interface)
+
+```ts
+interface ActionHandle<F extends FunctionReference> {
+    call: (args: ArgsOf<F>, options?: ActionCallOptions) => Promise<ReturnOf<F>>;
+    data: Accessor<ReturnOf<F> | undefined>;
+    error: Accessor<Error | undefined>;
+    pending: Accessor<boolean>;
+    reset: () => void;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -592,6 +612,18 @@ type VoiceReference = FunctionReference<"stream", {
 
 ```ts
 type VoiceStatus = "idle" | "listening" | "speaking" | "thinking";
+```
+
+### `createAction` (const)
+
+```ts
+const createAction: <F extends FunctionReference>(function_: F) => ActionHandle<F>;
+```
+
+### `createActionForClient` (const)
+
+```ts
+const createActionForClient: <F extends FunctionReference>(client: ActionClient<F>, function_: F) => ActionHandle<F>;
 ```
 
 ### `createAgent` (const)

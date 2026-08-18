@@ -289,6 +289,24 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         expect(mentions).toBeGreaterThanOrEqual(2);
     });
 
+    it("forwards the shard key into the subscription rather than discarding it", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // A parameter accepted and then thrown away satisfies the mention count
+        // above, compiles, and lints clean in every language — which is how the
+        // Rust target shipped `let _ = shard_key;`. The cost is invisible and
+        // total: a write matches a subscription on exactly this value, so every
+        // optimistic overlay silently no-ops on a sharded app.
+        expect(/(?:let\s+)?_\s*=\s*shard_?key/iu.test(surface)).toBe(false);
+    });
+
     it("uses a declared result model at its call site rather than emitting it unused", async () => {
         expect.assertions(1);
 

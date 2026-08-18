@@ -8,7 +8,10 @@ import XCTest
 /// the Python, Go and Ruby ports are tested against.
 final class ConformanceTests: XCTestCase {
     /// Walks up from this source file to the repo's `protocol/fixtures`.
-    private func fixturesDirectory() throws -> URL {
+    ///
+    /// Not `private`: the optimistic-layer and offline-queue cases live in an
+    /// extension in their own file and share these helpers.
+    func fixturesDirectory() throws -> URL {
         var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         for _ in 0..<8 {
             let candidate = directory.appendingPathComponent("protocol/fixtures")
@@ -20,7 +23,7 @@ final class ConformanceTests: XCTestCase {
         throw XCTSkip("could not locate protocol/fixtures")
     }
 
-    private func fixture(_ name: String) throws -> [String: Any] {
+    func fixture(_ name: String) throws -> [String: Any] {
         let url = try fixturesDirectory().appendingPathComponent(name)
         let data = try Data(contentsOf: url)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -28,7 +31,7 @@ final class ConformanceTests: XCTestCase {
 
     /// Re-serialises so two structures compare as text with a canonical key
     /// order, independent of the order the fixture file happens to use.
-    private func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
+    func canonical(_ value: Any?) -> String { Wire.stableStringify(value) }
 
     // MARK: - Manifest coverage
 
@@ -53,6 +56,7 @@ final class ConformanceTests: XCTestCase {
             case "wire_codec_round_trip": try caseWireCodecRoundTrip()
             case "undefined_is_distinct_from_null": try caseUndefinedIsDistinctFromNull()
             case "over_long_bigint_rejected": caseOverLongBigIntRejected()
+            case "malformed_bytes_rejected": try caseMalformedBytesRejected()
             case "depth_cap_enforced": caseDepthCapEnforced()
             case "stable_wire_key_fixtures": try caseStableWireKeyFixtures()
             case "format_number_matches_ecmascript": caseFormatDoubleMatchesEcmaScript()
@@ -63,9 +67,25 @@ final class ConformanceTests: XCTestCase {
             case "non_2xx_without_error_envelope_fails": caseNon2xxWithoutErrorEnvelopeThrows()
             case "client_frame_builders": try caseClientFrameBuilders()
             case "server_frame_consumer": try caseServerFrameConsumer()
+            case "subscription_stream_yields_frame_values_in_order": try caseSubscriptionStreamYieldsFrameValuesInOrder()
             case "shape_subscribe_frame": try caseShapeSubscribeFrame()
             case "poke_sequence_materialises_rows": try casePokeSequenceMaterialisesRows()
             case "poke_parts_do_not_apply_before_poke_end": try casePokePartsDoNotApplyBeforePokeEnd()
+            case "optimistic_layer_rebases_onto_server_frame": try caseOptimisticLayerRebasesOntoServerFrame()
+            case "optimistic_layer_drops_on_commit_cursor": try caseOptimisticLayerDropsOnCommitCursor()
+            case "optimistic_layer_drops_on_settled_frame": try caseOptimisticLayerDropsOnSettledFrame()
+            case "optimistic_layer_rolls_back_on_failure": try caseOptimisticLayerRollsBackOnFailure()
+            case "offline_queue_fifo_replay_order": try caseOfflineQueueFifoReplayOrder()
+            case "offline_queue_drains_only_the_named_shard": try caseOfflineQueueDrainsOnlyTheNamedShard()
+            case "offline_queue_overflow_evicts_oldest": try caseOfflineQueueOverflowEvictsOldest()
+            case "offline_queue_precondition_drops_stale_write": try caseOfflineQueuePreconditionDropsStaleWrite()
+            case "offline_queue_hydrates_persisted_writes": try caseOfflineQueueHydratesPersistedWrites()
+            case "offline_queue_identity_gate_rejects_replay": try caseOfflineQueueIdentityGateRejectsReplay()
+            case "offline_flush_replays_and_confirms_optimistic": try caseOfflineFlushReplaysAndConfirmsOptimistic()
+            case "offline_flush_batches_multiple_writes": try caseOfflineFlushBatchesMultipleWrites()
+            case "optimistic_cursorless_frame_preserves_cursor": try caseOptimisticCursorlessFramePreservesCursor()
+            case "offline_queue_hydrate_overflow_settles_discarded": try caseOfflineQueueHydrateOverflowSettlesDiscarded()
+            case "offline_flush_unencodable_write_settles_terminal": try caseOfflineFlushUnencodableWriteSettlesTerminal()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -104,6 +124,13 @@ final class ConformanceTests: XCTestCase {
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", overLong]))
         XCTAssertThrowsError(try Wire.decode([Wire.tag, "bigint", "12x4"]))
         XCTAssertNoThrow(try Wire.decode([Wire.tag, "bigint", "-42"]))
+    }
+
+    func caseMalformedBytesRejected() throws {
+        XCTAssertThrowsError(try Wire.decode([Wire.tag, "bytes", "not@@base64!!"]))
+
+        let decoded = try Wire.decode([Wire.tag, "bytes", "AQID"])
+        XCTAssertEqual(try XCTUnwrap(decoded as? Data), Data([1, 2, 3]))
     }
 
     func caseDepthCapEnforced() {
@@ -195,6 +222,17 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(apiError.message, testCase["message"] as? String)
             }
         }
+
+        commitCursorExcludesBooleans()
+    }
+
+    /// `NSNumber` bridges JSON `true` to `1`, so a peer sending a boolean cursor
+    /// would otherwise confirm every pending optimistic layer at cursor 1.
+    private func commitCursorExcludesBooleans() {
+        XCTAssertEqual(LunoraClient.parseCommitCursor(["commitCursor": 4]), 4)
+        XCTAssertNil(LunoraClient.parseCommitCursor(["commitCursor": true]))
+        XCTAssertNil(LunoraClient.parseCommitCursor(["commitCursor": "4"]))
+        XCTAssertNil(LunoraClient.parseCommitCursor([:]))
     }
 
     func caseNon2xxWithoutErrorEnvelopeThrows() {
@@ -254,6 +292,56 @@ final class ConformanceTests: XCTestCase {
                 XCTAssertEqual(errors.first?.code, expect["code"] as? String)
             }
         }
+    }
+
+    /// The `AsyncStream` form of a live query: same subscription, same decode,
+    /// same order as the callback form.
+    func caseSubscriptionStreamYieldsFrameValuesInOrder() throws {
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let frames = try XCTUnwrap(testCase["frames"] as? [Any])
+        let client = LunoraClient(url: "https://app.example")
+        client.attachSocket { _ in }
+
+        let events = client.stream("messages:list", args: ["channel": "general"])
+        var iterator = events.makeAsyncIterator()
+        var seen: [Any] = []
+
+        // Frames are fed from this same thread, so the loop is driven one `next()`
+        // at a time rather than with `for await`.
+        for frame in frames {
+            let raw = try JSONSerialization.data(withJSONObject: frame)
+
+            _ = try client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+
+            switch runBlocking({ await iterator.next() }) {
+            case .value(let value): seen.append(value)
+            case .failure(let error): XCTFail("stream error: \(error.message)")
+            case nil: XCTFail("the stream ended early")
+            }
+        }
+
+        XCTAssertEqual(canonical(try Wire.encode(seen)), canonical(testCase["yielded"]), "the stream yields the frames' values, in order")
+    }
+
+    /// Runs one `async` step to completion from a synchronous test.
+    ///
+    /// The suite is driven by the manifest through synchronous `case…` methods,
+    /// and this is the only asynchronous surface in it — a semaphore here is
+    /// cheaper than making every dispatch arm `async`.
+    private func runBlocking<T>(_ operation: @escaping () async -> T) -> T {
+        let ready = DispatchSemaphore(value: 0)
+        // `nonisolated(unsafe)`: written once inside the task and read once after
+        // the semaphore, which orders the two.
+        nonisolated(unsafe) var result: T?
+
+        Task {
+            result = await operation()
+            ready.signal()
+        }
+
+        ready.wait()
+
+        return result!
     }
 
     // MARK: - Shapes

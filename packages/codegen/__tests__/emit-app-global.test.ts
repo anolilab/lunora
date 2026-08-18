@@ -61,8 +61,24 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
-        expect(output).toContain('import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage } from "@lunora/d1";');
+        expect(output).toContain(
+            'import { createD1CtxDb, facetGlobalColumn, importGlobalRows, listGlobalTables, readGlobalTablePage, retryingExec } from "@lunora/d1";',
+        );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
+    });
+
+    it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        // Every `.global()` read runs through this exec, not through a
+        // `D1Client` — so an unwrapped exec means the app eats D1's documented
+        // baseline error rate on every read no matter what the client offers.
+        expect(output).toContain(
+            "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
+        );
+        expect(output).toContain("return retryingExec({");
     });
 
     it("imports AdminTableResolver from @lunora/runtime alongside GlobalIntrospector", () => {

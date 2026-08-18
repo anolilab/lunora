@@ -50,6 +50,22 @@ const hashToShard = (storageKey: string, shards: number): number => {
     return Math.abs(hash) % shards;
 };
 
+// Fires once per `new RateLimiter(...)` call that receives no explicit
+// `store` — never per check/limit call, which would be noise on the hot
+// path. `createMemoryStore()` is the right default *inside a Durable
+// Object* (the default single-DO topology, where every call for this
+// limiter lands on the same instance); we cannot reliably detect that
+// context from here (Workers exposes no synchronous "am I in a DO"
+// signal), so this warns unconditionally rather than risk a silently
+// weaker-than-configured limit. Mirrors the reasoning `@lunora/auth`
+// applies to better-auth's own per-isolate rate-limit storage default.
+const NO_STORE_WARNING =
+    "@lunora/ratelimit: new RateLimiter() was built with no explicit `store`, so it falls back to `createMemoryStore()` — an in-process Map. " +
+    "That Map is durable and correctly shared only for calls that land on the same Durable Object instance; it is NOT shared across " +
+    "`.shardBy(...)` shards or `.global()` replicas, and it resets when the DO instance is evicted/restarted. For a limit that must hold " +
+    "across any of those, pass a durable `store` (`createDbStore` or `createSqlStore`) instead. Pass `store: createMemoryStore()` " +
+    "explicitly once you've confirmed the in-memory default is correct here, to silence this warning.";
+
 // A sharded config splits its rate and capacity evenly across N sub-buckets,
 // each enforced independently. `shards <= 1` (or unset) leaves the config as-is.
 const perShardConfig = (config: RateLimitConfig, shards: number): RateLimitConfig =>
@@ -94,6 +110,12 @@ class RateLimiter<Names extends string = string> {
         this.denyList = new Set(options.denyList);
         this.normalize = options.normalize ?? ((key: string): string => key);
         this.now = options.now ?? Date.now;
+
+        if (options.store === undefined) {
+            // eslint-disable-next-line no-console -- intentional: no injected logger, mirrors @lunora/auth's construction-time warning
+            console.warn(NO_STORE_WARNING);
+        }
+
         this.store = options.store ?? createMemoryStore();
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
