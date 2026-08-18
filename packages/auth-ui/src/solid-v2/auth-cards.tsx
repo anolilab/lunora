@@ -201,11 +201,12 @@ interface MagicLinkCardProps {
 const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createMagicLinkController);
 
     if (!isFlowEnabled(context, "magicLink", "MagicLinkCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createMagicLinkController);
 
     return (
         <AuthCard footer={<AuthLink href={props.signInHref ?? "/sign-in"}>{t.backToSignIn}</AuthLink>} title={t.magicLink}>
@@ -221,11 +222,12 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
 const EmailOtpCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createEmailOtpController);
 
     if (!isFlowEnabled(context, "emailOtp", "EmailOtpCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createEmailOtpController);
 
     return (
         <Show
@@ -282,6 +284,11 @@ interface TwoFactorCardProps {
 const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
+
+    if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
+        return null;
+    }
+
     const [state, actions] = createController((context_) =>
         createTwoFactorVerifyController(context_, { method: props.method, trustDevice: props.trustDevice }),
     );
@@ -289,10 +296,6 @@ const TwoFactorCard = (props: TwoFactorCardProps = {}): JSX.Element => {
     // session-mutating submit must not depend on the toggle's current position.
     const [backupState, backupActions] = createController((context_) => createBackupCodeSignInController(context_, { trustDevice: props.trustDevice }));
     const [useBackupCode, setUseBackupCode] = createSignal(false);
-
-    if (!isFlowEnabled(context, "twoFactor", "TwoFactorCard")) {
-        return null;
-    }
 
     return (
         <Show

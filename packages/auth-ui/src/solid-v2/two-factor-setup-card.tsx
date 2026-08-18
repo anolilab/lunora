@@ -11,11 +11,12 @@ import { createController } from "./use-controller";
 const TwoFactorSetupCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createTwoFactorSetupController);
 
     if (!isFlowEnabled(context, "twoFactor", "TwoFactorSetupCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createTwoFactorSetupController);
 
     return (
         <Show

@@ -308,7 +308,11 @@ const TeamsCard = (): JSX.Element => {
 const BackupCodesCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const enabled = isFlowEnabled(context, "twoFactor", "BackupCodesCard");
+
+    if (!isFlowEnabled(context, "twoFactor", "BackupCodesCard")) {
+        return null;
+    }
+
     // The codes live in a second store beside the form's, so they get the same
     // subscribe/cleanup bridge every other controller gets.
     const handle = createBackupCodesController(context);
@@ -320,10 +324,6 @@ const BackupCodesCard = (): JSX.Element => {
             setCodes(handle.getCodes());
         }),
     );
-
-    if (!enabled) {
-        return null;
-    }
 
     return (
         <AuthCard title={t.backupCodesRegenerate}>

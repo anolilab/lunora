@@ -167,14 +167,15 @@ const AvatarCard = (): JSX.Element => {
 const SetUsernameCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createSetUsernameController);
-    // Checked as the user types, so a taken name surfaces here rather than as a
-    // failed save with the field already blurred.
-    const [availability, availabilityActions] = createController(createUsernameAvailabilityController);
 
     if (!isFlowEnabled(context, "username", "SetUsernameCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createSetUsernameController);
+    // Checked as the user types, so a taken name surfaces here rather than as a
+    // failed save with the field already blurred.
+    const [availability, availabilityActions] = createController(createUsernameAvailabilityController);
 
     return (
         <AuthCard title={t.usernameLabel}>

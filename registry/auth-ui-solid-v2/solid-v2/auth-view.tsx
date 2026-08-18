@@ -16,11 +16,12 @@ import { AcceptInvitationCard, VerifyEmailCard } from "./verify-invite-cards";
 const UsernameSignInCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createUsernameSignInController);
 
     if (!isFlowEnabled(context, "username", "UsernameSignInCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createUsernameSignInController);
 
     return (
         <AuthCard title={t.signIn}>
@@ -38,11 +39,12 @@ const UsernameSignInCard = (): JSX.Element => {
 const PhoneSignInCard = (): JSX.Element => {
     const context = useAuthUI();
     const { localization: t } = context;
-    const [state, actions] = createController(createPhoneSignInController);
 
     if (!isFlowEnabled(context, "phoneNumber", "PhoneSignInCard")) {
         return null;
     }
+
+    const [state, actions] = createController(createPhoneSignInController);
 
     return (
         <AuthCard title={t.signIn}>
