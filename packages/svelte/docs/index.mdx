@@ -53,6 +53,7 @@ required to build or use it.
 | `getLunoraClient`  | function | Read the `LunoraClient` from context. Throws if none was set.                              |
 | `query`            | function | Live query as a readable store (`$store`). Sharing one store shares one subscription.      |
 | `mutation`         | function | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` stores.              |
+| `action`           | function | Action handle: `{ data, error, pending, call, reset }` stores. No optimistic options.      |
 | `hydratePreloaded` | function | Seed a readable store synchronously from an SSR `Preloaded` token, then attach the socket. |
 
 The table above lists the core handful. The package also exports the live
@@ -62,8 +63,8 @@ stores covered under [Additional stores](#additional-stores): `subscription`,
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
-`ReturnOf`, plus the adapter's own `QueryStore`, `QueryStoreOptions`, and
-`MutationHandle`.
+`ReturnOf`, plus the adapter's own `QueryStore`, `QueryStoreOptions`,
+`MutationHandle`, and `ActionHandle`.
 
 <Callout type="info">
 Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
@@ -181,6 +182,44 @@ await mutate(
     },
 );
 ```
+
+## `action(fn)`
+
+Creates an `ActionHandle` for an action reference — the same shape as
+`MutationHandle`, with `call` in place of `mutate`:
+
+```ts
+interface ActionHandle<F> {
+    data: Readable<ReturnOf<F> | undefined>; // latest resolved value
+    error: Readable<Error | undefined>; // latest error
+    pending: Readable<boolean>; // true while any call from this handle is in flight (ref-counted)
+    call: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value, rejects on failure
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+`action` is overloaded the same way as `query` and `mutation`: pass `client`
+explicitly or omit it to use the ambient client.
+
+```svelte
+<script lang="ts">
+    import { action } from "@lunora/svelte";
+
+    import { api } from "$lib/_generated/api";
+
+    const verify = action(api.commands.run);
+    const { call, pending, error } = verify;
+</script>
+
+<button disabled={$pending} on:click={() => call({ command: "lunora", args: ["verify"] })}>Verify</button>
+{#if $error}<p>{$error.message}</p>{/if}
+```
+
+Per-call options are `{ shardKey }` only. Unlike `mutation` there are no
+`optimistic` / `optimisticUpdate` options: an optimistic update patches the
+subscription cache on the assumption a write will land, and an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query.
 
 ## Reactive loaders — `hydratePreloaded`
 

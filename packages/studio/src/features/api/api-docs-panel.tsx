@@ -40,15 +40,6 @@ interface SnippetInput {
     readonly kind: FunctionKind;
 }
 
-/**
- * `@lunora/react` ships `useQuery`/`useMutation`/`useSubscription` but no
- * `useAction` — actions have no hook, so the React tab falls back to the client
- * snippet for them (and the panel notes why). Exposed so the panel and its tests
- * read the same fact; flip to `true` and add a `useAction` branch below if a hook
- * is ever added to the barrel.
- */
-const REACT_HAS_ACTION_HOOK: boolean = false;
-
 /** The client method each function kind is invoked through. */
 const CLIENT_METHOD: Record<FunctionKind, string> = {
     action: "action",
@@ -84,7 +75,7 @@ const buildReactSnippet = (input: SnippetInput): string => {
 
     switch (input.kind) {
         case "action": {
-            return buildClientSnippet(input);
+            return `const { call: ${input.fn} } = useAction(${reference});`;
         }
         case "mutation": {
             return `const ${input.fn} = useMutation(${reference});`;
@@ -182,7 +173,6 @@ const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
     };
 
     const code = snippetForTab(tab, input);
-    const actionFellBack = kind === "action" && tab === "react" && !REACT_HAS_ACTION_HOOK;
 
     return (
         <div className="flex flex-col gap-3" data-testid="api-fn-doc">
@@ -212,12 +202,6 @@ const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
             </div>
 
             <SnippetBlock code={code} label={tabLabel[tab]} testId={`api-snippet-${tab}`} />
-
-            {actionFellBack && (
-                <p className="text-xs text-muted-foreground" data-testid="api-action-note">
-                    {t("Actions have no React hook — call them through the client.")}
-                </p>
-            )}
         </div>
     );
 };
@@ -420,5 +404,5 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
 };
 
 export type { ApiDocsPanelProps };
-export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, REACT_HAS_ACTION_HOOK, splitPath };
+export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath };
 export default ApiDocsPanel;

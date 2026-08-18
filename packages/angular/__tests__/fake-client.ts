@@ -40,7 +40,9 @@ export interface FakeConnectionContext {
 }
 
 export interface FakeClient {
-    /** As a typed `LunoraClient` for passing through `liveQuery` / `mutate`. */
+    /** Every `action()` call made against the fake, in order. */
+    actionCalls: { args: unknown; functionPath: string; options: unknown }[];
+    /** As a typed `LunoraClient` for passing through `liveQuery` / `mutate` / `runAction`. */
     asClient: LunoraClient;
     /** Connection contexts acquired via `acquireConnectionContext`. */
     connectionContexts: FakeConnectionContext[];
@@ -55,6 +57,10 @@ export interface FakeClient {
     push: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Resolve the next `action()` with this value (default: echoes args). */
+    setActionResult: (value: unknown) => void;
+    /** Reject the next `action()` with this error. */
+    setActionThrow: (error: Error) => void;
     /** Set the user that `getCurrentUser()` resolves with. */
     setCurrentUser: (user: User | null) => void;
     /** Resolve the next `mutation()` with this value (default: echoes args). */
@@ -73,6 +79,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
     const subscriptions: FakeSubscription[] = [];
     const streamCalls: FakeStreamCall[] = [];
     const mutationCalls: { args: unknown; functionPath: string; options: unknown }[] = [];
+    const actionCalls: { args: unknown; functionPath: string; options: unknown }[] = [];
     const statusListeners: ((status: ConnectionStatus) => void)[] = [];
     const tokenListeners: (() => void)[] = [];
     const connectionContexts: FakeConnectionContext[] = [];
@@ -82,11 +89,22 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
 
     let mutationResult: unknown;
     let mutationThrow: Error | undefined;
+    let actionResult: unknown;
+    let actionThrow: Error | undefined;
     let status = initialStatus;
     let authToken: string | null = null;
     let currentUser: User | null = null;
 
     const client = {
+        action: (function_: FunctionReference, args: unknown, options: unknown) => {
+            actionCalls.push({ args, functionPath: function_.__lunoraRef, options });
+
+            if (actionThrow) {
+                return Promise.reject(actionThrow);
+            }
+
+            return Promise.resolve(actionResult ?? args);
+        },
         acquireConnectionContext: (context: { roomId: string; sessionId: string }, options?: { shardKey?: string }) => {
             const entry: FakeConnectionContext = { context, released: false, shardKey: options?.shardKey };
             connectionContexts.push(entry);
@@ -175,6 +193,7 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
     };
 
     return {
+        actionCalls,
         asClient: client as unknown as LunoraClient,
         connectionContexts,
         emitAuthTokenChange: () => {
@@ -216,6 +235,12 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
         },
         setCurrentUser: (user: User | null) => {
             currentUser = user;
+        },
+        setActionResult: (value: unknown) => {
+            actionResult = value;
+        },
+        setActionThrow: (error: Error) => {
+            actionThrow = error;
         },
         setMutationResult: (value: unknown) => {
             mutationResult = value;

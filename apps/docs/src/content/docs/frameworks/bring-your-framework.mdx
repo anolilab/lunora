@@ -267,6 +267,23 @@ worth calling out for anyone who tracked the earlier previews:
 - **Provider accessor is `useLunora`** in React/Solid/Vue (Svelte uses the
   idiomatic `getLunoraClient`). The Vue adapter's earlier `useLunoraClient` name
   is gone; use `useLunora`.
+- **Actions have their own primitive**, named per idiom: `useAction`
+  (React/Vue), `createAction` (Solid), `action` (Svelte), `runAction`
+  (Angular). The first four return the same handle shape as the mutation one
+  with `call` in place of `mutate` — `{ data, error, pending, call, reset }`,
+  with `error` typed `Error | undefined` everywhere; Angular's is a plain
+  function, matching its `mutate`, because Angular models writes as calls rather
+  than reactive handles. All five are narrower than their mutation counterpart:
+  per-call options are the shared `ActionCallOptions` (`{ shardKey }`) only, with
+  no `optimistic` / `optimisticUpdate`. An optimistic update patches the
+  subscription cache on the assumption a write will land, and an action is not a
+  write — it runs in the Worker, may call a third party, and has no declared
+  effect on any query.
+- **One lifecycle contract for `data` / `error`**, shared by the four handle
+  adapters and enforced by the `createCallRunner` they all build on: both track
+  the LATEST invocation rather than the last to settle, a success clears `error`,
+  a failure leaves the previous `data` in place, and `reset()` clears both
+  without cancelling an in-flight call.
 
 ## Scaffolding
 

@@ -35,6 +35,8 @@ export type {
     UseQueryOptions,
     User,
 } from "./types";
+export type { ActionHandle } from "./use-action";
+export { useAction } from "./use-action";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
 export type {
