@@ -1,6 +1,7 @@
 export type { WorkflowBindingSpec } from "./create-workflow-context";
 export { createWorkflowContext } from "./create-workflow-context";
 export { default as createWorkflows } from "./create-workflows";
+export { defineWorkflowEvent, isWorkflowEventDefinition } from "./define-event";
 export { defineStep, isStepDefinition } from "./define-step";
 export { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName } from "./define-workflow";
 export type { NativeNonRetryableErrorConstructor } from "./errors";
@@ -33,12 +34,14 @@ export type {
     StepRollbackContext,
     StepRollbackHandler,
     StepRunContext,
+    WaitForEventOptions,
     WorkflowBindingLike,
     WorkflowBranch,
     WorkflowBranchOutputs,
     WorkflowConfig,
     WorkflowCreateOptions,
     WorkflowDefinition,
+    WorkflowEventDefinition,
     WorkflowEventLike,
     WorkflowHandle,
     WorkflowHandler,
@@ -59,4 +62,6 @@ export type {
     WorkflowStepContextLike,
     WorkflowStepLike,
     WorkflowStepRollbackOptionsLike,
+    WorkflowWaitForEventFunction,
 } from "./types";
+export { createWaitForEvent } from "./wait-for-event";

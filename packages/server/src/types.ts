@@ -1281,6 +1281,17 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     retention?: { errorRetention?: string; successRetention?: string };
 }
 
+/**
+ * One declared external event a workflow waits on. Mirrors `@lunora/workflow`'s
+ * `WorkflowEventDefinition` — the value `defineWorkflowEvent` returns, taken by
+ * both {@link WorkflowInstance.sendEvent} and the workflow's `ctx.waitForEvent`.
+ */
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+
 /** A live handle to a single workflow instance. Mirrors `@lunora/workflow`'s `WorkflowInstanceLike`. */
 interface WorkflowInstance {
     readonly id: string;
@@ -1303,6 +1314,8 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstance>;
+    /** Deliver a declared event (`defineWorkflowEvent`) to one instance; the payload is validated before the send. */
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 
 /**
@@ -2369,6 +2382,7 @@ export type {
     VectorSearchReader,
     VectorUpsertInput,
     WorkflowCreateOptions,
+    WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
     WorkflowInstanceStatus,

@@ -2441,6 +2441,16 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
 }
 ```
 
+### `WorkflowEventDefinition` (interface)
+
+```ts
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+```
+
 ### `WorkflowHandle` (interface)
 
 ```ts
@@ -2448,6 +2458,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     get: (id: string) => Promise<WorkflowInstance>;
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 ```
 
@@ -5331,6 +5342,16 @@ interface WorkflowCreateOptions<Params = Record<string, unknown>> {
 }
 ```
 
+### `WorkflowEventDefinition` (interface)
+
+```ts
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+```
+
 ### `WorkflowHandle` (interface)
 
 ```ts
@@ -5338,6 +5359,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
     get: (id: string) => Promise<WorkflowInstance>;
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 ```
 

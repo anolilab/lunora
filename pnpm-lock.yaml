@@ -5060,6 +5060,9 @@ importers:
       '@lunora/dispatch':
         specifier: workspace:*
         version: link:../dispatch
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
       '@types/node':
         specifier: catalog:types
         version: 26.2.0

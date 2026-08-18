@@ -166,6 +166,15 @@ interface StepRunContext {
 }
 ```
 
+### `WaitForEventOptions` (interface)
+
+```ts
+interface WaitForEventOptions {
+    name?: string;
+    timeout?: number | string;
+}
+```
+
 ### `WorkflowBindingLike` (interface)
 
 ```ts
@@ -238,6 +247,16 @@ interface WorkflowDefinition<Params = Record<string, unknown>, Output = unknown>
 }
 ```
 
+### `WorkflowEventDefinition` (interface)
+
+```ts
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+```
+
 ### `WorkflowEventLike` (interface)
 
 ```ts
@@ -256,6 +275,7 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
     createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 ```
 
@@ -375,6 +395,7 @@ interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly runStep: WorkflowRunStepFunction;
     readonly spawn: WorkflowSpawnFunction;
     readonly step: WorkflowStepLike;
+    readonly waitForEvent: WorkflowWaitForEventFunction;
 }
 ```
 
@@ -487,6 +508,12 @@ interface WorkflowStepRollbackOptionsLike<T = unknown> {
 }
 ```
 
+### `WorkflowWaitForEventFunction` (type)
+
+```ts
+type WorkflowWaitForEventFunction = <Payload>(event: WorkflowEventDefinition<Payload>, options?: WaitForEventOptions) => Promise<Payload>;
+```
+
 ### `Workflows` (interface)
 
 ```ts
@@ -559,6 +586,12 @@ const convertNonRetryableError: (error: unknown, NativeNonRetryableError: Native
 const createRunStep: (deps: RunStepDeps) => WorkflowRunStepFunction;
 ```
 
+### `createWaitForEvent` (const)
+
+```ts
+const createWaitForEvent: (deps: WaitForEventDeps) => WorkflowWaitForEventFunction;
+```
+
 ### `createWorkflowContext` (const)
 
 ```ts
@@ -595,6 +628,12 @@ const defineStep: <A extends StepArgsValidator, Result>(name: string, config: St
 const defineWorkflow: <Params = Record<string, unknown>, Output = unknown>(config: WorkflowConfig<Params, Output>) => WorkflowDefinition<Params, Output>;
 ```
 
+### `defineWorkflowEvent` (const)
+
+```ts
+const defineWorkflowEvent: <Payload>(type: string, payload: Validator<Payload>) => WorkflowEventDefinition<Payload>;
+```
+
 ### `isNonRetryableError` (const)
 
 ```ts
@@ -611,6 +650,12 @@ const isStepDefinition: (value: unknown) => value is StepDefinition;
 
 ```ts
 const isWorkflowDefinition: (value: unknown) => value is WorkflowDefinition;
+```
+
+### `isWorkflowEventDefinition` (const)
+
+```ts
+const isWorkflowEventDefinition: (value: unknown) => value is WorkflowEventDefinition;
 ```
 
 ### `toNativeNonRetryableError` (const)
