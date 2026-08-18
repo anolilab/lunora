@@ -7,6 +7,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ExportMenu } from "../data/grid-features";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
+import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import SqlResultTable from "./sql-result-table";
 import type { ResultTab } from "./sql-tabs";
 
@@ -29,6 +30,7 @@ const SqlResultsPane = ({
     onFormat,
     onInferChart,
     onRun,
+    onSelectStatement,
     onShardKeyChange,
     onShowChart,
     onShowExplain,
@@ -37,6 +39,7 @@ const SqlResultsPane = ({
     pane,
     result,
     running,
+    script,
     shardKey,
     splitView,
 }: {
@@ -49,6 +52,8 @@ const SqlResultsPane = ({
     readonly onFormat: () => void;
     readonly onInferChart: () => void;
     readonly onRun: () => void;
+    /** Show statement `index` of an already-run script. */
+    readonly onSelectStatement: (index: number) => void;
     readonly onShardKeyChange: (shardKey: string) => void;
     readonly onShowChart: () => void;
     readonly onShowExplain: () => void;
@@ -57,6 +62,8 @@ const SqlResultsPane = ({
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
     readonly running: boolean;
+    /** Every statement of a multi-statement script; absent for a single one. */
+    readonly script?: { readonly runs: ReadonlyArray<ScriptRun>; readonly selected: number };
     readonly shardKey: string;
     readonly splitView: boolean;
 }): ReactElement => {
@@ -133,6 +140,30 @@ const SqlResultsPane = ({
                     </button>
                 </div>
             </div>
+
+            {script !== undefined && (
+                // Only for a script. A single statement has nothing to choose
+                // between, and a one-button strip would be pure chrome.
+                <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1.5" data-testid="sql-statements">
+                    {script.runs.map((statement, index) => (
+                        <button
+                            aria-pressed={index === script.selected}
+                            className={`rounded-md border px-2 py-0.5 font-mono text-[11px] outline-none transition-colors ${
+                                index === script.selected ? "border-foreground text-foreground" : "border-border text-muted-foreground hover:text-foreground"
+                            } ${statement.error === null ? "" : "border-destructive/50 text-destructive"}`}
+                            data-testid={`sql-statement-${index.toString()}`}
+                            key={`${index.toString()}:${statement.sql}`}
+                            onClick={() => {
+                                onSelectStatement(index);
+                            }}
+                            title={statement.sql}
+                            type="button"
+                        >
+                            {index + 1}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             <div className="min-h-0 flex-1 overflow-auto">
                 {error !== null && (

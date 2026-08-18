@@ -11,8 +11,10 @@ import formatSql from "./format-sql";
 import { useSqlAssistant } from "./hooks/use-sql-assistant";
 import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
+import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
+import { splitStatements } from "./split-statements";
 import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import SqlResultsPane from "./sql-results-pane";
@@ -101,6 +103,28 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         fireAndForget(apply());
     };
 
+    /** Run one statement, never a script: the gate refuses a `;`-joined string. */
+    const runOne = async (sql: string): Promise<ScriptRun> => {
+        try {
+            const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
+
+            recordHistory(sql);
+
+            return { error: null, result: next, sql };
+        } catch (error_: unknown) {
+            return { error: errorMessage(error_), result: null, sql };
+        }
+    };
+
+    /**
+     * Run the draft.
+     *
+     * A multi-statement draft is split ABOVE the read-only gate and submitted as
+     * N separate `runSql` calls, never as one `;`-joined string — the classifier
+     * is the console's enforcement point and stays exactly as strict. A statement
+     * the gate would refuse is reported without being sent, and the ones after it
+     * still run, so a script says what happened to every part of itself.
+     */
     const run = async (mode: ResultTab): Promise<void> => {
         if (draft.trim() === "") {
             return;
@@ -113,27 +137,52 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // actually ran the query, not whichever tab happens to be active when the
         // response lands.
         patchActiveOutput({ running: true });
-        const sql = mode === "explain" ? `EXPLAIN QUERY PLAN ${draft}` : draft;
 
-        try {
-            const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
+        // EXPLAIN wraps the whole draft, so it is one statement by construction
+        // and is never split.
+        const statements = mode === "explain" ? [{ sql: `EXPLAIN QUERY PLAN ${draft}` }] : splitStatements(draft);
+        const runs: ScriptRun[] = [];
 
-            patchActiveOutput({ chart: undefined, error: null, failed: undefined, pane: mode, result: next, running: false });
-            recordShard(shardKey);
-            recordHistory(sql);
-        } catch (error_: unknown) {
-            // Capture the statement that actually failed. "Fix this" previously
-            // read the live draft, so any edit after the failure asked the model
-            // to repair text that never ran, against an error it never produced.
-            patchActiveOutput({
-                chart: undefined,
-                error: errorMessage(error_),
-                failed: { error: errorMessage(error_), sql },
-                pane: mode,
-                result: null,
-                running: false,
-            });
+        for (const statement of statements) {
+            // eslint-disable-next-line no-await-in-loop -- sequential on purpose: a script's statements are ordered, and firing them concurrently would run a later one against state an earlier one has not established
+            runs.push(statement.rejection === undefined ? await runOne(statement.sql) : { error: statement.rejection, result: null, sql: statement.sql });
         }
+
+        recordShard(shardKey);
+
+        // The last statement is what the panes show — the one an operator writing
+        // a script is looking for. Everything before it stays reachable through
+        // the statement strip.
+        const selected = Math.max(runs.length - 1, 0);
+        const shown = runs[selected];
+
+        patchActiveOutput({
+            chart: undefined,
+            error: shown?.error ?? null,
+            failed: shown?.error === null || shown === undefined ? undefined : { error: shown.error, sql: shown.sql },
+            pane: mode,
+            result: shown?.result ?? null,
+            running: false,
+            script: runs.length > 1 ? { runs, selected } : undefined,
+        });
+    };
+
+    /** Show statement `index` of the script already run, without re-running anything. */
+    const onSelectStatement = (index: number): void => {
+        const runs = output.script?.runs;
+        const shown = runs?.[index];
+
+        if (runs === undefined || shown === undefined) {
+            return;
+        }
+
+        patchActiveOutput({
+            chart: undefined,
+            error: shown.error,
+            failed: shown.error === null ? undefined : { error: shown.error, sql: shown.sql },
+            result: shown.result,
+            script: { runs, selected: index },
+        });
     };
 
     const onRun = (): void => {
@@ -232,6 +281,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         onFormat={formatDraft}
                         onInferChart={inferChart}
                         onRun={onRun}
+                        onSelectStatement={onSelectStatement}
                         onShardKeyChange={setShardKey}
                         onShowChart={showChart}
                         onShowExplain={showExplain}
@@ -240,6 +290,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         pane={tab}
                         result={result}
                         running={running}
+                        script={output.script}
                         shardKey={shardKey}
                         splitView={splitView}
                     />

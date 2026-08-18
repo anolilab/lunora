@@ -148,6 +148,54 @@ describe("sqlEditorPanel", () => {
         expect(within(screen.getByTestId("sql-history")).getAllByTestId("sql-history-item")).toHaveLength(1);
     });
 
+    it("runs a script as separate gated calls and never sends a joined string", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; SELECT 2; SELECT 3" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const strip = await screen.findByTestId("sql-statements");
+
+        expect(within(strip).getAllByRole("button")).toHaveLength(3);
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2", "SELECT 3"]);
+        // The gate is the console's enforcement point; splitting happens above it
+        // and a `;`-joined string must never reach the server.
+        expect(sent.some((sql) => sql.includes(";"))).toBe(false);
+        // The last statement is what the panes show.
+        expect(screen.getByTestId("sql-statement-2").getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("reports a statement the gate refuses without sending it, and still runs the rest", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; DELETE FROM messages; SELECT 2" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await screen.findByTestId("sql-statements");
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        // The refusal is local — the write never leaves the browser — and it does
+        // not abort the statements after it.
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2"]);
+
+        fireEvent.click(screen.getByTestId("sql-statement-1"));
+
+        expect(screen.getByTestId("sql-error").textContent).toContain("read-only");
+        expect(screen.queryByTestId("sql-rows")).toBeNull();
+    });
+
     it("clears the history", async () => {
         expect.assertions(3);
 
