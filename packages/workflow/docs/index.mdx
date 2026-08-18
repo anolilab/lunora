@@ -65,17 +65,18 @@ export const channelWelcome = defineWorkflow<
 The handler receives one argument bundling the durable-step API and a typed
 function caller:
 
-| Member             | What it is                                                                                          |
-| ------------------ | --------------------------------------------------------------------------------------------------- |
-| `context.params`   | The input passed to `.create({ params })`, typed as `Params`.                                       |
-| `context.step`     | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                               |
-| `context.run`      | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
-| `context.runStep`  | Run a reusable, schema-validated `defineStep` as a durable step (see below).                        |
-| `context.parallel` | Fan out branches as isolated child workflow instances and await their outputs (see below).          |
-| `context.spawn`    | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).            |
-| `context.log`      | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs. |
-| `context.event`    | The raw triggering event (`id`, `payload`, timestamp).                                              |
-| `context.env`      | The Worker environment bindings.                                                                    |
+| Member                 | What it is                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| `context.params`       | The input passed to `.create({ params })`, typed as `Params`.                                          |
+| `context.step`         | The durable-step API: `do` / `sleep` / `sleepUntil` / `waitForEvent`.                                  |
+| `context.run`          | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.            |
+| `context.runStep`      | Run a reusable, schema-validated `defineStep` as a durable step (see below).                           |
+| `context.parallel`     | Fan out branches as isolated child workflow instances and await their outputs (see below).             |
+| `context.spawn`        | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).               |
+| `context.waitForEvent` | Hibernate until a declared event (`defineWorkflowEvent`) arrives; resolves with its validated payload. |
+| `context.log`          | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs.    |
+| `context.event`        | The raw triggering event (`id`, `payload`, timestamp).                                                 |
+| `context.env`          | The Worker environment bindings.                                                                       |
 
 ### Durable steps
 
@@ -96,6 +97,7 @@ await context.step.sleep("cool-off", "1 minute");
 await context.step.sleepUntil("run-at", new Date("2026-07-01T00:00:00Z"));
 
 // Pause until an external event (approvals, webhooks, human-in-the-loop).
+// Prefer `context.waitForEvent` with a declared event — see below.
 const approval = await context.step.waitForEvent<{ approved: boolean }>("await-approval", {
     type: "approval",
     timeout: "7 days",
@@ -106,6 +108,57 @@ const approval = await context.step.waitForEvent<{ approved: boolean }>("await-a
     Steps must be **JSON-serialisable and idempotent**, the same determinism contract Cloudflare (and Convex) impose. A step body may run more than once on
     retry, so don't rely on side effects outside the step's return value.
 </Callout>
+
+### Declared events (`defineWorkflowEvent`)
+
+The native `step.waitForEvent(name, { type })` matches `instance.sendEvent({ type })`
+by a bare string, and the payload crosses as `unknown`. Both ends drift silently:
+a typo'd type hibernates the instance until its timeout (24 hours by default) with
+no error anywhere, and a payload whose shape changed resumes the workflow on
+garbage. Declare the event once instead, so there is no literal to typo and no
+second place to update on a rename, and both ends parse the payload:
+
+```ts
+// lunora/events.ts
+import { defineWorkflowEvent } from "@lunora/workflow";
+import { v } from "@lunora/values";
+
+export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
+```
+
+Wait on it inside the workflow — the payload is typed **and** parsed:
+
+```ts
+const { approvedBy } = await context.waitForEvent(orderApproved, { name: "await approval", timeout: "7 days" });
+```
+
+Send it from a mutation or action with the same definition:
+
+```ts
+export const approve = mutation.input({ approvedBy: v.string(), instanceId: v.string() }).mutation(async ({ ctx, args: { approvedBy, instanceId } }) => {
+    await ctx.workflows.get("orderPipeline").sendEvent(instanceId, orderApproved, { approvedBy });
+});
+```
+
+The payload is validated on **send** (a bad value fails the caller's request,
+before the workflow is woken) and again on **receive**. A payload that fails the
+validator on receive is a non-retryable failure — the event has already been
+consumed, so replaying the wait could only hibernate the instance again.
+
+<Callout type="warn">
+    **Pass a stable `{ name }` on any wait that can outlive a deploy.** The durable step is otherwise labelled `event:<type>`, which couples the step's identity
+    to the wire type: rename the event type and an instance that already recorded the wait replays into a *fresh* step that nothing will ever satisfy — it
+    hibernates to its timeout. An explicit `name` also tells two waits on the same event type apart in the timeline.
+</Callout>
+
+What this does **not** buy is a compile error for every mismatch: two definitions
+with the same payload shape are mutually assignable, so sending `orderRejected`
+where the workflow awaits `orderApproved` still type-checks. What it removes is the
+hand-matched string.
+
+Event types beginning with `lunora:` are reserved for the framework's own
+instance-to-instance protocol (the `context.parallel` branch join) and are rejected
+both when declared and when sent.
 
 ### Reusable steps (`defineStep`)
 
@@ -293,9 +346,13 @@ export const create = mutation.input({ channelId: v.id("channels") }).mutation(a
 - `createBatch([...])`: start many in one batch.
 - `get(id)`: a handle to an existing instance.
 
-An instance handle exposes its lifecycle: `status()` (returns
-`status` + `output`/`error`), `pause()`, `resume()`, `terminate()`, and
-`sendEvent({ type, payload })` (to satisfy a `waitForEvent`).
+- `sendEvent(instanceId, event, payload)`: deliver a
+  [declared event](#declared-events-defineworkflowevent) to one instance, to satisfy
+  its `context.waitForEvent`. The payload is validated before the send.
+
+`create`/`get` hand back the native Cloudflare instance, which exposes its own
+lifecycle: `status()` (returns `status` + `output`/`error`), `pause()`, `resume()`,
+`restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
 
 ### Listing instances and step timelines
 

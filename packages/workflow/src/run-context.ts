@@ -16,6 +16,7 @@ import type { WorkflowBindingResolver } from "./fan-out";
 import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
 import type { WorkflowBindingLike, WorkflowEventLike, WorkflowRunContext, WorkflowRunFunction, WorkflowStepLike } from "./types";
+import { createWaitForEvent } from "./wait-for-event";
 
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
@@ -88,6 +89,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
         spawn: createSpawn(fanOutDeps),
         step: options.step,
+        waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),
     };
 };
 

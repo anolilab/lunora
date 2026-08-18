@@ -85,9 +85,32 @@ The handler context bundles:
 - `ctx.step` — the native Cloudflare durable-step API (`do` / `sleep` / `sleepUntil` / `waitForEvent`).
 - `ctx.run(ref, args, opts?)` — call a Lunora query / mutation / action; wrap in `ctx.step.do(...)` for durability.
 - `ctx.runStep(step, args, opts?)` — run a reusable, schema-validated `defineStep` as a durable step (see below).
+- `ctx.waitForEvent(event, opts?)` — hibernate until a declared `defineWorkflowEvent` arrives; resolves with its validated payload (see below).
 - `ctx.event` / `ctx.params` — the triggering event and its payload.
 - `ctx.env` — the Worker bindings.
 - `ctx.log` — a workflow-prefixed logger surfaced in `wrangler tail` / Studio.
+
+### Declared events (`defineWorkflowEvent`)
+
+`step.waitForEvent(name, { type })` and `instance.sendEvent({ type })` match on a bare string, and the payload crosses as `unknown` — so a typo hibernates the instance until its timeout with no error anywhere, and a changed payload shape resumes the workflow on garbage. Declare the event once and both ends import the same value:
+
+```ts
+// lunora/events.ts
+import { defineWorkflowEvent } from "@lunora/workflow";
+import { v } from "@lunora/values";
+
+export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
+```
+
+```ts
+// inside the workflow body — typed and parsed
+const { approvedBy } = await ctx.waitForEvent(orderApproved, { name: "await approval", timeout: "7 days" });
+
+// from a mutation/action — validated before the send
+await ctx.workflows.get("orderPipeline").sendEvent(instanceId, orderApproved, { approvedBy });
+```
+
+Pass a stable `{ name }` on any wait that can outlive a deploy: the step is otherwise labelled `event:<type>`, so renaming the event type also renames the durable step and an instance that already recorded the wait replays into a fresh one nothing will satisfy.
 
 ### Reusable steps (`defineStep`)
 
@@ -169,7 +192,7 @@ export const checkout = mutation.input({ orderId: v.string() }).mutation(async (
 });
 ```
 
-A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, and `get(id)`. An instance handle exposes its lifecycle: `status()`, `pause()`, `resume()`, `terminate()`, and `sendEvent({ type, payload })` (to satisfy a `waitForEvent`).
+A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, and the untyped `sendEvent({ type, payload })`.
 
 ### Runtime requirements
 
