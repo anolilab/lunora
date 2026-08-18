@@ -57,6 +57,7 @@ const MESSAGE_IDS = [
     ", changed",
     "(no subject)",
     "(root)",
+    "(none)",
     "{count} active",
     "{count} calls",
     "{count} failed",

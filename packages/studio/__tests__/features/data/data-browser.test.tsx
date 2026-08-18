@@ -777,6 +777,96 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "from-form" }, op: "insert", table: "messages" });
     });
 
+    it("renders a declared string-literal union as a dropdown, and a null boolean as a checkbox", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { enumValues: ["draft", "published"], name: "status", optional: false, type: "union" },
+                                { name: "pinned", optional: true, type: "boolean" },
+                            ],
+                        },
+                    };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.writeRow) {
+                    return { id: "p1", op: "patch" };
+                }
+
+                return { columns: ["__id__", "status", "pinned"], rows: [{ __id__: "p1", pinned: null, status: "draft" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-edit-p1"));
+
+        const status = await screen.findByTestId<HTMLSelectElement>("db-field-status");
+
+        // Before this the widget came from the VALUE, so a literal union was a
+        // free-text box and a null boolean was a free-text box too.
+        expect(status.tagName).toBe("SELECT");
+        expect([...status.options].map((option) => option.value)).toStrictEqual(["draft", "published"]);
+        expect(screen.getByTestId("db-field-pinned").getAttribute("role")).toBe("checkbox");
+
+        fireEvent.change(status, { target: { value: "published" } });
+        fireEvent.click(screen.getByTestId("db-editor-save"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect((call[1] as { doc: Record<string, unknown> }).doc).toMatchObject({ status: "published" });
+    });
+
+    it("keeps a stored value the union no longer declares, rather than rewriting it", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 1 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return { columnsByTable: { posts: [{ enumValues: ["draft", "published"], name: "status", optional: false, type: "union" }] } };
+                }
+
+                return { columns: ["__id__", "status"], rows: [{ __id__: "p1", status: "archived" }], total: 1 };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-edit-p1"));
+
+        const status = await screen.findByTestId<HTMLSelectElement>("db-field-status");
+
+        // A row written before the union changed keeps what it holds; a dropdown
+        // that silently snapped it to the first option would edit a field nobody
+        // touched.
+        expect(status.value).toBe("archived");
+        expect([...status.options].map((option) => option.value)).toContain("archived");
+    });
+
     it("stages an inline cell edit and commits it as a patch of just that field", async () => {
         expect.assertions(2);
 

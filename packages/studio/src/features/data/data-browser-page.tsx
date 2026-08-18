@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { ConfirmButton } from "../../components/confirm-button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
-import type { TablePage } from "../../lib/admin";
+import type { ColumnMeta, TablePage } from "../../lib/admin";
 import { jsonRowReplacer } from "../../lib/internal";
 import { maskRows } from "../../lib/mask-preview";
 import type { SavedQuery } from "../../lib/saved-queries";
@@ -148,6 +148,7 @@ const DataBrowserPage = ({
     assistant,
     backRelations,
     browser,
+    columnMeta,
     edit,
     editable,
     onAskAiFilter,
@@ -170,6 +171,8 @@ const DataBrowserPage = ({
     };
     /** The data model — reads, writes, pagination, staged edits. */
     readonly browser: DataBrowserModel;
+    /** Declared columns of the open table, keyed by name — the row editor's type source. */
+    readonly columnMeta?: Record<string, ColumnMeta>;
     /** The inline-edit context every grid cell reads. */
     readonly edit: GridEdit;
     readonly editable: boolean;
@@ -247,6 +250,7 @@ const DataBrowserPage = ({
 
             {editable && browser.editing !== null && (
                 <RowFormEditor
+                    columnMeta={columnMeta}
                     documentText={browser.editing.docText}
                     onCancel={browser.cancelEdit}
                     onDocumentTextChange={browser.setEditorDocumentText}

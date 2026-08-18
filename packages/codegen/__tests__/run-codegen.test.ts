@@ -3081,8 +3081,73 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(output).toContain("const LUNORA_TABLE_COLUMNS");
             expect(output).toContain(
-                "LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {}",
+                "Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>",
             );
+        });
+
+        it("names the members of a string-literal union so the row editor can offer them", () => {
+            expect.assertions(2);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            aggregateIndexes: [],
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                status: {
+                                    kind: "union",
+                                    members: [
+                                        { kind: "literal", literalValue: '"draft"' },
+                                        { kind: "literal", literalValue: '"published"' },
+                                    ],
+                                },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            expect(output).toContain('"enumValues"');
+            // The parsed VALUES, not the source text `parse-validator` stores — a
+            // dropdown built from the latter offers `"draft"` with the quotes in it.
+            expect(output).toContain('"draft"');
+        });
+
+        it("omits enumValues for a union with a non-literal member", () => {
+            expect.assertions(1);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        {
+                            aggregateIndexes: [],
+                            indexes: [],
+                            name: "posts",
+                            rankIndexes: [],
+                            relations: [],
+                            searchIndexes: [],
+                            shape: {
+                                // A mixed union has legal values outside any list, so a
+                                // dropdown built from it would silently forbid one.
+                                status: { kind: "union", members: [{ kind: "literal", literalValue: '"draft"' }, { kind: "string" }] },
+                            },
+                            shardMode: "root",
+                            vectorIndexes: [],
+                        },
+                    ],
+                    vectorIndexes: [],
+                },
+            });
+
+            expect(output).not.toContain('"enumValues"');
         });
     });
 

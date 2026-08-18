@@ -282,6 +282,8 @@ interface TablesIndexesResult {
  * foreign key; `pk` marks the runtime-minted `_id` primary key.
  */
 interface ColumnMeta {
+    /** Allowed values of a string-literal union column, when codegen could name them all. */
+    enumValues?: string[];
     /** `v.storage(...)` column — the value is an R2 object key. */
     isStorage?: boolean;
     name: string;

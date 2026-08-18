@@ -307,6 +307,12 @@ export const DataBrowser = ({
 
     const client = useLunora();
 
+    // The open table's declared columns, keyed by name — what the row editor reads
+    // to pick a field widget. Sourced from the same `describeTables` read the
+    // diagram and the back-relations use, not from `useGenerateRows`'s
+    // `describeTable`: that one is only fetched when the generate dialog opens.
+    const editorColumnMeta = Object.fromEntries((columnsByTable[selectedTable ?? ""] ?? []).map((meta) => [meta.name, meta]));
+
     // The `v.storage(...)` columns of the table on screen. Their values are R2
     // object keys, which is what lets an expanded cell show the object instead of
     // the key — every other column's value IS the value.
@@ -435,6 +441,7 @@ export const DataBrowser = ({
                             onToggle: onToggleBackRelation,
                         }}
                         browser={browser}
+                        columnMeta={editorColumnMeta}
                         edit={edit}
                         editable={editable}
                         onAskAiFilter={askAiFilter}

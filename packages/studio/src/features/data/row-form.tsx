@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
+import type { ColumnMeta } from "../../lib/admin";
 import { cn } from "../../lib/utils";
 
 /** Shared control-button class (mirrors the data-browser toolbar). */
@@ -15,13 +16,18 @@ const FIELD_INPUT = "w-full rounded-md border border-border bg-background px-2 p
 /** Numeric columns whose name reads as an epoch-ms timestamp get a date picker. */
 const TIMESTAMP_RE = /(?:_creationtime|(?:^|[a-z])(?:time|at))$/iu;
 
-/** The widget a field renders as, inferred from its current value + column name. */
-type FieldKind = "boolean" | "date" | "json" | "number" | "text";
+/** The widget a field renders as. */
+type FieldKind = "boolean" | "date" | "enum" | "json" | "number" | "text";
 
 /**
- * Infer the input widget for a field from its current value (and, for numbers, its
- * column name): booleans toggle, timestamp-named numbers get a date picker, other
- * numbers a number input, objects/arrays a JSON sub-editor, everything else text.
+ * Infer the input widget for a field from its current VALUE (and, for numbers,
+ * its column name): booleans toggle, timestamp-named numbers get a date picker,
+ * other numbers a number input, objects/arrays a JSON sub-editor, everything else
+ * text.
+ *
+ * The fallback, not the primary path — see {@link fieldKind}. A value is a poor
+ * witness for a column's type: a `null` says nothing at all, and a string-literal
+ * union is indistinguishable from free text.
  */
 const inferKind = (column: string, value: unknown): FieldKind => {
     if (typeof value === "boolean") {
@@ -37,6 +43,41 @@ const inferKind = (column: string, value: unknown): FieldKind => {
     }
 
     return "text";
+};
+
+/**
+ * The widget for a field, from the SCHEMA where the studio has it and from the
+ * value otherwise.
+ *
+ * The schema is the better witness and the studio has always had it — the same
+ * `describeTables` read that draws the diagram reports every column's validator
+ * kind. Reading the value instead is why a `v.union(v.literal(…))` column was a
+ * free-text box, why a null boolean was a text box, and why a null number was a
+ * text box: those are all "the value cannot tell you".
+ *
+ * `v.any()` and plugin-owned tables have no metadata, so the value fallback stays
+ * load-bearing rather than being a transition step.
+ */
+const fieldKind = (column: string, value: unknown, meta: ColumnMeta | undefined): FieldKind => {
+    if (meta === undefined) {
+        return inferKind(column, value);
+    }
+
+    if (meta.enumValues !== undefined && meta.enumValues.length > 0) {
+        return "enum";
+    }
+
+    if (meta.type === "boolean") {
+        return "boolean";
+    }
+
+    if (meta.type === "number") {
+        return TIMESTAMP_RE.test(column) ? "date" : "number";
+    }
+
+    // Everything else — string, id, bytes, bigint, array, object, any — is either
+    // already served by the value inference or has no better widget than text.
+    return inferKind(column, value);
 };
 
 /** Parse `documentText` to a field object, or `null` when it isn't a JSON object (force raw mode). */
@@ -71,6 +112,36 @@ const BooleanField = ({ column, onChange, value }: FieldProps): ReactElement => 
     };
 
     return <Checkbox aria-label={column} checked={value === true} data-testid={`db-field-${column}`} onCheckedChange={onCheckedChange} />;
+};
+
+/**
+ * String-literal-union field → a dropdown of exactly the values the schema allows.
+ *
+ * A blank option appears when the column is optional, so an optional enum can be
+ * cleared — and also when the stored value is not one of the declared ones, so a
+ * row written before the union changed keeps its value visible instead of being
+ * silently rewritten to whichever option happens to sort first.
+ */
+const EnumField = ({ column, onChange, optional, options, value }: FieldProps & { readonly optional: boolean; readonly options: string[] }): ReactElement => {
+    const t = useT();
+    const current = typeof value === "string" ? value : "";
+    const unknownValue = current !== "" && !options.includes(current);
+
+    const onSelect = (event: React.ChangeEvent<HTMLSelectElement>): void => {
+        onChange(column, event.target.value === "" ? null : event.target.value);
+    };
+
+    return (
+        <select aria-label={column} className={FIELD_INPUT} data-testid={`db-field-${column}`} onChange={onSelect} value={current}>
+            {(optional || current === "") && <option value="">{t("(none)")}</option>}
+            {unknownValue && <option value={current}>{current}</option>}
+            {options.map((option) => (
+                <option key={option} value={option}>
+                    {option}
+                </option>
+            ))}
+        </select>
+    );
 };
 
 /** Number field → a numeric input; empty/NaN leaves the value unchanged. */
@@ -176,17 +247,25 @@ const JsonField = ({ column, onChange, value }: FieldProps): ReactElement => {
     );
 };
 
-/** One labelled field row: the column name, a foreign-key hint, and the inferred input. */
-const FieldRow = ({ column, onChange, target, value }: FieldProps & { readonly target?: string }): ReactElement => {
-    const kind = inferKind(column, value);
+/** One labelled field row: the column name, its declared type, a foreign-key hint, and the input. */
+const FieldRow = ({ column, meta, onChange, target, value }: FieldProps & { readonly meta?: ColumnMeta; readonly target?: string }): ReactElement => {
+    const kind = fieldKind(column, value, meta);
 
     return (
         <label className="flex flex-col gap-1 text-xs" htmlFor={`db-field-${column}`}>
             <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
                 <span className="font-mono">{column}</span>
+                {meta !== undefined && (
+                    <span className="rounded bg-muted px-1 font-mono text-[10px] tracking-wide" data-testid={`db-field-type-${column}`}>
+                        {meta.type}
+                    </span>
+                )}
                 {target !== undefined && <span className="rounded bg-muted px-1 font-mono text-[10px] tracking-wide uppercase">→ {target}</span>}
             </span>
             {kind === "boolean" && <BooleanField column={column} onChange={onChange} value={value} />}
+            {kind === "enum" && (
+                <EnumField column={column} onChange={onChange} optional={meta?.optional ?? true} options={meta?.enumValues ?? []} value={value} />
+            )}
             {kind === "number" && <NumberField column={column} onChange={onChange} value={value} />}
             {kind === "date" && <DateField column={column} onChange={onChange} value={value} />}
             {kind === "json" && <JsonField column={column} onChange={onChange} value={value} />}
@@ -196,6 +275,8 @@ const FieldRow = ({ column, onChange, target, value }: FieldProps & { readonly t
 };
 
 interface RowFormEditorProps {
+    /** Declared columns of the table being edited, keyed by name. Absent for a table the schema does not describe. */
+    readonly columnMeta?: Record<string, ColumnMeta>;
     /** The row document as JSON text — the single source of truth, shared with the raw-JSON mode. */
     readonly documentText: string;
     readonly onCancel: () => void;
@@ -214,7 +295,7 @@ interface RowFormEditorProps {
  * parses `documentText`) is unchanged. Falls back to (and offers a toggle to) the raw
  * textarea, which is also the only mode when the text isn't a JSON object.
  */
-const RowFormEditor = ({ documentText, onCancel, onDocumentTextChange, onSave, refs }: RowFormEditorProps): ReactElement => {
+const RowFormEditor = ({ columnMeta, documentText, onCancel, onDocumentTextChange, onSave, refs }: RowFormEditorProps): ReactElement => {
     const t = useT();
     const fields = parseDocument(documentText);
     const [rawMode, setRawMode] = useState<boolean>(false);
@@ -258,7 +339,7 @@ const RowFormEditor = ({ documentText, onCancel, onDocumentTextChange, onSave, r
             {showForm ? (
                 <div className="flex flex-col gap-3" data-testid="db-editor-fields">
                     {Object.entries(fields).map(([column, value]) => (
-                        <FieldRow column={column} key={column} onChange={onField} target={refs?.[column]} value={value} />
+                        <FieldRow column={column} key={column} meta={columnMeta?.[column]} onChange={onField} target={refs?.[column]} value={value} />
                     ))}
                 </div>
             ) : (

@@ -420,6 +420,12 @@ export interface TablesIndexesResult {
  * of a `v.id("ref")` column; `pk` marks the `_id` primary key.
  */
 export interface ColumnMeta {
+    /**
+     * The allowed values of a string-literal union column, when codegen could name
+     * them all. Absent for every other column — and for a mixed union, which has
+     * legal values outside any list the editor could offer.
+     */
+    enumValues?: string[];
     /** `v.storage(...)` column — the value is an R2 object key. */
     isStorage?: boolean;
     name: string;
