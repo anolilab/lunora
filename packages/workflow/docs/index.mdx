@@ -157,8 +157,9 @@ where the workflow awaits `orderApproved` still type-checks. What it removes is 
 hand-matched string.
 
 Event types beginning with `lunora:` are reserved for the framework's own
-instance-to-instance protocol (the `context.parallel` branch join) and are rejected
-both when declared and when sent.
+instance-to-instance protocol (the `context.parallel` branch join). `defineWorkflowEvent`
+and the typed `sendEvent` above reject them; the native untyped
+`instance.sendEvent({ type, payload })` does not go through that check.
 
 ### Reusable steps (`defineStep`)
 

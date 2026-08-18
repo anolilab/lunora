@@ -96,8 +96,11 @@ const defineWorkflowEvent = <Payload>(type: string, payload: Validator<Payload>)
     return { isLunoraWorkflowEvent: true, payload, type };
 };
 
-/** True when a value is a `defineWorkflowEvent` result (the runtime brand check). */
-const isWorkflowEventDefinition = (value: unknown): value is WorkflowEventDefinition =>
-    typeof value === "object" && value !== null && (value as { isLunoraWorkflowEvent?: unknown }).isLunoraWorkflowEvent === true;
+/**
+ * True when a value is usable as an event definition. The brand alone is not the
+ * test: the predicate hands the caller a `type` and a `payload.parse`, so it checks
+ * for both (and for the reserved namespace) rather than trusting a public boolean.
+ */
+const isWorkflowEventDefinition = (value: unknown): value is WorkflowEventDefinition => eventDefinitionProblem(value) === undefined;
 
 export { defineWorkflowEvent, eventDefinitionProblem, isWorkflowEventDefinition, RESERVED_EVENT_TYPE_PREFIX };

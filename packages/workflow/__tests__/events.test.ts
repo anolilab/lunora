@@ -68,13 +68,15 @@ describe("defineWorkflowEvent", () => {
     });
 
     it("rejects an empty type, a reserved type, and a non-validator payload", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         expect(() => defineWorkflowEvent("", v.string())).toThrow(/non-empty string/);
         // The `lunora:` namespace carries `ctx.parallel`'s branch-join protocol.
         expect(() => defineWorkflowEvent("lunora:branch:x", v.string())).toThrow(/reserved/);
         expect(() => defineWorkflowEvent("ok", undefined as never)).toThrow(/must be a validator/);
+        // The guard validates the fields it promises the caller, not just the brand.
         expect(isWorkflowEventDefinition({ type: "order-approved" })).toBe(false);
+        expect(isWorkflowEventDefinition({ isLunoraWorkflowEvent: true })).toBe(false);
     });
 });
 
