@@ -22,18 +22,14 @@
         "This paragraph was once false: nothing read the file, and the coverage it",
         "was created to hold could drift again unnoticed. It was, in two ports.",
         "",
-        "The last thirteen names cover the client-side write features (optimistic",
+        "The last fourteen names cover the client-side write features (optimistic",
         "layers, offline queue) rather than the wire. They assert against",
         "fixtures/offline-optimistic.json, which carries the values and orderings",
         "all eight ports must agree on.",
         "",
         "A name here is required of EVERY port, so it may only assert behaviour",
         "every port has. Where one legitimately differs the difference belongs in",
-        "the capability matrix, not here: dart's single connectivity signal gives",
-        "it no per-shard drain, which is why the FIFO case is named for replay",
-        "ORDER and the shard predicate rides along only in the ports that have one.",
-        "Batched replay, which only dart has, is left out of this list entirely for",
-        "the same reason."
+        "the capability matrix, not here."
     ],
     "required": [
         "wire_codec_round_trip",
@@ -58,6 +54,7 @@
         "optimistic_layer_drops_on_settled_frame",
         "optimistic_layer_rolls_back_on_failure",
         "offline_queue_fifo_replay_order",
+        "offline_queue_drains_only_the_named_shard",
         "offline_queue_overflow_evicts_oldest",
         "offline_queue_precondition_drops_stale_write",
         "offline_queue_hydrates_persisted_writes",

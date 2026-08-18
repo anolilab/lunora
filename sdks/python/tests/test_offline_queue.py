@@ -94,7 +94,7 @@ class TestQueueOrdering(unittest.TestCase):
         self.assertEqual(sizes[-1], case["sizeAfterDrain"])
 
     def test_a_predicate_drain_flushes_one_shard_and_leaves_the_rest(self):
-        covers("offline_queue_fifo_replay_order")
+        covers("offline_queue_drains_only_the_named_shard")
         case = FIXTURES["shardDrain"]
         queue = OfflineQueue()
 

@@ -25,6 +25,16 @@ import 'dart:math';
 
 import 'errors.dart';
 
+/// Whether two shard keys name the same shard.
+///
+/// An absent key and an empty one are the SAME shard — an empty string names no
+/// shard, so both mean "the default one". Comparing them strictly leaves a write
+/// submitted with `''` queued forever, because nothing ever flushes a shard
+/// named `''`, and makes its optimistic overlay miss the subscription it
+/// targets. `LunoraTransport.buildRpcBody` drops an empty key from the wire for
+/// the same reason.
+bool sameShard(String? left, String? right) => (left ?? '') == (right ?? '');
+
 /// One mutation as it is written to durable storage.
 class PersistedMutation {
   const PersistedMutation({
@@ -447,16 +457,37 @@ class OfflineQueue {
     return restored.length;
   }
 
-  /// Remove and return every queued mutation, oldest first.
+  /// Remove and return queued mutations, oldest first.
   ///
-  /// No per-shard predicate, unlike the reference client: there the socket is
-  /// per-shard so one shard can reconnect while others are down, whereas this
-  /// transport has a single injected connection whose shard rides its URL. One
-  /// connectivity signal means one drain.
-  List<QueuedMutation> drain() {
-    final drained = List<QueuedMutation>.of(_items);
+  /// With no predicate this drains everything. With one it drains only the
+  /// matching writes and leaves the rest in order, which is what makes a
+  /// per-shard flush possible: one shard's socket can come back while another
+  /// is still down, and replaying that other shard's writes over a connection
+  /// that cannot reach it would only lose them to a transport failure.
+  List<QueuedMutation> drain([bool Function(QueuedMutation item)? predicate]) {
+    if (predicate == null) {
+      final drained = List<QueuedMutation>.of(_items);
 
-    _items.clear();
+      _items.clear();
+      _notifySize();
+
+      return drained;
+    }
+
+    final drained = <QueuedMutation>[];
+    final kept = <QueuedMutation>[];
+
+    for (final item in _items) {
+      (predicate(item) ? drained : kept).add(item);
+    }
+
+    if (drained.isEmpty) {
+      return drained;
+    }
+
+    _items
+      ..clear()
+      ..addAll(kept);
     _notifySize();
 
     return drained;

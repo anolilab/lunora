@@ -357,6 +357,8 @@ private fun offlineQueueFifoReplayOrder() {
     check(queuedIds(queue.drain()) == ids(fifo["drained"]), "writes drain in submission order")
     check(sizes.last() == count(fifo["sizeAfterDrain"]), "and the depth observer sees the queue empty")
 
+    covers("offline_queue_drains_only_the_named_shard")
+
     val shard = scenario("offlineQueue", "shardDrain")
     val sharded = OfflineQueue()
 

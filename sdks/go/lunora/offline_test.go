@@ -126,6 +126,8 @@ func TestOfflineQueueFIFOAndShardDrain(t *testing.T) {
 		t.Fatalf("last observed size: got %d, want %d", sizes[len(sizes)-1], want)
 	}
 
+	covers("offline_queue_drains_only_the_named_shard")
+
 	shard := fixtureScenario(t, "offlineQueue", "shardDrain")
 	queue = NewOfflineQueue(OfflineQueueOptions{})
 	entries, _ := shard["entries"].([]any)

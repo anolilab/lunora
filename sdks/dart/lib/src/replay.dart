@@ -37,11 +37,17 @@ class OfflineReplayer {
   /// and they have to be settled here instead.
   final bool Function() isClosed;
 
-  /// Whether the socket is up, for the coalesced-reconnect loop.
-  final bool Function() isConnected;
+  /// Whether the socket for a given shard is up, for the coalesced-reconnect
+  /// loop. Takes the shard key so a disconnect on one shard cannot end another
+  /// shard's flush.
+  final bool Function(String? shardKey) isConnected;
 
-  bool _flushing = false;
-  bool _flushAgain = false;
+  /// Shard keys with a flush in flight, and the subset that must run again when
+  /// it finishes. Per SHARD, not one pair of flags: one shard's socket can come
+  /// back while another is still down, and a single flag would let shard A's
+  /// running flush swallow shard B's reconnect entirely.
+  final Set<String> _flushing = <String>{};
+  final Set<String> _flushAgain = <String>{};
 
   /// Replay every queued write, oldest first.
   ///
@@ -52,35 +58,41 @@ class OfflineReplayer {
   /// queue, because the client is connected by then. That matches the reference
   /// client, whose gate opens the moment its socket does; if a strict global
   /// order matters, wait for this Future before writing again.
-  Future<void> flush() async {
-    if (_flushing) {
+  Future<void> flush({String? shardKey}) async {
+    final shard = shardKey ?? '';
+
+    if (_flushing.contains(shard)) {
       // A reconnect arrived mid-flush. Remembered rather than dropped: the
       // running flush may already have stopped on the very transport failure
       // that caused the disconnect, and its re-queued writes would then sit
       // untouched until some LATER reconnect happened to come along.
-      _flushAgain = true;
+      _flushAgain.add(shard);
 
       return;
     }
 
-    _flushing = true;
+    _flushing.add(shard);
 
     try {
-      do {
-        _flushAgain = false;
+      bool again;
 
-        await _flushOnce();
-        // Only while still connected, so a disconnect that lands mid-pass ends
-        // the loop instead of retrying into a socket that is down.
-      } while (_flushAgain && isConnected());
+      do {
+        _flushAgain.remove(shard);
+
+        await _flushOnce(shardKey);
+        // Only while THIS shard is still connected, so a disconnect that lands
+        // mid-pass ends the loop instead of retrying into a socket that is down.
+        again = _flushAgain.contains(shard);
+      } while (again && isConnected(shardKey));
     } finally {
-      _flushing = false;
+      _flushing.remove(shard);
+      _flushAgain.remove(shard);
     }
   }
 
   /// One drain-and-replay pass. See [flush], which owns the
   /// re-entrancy and the coalesced-reconnect loop around it.
-  Future<void> _flushOnce() async {
+  Future<void> _flushOnce(String? shardKey) async {
     // A client with no poster cannot replay anything. Checked here rather than
     // per write, because the two replay shapes classified it oppositely: the
     // single-call path saw a CODED error and rejected the whole queue
@@ -97,7 +109,10 @@ class OfflineReplayer {
       queue.unpersist(stale.id);
     }
 
-    final drained = queue.drain();
+    // `sameShard`, not `==`: a null shard key and an empty one are the SAME
+    // shard, so a write submitted with `''` drains on the default shard's flush
+    // instead of waiting for a socket that is never opened.
+    final drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
 
     if (drained.isEmpty) {
       return;

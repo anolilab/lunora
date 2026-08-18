@@ -362,25 +362,8 @@ extension ConformanceTests {
         }
     }
 
-    func caseOfflineQueueFifoReplayOrder() throws {
-        let fifo = try scenario("offlineQueue", "fifo")
-        var sizes: [Int] = []
-        let queue = LunoraOfflineQueue()
-
-        queue.onSizeChange = { sizes.append($0) }
-
-        for id in ids(fifo["enqueue"]) {
-            queue.enqueue(entry(try XCTUnwrap(id)))
-        }
-
-        XCTAssertEqual(queue.size, count(fifo["sizeAfterEnqueue"]), "every write is queued")
-        XCTAssertEqual(
-            queue.drain { _ in true }.map { $0.id },
-            ids(fifo["drained"]).compactMap { $0 },
-            "writes drain in submission order"
-        )
-        XCTAssertEqual(sizes.last, count(fifo["sizeAfterDrain"]), "and the depth observer sees the queue empty")
-
+    /// A predicate drain flushes one shard and leaves the rest queued in order.
+    func caseOfflineQueueDrainsOnlyTheNamedShard() throws {
         let shard = try scenario("offlineQueue", "shardDrain")
         let sharded = LunoraOfflineQueue()
 
@@ -422,6 +405,26 @@ extension ConformanceTests {
         flushing.flushOfflineQueue(shardKey: target)
 
         XCTAssertEqual(replayed, ids(shard["drained"]), "an empty shard key replays on the default shard's flush")
+    }
+
+    func caseOfflineQueueFifoReplayOrder() throws {
+        let fifo = try scenario("offlineQueue", "fifo")
+        var sizes: [Int] = []
+        let queue = LunoraOfflineQueue()
+
+        queue.onSizeChange = { sizes.append($0) }
+
+        for id in ids(fifo["enqueue"]) {
+            queue.enqueue(entry(try XCTUnwrap(id)))
+        }
+
+        XCTAssertEqual(queue.size, count(fifo["sizeAfterEnqueue"]), "every write is queued")
+        XCTAssertEqual(
+            queue.drain { _ in true }.map { $0.id },
+            ids(fifo["drained"]).compactMap { $0 },
+            "writes drain in submission order"
+        )
+        XCTAssertEqual(sizes.last, count(fifo["sizeAfterDrain"]), "and the depth observer sees the queue empty")
 
         let requeue = try scenario("offlineQueue", "requeue")
         let store = MemoryPersistence()

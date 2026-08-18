@@ -89,7 +89,13 @@ class LunoraTransport {
   static Map<String, Object?> buildRpcBody(String functionPath, Object? args, {String? shardKey}) {
     final body = <String, Object?>{'args': encodeWire(args ?? const <String, Object?>{}), 'functionPath': functionPath};
 
-    if (shardKey != null) {
+    // Empty means ABSENT, not "the shard named `''`". The runtime disagrees — it
+    // takes any string as a named shard and routes `''` to its own Durable
+    // Object — while this client treats `''` and null as one shard everywhere it
+    // matches a subscription or drains the queue (see `sameShard`). Sending it
+    // would split those two views: a write submitted with `''` would replay
+    // against a different shard than the subscription it updated.
+    if (shardKey != null && shardKey.isNotEmpty) {
       body['shardKey'] = shardKey;
     }
 
@@ -227,7 +233,7 @@ class LunoraTransport {
     }
 
     final params = <String>[
-      if (shardKey != null) 'shard=${Uri.encodeQueryComponent(shardKey)}',
+      if (shardKey != null && shardKey.isNotEmpty) 'shard=${Uri.encodeQueryComponent(shardKey)}',
       if (token != null) 'token=${Uri.encodeQueryComponent(token)}',
     ];
 

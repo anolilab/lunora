@@ -21,11 +21,11 @@ use serde_json::{json, Value};
 mod offline_cases;
 
 use offline_cases::{
-    offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal, offline_queue_fifo_replay_order,
-    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
-    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, optimistic_cursorless_frame_preserves_cursor,
-    optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame,
-    optimistic_layer_rolls_back_on_failure,
+    offline_flush_replays_and_confirms_optimistic, offline_flush_unencodable_write_settles_terminal, offline_queue_drains_only_the_named_shard,
+    offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes,
+    offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write,
+    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
+    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -105,6 +105,7 @@ fn conformance_manifest_is_covered() {
             "optimistic_layer_drops_on_settled_frame" => optimistic_layer_drops_on_settled_frame(),
             "optimistic_layer_rolls_back_on_failure" => optimistic_layer_rolls_back_on_failure(),
             "offline_queue_fifo_replay_order" => offline_queue_fifo_replay_order(),
+            "offline_queue_drains_only_the_named_shard" => offline_queue_drains_only_the_named_shard(),
             "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
             "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
             "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),

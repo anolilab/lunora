@@ -703,6 +703,8 @@ final class OptimisticOfflineTest {
 
         // Driven through the CLIENT's flush, not a predicate written here: the drain predicate is
         // production code, and a suite that supplies its own asserts nothing about it.
+        covers("offline_queue_drains_only_the_named_shard");
+
         Map<String, Object> shard = scenario("offlineQueue", "shardDrain");
         List<String> replayed = new ArrayList<>();
         Client sharded =

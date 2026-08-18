@@ -51,10 +51,6 @@ List<String> _expected(Map<String, Object?> case_, String key) => (case_[key]! a
 // ─── Offline queue: the shared golden scenarios ──────────────────────────────
 
 /// Writes replay in the order they were submitted.
-///
-/// Named for replay ORDER rather than for the shard predicate the sibling ports
-/// also assert here: this transport takes a single connectivity signal, so it has
-/// one drain and no per-shard one to exercise. See the capability matrix.
 void caseGoldenOfflineQueueFifo() {
   covers('offline_queue_fifo_replay_order');
 
@@ -71,6 +67,29 @@ void caseGoldenOfflineQueueFifo() {
 
   equals(canonical(_ids(drained)), canonical(case_['drained']), 'writes drain oldest first');
   equals(queue.size, case_['sizeAfterDrain'], 'the queue is empty afterwards');
+}
+
+/// A drain takes ONE shard's writes and leaves the rest queued, in order.
+///
+/// The entry the fixture keys on is the one submitted with `''`: an empty shard
+/// key and an absent one name the same shard, so it has to drain on the default
+/// shard's flush. A port comparing the two strictly leaves it queued forever,
+/// because nothing ever flushes a shard named `''`.
+void caseGoldenOfflineQueueShardDrain() {
+  covers('offline_queue_drains_only_the_named_shard');
+
+  final case_ = _scenario('shardDrain');
+  final queue = OfflineQueue();
+
+  for (final entry in (case_['entries']! as List<Object?>).cast<Map<String, Object?>>()) {
+    queue.enqueue(_entry(entry['id']! as String, shardKey: entry['shardKey'] as String?));
+  }
+
+  final shardKey = case_['drainShardKey'] as String?;
+  final drained = queue.drain((item) => sameShard(item.shardKey, shardKey));
+
+  equals(canonical(_ids(drained)), canonical(case_['drained']), "only the named shard's writes drain");
+  equals(canonical(_ids(queue.items)), canonical(case_['remaining']), 'the other shards keep their order');
 }
 
 /// A flush that aborts on a transient failure returns its unreplayed writes to
@@ -274,7 +293,7 @@ Future<void> caseGoldenOfflineFlushReplay() async {
   final queue = OfflineQueue(persistence: store);
   final poster = Poster();
   final transport = LunoraTransport(url: 'https://app.example', post: poster.call);
-  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: () => true);
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
 
   final committed = <String>[];
   final rejected = <String>[];
@@ -388,7 +407,7 @@ Future<void> caseGoldenOfflineFlushUnencodableWrite() async {
   final queue = OfflineQueue(persistence: store);
   final poster = Poster(commitCursor: 7, result: 'null');
   final transport = LunoraTransport(url: 'https://app.example', post: poster.call);
-  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: () => true);
+  final replayer = OfflineReplayer(transport: transport, queue: queue, isClosed: () => false, isConnected: (_) => true);
 
   final committed = <String>[];
   final rejected = <String>[];

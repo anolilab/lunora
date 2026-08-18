@@ -91,7 +91,7 @@ class TestQueueOrdering < Minitest::Test
   end
 
   def test_a_predicate_drain_flushes_one_shard_and_leaves_the_rest
-    ConformanceManifest.covers("offline_queue_fifo_replay_order")
+    ConformanceManifest.covers("offline_queue_drains_only_the_named_shard")
     case_data = queue_case("shardDrain")
     queue = Lunora::OfflineQueue.new
 

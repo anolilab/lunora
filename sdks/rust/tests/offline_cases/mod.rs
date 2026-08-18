@@ -431,6 +431,29 @@ fn queued_ids(queue: &OfflineQueue) -> Vec<String> {
     queue.items().iter().map(|item| item.id.clone()).collect()
 }
 
+/// A predicate drain flushes one shard and leaves the rest queued in order.
+pub fn offline_queue_drains_only_the_named_shard() {
+    let shard = queue_case("shardDrain");
+    let mut queue = OfflineQueue::new();
+
+    for spec in shard["entries"].as_array().expect("entries") {
+        queue.enqueue(entry(spec["id"].as_str().expect("id"), spec["shardKey"].as_str()), Ok(json!({})));
+    }
+
+    // `same_shard`, not `==`: an absent shard key and an empty one are the SAME
+    // shard, so `m5` below drains with the null-shard writes. This is the
+    // predicate `Client::flush_offline_queue` uses.
+    let target = shard["drainShardKey"].as_str();
+    let drained: Vec<String> = queue
+        .drain(|item| same_shard(item.shard_key.as_deref(), target))
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+
+    assert_eq!(drained, ids(&shard["drained"]), "one shard's writes drained");
+    assert_eq!(queued_ids(&queue), ids(&shard["remaining"]), "the rest stay queued in order");
+}
+
 pub fn offline_queue_fifo_replay_order() {
     let case = queue_case("fifo");
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -452,27 +475,6 @@ pub fn offline_queue_fifo_replay_order() {
         *seen.lock().expect("sizes").last().expect("a size change"),
         case["sizeAfterDrain"].as_u64().expect("count") as usize
     );
-
-    // A predicate drain flushes one shard and leaves the rest queued in order.
-    let shard = queue_case("shardDrain");
-    let mut queue = OfflineQueue::new();
-
-    for spec in shard["entries"].as_array().expect("entries") {
-        queue.enqueue(entry(spec["id"].as_str().expect("id"), spec["shardKey"].as_str()), Ok(json!({})));
-    }
-
-    // `same_shard`, not `==`: an absent shard key and an empty one are the SAME
-    // shard, so `m5` below drains with the null-shard writes. This is the
-    // predicate `Client::flush_offline_queue` uses.
-    let target = shard["drainShardKey"].as_str();
-    let drained: Vec<String> = queue
-        .drain(|item| same_shard(item.shard_key.as_deref(), target))
-        .into_iter()
-        .map(|item| item.id)
-        .collect();
-
-    assert_eq!(drained, ids(&shard["drained"]), "one shard's writes drained");
-    assert_eq!(queued_ids(&queue), ids(&shard["remaining"]), "the rest stay queued in order");
 
     // Requeue returns writes to the FRONT without re-persisting them: durable
     // storage still holds them, so a re-append would duplicate the record.

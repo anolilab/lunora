@@ -127,9 +127,10 @@ Each follows from what this transport is rather than from taste, and
   file; the sibling ports take a synchronous adapter. `MemoryPersistence` ships
   for tests. With no adapter the queue survives a dropped socket but not a
   restart.
-- **There is no per-shard drain.** The sibling ports own a socket per shard, so
-  one shard reconnecting flushes just its writes. Here the shard rides the socket
-  URL and there is one connectivity signal, so one reconnect drains everything.
+- **Connectivity is reported per shard.** `setConnected(true, shardKey: …)`
+  flushes only that shard's writes, so one shard reconnecting cannot replay
+  another's down a connection that cannot reach it. Omit `shardKey` for the
+  default shard; `''` and `null` are the same shard everywhere.
 
 `authSubject` is an opaque, **non-secret** stamp — a user id, not a bearer token.
 It is persisted with every queued write and re-checked before that write replays,

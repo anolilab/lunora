@@ -138,7 +138,7 @@ change that adds or removes a capability.
 | Optimistic updates            | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Offline mutation queue        | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Durable offline queue         | ✅¹    | ✅¹ | ✅¹  | ✅¹  | ✅¹   | ✅¹  | ✅¹    | ✅¹  |
-| Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ❌   |
+| Per-shard drain               | ✅     | ✅  | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ✅   |
 | Multi-tab leader election     | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ❌     | ❌  | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
@@ -232,10 +232,6 @@ rather than from taste:
   `append`, so an adapter that reorders can let a `remove` land before the append
   it cancels. `MemoryPersistence` ships for tests. With no adapter the queue
   survives a dropped socket but not a restart.
-- **There is no per-shard drain.** The reference queue and the other seven drain
-  one shard at a time because their sockets are per-shard; here the shard rides
-  the socket URL and there is a single connectivity signal, so one reconnect
-  drains everything. It is the one ❌ Dart carries that its siblings do not.
 
 **The targeting rule for a per-call `optimistic` is a trap worth stating.** It
 patches the subscription opened under the MUTATION's own path and args — not

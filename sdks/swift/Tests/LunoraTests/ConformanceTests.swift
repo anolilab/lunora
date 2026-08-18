@@ -75,6 +75,7 @@ final class ConformanceTests: XCTestCase {
             case "optimistic_layer_drops_on_settled_frame": try caseOptimisticLayerDropsOnSettledFrame()
             case "optimistic_layer_rolls_back_on_failure": try caseOptimisticLayerRollsBackOnFailure()
             case "offline_queue_fifo_replay_order": try caseOfflineQueueFifoReplayOrder()
+            case "offline_queue_drains_only_the_named_shard": try caseOfflineQueueDrainsOnlyTheNamedShard()
             case "offline_queue_overflow_evicts_oldest": try caseOfflineQueueOverflowEvictsOldest()
             case "offline_queue_precondition_drops_stale_write": try caseOfflineQueuePreconditionDropsStaleWrite()
             case "offline_queue_hydrates_persisted_writes": try caseOfflineQueueHydratesPersistedWrites()

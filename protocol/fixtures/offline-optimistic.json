@@ -106,7 +106,7 @@
             "sizeAfterDrain": 0
         },
         "shardDrain": {
-            "$comment": "A predicate drain flushes one shard's writes when its socket reconnects while other shards are still down, and leaves the rest queued in order. A null shardKey and an empty one are the SAME shard — `m5` below is the assertion, not the prose: a port that compares the two strictly leaves it queued forever, because nothing ever flushes the shard named `\"\"`. Read by the seven ports whose socket is per-shard; dart has one connectivity signal and therefore one drain, which the capability matrix records — see the note in conformance-cases.json.",
+            "$comment": "A predicate drain flushes one shard's writes when its socket reconnects while other shards are still down, and leaves the rest queued in order. A null shardKey and an empty one are the SAME shard — `m5` below is the assertion, not the prose: a port that compares the two strictly leaves it queued forever, because nothing ever flushes the shard named `\"\"`.",
             "entries": [
                 { "id": "m1", "shardKey": null },
                 { "id": "m2", "shardKey": "room-1" },
