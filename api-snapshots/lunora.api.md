@@ -905,6 +905,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowEventDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5415,6 +5419,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WorkflowEventDefinition` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WorkflowHandle` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7078,6 +7086,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `WorkflowCreateOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WorkflowEventDefinition` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
