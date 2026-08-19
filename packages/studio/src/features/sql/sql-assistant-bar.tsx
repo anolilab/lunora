@@ -9,12 +9,12 @@ import { cn } from "../../lib/utils";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
 
 /** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the bar is hidden. */
-const reasonMessage = (reason: GenerateSqlDegradedReason): string => {
+const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string => {
     if (reason === "unsafe-response") {
-        return "The model returned a statement that is not read-only, so it was discarded.";
+        return t("The model returned a statement that is not read-only, so it was discarded.");
     }
 
-    return reason === "empty-response" ? "The model returned nothing usable." : "The model could not be reached.";
+    return reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
 };
 
 /**
@@ -119,7 +119,7 @@ const SqlAssistantBar = ({
             </div>
             {reason !== undefined && (
                 <p className="text-[11px] text-muted-foreground" data-testid="sql-assistant-reason" role="status">
-                    {reasonMessage(reason)}
+                    {reasonMessage(reason, t)}
                 </p>
             )}
         </div>

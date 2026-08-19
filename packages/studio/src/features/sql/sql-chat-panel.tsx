@@ -8,9 +8,16 @@ import type { ChatTurn, GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import type { SqlAssistant } from "./hooks/use-sql-assistant";
 
-/** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the panel is hidden. */
-const reasonMessage = (reason: GenerateSqlDegradedReason): string =>
-    reason === "empty-response" ? "The model returned nothing usable." : "The model could not be reached.";
+/**
+ * Operator-facing copy per failure reason. `no-ai-binding` never reaches here —
+ * the panel is hidden entirely in that case.
+ *
+ * Takes `t` and calls it with literals rather than returning a string to
+ * translate, so every id stays statically known — the same reason
+ * `dashboards-panel`'s `kindLabel` is written this way.
+ */
+const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string =>
+    reason === "empty-response" ? t("The model returned nothing usable.") : t("The model could not be reached.");
 
 /** Opening fence of the only block shape offered for insertion. */
 const SQL_FENCE = "```sql";
@@ -155,7 +162,7 @@ const SqlChatPanel = ({ assistant, onInsert }: { readonly assistant: SqlAssistan
 
             {reason !== undefined && (
                 <p className="px-3 py-1 text-[11px] text-destructive" data-testid="sql-chat-error">
-                    {reasonMessage(reason)}
+                    {reasonMessage(reason, t)}
                 </p>
             )}
 
