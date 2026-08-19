@@ -196,6 +196,23 @@ describe("sqlEditorPanel", () => {
         expect(screen.queryByTestId("sql-rows")).toBeNull();
     });
 
+    it("purges an on-disk history left by a build that always persisted it", async () => {
+        expect.assertions(2);
+
+        // The upgrade path. Before the toggle existed the history always lived in
+        // localStorage; an operator who never opts in must not be shown an empty,
+        // unchecked history while last week's statements sit on disk.
+        localStorage.setItem("lunora-studio-sql-history", JSON.stringify([{ at: 1, sql: "SELECT * FROM users WHERE email = 'x@y.z'" }]));
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        });
+
+        expect(screen.queryByTestId("sql-history")).toBeNull();
+    });
+
     it("clears the history", async () => {
         expect.assertions(3);
 

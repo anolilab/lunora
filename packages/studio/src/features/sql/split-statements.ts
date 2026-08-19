@@ -1,10 +1,13 @@
+import { maskSqlNonCode } from "../../../../../shared/sql-mask";
+import type { SqlRejection } from "../../../../../shared/sql-readonly";
 import { classifyStatement } from "../../../../../shared/sql-readonly";
-import { maskNonCode } from "./sql-context";
 
-/** One statement from a script: its text, and why the gate refused it. */
+/** One statement from a script: its text, where it starts in the draft, and why the gate refused it. */
 interface ScriptStatement {
-    /** The gate's message when this statement cannot run, else `undefined`. */
-    readonly rejection?: string;
+    /** Index of this statement's first character in the ORIGINAL draft, so a diagnostic can be placed on it. */
+    readonly offset: number;
+    /** The gate's verdict when this statement cannot run, else `undefined`. Its own offsets are statement-relative. */
+    readonly rejection?: SqlRejection;
     readonly sql: string;
 }
 
@@ -19,13 +22,47 @@ interface ScriptStatement {
  * N separately-gated calls; the classifier is never relaxed, and each part is
  * classified here too so a refusal is visible before anything is sent.
  *
- * Splits on the comment/literal-MASKED copy of the text (`maskNonCode`), which
- * preserves offsets — a `;` inside a string or a `--` comment is not a statement
- * boundary, and splitting on the raw text would tear one statement in half and
- * send both halves.
+ * Splits on `shared/sql-mask.ts`'s masked copy — the SAME scanner the gate uses
+ * to decide whether a `;` is a batch. That shared scanner is the point: the
+ * studio has its own `maskNonCode` in `sql-context.ts`, but that one deliberately
+ * treats `"…"` as code because it resolves identifiers, so splitting with it tore
+ * `SELECT "a;b" FROM t` into `SELECT "a` (which the gate then ACCEPTS and sends)
+ * and `b" FROM t`. A boundary detector and an identifier resolver may not share a
+ * mask.
+ *
+ * A draft the scanner cannot read — an unterminated quote or block comment — is
+ * left whole rather than split, so the gate refuses it as a single statement
+ * instead of the splitter inventing boundaries inside it.
  */
+
+/**
+ * One statement carrying the gate's verdict, or nothing at all when it is blank.
+ *
+ * `at` is where `raw` began in the draft; the trim is measured so `offset` points
+ * at the statement's first real character rather than the whitespace before it.
+ */
+const classify = (raw: string, at: number): ScriptStatement[] => {
+    const sql = raw.trim();
+
+    if (sql === "") {
+        return [];
+    }
+
+    const offset = at + raw.indexOf(sql);
+    const rejection = classifyStatement(sql);
+
+    return [rejection === undefined ? { offset, sql } : { offset, rejection, sql }];
+};
+
 const splitStatements = (sql: string): ScriptStatement[] => {
-    const masked = maskNonCode(sql);
+    const masked = maskSqlNonCode(sql);
+
+    // Unreadable (an unterminated quote or block comment): hand the gate the whole
+    // draft as one statement rather than inventing boundaries inside it.
+    if (masked === undefined) {
+        return classify(sql, 0);
+    }
+
     const parts: ScriptStatement[] = [];
     let start = 0;
 
@@ -36,15 +73,9 @@ const splitStatements = (sql: string): ScriptStatement[] => {
 
         // Slice the ORIGINAL, not the mask: the mask exists only to locate the
         // boundary, and the operator's own text is what runs.
-        const part = sql.slice(start, index).trim();
+        parts.push(...classify(sql.slice(start, index), start));
 
         start = index + 1;
-
-        if (part !== "") {
-            const rejection = classifyStatement(part);
-
-            parts.push(rejection === undefined ? { sql: part } : { rejection: rejection.message, sql: part });
-        }
     }
 
     return parts;

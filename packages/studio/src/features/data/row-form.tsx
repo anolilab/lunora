@@ -115,26 +115,38 @@ const BooleanField = ({ column, onChange, value }: FieldProps): ReactElement => 
 };
 
 /**
+ * The clear option's value. A sentinel rather than `""`, because `""` is itself a
+ * legal member of a string-literal union — `v.literal("")` — and using it for both
+ * would make an allowed empty string unselectable and render two blank options
+ * that mean different things.
+ */
+const CLEAR_OPTION = "\u0000clear";
+
+/**
  * String-literal-union field → a dropdown of exactly the values the schema allows.
  *
- * A blank option appears when the column is optional, so an optional enum can be
- * cleared — and also when the stored value is not one of the declared ones, so a
- * row written before the union changed keeps its value visible instead of being
+ * The clear option appears when the column is NULLABLE, not when it is optional:
+ * `optional` means "may be omitted on INSERT" and is also true of a
+ * `.default(...)` column, so keying the control off it offered "set this to null"
+ * on columns that reject null.
+ *
+ * It also appears when the stored value is not one of the declared ones, so a row
+ * written before the union changed keeps its value visible instead of being
  * silently rewritten to whichever option happens to sort first.
  */
-const EnumField = ({ column, onChange, optional, options, value }: FieldProps & { readonly optional: boolean; readonly options: string[] }): ReactElement => {
+const EnumField = ({ column, nullable, onChange, options, value }: FieldProps & { readonly nullable: boolean; readonly options: string[] }): ReactElement => {
     const t = useT();
-    const current = typeof value === "string" ? value : "";
-    const unknownValue = current !== "" && !options.includes(current);
+    const stored = typeof value === "string" ? value : null;
+    const unknownValue = stored !== null && !options.includes(stored);
 
     const onSelect = (event: React.ChangeEvent<HTMLSelectElement>): void => {
-        onChange(column, event.target.value === "" ? null : event.target.value);
+        onChange(column, event.target.value === CLEAR_OPTION ? null : event.target.value);
     };
 
     return (
-        <select aria-label={column} className={FIELD_INPUT} data-testid={`db-field-${column}`} onChange={onSelect} value={current}>
-            {(optional || current === "") && <option value="">{t("(none)")}</option>}
-            {unknownValue && <option value={current}>{current}</option>}
+        <select aria-label={column} className={FIELD_INPUT} data-testid={`db-field-${column}`} onChange={onSelect} value={stored ?? CLEAR_OPTION}>
+            {(nullable || stored === null) && <option value={CLEAR_OPTION}>{t("(none)")}</option>}
+            {unknownValue && <option value={stored}>{stored}</option>}
             {options.map((option) => (
                 <option key={option} value={option}>
                     {option}
@@ -263,8 +275,10 @@ const FieldRow = ({ column, meta, onChange, target, value }: FieldProps & { read
                 {target !== undefined && <span className="rounded bg-muted px-1 font-mono text-[10px] tracking-wide uppercase">→ {target}</span>}
             </span>
             {kind === "boolean" && <BooleanField column={column} onChange={onChange} value={value} />}
-            {kind === "enum" && (
-                <EnumField column={column} onChange={onChange} optional={meta?.optional ?? true} options={meta?.enumValues ?? []} value={value} />
+            {kind === "enum" && meta?.enumValues !== undefined && (
+                // `kind === "enum"` is only reachable with populated `enumValues`
+                // (see `fieldKind`), so neither argument needs a fallback.
+                <EnumField column={column} nullable={meta.nullable === true} onChange={onChange} options={meta.enumValues} value={value} />
             )}
             {kind === "number" && <NumberField column={column} onChange={onChange} value={value} />}
             {kind === "date" && <DateField column={column} onChange={onChange} value={value} />}

@@ -77,6 +77,22 @@ const ShortcutRow = ({ modifier, name, label }: { readonly label: string; readon
     const shortcuts = useShortcuts();
 
     const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+        // Tab, Shift-Tab and Escape are NOT consumed: swallowing them made this box
+        // a keyboard trap (WCAG 2.1.2) — a keyboard or screen-reader user who
+        // focused it could not leave without a pointer.
+        if (["Escape", "Tab"].includes(event.key)) {
+            return;
+        }
+
+        // A binding that needs Shift can never fire: `useConsoleShortcut` requires
+        // `!event.shiftKey`, so storing `?` would produce a shortcut the operator
+        // cannot trigger and cannot see is broken.
+        if (event.shiftKey) {
+            event.preventDefault();
+
+            return;
+        }
+
         event.preventDefault();
         setShortcut(name, event.key);
     };

@@ -50,6 +50,11 @@ interface Widget {
     readonly title: string;
 }
 
+/** Accepting a drop requires cancelling the default. Module scope: it closes over nothing. */
+const allowDrop = (event: React.DragEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+};
+
 /** A widget's kind, defaulting the tiles saved before there was more than one. */
 const widgetKind = (widget: Widget): WidgetKind => widget.kind ?? "chart";
 
@@ -91,10 +96,6 @@ const WidgetFrame = ({ actions, children, draggedRef, onEdit, onRemove, onReorde
         draggedRef.current = widget.id;
     };
 
-    const onDragOver = (event: React.DragEvent<HTMLDivElement>): void => {
-        event.preventDefault();
-    };
-
     const onDrop = (): void => {
         const from = draggedRef.current;
 
@@ -107,7 +108,7 @@ const WidgetFrame = ({ actions, children, draggedRef, onEdit, onRemove, onReorde
     };
 
     return (
-        <Card data-testid={`dashboards-widget-${widget.id}`} draggable onDragOver={onDragOver} onDragStart={onDragStart} onDrop={onDrop}>
+        <Card data-testid={`dashboards-widget-${widget.id}`} draggable onDragOver={allowDrop} onDragStart={onDragStart} onDrop={onDrop}>
             <CardHeader className="flex flex-row items-start justify-between gap-2 border-b pb-3">
                 <CardTitle className="min-w-0 cursor-grab truncate" title={widget.title}>
                     {widget.title}

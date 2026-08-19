@@ -365,11 +365,14 @@ const IMAGE_KEY_RE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/iu;
  * useful answer when the object cannot be shown.
  */
 const StoragePreview = ({
+    bucket,
     objectKey,
     resolveUrl,
 }: {
+    /** The bucket `v.storage(bucket)` named, or undefined for the default one. */
+    readonly bucket?: string;
     readonly objectKey: string;
-    readonly resolveUrl: (key: string) => Promise<string>;
+    readonly resolveUrl: (key: string, bucket?: string) => Promise<string>;
 }): ReactElement | null => {
     const [url, setUrl] = useState<null | string>(null);
     const [failed, setFailed] = useState<boolean>(false);
@@ -381,7 +384,7 @@ const StoragePreview = ({
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    const resolved = await resolveUrl(objectKey);
+                    const resolved = await resolveUrl(objectKey, bucket);
 
                     if (!token.cancelled) {
                         setUrl(resolved);
@@ -397,7 +400,7 @@ const StoragePreview = ({
         return () => {
             token.cancelled = true;
         };
-    }, [objectKey, resolveUrl]);
+    }, [bucket, objectKey, resolveUrl]);
 
     const onError = (): void => {
         setFailed(true);
@@ -425,15 +428,18 @@ const StoragePreview = ({
  * boolean plus a resolver that could disagree with it.
  */
 const CellDetailDialog = ({
+    bucket,
     column,
     onClose,
     resolveUrl,
     value,
 }: {
+    /** The bucket this column's keys live in, when `v.storage(bucket)` named one. */
+    readonly bucket?: string;
     readonly column: string;
     readonly onClose: () => void;
     /** Resolve a viewable URL for a storage key. Absent for every ordinary column. */
-    readonly resolveUrl?: (key: string) => Promise<string>;
+    readonly resolveUrl?: (key: string, bucket?: string) => Promise<string>;
     readonly value: unknown;
 }): ReactElement => {
     const t = useT();
@@ -466,7 +472,9 @@ const CellDetailDialog = ({
                     </button>
                 </div>
             </div>
-            {resolveUrl !== undefined && typeof value === "string" && IMAGE_KEY_RE.test(value) && <StoragePreview objectKey={value} resolveUrl={resolveUrl} />}
+            {resolveUrl !== undefined && typeof value === "string" && IMAGE_KEY_RE.test(value) && (
+                <StoragePreview bucket={bucket} objectKey={value} resolveUrl={resolveUrl} />
+            )}
             <pre
                 className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap"
                 data-testid="grid-cell-value"

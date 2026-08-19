@@ -95,7 +95,7 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
 const LUNORA_TABLE_COLUMNS: Record<
     string,
-    Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>
+    Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
 > = {
     "feedback": [
         {
@@ -336,6 +336,28 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "nondeterministic_query_mutation",
         "remediation": "For a `query`: move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument, or accept that the value may differ across re-evaluations. For an ordinary `mutation`: no action needed — the handler runs at most once per logical write on this runtime. If the mutation is dispatched from inside a workflow step or queue consumer, treat it like an action value instead, since the surrounding step/consumer can replay.",
         "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "output_projection_missing_on_public_read:feedback:44",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "A `.public()` `query` returns raw table rows (no `.output(...)` projection, no `.use(mask(...))`) from a table carrying PII-named columns (`email`, `phone`, `ssn`, …). Every column ships to the caller, and a column added to the table later leaks by default.",
+        "detail": "Public query `list` (feedback:44) returns raw `feedback` rows with no `.output(...)` projection — shipping PII column(s) authorEmail to every caller, and any column added to `feedback` later leaks by default. Project the return with `.output(v.object({ … }))` or mask the PII columns.",
+        "facing": "EXTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "columns": [
+                "authorEmail"
+            ],
+            "exportName": "list",
+            "file": "feedback",
+            "line": 44,
+            "table": "feedback"
+        },
+        "name": "output_projection_missing_on_public_read",
+        "remediation": "Add an explicit return projection to the public query — `.output(v.object({ … }))` listing only the fields a client needs — or apply a `.use(mask(...))` policy to the PII columns. This makes the exposed shape intentional and stops a newly-added column from leaking through this query by default.",
+        "title": "Public query returns raw rows with PII and no output projection"
     }
 ];
 
@@ -916,7 +938,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableColumns(
             table: string,
-        ): Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        ): Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 

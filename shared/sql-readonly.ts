@@ -21,13 +21,15 @@
  * browser half needs an offset to underline and the server half needs an error
  * code to serialize. Callers add their own error type.
  *
- * The comment scanner below is a near-twin of the one in the studio's
- * `features/sql/sql-context.ts`, and that duplication is deliberate: this file is
- * inlined into `@lunora/do`, which must stay free of studio feature modules, and
- * `shared/` may only import other zero-dependency `shared/` files. If a third
- * consumer appears, promote the scanner to its own `shared/` module rather than
- * pointing this one at the studio.
+ * The boundary scanner it uses lives in `shared/sql-mask.ts` — promoted out of
+ * this file when a third consumer (the Studio's statement splitter) appeared,
+ * exactly as the note that used to sit here instructed. It stays separate from
+ * the studio's own `maskNonCode` in `features/sql/sql-context.ts`, which
+ * deliberately treats `"…"` as code because it resolves identifiers rather than
+ * finding statement boundaries.
  */
+
+import { maskSqlNonCode } from "./sql-mask";
 
 /** Why a statement was rejected. Mirrors the codes the DO serializes to the client. */
 type SqlRejectionCode = "SQL_EMPTY" | "SQL_MULTIPLE_STATEMENTS" | "SQL_NOT_READONLY";
@@ -87,99 +89,6 @@ const skipBlockComment = (sql: string, from: number): number => {
     const close = sql.indexOf("*/", from + 2);
 
     return close === -1 ? -1 : close + 2;
-};
-
-/** Filler for masked content. A letter, so it can never look like a `;`, a quote, or a comment opener. */
-const MASK_CHAR = "x";
-
-/** Closing delimiter per quote opener. SQLite doubles the delimiter to escape it, except for `[...]`. */
-const QUOTE_CLOSERS: Readonly<Record<string, string>> = { '"': '"', "'": "'", "[": "]", "`": "`" };
-
-/**
- * A same-length copy of `sql` with the CONTENT of string literals, quoted
- * identifiers and comments replaced by {@link MASK_CHAR}, or `undefined` when a
- * quote or block comment never closes.
- *
- * Only the batch check reads this, and only to answer "is this `;` a statement
- * boundary". A `;` inside `'…'`, `"…"`, `` `…` ``, `[…]`, `-- …` or `/* … *\/` is
- * content, not a boundary — SQLite's own parser never sees a second statement
- * there — so scanning the raw text reported four separate false batches
- * (`SELECT ';' AS a`, `SELECT 1 -- a; b`, `SELECT 1 /* a; b *\/`,
- * `SELECT "a;b" FROM t`), each of which is a legal read-only query the console
- * refused to run at all.
- *
- * It is deliberately NOT used for {@link FORBIDDEN_KEYWORD}. That check rejects a
- * mutating word even inside a literal, and its docblock records that as an
- * accepted trade for an admin tool that must never corrupt the doc-store's
- * shadow tables. Masking there would relax a rule someone chose; masking here
- * fixes one nobody did.
- *
- * **Fail-closed on anything unclosed.** An unterminated quote or block comment
- * returns `undefined`, and the caller falls back to scanning the raw text — the
- * behaviour that shipped. Such a statement is a syntax error to SQLite anyway,
- * so the strictness costs nothing and the alternative (masking to end of input)
- * would hide a real `;` behind a stray quote.
- *
- * Length is preserved so a rejection's `offset` still indexes the caller's own
- * string. Newlines survive for the same reason.
- */
-const maskNonCode = (sql: string): string | undefined => {
-    const out = [...sql];
-    let index = 0;
-
-    while (index < sql.length) {
-        const char = sql[index] ?? "";
-        const closer = QUOTE_CLOSERS[char];
-
-        if (char === "-" && sql[index + 1] === "-") {
-            const end = skipLineComment(sql, index);
-
-            out.fill(MASK_CHAR, index, end);
-            index = end;
-        } else if (char === "/" && sql[index + 1] === "*") {
-            const end = skipBlockComment(sql, index);
-
-            if (end === -1) {
-                return undefined;
-            }
-
-            out.fill(MASK_CHAR, index, end);
-            index = end;
-        } else if (closer !== undefined) {
-            let scan = index + 1;
-
-            while (scan < sql.length) {
-                if (sql[scan] !== closer) {
-                    scan += 1;
-                } else if (closer !== "]" && sql[scan + 1] === closer) {
-                    // A doubled delimiter escapes it — `''`, `""`, ` `` ` — and is
-                    // content, so step over both. `[...]` has no escape form.
-                    scan += 2;
-                } else {
-                    break;
-                }
-            }
-
-            if (scan >= sql.length) {
-                return undefined;
-            }
-
-            out.fill(MASK_CHAR, index, scan + 1);
-            index = scan + 1;
-        } else {
-            index += 1;
-        }
-    }
-
-    // Newlines are restored so line geometry — and therefore any offset an editor
-    // derives from it — is unchanged.
-    for (const [at, original] of [...sql].entries()) {
-        if (original === "\n") {
-            out[at] = "\n";
-        }
-    }
-
-    return out.join("");
 };
 
 /**
@@ -242,9 +151,9 @@ const classifyStatement = (query: string): SqlRejection | undefined => {
     // Located on a comment/quote-MASKED copy (same length, so the offset still
     // indexes `query`), because a `;` inside a literal or a comment is content
     // rather than a boundary. Anything unclosed masks to `undefined` and falls
-    // back to the raw scan — see {@link maskNonCode}.
+    // back to the raw scan — see {@link maskSqlNonCode}.
     const single = trimmed.replace(TRAILING_SEMICOLON, "");
-    const batchAt = (maskNonCode(single) ?? single).indexOf(";");
+    const batchAt = (maskSqlNonCode(single) ?? single).indexOf(";");
 
     if (batchAt !== -1) {
         return {

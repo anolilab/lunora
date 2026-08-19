@@ -56,7 +56,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     // unlink with `null`), and clear that tab's stale result/error.
     const loadIntoActiveTab = (sql: string, savedId: null | string): void => {
         patchActiveTab({ activeId: savedId, sql });
-        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null });
+        // `script` too: without it the previous run's statement strip survives into
+        // a new draft, and selecting one of its entries shows a result belonging to
+        // a query the editor no longer holds.
+        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null, script: undefined });
     };
 
     const library = useSqlLibrary({ loadIntoActiveTab, unlinkQuery });
@@ -140,12 +143,18 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         // EXPLAIN wraps the whole draft, so it is one statement by construction
         // and is never split.
-        const statements = mode === "explain" ? [{ sql: `EXPLAIN QUERY PLAN ${draft}` }] : splitStatements(draft);
+        // EXPLAIN wraps the whole draft, so it is one statement by construction and
+        // is never split — but it still goes through the gate, so a script the
+        // operator asks to explain is refused with the same message the editor's
+        // own diagnostic shows rather than failing opaquely at the server.
+        const statements = mode === "explain" ? splitStatements(`EXPLAIN QUERY PLAN ${draft}`) : splitStatements(draft);
         const runs: ScriptRun[] = [];
 
         for (const statement of statements) {
+            const refused: ScriptRun = { error: statement.rejection?.message ?? "", result: null, sql: statement.sql };
+
             // eslint-disable-next-line no-await-in-loop -- sequential on purpose: a script's statements are ordered, and firing them concurrently would run a later one against state an earlier one has not established
-            runs.push(statement.rejection === undefined ? await runOne(statement.sql) : { error: statement.rejection, result: null, sql: statement.sql });
+            runs.push(statement.rejection === undefined ? await runOne(statement.sql) : refused);
         }
 
         recordShard(shardKey);

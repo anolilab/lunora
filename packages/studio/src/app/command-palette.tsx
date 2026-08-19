@@ -113,10 +113,23 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     // Open on ⌘/Ctrl + the bound key (K by default) and on the top-bar button's window event.
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent): void => {
-            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === paletteKey) {
-                event.preventDefault();
-                setOpen(true);
+            if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== paletteKey) {
+                return;
             }
+
+            // The same bail the console shortcut has, and now needed for the same
+            // reason: while the key was hardcoded to `k` this was safe, because ⌘K
+            // is not an editing shortcut. Rebindable, it is — an operator who binds
+            // the palette to `a` would otherwise lose ⌘A everywhere in the studio,
+            // including inside the SQL editor and every row-editor field.
+            const { target } = event;
+
+            if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))) {
+                return;
+            }
+
+            event.preventDefault();
+            setOpen(true);
         };
 
         const onOpen = (): void => {

@@ -2721,6 +2721,9 @@ const buildTtlSweeps = (schema: SchemaIR): EmittedTtlSweep[] => {
 
 /** One column descriptor per table, mirroring `@lunora/do`'s `ColumnMeta`. */
 interface EmittedColumn {
+    /** The typed bucket a `v.storage(bucket)` column's key lives in, when one was named. */
+    bucket?: string;
+
     /**
      * The allowed values of a string-literal union, so the studio's row editor can
      * offer a dropdown instead of a free-text box. Present only when EVERY member
@@ -2730,6 +2733,14 @@ interface EmittedColumn {
     /** `v.storage(...)` column — the value is an R2 object key. */
     isStorage?: boolean;
     name: string;
+
+    /**
+     * The column accepts `null` (`.nullable()`). Distinct from `optional`,
+     * which means "may be omitted on INSERT" and is also true of a column with a
+     * `.default(...)` — a defaulted non-nullable column must not be offered a
+     * "clear this field" control that then writes `null`.
+     */
+    nullable?: boolean;
     /** Optional on insert: declared `v.optional(...)` or carrying a `.default(...)`. */
     optional: boolean;
     /** Primary key — the runtime-minted `_id` column. */
@@ -2796,6 +2807,42 @@ const stringEnumValues = (validator: ValidatorIR): string[] | undefined => {
  * `_id` (the primary key) and `_creationTime` are absent from `table.shape`, so
  * they're prepended here so the diagram shows every column a row actually has.
  */
+
+/**
+ * One column's emitted metadata. Split out of {@link buildTableColumns} so the
+ * per-field decisions read on their own rather than nested two loops deep.
+ */
+const buildColumn = (field: string, validator: ValidatorIR): EmittedColumn => {
+    const resolved = unwrapOptional(validator);
+    const column: EmittedColumn = { name: field, optional: isOptionalOnInsert(validator), type: resolved.kind };
+
+    if (resolved.kind === "id" && resolved.tableName !== undefined) {
+        column.ref = resolved.tableName;
+    }
+
+    if (resolved.kind === "storage") {
+        column.isStorage = true;
+
+        if (resolved.bucket !== undefined) {
+            column.bucket = resolved.bucket;
+        }
+    }
+
+    const enumValues = stringEnumValues(resolved);
+
+    if (enumValues !== undefined) {
+        column.enumValues = enumValues;
+    }
+
+    // `.nullable()` flips `notNull` off. Absent column metadata means the field
+    // carries no modifiers at all, which is not-null.
+    if (resolved.column?.notNull === false) {
+        column.nullable = true;
+    }
+
+    return column;
+};
+
 const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> => {
     const byTable: Record<string, EmittedColumn[]> = {};
 
@@ -2806,25 +2853,7 @@ const buildTableColumns = (schema: SchemaIR): Record<string, EmittedColumn[]> =>
         ];
 
         for (const [field, validator] of Object.entries(table.shape)) {
-            const optional = isOptionalOnInsert(validator);
-            const resolved = unwrapOptional(validator);
-            const column: EmittedColumn = { name: field, optional, type: resolved.kind };
-
-            if (resolved.kind === "id" && resolved.tableName !== undefined) {
-                column.ref = resolved.tableName;
-            }
-
-            if (resolved.kind === "storage") {
-                column.isStorage = true;
-            }
-
-            const enumValues = stringEnumValues(resolved);
-
-            if (enumValues !== undefined) {
-                column.enumValues = enumValues;
-            }
-
-            columns.push(column);
+            columns.push(buildColumn(field, validator));
         }
 
         byTable[table.name] = columns;
@@ -4941,7 +4970,7 @@ const LUNORA_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
 const LUNORA_TABLE_COLUMNS: Record<
     string,
-    Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>
+    Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }>
 > = ${JSON.stringify(tableColumns, undefined, 4)};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
@@ -5126,7 +5155,7 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
 
         protected override tableColumns(
             table: string,
-        ): Array<{ enumValues?: string[]; isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }> {
+        ): Array<{ bucket?: string; enumValues?: string[]; isStorage?: boolean; name: string; nullable?: boolean; optional: boolean; pk?: boolean; ref?: string; type: string }> {
             return LUNORA_TABLE_COLUMNS[table] ?? [];
         }
 

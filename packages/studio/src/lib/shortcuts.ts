@@ -24,9 +24,34 @@ const STORAGE_KEY = "lunora-studio-shortcuts";
  * key would only take effect on the next reload, which is exactly the kind of
  * setting that reads as broken.
  */
-let current: Shortcuts = { ...DEFAULT_SHORTCUTS, ...loadJsonArray<Shortcuts>(STORAGE_KEY)[0] };
-
 const listeners = new Set<() => void>();
+
+/** A stored value is only honoured when BOTH fields are the single characters `setShortcut` would accept. */
+const validate = (stored: Partial<Shortcuts> | undefined): Shortcuts => {
+    const toggle = stored?.console;
+    const palette = stored?.palette;
+
+    return typeof toggle === "string" && toggle.length === 1 && typeof palette === "string" && palette.length === 1 && toggle !== palette
+        ? { console: toggle, palette }
+        : DEFAULT_SHORTCUTS;
+};
+
+let current: Shortcuts = DEFAULT_SHORTCUTS;
+
+/**
+ * Hydrate from storage. `loadJsonArray` only proves the stored value is an array,
+ * so a hand-edited or corrupted entry (`{"console": null}`, or both bindings the
+ * same) would otherwise walk straight past every check `setShortcut` performs.
+ */
+const hydrateShortcuts = (): void => {
+    current = validate(loadJsonArray<Partial<Shortcuts>>(STORAGE_KEY)[0]);
+
+    for (const listener of listeners) {
+        listener();
+    }
+};
+
+hydrateShortcuts();
 
 const subscribe = (listener: () => void): (() => void) => {
     listeners.add(listener);
@@ -55,7 +80,14 @@ const setShortcut = (name: keyof Shortcuts, key: string): void => {
         return;
     }
 
-    current = { ...current, [name]: key.toLowerCase() };
+    const next = key.toLowerCase();
+    const other = name === "console" ? "palette" : "console";
+
+    // Both bindings accept Ctrl, so an identical key would fire BOTH on one
+    // keydown — Ctrl+K would open the palette and toggle the console at once.
+    // Swapping rather than refusing keeps every key reachable and never leaves
+    // the pair in a state the operator cannot get out of.
+    current = current[other] === next ? { ...current, [name]: next, [other]: current[name] } : { ...current, [name]: next };
     saveJson(STORAGE_KEY, [current]);
 
     for (const listener of listeners) {
@@ -73,5 +105,5 @@ const resetShortcuts = (): void => {
     }
 };
 
-export { DEFAULT_SHORTCUTS, resetShortcuts, setShortcut, useShortcuts };
+export { DEFAULT_SHORTCUTS, hydrateShortcuts, resetShortcuts, setShortcut, useShortcuts };
 export type { Shortcuts };

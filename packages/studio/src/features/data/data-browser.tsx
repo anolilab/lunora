@@ -316,15 +316,25 @@ export const DataBrowser = ({
     // The `v.storage(...)` columns of the table on screen. Their values are R2
     // object keys, which is what lets an expanded cell show the object instead of
     // the key — every other column's value IS the value.
-    const storageColumns = new Set((columnsByTable[selectedTable ?? ""] ?? []).filter((meta) => meta.isStorage === true).map((meta) => meta.name));
+    // One pass, and it carries the bucket: a `Map` rather than a `Set` because the
+    // cell needs to know WHICH bucket to resolve against, not merely that it is a
+    // storage column. An entry with no bucket means `v.storage()` with no argument.
+    const storageColumns = new Map<string, string | undefined>();
 
-    // No bucket is passed: `ColumnMeta` does not carry the one `v.storage(bucket)`
-    // named, so this resolves against the deployment's default bucket. A project
-    // with a single bucket — the common case — is right; a multi-bucket project
-    // whose key is not in the default one fails the fetch and the preview simply
-    // does not render, which is the same outcome as not having the feature.
+    for (const meta of columnsByTable[selectedTable ?? ""] ?? []) {
+        if (meta.isStorage === true) {
+            storageColumns.set(meta.name, meta.bucket);
+        }
+    }
+
+    // Resolves against the bucket `v.storage(bucket)` named, which codegen now
+    // reports on the column. A column declared without one resolves against the
+    // deployment's default bucket, which is what `v.storage()` itself means.
     // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is an effect dependency in `StoragePreview`, and a fresh closure per render would re-fetch the signed URL on every keystroke elsewhere in the browser
-    const resolveStorageUrl = useCallback(async (key: string): Promise<string> => client.signedStorageUrl(key), [client]);
+    const resolveStorageUrl = useCallback(
+        async (key: string, bucket?: string): Promise<string> => client.signedStorageUrl(key, bucket === undefined ? {} : { bucket }),
+        [client],
+    );
 
     // Fetch the table list for a given shard key — used by the ShardExplorer to
     // show a live table/row-count summary when the operator picks a recent shard.
@@ -464,6 +474,7 @@ export const DataBrowser = ({
 
             {expandedCell !== null && (
                 <CellDetailDialog
+                    bucket={storageColumns.get(expandedCell.column)}
                     column={expandedCell.column}
                     onClose={closeExpandedCell}
                     resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}

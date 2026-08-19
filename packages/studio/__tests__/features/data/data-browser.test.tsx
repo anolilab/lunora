@@ -654,6 +654,75 @@ describe("dataBrowser — editable", () => {
         expect(screen.getByTestId("db-paste-skipped").textContent).toContain("2");
     });
 
+    it("judges a pasted value against the DECLARED column, not the cell's current value", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 2 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.describeTables) {
+                    return {
+                        columnsByTable: {
+                            posts: [
+                                { name: "views", optional: false, type: "number" },
+                                { enumValues: ["draft", "published"], name: "status", optional: false, type: "union" },
+                            ],
+                        },
+                    };
+                }
+
+                return {
+                    columns: ["__id__", "views", "status"],
+                    // `views` is NULL on both rows: judging by the value would read
+                    // "no type at all" and wave anything through.
+                    rows: [
+                        { __id__: "p1", status: "draft", views: null },
+                        { __id__: "p2", status: "draft", views: null },
+                    ],
+                    total: 2,
+                };
+            },
+        });
+
+        render(renderBrowser(mock, { editable: true, pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-page");
+
+        // The anchor defaults to the first column, the primary key, so each line
+        // leads with a value nothing may write.
+        pasteIntoGrid("ignored\tn/a\tarchived\nignored\t7\tpublished");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        // Only `7` (fits the declared number) and `published` (a declared union
+        // member) survive; `n/a` and `archived` do not, and neither does either
+        // primary-key cell.
+        expect(within(staged).getAllByRole("listitem")).toHaveLength(2);
+        expect(screen.getByTestId("db-paste-skipped").textContent).toContain("4");
+    });
+
+    it("anchors a paste at the cell the operator clicked", async () => {
+        expect.assertions(1);
+
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        // Click the `text` cell of the second row, then paste one value. Before
+        // this, `active` was written only by the arrow keys, so a pointer-selected
+        // cell was ignored and the block landed at the top-left of the page.
+        fireEvent.pointerDown(screen.getAllByTestId("db-expand-text")[1] as HTMLElement);
+        pasteIntoGrid("clicked");
+
+        const staged = await screen.findByTestId("db-staged-list");
+
+        expect(staged.textContent).toContain("clicked");
+    });
+
     it("refuses a pasted value that does not fit a numeric column", async () => {
         expect.assertions(2);
 

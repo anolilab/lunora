@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useRef, useState } from "react";
 
+import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -292,6 +293,9 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
                 if (inferred !== undefined) {
                     setWidgets(applyInference(id, inferred));
                 }
+                // `inferChart` swallows its own failures and answers `undefined`
+                // for both an AI error and a degraded reply, so without reading
+                // the reason a failure is indistinguishable from "no change".
             } finally {
                 setInferringId((current) => (current === id ? null : current));
             }
@@ -342,10 +346,20 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
                 )}
             </div>
 
+            {assistant.reason("chart") !== undefined && (
+                <Alert className="text-xs" testId="dashboards-suggest-error" variant="destructive">
+                    {t("Could not suggest a chart for that result.")}
+                </Alert>
+            )}
+
             {formOpen && <WidgetForm draft={draft} editing={editingId !== null} onCancel={closeForm} onChange={setDraft} onSubmit={onSubmit} />}
 
             {widgets.length === 0 && !formOpen ? (
-                <EmptyState description={t("Add a widget to chart a saved SQL query on this browser.")} testId="dashboards-empty" title={t("No widgets yet")} />
+                <EmptyState
+                    description={t("Add a chart, a single value, a table, or a note. Everything is saved on this browser.")}
+                    testId="dashboards-empty"
+                    title={t("No widgets yet")}
+                />
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="dashboards-grid">
                     {widgets.map((widget) => (

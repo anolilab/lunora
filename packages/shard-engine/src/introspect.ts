@@ -282,11 +282,20 @@ interface TablesIndexesResult {
  * foreign key; `pk` marks the runtime-minted `_id` primary key.
  */
 interface ColumnMeta {
+    /** The typed bucket a `v.storage(bucket)` column's key lives in, when one was named. */
+    bucket?: string;
     /** Allowed values of a string-literal union column, when codegen could name them all. */
     enumValues?: string[];
     /** `v.storage(...)` column — the value is an R2 object key. */
     isStorage?: boolean;
     name: string;
+
+    /**
+     * The column accepts `null` (`.nullable()`). Distinct from `optional`, which
+     * means "may be omitted on INSERT" and is also true of a `.default(...)`
+     * column — one of those must not be offered a control that writes `null`.
+     */
+    nullable?: boolean;
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */

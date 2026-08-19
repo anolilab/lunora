@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../../../i18n/i18n-context";
 import type { StorageKind } from "../../../lib/browser-storage";
@@ -70,6 +70,18 @@ const useSqlLibrary = ({
     // the tab's lifetime, and only moves to disk if the operator asks it to.
     const [rememberHistory, setRemember] = usePersistedValue<boolean>(REMEMBER_KEY, false);
     const [history, setHistory] = usePersistedList<HistoryEntry>(HISTORY_KEY, rememberHistory ? "local" : "session");
+
+    // Purge the on-disk copy whenever persistence is off. Idempotent, and it is
+    // what makes the unchecked box TRUE for an operator upgrading from a build
+    // that always wrote to `localStorage`: without it the sidebar shows an empty
+    // history beside an unchecked toggle while last week's statements — emails,
+    // ids, whatever was in the WHERE clause — sit in local storage indefinitely,
+    // and nothing in the UI gives them a reason to press "Clear history".
+    useEffect(() => {
+        if (!rememberHistory) {
+            removeJson(HISTORY_KEY, "local");
+        }
+    }, [rememberHistory]);
     const [search, setSearch] = useState<string>("");
 
     const listRef = useRef<HTMLUListElement | null>(null);

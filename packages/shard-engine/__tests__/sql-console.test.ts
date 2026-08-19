@@ -196,6 +196,23 @@ describe("classifyStatement offsets", () => {
         expect(classifyStatement(query)?.code).toBe("SQL_MULTIPLE_STATEMENTS");
     });
 
+    it("still finds the batch when the literal holds an astral character", () => {
+        expect.assertions(3);
+
+        // The mask buffer is code-UNIT indexed. Building it with a code-POINT
+        // spread desynchronised the two, so one emoji made the fill run a slot
+        // short and eat the `;` after the closing quote — `SELECT '😀';ANALYZE`
+        // masked to `SELECT xxxxANALYZE` and reached `sql.exec` as one statement.
+        expect(classifyStatement("SELECT '😀';SELECT 2")?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+        expect(classifyStatement("SELECT '😀';ANALYZE")?.code).toBe("SQL_MULTIPLE_STATEMENTS");
+
+        // And the offset still indexes the ORIGINAL string, which only holds if
+        // the mask preserved length.
+        const query = "SELECT '😀' ; SELECT 2";
+
+        expect(query[classifyStatement(query)?.offset ?? -1]).toBe(";");
+    });
+
     it("keeps refusing a mutating keyword inside a literal", () => {
         expect.assertions(1);
 

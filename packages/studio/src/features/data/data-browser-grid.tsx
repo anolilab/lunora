@@ -150,14 +150,63 @@ const rowId = (row: TableRow): null | string => {
 };
 
 /**
+ * /**
  * The value a pasted cell should stage, or `undefined` when it must be skipped.
  *
  * `coerceCellValue` falls back to the raw string when it cannot parse, which is
  * the right call for the one hand-typed cell an operator is looking at and the
  * wrong one for a block nobody reads row by row: a hundred "n/a"s pasted into a
  * numeric column would be a hundred silently-corrupted cells at commit time.
+ *
+ * The fit is judged against the DECLARED column, falling back to the cell's
+ * current value only where the schema says nothing (`v.any()`, a plugin-owned
+ * table, a page column codegen never described). Judging by the value alone —
+ * which this did — reads a `null` numeric cell as "no type at all" and lets
+ * `"n/a"` straight through, and constrains neither a boolean nor an enum at all.
+ * It is the same defect the row editor's `fieldKind` exists to avoid, in a
+ * component that already receives the same metadata.
  */
-const stagedPasteValue = (raw: string, original: unknown): undefined | { value: unknown } => {
+
+/**
+ * The value a pasted cell should stage against its DECLARED column, or
+ * `undefined` when nothing about `raw` fits it.
+ *
+ * Split out so the schema-driven answer and {@link stagedPasteValue}'s
+ * value-inference fallback read as two units rather than one chain.
+ */
+const declaredPasteValue = (raw: string, meta: ColumnMeta): undefined | { value: unknown } => {
+    if (meta.enumValues !== undefined && meta.enumValues.length > 0) {
+        // A declared string-literal union has exactly this many legal values, and
+        // a blank clears a nullable one.
+        return meta.enumValues.includes(raw) || (raw === "" && meta.nullable === true) ? { value: raw === "" ? null : raw } : undefined;
+    }
+
+    if (meta.type === "boolean") {
+        return raw === "true" || raw === "false" ? { value: raw === "true" } : undefined;
+    }
+
+    if (meta.type === "number") {
+        const parsed = Number(raw);
+
+        // `Number.isFinite`, not `!Number.isNaN`: `Number("Infinity")` parses, and
+        // an infinity JSON-serialises to `null` somewhere downstream.
+        return raw.trim() === "" || !Number.isFinite(parsed) ? undefined : { value: parsed };
+    }
+
+    return { value: raw };
+};
+
+const stagedPasteValue = (raw: string, original: unknown, meta: ColumnMeta | undefined): undefined | { value: unknown } => {
+    // `v.any()` is described but says nothing useful, so it takes the value
+    // fallback like an undescribed column. Keying this off `meta !== undefined`
+    // disabled the numeric guard for every declared kind the branches above do not
+    // cover — `any`, `bigint`, `id`, `bytes`, `array`, `object` — so `n/a` pasted
+    // over a cell holding `42` staged as a string there while the same paste into
+    // an undescribed column was correctly skipped.
+    if (meta !== undefined && meta.type !== "any") {
+        return declaredPasteValue(raw, meta);
+    }
+
     const coerced = coerceCellValue(raw, original);
 
     return typeof original === "number" && typeof coerced !== "number" ? undefined : { value: coerced };
@@ -178,18 +227,23 @@ interface PastedEdit {
  * Pure, and separate from the handler, because what a paste DECIDES is the part
  * worth asserting: cells past the last row or column, cells in a column nothing
  * may write (a primary key, a masked column), and cells that do not fit the
- * column's type are all counted rather than applied — a paste that quietly
- * dropped half its block would read as a clean apply.
+ * column's DECLARED type — a non-numeric string in a `v.number()`, anything but
+ * `true`/`false` in a `v.boolean()`, a value outside a declared string-literal
+ * union — are all counted rather than applied. A paste that quietly dropped half
+ * its block would read as a clean apply.
  */
 const planPastedEdits = ({
     anchor,
     columnIds,
+    columnMeta,
     editableColumn,
     rows,
     text,
 }: {
     readonly anchor: { col: number; row: number };
     readonly columnIds: string[];
+    /** Declared columns of the open table, keyed by name — what a pasted value is judged against. */
+    readonly columnMeta: Record<string, ColumnMeta> | undefined;
     readonly editableColumn: (column: string) => boolean;
     readonly rows: TableRow[];
     readonly text: string;
@@ -215,7 +269,7 @@ const planPastedEdits = ({
 
         for (const [colOffset, raw] of cells.entries()) {
             const column = columnIds[anchor.col + colOffset];
-            const staged = column === undefined || !editableColumn(column) ? undefined : stagedPasteValue(raw, row[column]);
+            const staged = column === undefined || !editableColumn(column) ? undefined : stagedPasteValue(raw, row[column], columnMeta?.[column]);
 
             if (column === undefined || staged === undefined) {
                 skipped += 1;
@@ -863,6 +917,10 @@ const DataBrowserTableView = ({
     // Cells the last paste declined, so a partial paste reports itself instead of
     // looking like it applied cleanly.
     const [pasteSkipped, setPasteSkipped] = useState<number>(0);
+    // The banner belongs to the table it was reported for. The component is not
+    // keyed per table, so without this a "3 pasted cells were skipped" notice
+    // follows the operator to the next table they open.
+    const pastedForColumns = useRef<string>("");
     const columnCount = table.getVisibleLeafColumns().length;
 
     const onGridKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -933,9 +991,11 @@ const DataBrowserTableView = ({
 
         event.preventDefault();
 
+        const columnIds = table.getVisibleLeafColumns().map((column) => column.id);
         const plan = planPastedEdits({
             anchor: active ?? { col: 0, row: 0 },
-            columnIds: table.getVisibleLeafColumns().map((column) => column.id),
+            columnIds,
+            columnMeta,
             editableColumn: edit.editableColumn,
             rows: tableRows.map((row) => row.original),
             text,
@@ -945,6 +1005,7 @@ const DataBrowserTableView = ({
             edit.stage(change.rowId, change.column, change.value);
         }
 
+        pastedForColumns.current = columnIds.join("\u0000");
         setPasteSkipped(plan.skipped);
     };
 
@@ -1008,6 +1069,14 @@ const DataBrowserTableView = ({
                                 ring,
                             )}
                             key={cell.id}
+                            // A click moves the keyboard focus ring too, so the cell an
+                            // operator selected with the pointer is the cell a paste
+                            // anchors at. Without this `active` was written only by the
+                            // arrow keys, so click-then-paste silently landed the whole
+                            // block at the top-left cell of the page.
+                            onPointerDown={() => {
+                                setActive({ col: colIndex, row: virtualRow.index });
+                            }}
                             style={offset === undefined ? sizedCellStyle(cell.column.getSize()) : pinnedDataCellStyle(cell.column.getSize(), offset)}
                         >
                             {cell.column.id.startsWith(BACK_RELATION_PREFIX) ? (
@@ -1062,11 +1131,16 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer layout="fill">
-            {pasteSkipped > 0 && (
-                <p className="border-b border-warning/40 bg-warning/5 px-3 py-1.5 text-xs text-warning" data-testid="db-paste-skipped">
-                    {t("{count} pasted cells were skipped", { count: pasteSkipped })}
-                </p>
-            )}
+            {pasteSkipped > 0 &&
+                pastedForColumns.current ===
+                    table
+                        .getVisibleLeafColumns()
+                        .map((column) => column.id)
+                        .join("\u0000") && (
+                    <p className="border-b border-warning/40 bg-warning/5 px-3 py-1.5 text-xs text-warning" data-testid="db-paste-skipped">
+                        {t("{count} pasted cells were skipped", { count: pasteSkipped })}
+                    </p>
+                )}
             <div data-testid="db-scroll" onKeyDown={onGridKeyDown} onPaste={onGridPaste} ref={attachScroll} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
