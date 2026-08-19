@@ -1,3 +1,4 @@
+import { encodeWire } from "../../../shared/wire-codec";
 import { LunoraError } from "./errors";
 
 /**
@@ -152,7 +153,13 @@ const buildGetAuthAuditLog = (deps: AuthAuditRpcDeps): AuthAuditRpcHandler => {
 
         const result: AuthAuditLogResult = { entries };
 
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+        // `{ result: encodeWire(...) }`, not the bare body: this op is served by
+        // the WORKER rather than forwarded to a shard, but the caller is the same
+        // `client.query()`, which reads `decodeWire(body.result)`. A bare body
+        // decodes to `undefined` — which TanStack Query rejects outright ("Query
+        // data cannot be undefined"), so the Studio panel never even renders its
+        // own error state. Mirrors `adminResponse` in `@lunora/do`.
+        return Response.json({ result: encodeWire(result) }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     return handle;

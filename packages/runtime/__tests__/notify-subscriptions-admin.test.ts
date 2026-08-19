@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, NotifySubscriptionStoreLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -72,6 +73,10 @@ const listRequest = (options: { args?: Record<string, unknown>; token?: string }
     });
 };
 
+// The worker serves this op itself rather than forwarding it to a shard, but the
+// caller is the same `client.query()`, which reads `decodeWire(body.result)`. These
+// assertions used to read a bare `{ subscriptions }` off the response — the shape the
+// client cannot decode, which is how the Studio's Notifications page shipped broken.
 describe("createWorker — __lunora_admin__:listPushSubscriptions", () => {
     it("returns the registered devices for an admin, with delivery secrets stripped", async () => {
         expect.assertions(5);
@@ -86,7 +91,8 @@ describe("createWorker — __lunora_admin__:listPushSubscriptions", () => {
 
         expect(response.status).toBe(200);
 
-        const body: { subscriptions: Record<string, unknown>[] } = await response.json();
+        const envelope: { result: unknown } = await response.json();
+        const body = decodeWire(envelope.result) as { subscriptions: Record<string, unknown>[] };
 
         expect(body.subscriptions).toHaveLength(2);
         // The endpoint/kind/status are surfaced…
@@ -106,7 +112,8 @@ describe("createWorker — __lunora_admin__:listPushSubscriptions", () => {
         });
 
         const response = await worker.fetch(listRequest({ args: { kind: "fcm" }, token: ADMIN_TOKEN }), {}, fakeContext);
-        const body: { subscriptions: Record<string, unknown>[] } = await response.json();
+        const envelope: { result: unknown } = await response.json();
+        const body = decodeWire(envelope.result) as { subscriptions: Record<string, unknown>[] };
 
         expect(body.subscriptions).toHaveLength(1);
         expect(body.subscriptions[0]).toMatchObject({ id: "fcm:1", kind: "fcm" });
@@ -159,7 +166,8 @@ describe("createWorker — __lunora_admin__:listPushSubscriptions", () => {
 
         expect(response.status).toBe(200);
 
-        const body: { subscriptions: unknown[] } = await response.json();
+        const envelope: { result: unknown } = await response.json();
+        const body = decodeWire(envelope.result) as { subscriptions: unknown[] };
 
         expect(body.subscriptions).toStrictEqual([]);
     });
