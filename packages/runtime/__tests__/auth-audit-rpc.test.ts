@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { AuthAuditEntry, AuthAuditReader, ExecutionContextLike } from "../src/create-worker";
 import { createWorker, GET_AUTH_AUDIT_LOG_OP } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -76,8 +77,8 @@ describe("createWorker — getAuthAuditLog admin RPC", () => {
         expect(body.error.code).toBe("AUTH_AUDIT_NOT_CONFIGURED");
     });
 
-    it("returns the reader's entries for an admin caller", async () => {
-        expect.assertions(2);
+    it("returns the reader's entries for an admin caller, in the RPC envelope the client decodes", async () => {
+        expect.assertions(3);
 
         const reader = readerSpy();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAuditReader: reader, shardDO: failingShard });
@@ -85,7 +86,18 @@ describe("createWorker — getAuthAuditLog admin RPC", () => {
         const response = await worker.fetch(rpc(), {}, fakeContext);
 
         expect(response.status).toBe(200);
-        await expect(response.json()).resolves.toEqual({ entries: ENTRIES });
+
+        // The envelope, not a bare `{ entries }`. This op is served by the WORKER
+        // rather than forwarded to a shard, but the caller is the same
+        // `client.query()`, which reads `decodeWire(body.result)` — so a bare body
+        // decodes to `undefined`, and TanStack Query rejects that outright
+        // ("Query data cannot be undefined") before the panel can render an error.
+        // This assertion used to demand the bare shape, which is how the Studio's
+        // Auth audit page shipped broken.
+        const body: { result: unknown } = await response.json();
+
+        expect(body).toHaveProperty("result");
+        expect(decodeWire(body.result)).toEqual({ entries: ENTRIES });
     });
 
     it("passes actor/event/sinceSeq/limit filters through to the reader", async () => {
