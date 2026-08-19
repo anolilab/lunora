@@ -170,10 +170,12 @@ const lintDraft = (draft: string, schema: SqlSchema): SqlDiagnostic[] => {
         const { ctes, masked, targets } = sqlContextOf(statement.sql, schema.tables);
 
         diagnostics.push(
-            ...[...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)].map((diagnostic) => {return {
-                ...diagnostic,
-                offset: diagnostic.offset === undefined ? offset : offset + diagnostic.offset,
-            }}),
+            ...[...unknownTableDiagnostics(masked, known, ctes), ...unknownColumnDiagnostics(masked, schema, targets)].map((diagnostic) => {
+                return {
+                    ...diagnostic,
+                    offset: diagnostic.offset === undefined ? offset : offset + diagnostic.offset,
+                };
+            }),
         );
     }
 
