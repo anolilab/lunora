@@ -68,16 +68,33 @@ export default defineSchema({
      * derives the rows from this definition, seeds the FK parents first, and
      * gives the `*At` columns real timestamps spread over the last six months,
      * which is what makes the grid's `2026-07`-style date search meaningful.
+     *
+     * Four columns exist for their TYPE rather than their data, because the row
+     * editor and the grid header read the declared schema and nothing else here
+     * declared anything but `string`/`number`:
+     *
+     * - `status` / `currency` are literal unions, so the row editor offers a
+     *   dropdown of the members instead of a free-text box, and a value outside
+     *   the set cannot be pasted into the grid.
+     * - `archived` is a plain `boolean`, so the editor offers a checkbox rather
+     *   than a text box and the header carries the boolean glyph. Deliberately
+     *   NOT `.default(false)`: the seeder skips defaulted columns so the write
+     *   layer can apply them, which would have left this blank in every row.
+     * - `attachmentKey` is a `v.storage("avatars")` key, so the grid can resolve
+     *   a signed URL and preview the object inline, and the file browser can
+     *   join the row to the bucket that actually holds it.
      */
     demoRecords: defineTable({
         amount: v.number(),
+        archived: v.boolean(),
+        attachmentKey: v.optional(v.storage("avatars")),
         category: v.string(),
         channelId: v.id("channels"),
         city: v.string(),
         code: v.string(),
         country: v.string(),
         createdAt: v.number(),
-        currency: v.string(),
+        currency: v.union(v.literal("EUR"), v.literal("GBP"), v.literal("USD")),
         department: v.string(),
         description: v.string(),
         email: v.string(),
@@ -90,7 +107,7 @@ export default defineSchema({
         quantity: v.number(),
         region: v.string(),
         sku: v.string(),
-        status: v.string(),
+        status: v.union(v.literal("blocked"), v.literal("done"), v.literal("in_review"), v.literal("open")),
         tags: v.string(),
         title: v.string(),
         updatedAt: v.number(),

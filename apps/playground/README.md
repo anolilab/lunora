@@ -19,6 +19,7 @@ public release is good.
 | R2 signed URLs                 | `@lunora/storage`                    | `avatars.ts`                      |
 | Cron + deferred jobs           | `@lunora/scheduler`                  | `cleanup.ts`                      |
 | Vite codegen + HMR             | `@lunora/vite`                       | `vite.config.ts`                  |
+| Studio data + SQL surface      | `@lunora/studio`                     | `/__lunora`, `demoRecords` table  |
 
 ## Layout
 
@@ -65,6 +66,71 @@ matters for `deploy` (see below).
 
 This spins up Vite + Wrangler. Codegen runs on schema edits, deltas land via
 WebSocket within ~10 ms locally.
+
+## Studio demo walkthrough
+
+The admin UI is served alongside the app at **<http://localhost:5173/__lunora>**.
+`demoRecords` is the table it is meant to be opened against — seed it first, or
+the data browser has nothing to draw:
+
+```bash
+# from apps/playground — the repo has no linked `lunora` bin, the scripts call it by path
+node node_modules/lunorash/dist/bin.mjs seed --table demoRecords --count 250
+```
+
+Four of its columns exist for their **declared type**, because the row editor and
+the grid header read the schema rather than the value in the cell:
+
+| Try this                                                                | Column                      | What it proves                                                                                                         |
+| ----------------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Edit a row — `status` and `currency` render dropdowns, not text boxes   | `v.union(v.literal…)`       | The editor reads `enumValues` off the schema, so an illegal value cannot be typed or pasted                            |
+| Paste a TSV block over a `status` column with a value outside the union | `status`                    | Paste validates against the **declared column**, and reports the cells it skipped rather than dropping them silently   |
+| Toggle `archived`; clear `notes`                                        | `v.boolean()`, `v.optional` | The editor renders a checkbox from the declared kind, and offers "clear" only for the column that is actually optional |
+| Look at `attachmentKey` cells                                           | `v.storage("avatars")`      | The grid resolves a signed URL and previews the object inline, from the **named** bucket                               |
+| Scan the grid header                                                    | all                         | Each header carries a one-character glyph for its validator kind; a column the schema does not describe carries none   |
+
+### SQL console
+
+Multi-statement scripts run as **separate gated calls** — one result tab per
+statement, including any the gate refuses, so a three-statement script never
+looks like a two-statement one:
+
+```sql
+SELECT status, COUNT(*) AS n FROM demoRecords GROUP BY status ORDER BY n DESC;
+SELECT currency, ROUND(SUM(amount), 2) AS total FROM demoRecords GROUP BY currency;
+SELECT region, AVG(priority) AS avg_priority FROM demoRecords GROUP BY region;
+```
+
+The gate is still per statement, and it is the enforcement point for the whole
+console — a write is refused in its own tab while the reads beside it still run.
+Two inputs worth pasting, both of which reached `sql.exec` before this surface
+was audited and are refused now:
+
+```sql
+SELECT 'a;b' AS quoted_semicolon;   -- legal: the ; is inside a literal, not a boundary
+SELECT "a;b" FROM demoRecords;      -- legal: quoted IDENTIFIER, likewise not a boundary
+```
+
+History is scoped per deployment and is **off by default**; the toggle purges
+what a previous build left on disk rather than only stopping new writes.
+
+### Dashboards
+
+Widgets come in four kinds — `chart`, `kpi`, `table`, `text` — and a chart can be
+`bar`, `line`, or `area`. The shape you pick always wins over the assistant's
+inference, so the picker works with no AI binding configured:
+
+```sql
+-- chart (line): rows per day over the seeded six-month spread
+SELECT DATE(createdAt / 1000, 'unixepoch') AS day, COUNT(*) AS n
+FROM demoRecords GROUP BY day ORDER BY day;
+
+-- kpi: reads the first cell of the first row
+SELECT COUNT(*) AS open_records FROM demoRecords WHERE status = 'open';
+```
+
+Dashboards, history, and shortcut bindings live in the browser, so they are per
+operator and do not ship with the app.
 
 ## Deploy
 
