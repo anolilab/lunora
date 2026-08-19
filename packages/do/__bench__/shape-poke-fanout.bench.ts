@@ -1,0 +1,167 @@
+import type { DatabaseWriterLike, SocketAttachment } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "@lunora/shard-engine";
+import { bench, describe } from "vitest";
+
+import createSqliteExec from "../__tests__/_helpers/node-sqlite";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+
+/**
+ * One write's shape-poke fan-out across N subscribed sockets.
+ *
+ * The membership probe behind each poke is keyed by `(table, predicate, ids)`
+ * and names no socket, so subscribers of the same shape were issuing byte-
+ * identical queries within one flush — a hundred sockets, a hundred copies of
+ * one answer. The per-flush cache collapses them, and the two axes here separate
+ * the part that collapses from the part that cannot:
+ *
+ * - **shared predicate** — every socket watches the same channel, so one probe
+ * serves the whole fan-out. Cost should be close to flat in socket count
+ * (what remains is the per-socket send, not the per-socket query).
+ * - **distinct predicates** — every socket watches its own channel, so there is
+ * genuinely nothing to share. This is the honest floor: the case where the
+ * cache cannot help, and the number to compare the shared case against.
+ */
+
+interface FakeWebSocket {
+    attachment: SocketAttachment | undefined;
+    deserializeAttachment: () => unknown;
+    send: (data: string) => void;
+    serializeAttachment: (value: unknown) => void;
+}
+
+const createFakeWebSocket = (connectionId: string, channelId: string): FakeWebSocket => {
+    return {
+        attachment: { connectionId, shapes: { s1: { args: { channelId }, name: "messagesByChannel" } }, subs: {} },
+        deserializeAttachment() {
+            return this.attachment;
+        },
+        send(_data: string) {
+            /* discard — the fan-out loop and its reads are what is measured, not socket IO */
+        },
+        serializeAttachment(value: unknown) {
+            this.attachment = value as SocketAttachment | undefined;
+        },
+    };
+};
+
+const benchSchema = {
+    tables: {
+        messages: {
+            indexes: [{ fields: ["channelId"], name: "by_channel" }],
+            shape: { authorId: { kind: "string" }, channelId: { kind: "string" }, text: { kind: "string" } },
+        },
+    },
+} as unknown as Parameters<typeof runShardMigrations>[1];
+
+/** A shard whose only shape is `messagesByChannel(channelId)`, driven one write at a time. */
+class FanoutBenchShard extends ShardDO {
+    private writer: DatabaseWriterLike | undefined;
+
+    public override async handleRpc(_functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        await this.getWriter().insert(
+            "messages",
+            { _id: args["_id"], authorId: "u1", channelId: args["channelId"], text: String(args["_id"]).padEnd(512, "x") },
+            { allowExplicitId: true },
+        );
+
+        this.recordChangedTable("messages");
+
+        return { ok: true };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- bench stub override: resolves by `name`/`args` alone, no instance state
+    protected override resolveShape(name: string, args: Record<string, unknown>): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+        if (name !== "messagesByChannel") {
+            return undefined;
+        }
+
+        return { effectiveWhere: { channelId: args["channelId"] }, table: "messages" };
+    }
+
+    private getWriter(): DatabaseWriterLike {
+        this.writer ??= createShardContextDatabase({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: benchSchema,
+            sql: this.sql as Parameters<typeof createShardContextDatabase>[0]["sql"],
+        });
+
+        return this.writer;
+    }
+}
+
+/**
+ * A shard with `sockets` subscribers. With `sharedChannel`, every socket
+ * resolves to the same predicate; without it, each gets its own.
+ */
+const buildShard = (sockets: number, sharedChannel: boolean): { next: () => Request; shard: FanoutBenchShard } => {
+    const harness = createSqliteExec();
+
+    runShardMigrations(harness.sql, benchSchema, { cdc: true });
+
+    const list: FakeWebSocket[] = [];
+    const state: ShardDOState = {
+        acceptWebSocket(ws: unknown) {
+            list.push(ws as FakeWebSocket);
+        },
+        getWebSockets() {
+            return list as unknown as WebSocket[];
+        },
+        id: { name: "bench-shard" },
+        // No `waitUntil`: the flush (and with it the whole poke fan-out) is
+        // awaited inline, so one `fetch` measures one complete pass.
+        storage: { sql: harness.sql },
+    } as unknown as ShardDOState;
+
+    for (let index = 0; index < sockets; index += 1) {
+        list.push(createFakeWebSocket(`conn-${String(index)}`, sharedChannel ? "watched" : `channel-${String(index)}`));
+    }
+
+    let sequence = 0;
+
+    return {
+        next: () => {
+            sequence += 1;
+
+            return new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { _id: `m${String(sequence)}`, channelId: "watched" }, functionPath: "messages:send" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            });
+        },
+        shard: new FanoutBenchShard(state, {}),
+    };
+};
+
+describe("shape poke fan-out — one write, N subscribers on the SAME predicate", () => {
+    const few = buildShard(10, true);
+    const many = buildShard(100, true);
+    const crowd = buildShard(500, true);
+
+    bench("10 sockets", async () => {
+        await few.shard.fetch(few.next());
+    });
+
+    bench("100 sockets", async () => {
+        await many.shard.fetch(many.next());
+    });
+
+    bench("500 sockets", async () => {
+        await crowd.shard.fetch(crowd.next());
+    });
+});
+
+describe("shape poke fan-out — one write, N subscribers on DISTINCT predicates (nothing to share)", () => {
+    const few = buildShard(10, false);
+    const many = buildShard(100, false);
+
+    bench("10 sockets", async () => {
+        await few.shard.fetch(few.next());
+    });
+
+    bench("100 sockets", async () => {
+        await many.shard.fetch(many.next());
+    });
+});

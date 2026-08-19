@@ -271,6 +271,7 @@ abstract class ShardDO {
     protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2e3;
     protected static readonly GLOBAL_SHAPE_MAX_ROWS = 5e4;
+    protected static readonly GLOBAL_SHAPE_RESYNC_MS = 3e4;
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
     protected static readonly MAX_WHISPER_BYTES = 4096;
     protected static readonly WHISPER_RATE_BURST = 50;
@@ -279,6 +280,8 @@ abstract class ShardDO {
     protected state: ShardDOState;
     protected env: unknown;
     protected readonly reactiveCache: ReactiveCache | undefined;
+    protected shapeProbe: ShapeProbeCounters;
+    protected globalPoll: ShapeProbeCounters;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
@@ -415,10 +418,11 @@ abstract class ShardDO {
     protected handleAlarmCloudflare(): Promise<void>;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
-    protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): {
-        changes: CdcChange[];
+    protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[];
+    protected readGlobalChangedTables(_sinceSeq: number): Promise<{
         cursor: number;
-    };
+        tables: string[];
+    } | undefined>;
 }
 ```
 

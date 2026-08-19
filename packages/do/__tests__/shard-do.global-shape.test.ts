@@ -372,6 +372,41 @@ describe("shardDO global-shape poll tier", () => {
         expect(alarmBox.scheduled).not.toBeNull();
     });
 
+    it("never shares one tick's global read between two identities", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new FlakyGlobalShard(makeState(sockets), {});
+        const alice = createFakeWebSocket();
+
+        alice.attachment = { subs: {}, userId: "alice" };
+
+        const bob = createFakeWebSocket();
+
+        bob.attachment = { subs: {}, userId: "bob" };
+        sockets.push(alice, bob);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, alice);
+        await subscribeShape(shard, bob);
+        alice.sent.length = 0;
+        bob.sent.length = 0;
+
+        // The per-tick read cache exists to collapse duplicate reads, but the
+        // `.global()` writer is built per caller — an app's own `d1` factory may
+        // scope rows by identity — so two identities are never the same read.
+        // `bob`'s read fails; if the cache had keyed on the predicate alone,
+        // `alice`'s rows would have been handed to him.
+        shard.failUserId = "bob";
+        shard.rows = [{ doc: { _id: "t1", label: "a2" }, id: "t1" }];
+        alarmBox.scheduled = null;
+
+        await shard.alarm();
+
+        expect(pokeOps(alice)).toStrictEqual([{ key: "t1", op: "update", table: "things", value: expect.objectContaining({ label: "a2" }) }]);
+        expect(bob.sent).toStrictEqual([]);
+    });
+
     it("contains a throwing resolveShape on an alarm tick and still re-arms", async () => {
         expect.assertions(2);
 

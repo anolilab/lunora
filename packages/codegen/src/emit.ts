@@ -4739,6 +4739,17 @@ ${vectorNamespaceField}
 
             return rows;
         }
+
+        protected override async readGlobalChangedTables(sinceSeq: number): Promise<{ cursor: number; tables: string[] } | undefined> {
+            const env = this.env as Record<string, unknown>;
+            // Metadata-only: this asks the global changelog which TABLES moved,
+            // never what changed in them, so it costs one small read per poll tick
+            // for the whole shard — and a tick whose answer omits a shape's table
+            // skips that shape's membership drain entirely.
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { bookmark: this.getInboundBookmark() }) ?? globalDbStub;
+
+            return globalDb.cdcChangedTables?.(sinceSeq);
+        }
 `
             : "";
     /* eslint-enable no-secrets/no-secrets */

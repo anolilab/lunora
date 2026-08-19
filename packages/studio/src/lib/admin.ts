@@ -931,17 +931,31 @@ export interface FanoutPathCounters {
 }
 
 /**
+ * How much of the shape-poke path's membership work the shard's per-flush cache
+ * collapsed, mirroring `@lunora/do`'s `ShapeProbeCounters`. A probe is keyed by
+ * `(table, predicate, ids)` and names no socket, so every subscriber resolving to
+ * the same predicate asks the identical question: `served` counts the duplicate
+ * queries the per-socket loop would otherwise have issued.
+ */
+export interface ShapeProbeCounters {
+    run: number;
+    served: number;
+}
+
+/**
  * Payload of a `__lunora_admin__:getFanoutMetrics` call, mirroring `@lunora/do`'s
  * `FanoutMetricsResult`: the current per-topic subscriber counts (derived live
  * from the shard's sockets) plus the running per-path fan-out cost counters
  * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
  */
 export interface FanoutMetricsResult {
+    globalPoll: ShapeProbeCounters;
     maxRelays: number;
     peakSubscribers: number;
     promoted: boolean;
     relayCount: number;
     shapePoke: FanoutPathCounters;
+    shapeProbe: ShapeProbeCounters;
     sinceMs: number;
     topics: FanoutTopicStat[];
     totalConnections: number;

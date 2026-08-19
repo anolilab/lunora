@@ -1,4 +1,4 @@
-import type { CdcChange, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
+import type { CdcChangeKey, DatabaseWriterLike, SocketAttachment, SqlExec } from "@lunora/shard-engine";
 import { createShardCtxDb as createShardContextDatabase, readCdcCursor, readShapePokeCursor, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -107,21 +107,21 @@ class ShapePokeShard extends ShardDO {
 }
 
 /**
- * {@link ShapePokeShard} that counts every `__cdc_log` page read backing a shape
- * diff, so a test can prove the flush-local op-range cache collapses N
- * same-range shape diffs to ONE changelog drain.
+ * {@link ShapePokeShard} that counts every `__cdc_log` read backing a shape
+ * diff, so a test can prove the flush-local diff cache collapses N same-range
+ * shape diffs to ONE changed-key scan.
  */
 class CountingShapePokeShard extends ShapePokeShard {
     public cdcPageReads = 0;
 
-    /** Every `sinceSeq` a shape diff was drained from, in call order — lets a test pin exactly which baseline a poke resumed from. */
+    /** Every `sinceSeq` a shape diff was scanned from, in call order — lets a test pin exactly which baseline a poke resumed from. */
     public sinceSeqSeen: number[] = [];
 
-    protected override readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): { changes: CdcChange[]; cursor: number } {
+    protected override readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] {
         this.cdcPageReads += 1;
         this.sinceSeqSeen.push(sinceSeq);
 
-        return super.readShapeCdcPage(sql, sinceSeq, tables);
+        return super.readShapeCdcKeys(sql, table, sinceSeq, upTo);
     }
 }
 

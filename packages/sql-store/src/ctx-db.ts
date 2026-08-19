@@ -870,6 +870,9 @@ const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialec
 /** Reserved append-only changelog table backing CDC streaming export for global tables (CDC consumers only — D1 point-in-time recovery is the platform's Time Travel, not a changelog replay). */
 const CDC_LOG_TABLE = "__cdc_log";
 
+/** Composite index backing table-filtered changelog reads (`("table", seq)`). Mirrors the DO twin. */
+const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
+
 /** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
 interface CdcChange {
     /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
@@ -895,6 +898,17 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
         dialect,
         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_LOG_TABLE)} (${sql.identifier("seq")} ${sql.raw(autoincrementPrimaryKey)}, ${sql.identifier("ts")} ${sql.raw(real)} NOT NULL, ${sql.identifier("table")} ${sql.raw(key)} NOT NULL, ${sql.identifier("id")} ${sql.raw(key)} NOT NULL, ${sql.identifier("op")} ${sql.raw(key)} NOT NULL, ${sql.identifier("doc")} ${sql.raw(text)})`,
     );
+
+    // `("table", seq)` covers both the filter and the ordering of every
+    // table-scoped changelog read (the `.global()` shape delta path); without it
+    // that read scans the whole log in commit order and discards other tables'
+    // rows. Mirrors the DO twin's `CDC_LOG_TABLE_SEQ_INDEX`.
+    await createIndexIfNotExists(exec, dialect, {
+        columns: sql`${sql.identifier("table")}, ${sql.identifier("seq")}`,
+        name: CDC_LOG_TABLE_SEQ_INDEX,
+        table: CDC_LOG_TABLE,
+        unique: false,
+    });
 };
 
 /** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
@@ -943,6 +957,26 @@ const readSqlCdcChanges = async (
     });
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
+};
+
+/**
+ * Which tables the changelog recorded a write to after `sinceSeq`, plus the
+ * log's current head. Metadata only — it reads no `doc`, so its cost is the
+ * distinct-table scan over an index range rather than the size of the documents
+ * in it.
+ *
+ * The `.global()` shape poll asks this once per tick for the whole shard, and a
+ * shape whose table is absent from the answer skips its membership read
+ * entirely. `cursor` is `MAX(seq)` over the WHOLE log rather than the filtered
+ * range, so a caller that advances to it cannot re-see the changes it just
+ * skipped over on the next tick.
+ */
+const readSqlCdcChangedTables = async (exec: SqlCtxExec, sinceSeq: number, dialect: SqlDialect): Promise<{ cursor: number; tables: string[] }> => {
+    const rows = await queryAll(exec, dialect, sql`SELECT DISTINCT ${sql.identifier("table")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}`);
+    const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+    const cursor = Number(head[0]?.["seq"] ?? 0);
+
+    return { cursor: Number.isFinite(cursor) ? cursor : 0, tables: rows.map((row) => String(row["table"])) };
 };
 
 /** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
@@ -2007,6 +2041,29 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     });
 
     const writer: DatabaseWriterLike = {
+        /**
+         * Which tables the changelog saw a write to after `sinceSeq` (see
+         * {@link DatabaseWriterLike.cdcChangedTables}) — `undefined` when this
+         * store has CDC disabled, since there is then no log to answer from and
+         * the caller must fall back to re-reading. A missing/never-migrated log
+         * table reports the same way rather than throwing: "no visibility" is a
+         * state the caller already handles, and a poll tick is the wrong place
+         * to surface a migration problem.
+         */
+        async cdcChangedTables(sinceSeq: number): Promise<{ cursor: number; tables: string[] } | undefined> {
+            if (!cdcEnabled) {
+                return undefined;
+            }
+
+            try {
+                await ensureMigrated();
+
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect);
+            } catch {
+                return undefined;
+            }
+        },
+
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
             const definition = schema.tables[tableName];
@@ -3232,6 +3289,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
 export {
     createSqlCtxDb,
+    readSqlCdcChangedTables,
     readSqlCdcChanges,
     runSqlAggregateMigrations,
     runSqlCdcMigration,

@@ -498,6 +498,26 @@ export interface MutationDelta {
 export interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
+
+    /**
+     * Which tables this store's change-data-capture log recorded a write to
+     * after `sinceSeq`, plus the log's current head — a metadata-only probe that
+     * reads no documents.
+     *
+     * It exists so a poller can find out that nothing it watches has changed
+     * without re-reading what it watches. The `.global()` shape path polls on a
+     * timer because a global table is written from other shards and other
+     * regions, with no coordinator to poke it; before this, every tick answered
+     * "did anything change?" by draining the entire membership of every live
+     * shape from the global backend and diffing it, which costs the same whether
+     * the answer is yes or no — and on a healthy deployment it is overwhelmingly
+     * no.
+     *
+     * Optional because it is only meaningful on a store with CDC enabled: a
+     * caller that gets `undefined` has no visibility and must fall back to
+     * re-reading, which is what every caller did before this method existed.
+     */
+    cdcChangedTables?: (sinceSeq: number) => Promise<{ cursor: number; tables: string[] } | undefined>;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;

@@ -1656,6 +1656,24 @@ interface FanoutPathCounters {
 }
 
 /**
+ * How much of the shape-poke path's membership work the per-flush cache
+ * collapsed. A probe is `(table, effectiveWhere, ids)` and names no socket, so
+ * every subscriber whose shape resolves to the same predicate asks the identical
+ * question — `served` is exactly the duplicate `SELECT`s the per-socket loop
+ * would have issued, and `run / (run + served)` is the fan-out this path
+ * actually pays. A deployment where `served` stays near zero has predicates that
+ * genuinely vary per identity (RLS on the caller's own id), which is a real
+ * answer and not a misconfiguration.
+ */
+interface ShapeProbeCounters {
+    /** Membership probes issued to the store, summed across every flush. */
+    run: number;
+
+    /** Membership probes answered from the per-flush cache instead. */
+    served: number;
+}
+
+/**
  * Payload of a `__lunora_admin__:getFanoutMetrics` call: the current per-topic
  * subscriber counts plus the running fan-out counters for each delivery path.
  * The point-in-time `topics`/`peakSubscribers`/`totalConnections` are derived
@@ -1665,6 +1683,8 @@ interface FanoutPathCounters {
  * half of plan 075 Phase 1, before any topology change exists.
  */
 interface FanoutMetricsResult {
+    /** Running `.global()` poll tallies — membership drains issued vs (socket, shape) pairs the changelog let a tick skip. */
+    globalPoll: ShapeProbeCounters;
     /** Cost ceiling — the hard cap on relays per shard (`LUNORA_MAX_RELAYS`); the relay tier never spawns more, even for a viral shard. */
     maxRelays: number;
     /** Highest current subscriber count across all topics/shapes — the widest single fan-out right now. */
@@ -1675,6 +1695,8 @@ interface FanoutMetricsResult {
     relayCount: number;
     /** Running reactive-shape-poke fan-out counters since this instance woke. */
     shapePoke: FanoutPathCounters;
+    /** Running membership-probe run/served tallies since this instance woke — how much the per-flush cache collapsed. */
+    shapeProbe: ShapeProbeCounters;
     /** Epoch-ms this instance began collecting (shared with `getMetrics`/`getFunctionStats`). */
     sinceMs: number;
     /** Hottest topics/shapes by current subscriber count, busiest first (capped at {@link DEFAULT_FANOUT_TOPIC_LIMIT}). */
@@ -1702,6 +1724,20 @@ const DEFAULT_FANOUT_TOPIC_LIMIT = 20;
 /** A freshly-zeroed {@link FanoutPathCounters}, for a DO instance waking up. */
 const createFanoutCounters = (): FanoutPathCounters => {
     return { maxMs: 0, passes: 0, peakSocketsIterated: 0, socketsDelivered: 0, socketsIterated: 0, totalMs: 0 };
+};
+
+/** A freshly-zeroed {@link ShapeProbeCounters}, for a DO instance waking up. */
+const createShapeProbeCounters = (): ShapeProbeCounters => {
+    return { run: 0, served: 0 };
+};
+
+/**
+ * Fold one flush's probe tallies into the running {@link ShapeProbeCounters}.
+ * Pure (a new object, no mutation), like {@link recordFanoutPass}; the caller
+ * swaps the stored counters for the result.
+ */
+const recordShapeProbePass = (counters: ShapeProbeCounters, run: number, served: number): ShapeProbeCounters => {
+    return { run: counters.run + run, served: counters.served + served };
 };
 
 /**
@@ -1773,6 +1809,7 @@ export {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
     createFanoutCounters,
+    createShapeProbeCounters,
     datePrefixRange,
     DEFAULT_FANOUT_TOPIC_LIMIT,
     facetColumn,
@@ -1782,6 +1819,7 @@ export {
     MAX_PAGE_SIZE,
     readTablePage,
     recordFanoutPass,
+    recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
     summarizeFanoutTopics,
@@ -1824,6 +1862,7 @@ export type {
     SettingEntry,
     SettingKind,
     SettingsResult,
+    ShapeProbeCounters,
     StorageReference,
     StorageReferenceResult,
     StorageRuleMetadata,

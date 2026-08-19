@@ -37,7 +37,7 @@ export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexF
 export type { AuditEntry } from "./audit-log";
 export type { AppendAuditEntry } from "./audit-log";
 export { appendAuditEntry, AUDIT_LOG_TABLE, ensureAuditTable, readAuditLog } from "./audit-log";
-export type { CdcChange, Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook } from "./ctx-db";
+export type { CdcChange, CdcChangeKey, Clock, CountArgs, CtxDbOptions, IdGenerator, SqlCursor, SqlExec, WriteEvent, WriteHook } from "./ctx-db";
 export {
     applyCdcChanges,
     assertValidClientId,
@@ -45,15 +45,31 @@ export {
     backfillRankIndexes,
     backfillSearchIndexes,
     CDC_LOG_TABLE,
+    cdcSeqLeavingRows,
+    cdcTouchesTables,
+    compactCdcDocs,
+    countCdcChanges,
     createShardCtxDb,
+    minCdcDocSeq,
     normalizeIdStructurally,
     NotUniqueError,
+    readCdcChangeKeys,
     readCdcChanges,
     runShardMigrations,
     trimCdcChanges,
 } from "./ctx-db";
 export { backfillSearchIndexesForTable } from "./ctx-db-backfill";
-export { appendCdcChange, bumpCdcEpoch, CDC_META_TABLE, migrateCdcLog, migrateCdcMeta, minCdcSeq, readCdcCursor, readCdcEpoch } from "./ctx-db-cdc";
+export {
+    appendCdcChange,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE_SEQ_INDEX,
+    CDC_META_TABLE,
+    migrateCdcLog,
+    migrateCdcMeta,
+    minCdcSeq,
+    readCdcCursor,
+    readCdcEpoch,
+} from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
@@ -76,12 +92,13 @@ export {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     migrateShapePokeCursor,
+    minShapePokeCursor,
     readShapePokeCursor,
     SHAPE_POKE_CURSOR_TABLE,
     writeShapePokeCursor,
 } from "./ctx-db-shape-poke-cursor";
 export type { ShapeRow } from "./ctx-db-shapes";
-export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
+export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -189,6 +206,7 @@ export type {
     FilterOperator,
     FunctionScanAttribution,
     OrderByClause,
+    ShapeProbeCounters,
     StorageReference,
     StorageReferenceResult,
     SubscriptionConnection,
@@ -209,10 +227,12 @@ export {
 } from "./introspect";
 export {
     createFanoutCounters,
+    createShapeProbeCounters,
     DEFAULT_FANOUT_TOPIC_LIMIT,
     findStorageReferences,
     MAX_PAGE_SIZE,
     recordFanoutPass,
+    recordShapeProbePass,
     summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
@@ -336,6 +356,8 @@ export type {
 } from "./schema-types";
 export { serializeSqlValue } from "./serialize-sql";
 export { buildSettings, isDevEnvironment } from "./settings";
+export type { ShapeDiffCache } from "./shape-diff-cache";
+export { createShapeDiffCache, globalShapeReadKey, shapeProbeKey, shapeRangeKey } from "./shape-diff-cache";
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "./shape-global-diff";
 export type { ShardRunnerOptions } from "./shard-runner";

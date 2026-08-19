@@ -492,6 +492,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Unknown column";
     };
+    readonly CDC_PAYLOAD_COMPACTED: {
+        readonly status: 409;
+        readonly title: "CDC payloads compacted";
+    };
     readonly EXPIRED: {
         readonly status: 404;
         readonly title: "Session expired";

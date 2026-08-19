@@ -12,7 +12,7 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useShardKey } from "../../hooks/use-shard-key";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { FanoutMetricsResult, FanoutPathCounters } from "../../lib/admin";
+import type { FanoutMetricsResult, FanoutPathCounters, ShapeProbeCounters } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 
 interface FanoutPanelProps {
@@ -54,6 +54,39 @@ const PathCounters = ({
             <StatCard label={t("Peak width")} testId={`${prefix}-peak`} value={counters.peakSocketsIterated} />
             {includeTiming && <StatCard label={t("Total time")} testId={`${prefix}-total-ms`} value={formatMs(counters.totalMs)} />}
             {includeTiming && <StatCard label={t("Max time")} testId={`${prefix}-max-ms`} value={formatMs(counters.maxMs)} />}
+        </dl>
+    </section>
+);
+
+/**
+ * Membership-probe sharing for the shape-poke path: how many probes the shard
+ * issued to SQLite versus how many the per-flush cache answered because another
+ * socket had already asked the identical `(table, predicate, ids)` question.
+ *
+ * The two numbers are only meaningful together. `served` near zero is not a
+ * problem to fix — it means this app's shape predicates genuinely vary per
+ * caller (RLS on the caller's own id), so there is nothing to share. `served`
+ * far above `run` is the shape of a broadly-subscribed public shape, where the
+ * cache is doing the work a per-socket loop would have repeated.
+ */
+const ProbeCounters = ({
+    counters,
+    prefix,
+    runLabel,
+    savedLabel,
+    title,
+}: {
+    counters: ShapeProbeCounters;
+    prefix: string;
+    runLabel: string;
+    savedLabel: string;
+    title: string;
+}): ReactElement => (
+    <section className="flex flex-col gap-2" data-testid={`${prefix}-section`}>
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid={`${prefix}-stats`}>
+            <StatCard label={runLabel} testId={`${prefix}-run`} value={counters.run} />
+            <StatCard label={savedLabel} testId={`${prefix}-served`} value={counters.served} />
         </dl>
     </section>
 );
@@ -167,6 +200,20 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                         <h2 className="text-sm font-medium text-muted-foreground">{t("Fan-out cost since this instance woke")}</h2>
                         <PathCounters counters={result.shapePoke} includeTiming prefix="fanout-poke" t={t} title={t("Shape pokes")} />
                         <PathCounters counters={result.whisper} includeTiming={false} prefix="fanout-whisper" t={t} title={t("Whisper broadcasts")} />
+                        <ProbeCounters
+                            counters={result.shapeProbe}
+                            prefix="fanout-probe"
+                            runLabel={t("Queries run")}
+                            savedLabel={t("Shared from cache")}
+                            title={t("Membership probes")}
+                        />
+                        <ProbeCounters
+                            counters={result.globalPoll}
+                            prefix="fanout-global-poll"
+                            runLabel={t("Global reads")}
+                            savedLabel={t("Ticks skipped")}
+                            title={t("Global shape polls")}
+                        />
                     </section>
                 </>
             )}

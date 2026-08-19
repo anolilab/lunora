@@ -1,7 +1,7 @@
 # Plan 365 — Rebuild the delta-sync read path: metadata scan first, hydrate last
 
 **Baseline:** `d18ccd9` (2026-08-19)
-**Status:** TODO
+**Status:** DONE (W1–W6 shipped; see the per-workstream notes in §5)
 
 Prompted by [Linear's "Rebuilding Linear's delta sync read path"](https://linear.app/now/rebuilding-delta-sync-read-path)
 and [turbopuffer's architecture](https://turbopuffer.com/docs/architecture), read
@@ -216,7 +216,7 @@ workstream.
 Each is independently shippable and independently measurable. W1/W2 are the cheap
 half of the win; W6 is the largest but touches the least-used tier.
 
-**W1 (S) — Metadata-only resume probe.**
+**W1 (S) — Metadata-only resume probe. Done.**
 Add `cdcTouchesTables(sql, sinceSeq, tables): boolean` to `ctx-db-cdc.ts`:
 `SELECT 1 FROM __cdc_log WHERE seq > ? AND "table" IN (…) LIMIT 1`. Replace the
 10 000-row scan at `shard-do.ts:2706` with it and **delete `CDC_RESUME_SCAN_LIMIT`**
@@ -227,6 +227,10 @@ re-snapshotting, and the check becomes an index probe (with W2) instead of a dec
 **W2 (S) — `CREATE INDEX IF NOT EXISTS __cdc_log_table_seq ON __cdc_log("table", seq)`**
 in `migrateCdcLog`, plus the same on the `sql-store` twin in `runSqlCdcMigration`
 (needed by W6). Verify with a query plan assertion in the DO tests, not by timing.
+**Done.** Both indexes ship; the plan assertion is
+`shard-do.delta-read-path.test.ts` → "plans the table-filtered changelog read
+through the (table, seq) index", which asserts the index by name AND the absence
+of a `SCAN __cdc_log`.
 
 **W3 (M) — Two-stage shape diff.**
 Split `readShapeOpRange` into:
@@ -241,28 +245,67 @@ Split `readShapeOpRange` into:
   documents and calling `projectColumns` after.
   `buildShapeDiff` keeps its signature and its op-selection rules (contract §2).
 
-**W4 (S) — Share the membership probe across sockets.**
-Widen the flush-local cache (D5) to memoize `selectShapeMemberIds` by
-`(table, stableKey(effectiveWhere), idSet)`. Keep it flush-scoped. Extend
-`getFanoutMetrics` with probes-run vs probes-served so the collapse is observable
-the way `delivered`-vs-`iterated` already is (`shard-do.ts:8753`).
+**Done, and simpler than planned: stages two and three fused.** `selectShapeMemberIds`
+(id-only) became `selectShapeMembers`, which returns each surviving row's document
+from the same `SELECT` that tests its membership. Hydration is therefore not a
+third read at all — and it settles a smaller inconsistency the plan had not
+noticed: the old diff took a row's VALUE from the op-log post-image while taking
+its MEMBERSHIP from the table, two sources for one row. Both now come from the
+read the predicate filtered. `readShapeCdcPage` became `readShapeCdcKeys` (the
+protected seam tests count), and the `seq <= upTo` bound §1.3 flagged as missing
+is now in the SQL. Measured in `__bench__/shape-diff-catchup.bench.ts`: at a
+constant 200-row key set, a 20x longer range costs ~5.4x rather than 20x, and the
+selectivity axis (1% -> 100% of a fixed range in the shape) is now what dominates.
 
-**W5 (M) — Op-log retention + payload compaction.**
-Sweep on the existing alarm: compute the floor per D3, `UPDATE __cdc_log SET doc =
-NULL WHERE seq <= payloadFloor` (D4), `DELETE … WHERE seq <= hardFloor`. Env knobs
-mirror `LUNORA_REQUEST_LOG_RETENTION`. `minCdcSeq` keeps meaning "oldest retained
-key"; add `minCdcDocSeq` for "oldest retained payload" so W3's hydration knows when
-to read the current table instead of the post-image. **This is the workstream that
-closes the cliff `ctx-db-shape-poke-cursor.ts:10-18` documents and does not fix.**
+**W4 (S) — Share the membership probe across sockets. Done.**
+The flush-local cache became `ShapeDiffCache` (`shard-engine/src/shape-diff-cache.ts`),
+memoizing both the changed-key scan by `(table, sinceSeq, upTo)` and the probe by
+`(table, stableWireKey(effectiveWhere), idSet)`; key parts are length-prefixed
+rather than separator-joined so two different probes cannot collide. `getFanoutMetrics`
+grew `shapeProbe: { run, served }`, mirrored in the Studio's admin types and
+rendered on the fan-out panel. Five sockets on one predicate now run one query
+(`run: 1, served: 4`, asserted); five on distinct predicates still run five.
 
-**W6 (L) — `.global()` shape delta path.**
-Give the generated `readGlobalShapeRows` a sibling `readGlobalShapeChanges(sinceSeq)`
-over `readSqlCdcChanges`, and drive `refreshGlobalShape` from it: read the global
-changelog once per shard per tick, collapse per id, run the membership probe per
-distinct resolved predicate (not per socket), poke the diff. Keep the full re-read
-as the covered-range fallback (D6) and keep the 50 000-row cap on that path only.
-Store the global cursor next to `__global_shape_snapshot`; the snapshot then only
-needs keys, not values, for sockets whose delta arrived by cursor.
+**W5 (M) — Op-log retention + payload compaction. Done, with one decision the plan
+left open (Q3) answered against its own preference.** The sweep runs at the end of
+the coalesced flush drain (not the alarm — that is where every consumer has just
+advanced its cursor, so the floor is highest), throttled to once a minute per warm
+instance. `LUNORA_CDC_PAYLOAD_RETENTION` compacts payloads, `LUNORA_CDC_LOG_RETENTION`
+deletes rows, and **both default to off**: the log's out-of-shard consumers hold
+opaque cursors issued by the Worker (`runtime/src/connector-cdc.ts`), so a floor
+computed only from what SQLite can see would silently drop rows a warehouse
+connector had not read. Enabling either still never crosses the in-shard floor
+(`minShapePokeCursor`). W3 removed the hydration dependency on post-images
+entirely, so `minCdcDocSeq` ended up serving a different and more important
+purpose: `runShardCdcSync` now refuses a range below the retained payload floor
+with `CDC_PAYLOAD_COMPACTED` rather than serving doc-less rows a change feed would
+read as deletes.
+
+**W6 (L) — `.global()` shape delta path. Done, scoped to table granularity rather
+than row granularity.** `DatabaseWriterLike` grew an optional
+`cdcChangedTables(sinceSeq)`, implemented once in `@lunora/sql-store` (so D1 and
+Hyperdrive/global both inherit it) and forwarded by a codegen-emitted
+`readGlobalChangedTables` override. Each poll tick asks it once for the whole
+shard; a shape whose table is absent from the answer skips its membership read
+entirely, which is the steady state. What did NOT ship is per-row global deltas:
+membership still comes from a full read when a table did move, because that keeps
+`diffGlobalMembership` and the 50 000-row cap exactly as they were. Two guards the
+plan did not anticipate:
+
+- **A resync interval** (`GLOBAL_SHAPE_RESYNC_MS`, 30s). A `.global()` table can be
+  written by something that is not this deployment, and such a write leaves no row
+  in our changelog. Trusting it forever would freeze a shape silently, so the skip
+  is bounded: worst case 30s of staleness for an invisible write, against a full
+  re-read of every shape on every socket every 2s.
+- **The per-tick read cache is keyed by identity as well as predicate.** This is
+  the one place the op-log path's reasoning does NOT carry over, and it is a
+  security property rather than a nicety: a `.global()` read goes through a writer
+  the application builds per caller from `{ identity, userId }`, so equal
+  predicates do not imply equal rows and sharing across identities would hand one
+  user another's rows. Pinned by
+  `shard-do.global-shape.test.ts` → "never shares one tick's global read between
+  two identities". Sockets of the same user, and of anonymous/public shapes — where
+  the fan-out actually is — still share.
 
 ## 6. Platform parity
 
@@ -314,14 +357,20 @@ run entirely through `SqlExec`, and W6 through the existing global-backend seam,
    compaction must be gated off, and D4's degrade path must be the only tier that
    ships for those apps.)
 2. What is the real distribution of `effectiveWhere` across sockets in a live app?
-   W4's win is exactly the duplicate-predicate rate; if RLS makes every predicate
-   unique per user, W4 is dead weight and should be dropped rather than merged.
-3. Should `LUNORA_CDC_LOG_RETENTION` default to unbounded (today's behaviour,
-   opt-in trimming) or to a bounded default? A bounded default changes resumability
-   for existing deployments on upgrade — pre-1.0 permits it, but it should be a
-   recorded decision, not a side effect.
-4. Is `MAX(seq) … GROUP BY id` (W3) actually cheaper than the collapse-in-JS the
-   drain does today on DO SQLite, once the `(table, seq)` index exists? Measure
-   before assuming; if not, keep the JS collapse and change only the projection.
+   W4's win is exactly the duplicate-predicate rate. Shipped rather than dropped,
+   because the answer is now MEASURABLE in production instead of guessed:
+   `getFanoutMetrics.shapeProbe` reports run-vs-served per deployment, and the
+   Studio renders it. A deployment where `served` stays near zero has genuinely
+   per-identity predicates — a real answer, not a misconfiguration.
+3. ~~Should `LUNORA_CDC_LOG_RETENTION` default to unbounded or bounded?~~
+   **Answered: unbounded (opt-in).** Not out of caution — because the log has
+   consumers whose cursors provably cannot be seen from the shard (a warehouse
+   connector's opaque token), so a default floor would be a guess with silent data
+   loss as its failure mode. A deployment states the window it can afford.
+4. ~~Is `MAX(seq) … GROUP BY id` (W3) actually cheaper than the collapse-in-JS?~~
+   **Answered: yes, and for a reason the question understated.** The collapse
+   itself is a wash; what the SQL form buys is never selecting `doc`, which is
+   where the bytes and the JSON parsing were. `__bench__/shape-diff-catchup.bench.ts`
+   holds the key set at 200 rows and grows the range 20x for ~5.4x the cost.
 5. At what `.global()` membership size does W6 stop being enough — i.e. where does
    D7's "no external index" answer expire?

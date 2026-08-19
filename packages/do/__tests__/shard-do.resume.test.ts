@@ -116,4 +116,40 @@ describe("shardDO.evaluateResume", () => {
         // log rolled back (e.g. PITR) — re-snapshot rather than trust it.
         expect(buildShard().probe(99, new Set(["users"]), currentEpoch()).resumable).toBe(false);
     });
+
+    it("resumes a client that is tens of thousands of changes behind on an untouched read-set", async () => {
+        expect.assertions(2);
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: messagesSchema,
+            sql: harness.sql,
+        });
+
+        // Well past the 10 000-row page the resume check used to scan. That cap
+        // meant the client with the MOST to gain from a delta — offline long
+        // enough to accumulate a big range — was the one guaranteed to be re-sent
+        // its whole query result, because the check could not see far enough to
+        // prove the range was irrelevant to it.
+        for (let index = 0; index < 12_000; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes are the point: they build one long changelog range
+            await writer.insert(
+                "messages",
+                { _id: `bulk_${String(index)}`, authorId: "u1", channelId: "c1", text: `x${String(index)}` },
+                { allowExplicitId: true },
+            );
+        }
+
+        const shard = buildShard();
+
+        // None of those 12 000 changes touched `users`, so a query reading only
+        // `users` is still current and resumes.
+        expect(shard.probe(0, new Set(["users"]), currentEpoch()).resumable).toBe(true);
+
+        // The verdict is still a real intersection, not a blanket yes: a query
+        // that DOES read the written table must re-snapshot.
+        expect(shard.probe(0, new Set(["messages"]), currentEpoch()).resumable).toBe(false);
+    });
 });

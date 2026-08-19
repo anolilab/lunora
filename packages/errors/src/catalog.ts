@@ -325,6 +325,7 @@ export const ERROR_CATALOG = {
      * is static and safe, but flagged internal so a future edit that adds
      * diagnostic detail can't accidentally start leaking it.
      */
+    CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },

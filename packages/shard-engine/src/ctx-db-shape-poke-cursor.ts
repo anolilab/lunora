@@ -7,12 +7,15 @@
  * hibernation eviction (the steady state for an idle shape socket, since the
  * keepalive deliberately lets idle sockets hibernate) silently clears it, so
  * the first write after every wake fell back to a literal `0` instead of the
- * true baseline: `buildShapeDiff` then re-drains the ENTIRE retained
+ * true baseline: `buildShapeDiff` then re-scans the ENTIRE retained
  * `__cdc_log` for that table and re-runs a membership probe over every
- * touched row, no matter how long the log has grown. `trimCdcChanges` is
- * never invoked from `ShardDO`, so that log grows without bound over a
- * shard's lifetime — this was a real, worsening-over-time cost cliff, not a
- * one-time cold start.
+ * touched row, no matter how long the log has grown — a real,
+ * worsening-over-time cost cliff, not a one-time cold start.
+ *
+ * These rows now serve a second purpose: they are the shape-subscriber input to
+ * the op-log retention floor ({@link minShapePokeCursor}), which is what lets
+ * `ShardDO`'s sweep bound the log's growth without ever compacting a range a
+ * live subscription has not been poked through.
  *
  * Persisting the baseline here makes it survive hibernation exactly like
  * `__global_shape_snapshot` does for `.global()`-table shapes: keyed by
@@ -81,6 +84,23 @@ const writeShapePokeCursor = (sql: SqlExec, connectionId: string, subId: string,
     );
 };
 
+/**
+ * The lowest cursor any stored shape subscription has been poked through, or
+ * `undefined` when none is stored.
+ *
+ * This is the op-log retention floor's shape-subscriber input: a sweep must not
+ * compact or delete a range that a live subscription has yet to be told about,
+ * and this row set is the only place those positions are durably recorded. An
+ * empty table returns `undefined` — "no shape subscriber constrains the sweep" —
+ * which is different from `0`, the answer that would pin the floor to the very
+ * bottom of the log forever.
+ */
+const minShapePokeCursor = (sql: SqlExec): number | undefined => {
+    const rows = runDrizzle<{ cursor: null | number }>(sql, dsql`SELECT MIN(cursor) AS cursor FROM ${dsql.identifier(SHAPE_POKE_CURSOR_TABLE)}`).toArray();
+
+    return rows[0]?.cursor ?? undefined;
+};
+
 /** Drop the stored cursor for a single subscription (on `shape_unsubscribe`). */
 const deleteShapePokeCursor = (sql: SqlExec, connectionId: string, subId: string): void => {
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(SHAPE_POKE_CURSOR_TABLE)} WHERE connection_id = ${connectionId} AND sub_id = ${subId}`);
@@ -95,6 +115,7 @@ export {
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
     migrateShapePokeCursor,
+    minShapePokeCursor,
     readShapePokeCursor,
     SHAPE_POKE_CURSOR_TABLE,
     writeShapePokeCursor,

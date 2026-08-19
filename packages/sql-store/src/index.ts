@@ -15,6 +15,7 @@ export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
     createSqlCtxDb,
     decodeGlobalRow,
+    readSqlCdcChangedTables,
     readSqlCdcChanges,
     runSqlAggregateMigrations,
     runSqlCdcMigration,

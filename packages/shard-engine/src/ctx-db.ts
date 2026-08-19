@@ -4381,8 +4381,23 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
 export { backfillAggregateIndexes, backfillRankIndexes, backfillSearchIndexes } from "./ctx-db-backfill";
-export type { CdcChange } from "./ctx-db-cdc";
-export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
+export type { CdcChange, CdcChangeKey } from "./ctx-db-cdc";
+export {
+    applyCdcChanges,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE,
+    cdcSeqLeavingRows,
+    cdcTouchesTables,
+    compactCdcDocs,
+    countCdcChanges,
+    minCdcDocSeq,
+    minCdcSeq,
+    readCdcChangeKeys,
+    readCdcChanges,
+    readCdcCursor,
+    readCdcEpoch,
+    trimCdcChanges,
+} from "./ctx-db-cdc";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export {
     deleteGlobalShapeSnapshot,
@@ -4396,7 +4411,7 @@ export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } fr
 export { runShardMigrations } from "./ctx-db-migrations";
 export { SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { ShapeRow } from "./ctx-db-shapes";
-export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
+export { selectShapeMembers, selectShapeRows } from "./ctx-db-shapes";
 export {
     type BroadcastDelta,
     type ColumnMetaLike,
