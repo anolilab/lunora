@@ -220,7 +220,8 @@ interface CapturedMailResult {
 interface CommandItem {
     readonly group: string;
     readonly label: string;
-    readonly to: string;
+    readonly run?: () => void;
+    readonly to?: string;
 }
 ```
 
