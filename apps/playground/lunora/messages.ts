@@ -55,6 +55,8 @@ export const send = mutation
     .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
         const { channelId, createdAt, id, text } = args;
 
+        ctx.log.info("message sent", { channelId, characters: text.length, userId: ctx.auth.userId ?? "anonymous" });
+
         return ctx.db.insert(
             "messages",
             {

@@ -37,6 +37,8 @@ export const seedKv = action
         // shows clean values instead of double-encoded ones. Written in parallel.
         await Promise.all(DEMO_ENTRIES.map((entry) => ctx.kv.put(entry.key, entry.value, { raw: true, ...entry.options })));
 
+        ctx.log.info("kv demo entries seeded", { count: DEMO_ENTRIES.length });
+
         return { seeded: DEMO_ENTRIES.length };
     });
 

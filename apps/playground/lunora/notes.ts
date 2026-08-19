@@ -54,10 +54,12 @@ export const add = mutation
     })
     .use(dbRateLimit(limits, "add", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .use(notesWriteRls)
-    .mutation(async ({ args, ctx }): Promise<Id<"notes">> =>
-        ctx.db.insert("notes", {
+    .mutation(async ({ args, ctx }): Promise<Id<"notes">> => {
+        ctx.log.info("note added", { characters: args.text.length, ownerId: ctx.auth.userId ?? "anonymous" });
+
+        return ctx.db.insert("notes", {
             createdAt: args.createdAt,
             ownerId: ctx.auth.userId ?? "anonymous",
             text: args.text,
-        }),
-    );
+        });
+    });
