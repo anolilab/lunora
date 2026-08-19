@@ -1,6 +1,8 @@
-# Plan 306 — Cloud spend guardrails, anomaly alerting, recursion protection & agent-queryable billing
+# Plan 365 — Cloud spend guardrails, anomaly alerting, recursion protection & agent-queryable billing
 
-**Baseline:** `48366a2` (2026-08-08)
+**Baseline:** `18ec7965` — the head of [PR #85](https://github.com/anolilab/lunora/pull/85)
+(`claude/cloud-platform-dx-ojvkmu`), which carries `apps/cloud` itself. This plan
+stacks on that PR, not on `alpha`.
 **Status:** IN PROGRESS — W1 (metering fix) and W0 (full rate card) shipped;
 W2–W7 open
 
@@ -84,7 +86,7 @@ See §2.5 for the full interception ladder.
 
 | Capability               | Status in `apps/cloud`                                                                                                                                                                      |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hard cap**             | ✅ shipped, single-valued. `src/billing/spend.ts` (pure evaluator, per-plan defaults `free $5` / `pro $200` / `enterprise` uncapped, org override), `lunora/usage.ts:172` enforcement cron. |
+| **Hard cap**             | ✅ shipped, single-valued. `src/billing/spend.ts` (pure evaluator, per-plan defaults `free $5` / `pro $200` / `enterprise` uncapped, org override), `lunora/usage.ts:220` enforcement cron. |
 | **Soft cap**             | ❌ absent. No warn threshold, no notification before suspension. The org goes from serving traffic to a 503 with nothing in between.                                                        |
 | **Anomaly alerting**     | 🟡 threshold-only. `lunora/alerts.ts` + `src/telemetry/alerts.ts` give metric-window rules (`error_rate`, `latency_p95`, `llm_cost`) with static thresholds; no baseline, no score.         |
 | **Recursion protection** | ❌ absent. Nothing in the repo counts invocation depth or detects a tenant Worker looping through its own hostname. Only Cloudflare's own per-invocation subrequest cap applies.            |
@@ -120,9 +122,14 @@ Supporting detail:
   passes Workers-for-Platforms `limits` (CPU + subrequests) per plan on
   `env.DISPATCHER.get(...)`. This is the natural mounting point for a lineage
   header and a depth cap.
-- **A rate-of-change primitive already exists.** `src/telemetry/alerts.ts:271`
-  (`rateOfChangePercent`) is exported and unused by any rule target — the seam a
-  baseline-relative anomaly score would build on.
+- **A rate-of-change primitive already exists, but only decorates the message.**
+  `src/telemetry/alerts.ts:271` (`rateOfChangePercent`) has exactly one caller —
+  `renderMetricAlert` at `:322`, which turns it into the "+42% vs the prior
+  window" clause in the alert body. No rule _target_ thresholds on it, so
+  window-over-window change is computed and then thrown away for
+  decision-making purposes. That is the seam a baseline-relative anomaly score
+  builds on, and it needs promoting from render-time to evaluate-time rather
+  than writing from scratch.
 
 ## 2. Prior art
 
@@ -678,7 +685,63 @@ Pricing rate card (§4a) — [Workers for Platforms pricing](https://developers.
 OpenCloud (assessed, not prior art) — [opencloud-eu discussion: distinction from oCIS](https://github.com/orgs/opencloud-eu/discussions/262).
 
 > Cloudflare rates were read from the `cloudflare/cloudflare-docs` repository at
-> `production` on 2026-08-09 (the docs site itself is unreachable from this
-> environment's egress proxy). Rates change; `RATE_CARD.published` carries the
-> source string beside each derived integer so a re-check is a diff, not
-> arithmetic.
+> `production` (the docs site itself is unreachable from this environment's
+> egress proxy). Rates change; `RATE_CARD.published` carries the source string
+> beside each derived integer so a re-check is a diff, not arithmetic.
+
+## 9. Re-validation log
+
+**2026-08-19.** The findings were re-checked twice: once against `alpha`
+(`d18ccd96`, 795 upstream commits) and once again after re-stacking onto the
+head of PR #85, which is where `apps/cloud` actually lives. Both passes used
+`cloudflare-docs@1ee6060` (that day's `production`).
+
+Held, unchanged:
+
+- All 35 rate-card entries match the current pricing pages, verbatim.
+- The four quoted doc claims still read as quoted: budget alerts "do not pause
+  or cap usage"; "only requests that hit a Worker will count against your …
+  bill"; DDoS "unmetered and unlimited … to all customers on all plans"; WAF
+  hostname lists "only available to Enterprise customers".
+- Cloudflare's own usage-based-billing recipe still uses `sum(_sample_interval)`
+  (five occurrences), which is what the §0.1 fix was derived from.
+- The dispatcher still writes one AE data point per request indexed by
+  `scriptName`, the rollback still folds it into `platformUsage`,
+  `enforceSpendCaps` still runs hourly, and the suspension path still serves a
+  billed 503 from inside the dispatch Worker.
+- `metrics-read.ts:9-14` still carries the "not for billing math" caveat that
+  corroborates §0.1.
+- Alert targets are still the same six, all static-threshold.
+- Still no lineage / loop-detection / depth cap anywhere in `apps/cloud`.
+- `currentPeriodStart()` still buckets on the UTC calendar month, so the
+  billing-cycle mismatch in §1 stands.
+
+**One finding was wrong and is corrected** (§1): `rateOfChangePercent` was
+described as "exported and unused by any rule target". It is not unused — it has
+one caller, `renderMetricAlert`, which renders the window-over-window change into
+the alert body. It was already used that way at the original baseline, so this
+was a research error, not upstream drift. The design consequence is unchanged and
+slightly better: the primitive exists and is wired, it just informs the _message_
+rather than the _decision_, so W4 promotes it from render-time to evaluate-time.
+
+One citation was stale and is corrected: the enforcement cron moved from
+`lunora/usage.ts:172` to `:220`, pushed down by W0's own widening of the meter
+union. Every other `file:line` in this plan was re-resolved and still points at
+what it names.
+
+Upstream drift affecting the work: none, on either base.
+
+The **alpha** pass touched only 7 of the 368 files that branch changed, none in
+`apps/cloud`, and conflicted in four: `packages/runtime/src/create-worker.ts`
+and `api-snapshots/runtime.api.md` (alpha's new `replicaReads` beside the cloud
+line's `queueHandler` — both kept), `pnpm-lock.yaml` (discarded and regenerated,
+never text-merged) and `plans/README.md` (both waves kept).
+
+The **re-stack onto PR #85** then reduced this branch to its own 4 commits / 19
+files, and conflicted in two — both places where PR #85 had already fixed a lint
+error this plan had recorded as pre-existing, so its side was taken in each:
+`UsageSection.tsx` (the dead `summary === undefined` guard, removed there) and
+`__tests__/reconcile.test.ts` (`ControlPlaneDb` → `ControlPlaneDatabase`).
+
+The plan was renumbered 306 → **365** and its wave 20 → **22**. Both numbers
+were taken on **both** bases, so the renumbering is correct either way.

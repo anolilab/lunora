@@ -1647,7 +1647,8 @@ target becomes real, and `@lunora/platform-node` is still experimental with no
 (#365) — 311 is the data left behind by the defect and now ships inside #365
 itself, while 312 was the price its fix paid — since executed (see the DONE &
 REMOVED note above); its open follow-ups live in 314 and 315.
-## Wave 20 — Cloud spend guardrails & abuse research (baseline `48366a2`, 2026-08-08)
+
+## Wave 22 — Cloud spend guardrails & abuse research (baseline `d18ccd96`, 2026-08-19)
 
 Research pass over the five platform-guardrail capabilities Vercel shipped as a
 bundle (soft/hard spend caps, anomaly alerting, function recursion protection,
@@ -1666,7 +1667,7 @@ for billing math" (`apps/cloud/src/telemetry/metrics-read.ts:9-14`).
 
 | Plan | Title                                                                              | Category       | Pkg   | Pri | Effort | Risk | Status                        |
 | ---- | ---------------------------------------------------------------------------------- | -------------- | ----- | --- | ------ | ---- | ----------------------------- |
-| 306  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | IN PROGRESS — W0 + W1 shipped |
+| 365  | Cloud spend guardrails, anomaly alerting, recursion protection & billing usage API | cloud/platform | cloud | P1  | L      | MED  | IN PROGRESS — W0 + W1 shipped |
 
 ### Notes
 
