@@ -126,6 +126,7 @@ class AppBuilder<Env extends object> {
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
     private buildWorkerOptions(env: Env, _getAuth: () => null): WorkerOptions {
         const options: WorkerOptions = {
+            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
             openApiSpec,

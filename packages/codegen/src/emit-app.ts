@@ -719,6 +719,15 @@ ${options.voiceAgents
 
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
 const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
+    // The Workers `AI` binding, for the studio's chat assistant
+    // (`__lunora_admin__:aiChat`). Read off `env` exactly as the shard DO reads it
+    // for the three one-shot assistant RPCs — that op is served at the WORKER, so
+    // it cannot reach `env` any other way, and without this it degrades to
+    // "no AI binding" on every app regardless of what is bound.
+    //
+    // Unconditional and untyped-by-name: an app with no `AI` binding yields
+    // `undefined`, which is exactly the not-configured signal the op expects.
+    `            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],`,
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
     // The declared `defineIdentity(...)` contract — wires the runtime trust

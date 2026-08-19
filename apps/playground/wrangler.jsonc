@@ -78,4 +78,12 @@
             },
         ],
     },
+    // Workers AI, backing the studio's assistant surfaces: the SQL prompt bar,
+    // the filter/chart inference, and the chat panel at `/__lunora`.
+    //
+    // There is no local emulation — Wrangler proxies this binding to Cloudflare —
+    // so the assistant needs an authenticated account even in dev. Everything else
+    // in the playground runs fully offline; without an account the assistant
+    // surfaces simply hide themselves rather than failing on click.
+    "ai": { "binding": "AI" },
 }
