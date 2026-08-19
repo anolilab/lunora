@@ -106,13 +106,6 @@ interface FieldProps {
 }
 
 /** Boolean field → a checkbox toggle. */
-const BooleanField = ({ column, onChange, value }: FieldProps): ReactElement => {
-    const onCheckedChange = (checked: boolean): void => {
-        onChange(column, checked);
-    };
-
-    return <Checkbox aria-label={column} checked={value === true} data-testid={`db-field-${column}`} onCheckedChange={onCheckedChange} />;
-};
 
 /**
  * The clear option's value. A sentinel rather than `""`, because `""` is itself a
@@ -121,6 +114,48 @@ const BooleanField = ({ column, onChange, value }: FieldProps): ReactElement => 
  * that mean different things.
  */
 const CLEAR_OPTION = "\u0000clear";
+
+/**
+ * Boolean column → a checkbox, unless the column is `.nullable()`.
+ *
+ * A checkbox has two states and the column has three: a nullable boolean that
+ * reads `null` is not `false`, and a checkbox can neither show the difference nor
+ * get back to `null` once ticked. So a nullable one renders the same three-option
+ * select `EnumField` uses, sharing `CLEAR_OPTION` for the same reason.
+ */
+const BooleanField = ({ column, nullable, onChange, value }: FieldProps & { readonly nullable: boolean }): ReactElement => {
+    const t = useT();
+
+    const onCheckedChange = (checked: boolean): void => {
+        onChange(column, checked);
+    };
+
+    const onSelect = (event: React.ChangeEvent<HTMLSelectElement>): void => {
+        onChange(column, event.target.value === CLEAR_OPTION ? null : event.target.value === "true");
+    };
+
+    // A stored `null` keeps the clear option reachable even on a column the schema
+    // does not mark nullable — the row already holds one, so hiding it would strand
+    // the value with no way to read or replace it.
+    if (!nullable && value !== null) {
+        return <Checkbox aria-label={column} checked={value === true} data-testid={`db-field-${column}`} onCheckedChange={onCheckedChange} />;
+    }
+
+    return (
+        <select
+            aria-label={column}
+            className={FIELD_INPUT}
+            data-testid={`db-field-${column}`}
+            onChange={onSelect}
+            value={value === true || value === false ? String(value) : CLEAR_OPTION}
+        >
+            <option value={CLEAR_OPTION}>{t("(none)")}</option>
+            {/* Not translated: these are the stored VALUES, the same two literals the grid and the SQL console show. */}
+            <option value="true">true</option>
+            <option value="false">false</option>
+        </select>
+    );
+};
 
 /**
  * String-literal-union field → a dropdown of exactly the values the schema allows.
@@ -274,7 +309,7 @@ const FieldRow = ({ column, meta, onChange, target, value }: FieldProps & { read
                 )}
                 {target !== undefined && <span className="rounded bg-muted px-1 font-mono text-[10px] tracking-wide uppercase">→ {target}</span>}
             </span>
-            {kind === "boolean" && <BooleanField column={column} onChange={onChange} value={value} />}
+            {kind === "boolean" && <BooleanField column={column} nullable={meta?.nullable === true} onChange={onChange} value={value} />}
             {kind === "enum" && meta?.enumValues !== undefined && (
                 // `kind === "enum"` is only reachable with populated `enumValues`
                 // (see `fieldKind`), so neither argument needs a fallback.

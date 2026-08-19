@@ -321,6 +321,37 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
         setWidgets(moveWidget(from, to));
     };
 
+    /**
+     * Move one widget one place, for the keyboard.
+     *
+     * An adjacent SWAP rather than `moveWidget`'s insert-before, because the two
+     * read differently under repetition: pressing "move down" twice should land a
+     * widget two places later, which insert-before does not do at the tail.
+     */
+    const onMove = (id: string, delta: -1 | 1): void => {
+        setWidgets((current) => {
+            const at = current.findIndex((widget) => widget.id === id);
+            const to = at + delta;
+
+            if (at === -1 || to < 0 || to >= current.length) {
+                return current;
+            }
+
+            const next = [...current];
+            const moved = next[at];
+            const displaced = next[to];
+
+            if (moved === undefined || displaced === undefined) {
+                return current;
+            }
+
+            next[at] = displaced;
+            next[to] = moved;
+
+            return next;
+        });
+    };
+
     const onSubmit = (): void => {
         const title = draft.title.trim();
         const sql = draft.sql.trim();
@@ -371,12 +402,15 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
                 />
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="dashboards-grid">
-                    {widgets.map((widget) => (
+                    {widgets.map((widget, index) => (
                         <DashboardWidgetCard
                             draggedRef={draggedWidget}
+                            first={index === 0}
                             inferring={inferringId === widget.id}
                             key={widget.id}
+                            last={index === widgets.length - 1}
                             onEdit={onEdit}
+                            onMove={onMove}
                             onRemove={onRemove}
                             onReorder={onReorder}
                             onSuggest={assistant.unavailable ? undefined : onSuggestChart}

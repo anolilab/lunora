@@ -209,6 +209,34 @@ describe("dashboardsPanel", () => {
         expect(mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toHaveLength(0);
     });
 
+    it("reorders tiles from the keyboard, without a drag", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(numericMock()));
+
+        addTile("text", "First", "one");
+        addTile("text", "Second", "two");
+
+        const grid = await screen.findByTestId("dashboards-grid");
+
+        // `draggable` and the drag handlers are pointer-only, so this is the ONLY
+        // path a keyboard-only operator has to reorder a dashboard.
+        const down = within(grid).getAllByTestId<HTMLButtonElement>(/^dashboards-move-down-/u);
+
+        expect(down[0]?.disabled).toBe(false);
+        // The last tile cannot move down — disabled rather than hidden, so the
+        // control does not shift under the focus ring as the list changes.
+        expect(down.at(-1)?.disabled).toBe(true);
+
+        fireEvent.click(down[0] as HTMLElement);
+
+        await waitFor(() => {
+            const stored = JSON.parse(localStorage.getItem("lunora-studio-dashboards") ?? "[]") as { title: string }[];
+
+            expect(stored.map((widget) => widget.title)).toStrictEqual(["Second", "First"]);
+        });
+    });
+
     it("reorders tiles by drag and persists the new order", async () => {
         expect.hasAssertions();
 

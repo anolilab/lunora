@@ -64,7 +64,13 @@ interface FrameProps {
     readonly children: ReactNode;
     /** Carries the drag source between a dragstart and the drop that reads it. */
     readonly draggedRef: RefObject<null | string>;
+    /** First in the list — the move-up control is disabled. */
+    readonly first: boolean;
+    /** Last in the list — the move-down control is disabled. */
+    readonly last: boolean;
     readonly onEdit: (id: string) => void;
+    /** Move one place. The keyboard path to reordering — `draggable` is pointer-only. */
+    readonly onMove: (id: string, delta: -1 | 1) => void;
     readonly onRemove: (id: string) => void;
     /** Move the dragged widget to sit before this one. */
     readonly onReorder: (from: string, to: string) => void;
@@ -80,8 +86,16 @@ interface FrameProps {
  * separate order array — there is one list, and a second one would be a second
  * thing to keep in step for no benefit at this size.
  */
-const WidgetFrame = ({ actions, children, draggedRef, onEdit, onRemove, onReorder, widget }: FrameProps): ReactElement => {
+const WidgetFrame = ({ actions, children, draggedRef, first, last, onEdit, onMove, onRemove, onReorder, widget }: FrameProps): ReactElement => {
     const t = useT();
+
+    const onMoveUp = (): void => {
+        onMove(widget.id, -1);
+    };
+
+    const onMoveDown = (): void => {
+        onMove(widget.id, 1);
+    };
 
     const onEditClick = (): void => {
         onEdit(widget.id);
@@ -115,6 +129,57 @@ const WidgetFrame = ({ actions, children, draggedRef, onEdit, onRemove, onReorde
                 </CardTitle>
                 <div className="flex shrink-0 items-center gap-1">
                     {actions}
+                    {/*
+                     * Reordering by keyboard. `draggable` and the drag handlers are
+                     * pointer-only, and the card is a `div` with nothing focusable to
+                     * drag, so without these a keyboard-only operator cannot reorder a
+                     * dashboard at all. Disabled at the ends rather than hidden, so the
+                     * control does not move under the focus ring as the list changes.
+                     */}
+                    <Button
+                        aria-label={t("Move widget up")}
+                        data-testid={`dashboards-move-up-${widget.id}`}
+                        disabled={first}
+                        onClick={onMoveUp}
+                        size="icon-xs"
+                        title={t("Move widget up")}
+                        type="button"
+                        variant="ghost"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="m6 15 6-6 6 6" />
+                        </svg>
+                    </Button>
+                    <Button
+                        aria-label={t("Move widget down")}
+                        data-testid={`dashboards-move-down-${widget.id}`}
+                        disabled={last}
+                        onClick={onMoveDown}
+                        size="icon-xs"
+                        title={t("Move widget down")}
+                        type="button"
+                        variant="ghost"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="m6 9 6 6 6-6" />
+                        </svg>
+                    </Button>
                     <Button
                         aria-label={t("Edit widget")}
                         data-testid={`dashboards-widget-edit-${widget.id}`}
@@ -188,9 +253,15 @@ const KpiValue = ({ result }: { readonly result: SqlConsoleResult }): ReactEleme
 interface CardProps {
     /** Carries the drag source between a dragstart and the drop that reads it. */
     readonly draggedRef: RefObject<null | string>;
+    /** First in the list — the move-up control is disabled. */
+    readonly first: boolean;
     /** True while THIS card's suggestion is in flight — the panel tracks it per widget. */
     readonly inferring: boolean;
+    /** Last in the list — the move-down control is disabled. */
+    readonly last: boolean;
     readonly onEdit: (id: string) => void;
+    /** Move one place; the keyboard path to reordering. */
+    readonly onMove: (id: string, delta: -1 | 1) => void;
     readonly onRemove: (id: string) => void;
     /** Move the dragged widget to sit before this one. */
     readonly onReorder: (from: string, to: string) => void;
@@ -200,8 +271,8 @@ interface CardProps {
 }
 
 /** A `text` tile: the operator's own note, no query involved. */
-const TextWidgetCard = ({ draggedRef, onEdit, onRemove, onReorder, widget }: Omit<CardProps, "inferring" | "onSuggest">): ReactElement => (
-    <WidgetFrame draggedRef={draggedRef} onEdit={onEdit} onRemove={onRemove} onReorder={onReorder} widget={widget}>
+const TextWidgetCard = ({ draggedRef, first, last, onEdit, onMove, onRemove, onReorder, widget }: Omit<CardProps, "inferring" | "onSuggest">): ReactElement => (
+    <WidgetFrame draggedRef={draggedRef} first={first} last={last} onEdit={onEdit} onMove={onMove} onRemove={onRemove} onReorder={onReorder} widget={widget}>
         {/* Plain text, not markdown: the studio ships no markdown renderer and a
             dashboard note does not justify adding one. `whitespace-pre-wrap` keeps
             the operator's own line breaks, which is most of what they wanted. */}
@@ -221,7 +292,7 @@ const TextWidgetCard = ({ draggedRef, onEdit, onRemove, onReorder, widget }: Omi
  * only place that holds a result: inferring a chart needs the result's column
  * shape, and the form has never run the query it is editing.
  */
-const QueryWidgetCard = ({ draggedRef, inferring, onEdit, onRemove, onReorder, onSuggest, widget }: CardProps): ReactElement => {
+const QueryWidgetCard = ({ draggedRef, first, inferring, last, onEdit, onMove, onRemove, onReorder, onSuggest, widget }: CardProps): ReactElement => {
     const t = useT();
 
     // The shared run/cancel hook owns the query lifecycle; the card is otherwise
@@ -255,7 +326,17 @@ const QueryWidgetCard = ({ draggedRef, inferring, onEdit, onRemove, onReorder, o
         ) : undefined;
 
     return (
-        <WidgetFrame actions={suggest} draggedRef={draggedRef} onEdit={onEdit} onRemove={onRemove} onReorder={onReorder} widget={widget}>
+        <WidgetFrame
+            actions={suggest}
+            draggedRef={draggedRef}
+            first={first}
+            last={last}
+            onEdit={onEdit}
+            onMove={onMove}
+            onRemove={onRemove}
+            onReorder={onReorder}
+            widget={widget}
+        >
             {error !== undefined && (
                 <Alert className="font-mono text-xs" testId={`dashboards-widget-error-${widget.id}`} variant="destructive">
                     {error}
@@ -280,14 +361,26 @@ const QueryWidgetCard = ({ draggedRef, inferring, onEdit, onRemove, onReorder, o
 };
 
 /** One tile, dispatched on its kind. */
-const DashboardWidgetCard = ({ draggedRef, inferring, onEdit, onRemove, onReorder, onSuggest, widget }: CardProps): ReactElement =>
+const DashboardWidgetCard = ({ draggedRef, first, inferring, last, onEdit, onMove, onRemove, onReorder, onSuggest, widget }: CardProps): ReactElement =>
     widgetKind(widget) === "text" ? (
-        <TextWidgetCard draggedRef={draggedRef} onEdit={onEdit} onRemove={onRemove} onReorder={onReorder} widget={widget} />
+        <TextWidgetCard
+            draggedRef={draggedRef}
+            first={first}
+            last={last}
+            onEdit={onEdit}
+            onMove={onMove}
+            onRemove={onRemove}
+            onReorder={onReorder}
+            widget={widget}
+        />
     ) : (
         <QueryWidgetCard
             draggedRef={draggedRef}
+            first={first}
             inferring={inferring}
+            last={last}
             onEdit={onEdit}
+            onMove={onMove}
             onRemove={onRemove}
             onReorder={onReorder}
             onSuggest={onSuggest}

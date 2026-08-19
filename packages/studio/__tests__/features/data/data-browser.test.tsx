@@ -846,8 +846,8 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "from-form" }, op: "insert", table: "messages" });
     });
 
-    it("renders a declared string-literal union as a dropdown, and a null boolean as a checkbox", async () => {
-        expect.assertions(4);
+    it("renders a declared string-literal union as a dropdown, and a null boolean as a tri-state", async () => {
+        expect.assertions(5);
 
         const mock = createMockClient({
             query: (reference): unknown => {
@@ -887,7 +887,15 @@ describe("dataBrowser — editable", () => {
         // free-text box and a null boolean was a free-text box too.
         expect(status.tagName).toBe("SELECT");
         expect([...status.options].map((option) => option.value)).toStrictEqual(["draft", "published"]);
-        expect(screen.getByTestId("db-field-pinned").getAttribute("role")).toBe("checkbox");
+
+        // A checkbox has two states and this column has three. The row holds
+        // `null`, which a checkbox renders as unchecked — indistinguishable from
+        // a stored `false`, and with no way back to `null` once ticked. This
+        // assertion used to demand that checkbox.
+        const pinned = screen.getByTestId<HTMLSelectElement>("db-field-pinned");
+
+        expect(pinned.tagName).toBe("SELECT");
+        expect([...pinned.options].map((option) => option.value)).toStrictEqual(["\u0000clear", "true", "false"]);
 
         fireEvent.change(status, { target: { value: "published" } });
         fireEvent.click(screen.getByTestId("db-editor-save"));
