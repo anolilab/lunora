@@ -165,6 +165,44 @@ describe("dashboardsPanel", () => {
         expect(stored?.chartKind).toBe("line");
     });
 
+    it("says so when a suggestion fails, instead of looking like it changed nothing", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return NUMERIC_RESULT;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiAvailable) {
+                    return { available: true };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.aiChartConfig) {
+                    // `inferChart` swallows this and answers `undefined`, which is
+                    // also what it answers for "no change" — so without the alert a
+                    // failure and a no-op are indistinguishable to the operator.
+                    return { result: { degraded: true, reason: "unavailable" } };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        addWidget("Suggested", SQL);
+        await screen.findByTestId("sql-chart");
+
+        const [suggest] = screen.getAllByTestId(/^dashboards-widget-suggest-/u);
+
+        fireEvent.click(suggest as HTMLButtonElement);
+
+        await waitFor(() => {
+            expect(screen.getByTestId("dashboards-suggest-error")).toBeDefined();
+        });
+    });
+
     it("renders all four tile kinds and round-trips them through localStorage", async () => {
         expect.assertions(6);
 
