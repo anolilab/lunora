@@ -2167,6 +2167,7 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
     adminToken?: string;
+    aiChatBinding?: AiRunBinding;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
     authAdmin?: AuthAdmin;

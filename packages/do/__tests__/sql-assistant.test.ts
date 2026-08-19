@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SchemaFact } from "../src/sql-assistant";
-import { extractStatement, generateChart, generateFilter, generateSql, MAX_ATTEMPTS } from "../src/sql-assistant";
+import type { SchemaFact } from "../../../shared/sql-assistant";
+import { extractStatement, generateChart, generateFilter, generateSql, MAX_ATTEMPTS } from "../../../shared/sql-assistant";
 
 const SCHEMA: SchemaFact[] = [{ columns: ["id", "body", "authorId"], table: "messages" }];
 

@@ -293,7 +293,7 @@ import {
 } from "./admin-rpc-args";
 import { buildBatchEntryRequest } from "./batch";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
-import { generateChart, generateFilter, generateSql } from "./sql-assistant";
+import { generateChart, generateFilter, generateSql } from "../../../shared/sql-assistant";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
