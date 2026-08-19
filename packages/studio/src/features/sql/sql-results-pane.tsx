@@ -3,10 +3,10 @@ import type { ReactElement } from "react";
 import SqlResultChart from "../../components/result-chart";
 import { ShardInput } from "../../components/shard-input";
 import { Alert } from "../../components/ui/alert";
+import type { AssistantOps } from "../../hooks/use-assistant-ops";
 import { useT } from "../../i18n/i18n-context";
 import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { ExportMenu } from "../data/grid-features";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
 import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import SqlResultTable from "./sql-result-table";
 import type { ResultTab } from "./sql-tabs";
@@ -37,6 +37,8 @@ const SqlResultsPane = ({
     onShowResults,
     chatOpen,
     onDebugError,
+    onExplainPlan,
+    onExplainSql,
     onToggleChat,
     onToggleSplit,
     pane,
@@ -46,7 +48,7 @@ const SqlResultsPane = ({
     shardKey,
     splitView,
 }: {
-    readonly assistant: SqlAssistant;
+    readonly assistant: AssistantOps;
     /** Model-inferred axes for this result, or undefined for the manual chart. */
     readonly chart?: AssistantChartConfig;
     /** Whether the assistant panel is showing. */
@@ -56,6 +58,10 @@ const SqlResultsPane = ({
     readonly error: null | string;
     /** Open the assistant on the failing statement. Omitted when there is nothing to debug. */
     readonly onDebugError?: () => void;
+    /** Ask the assistant to read the query plan currently shown. Omitted when there is no plan or no assistant. */
+    readonly onExplainPlan?: () => void;
+    /** Ask the assistant to explain the draft in the editor. Omitted when there is nothing to explain or no assistant. */
+    readonly onExplainSql?: () => void;
     readonly onFormat: () => void;
     readonly onInferChart: () => void;
     readonly onRun: () => void;
@@ -65,7 +71,8 @@ const SqlResultsPane = ({
     readonly onShowChart: () => void;
     readonly onShowExplain: () => void;
     readonly onShowResults: () => void;
-    readonly onToggleChat: () => void;
+    /** Absent when no assistant is mounted above this tree — the toggle is then not rendered. */
+    readonly onToggleChat?: () => void;
     readonly onToggleSplit: () => void;
     readonly pane: ResultTab;
     readonly result: null | SqlConsoleResult;
@@ -109,7 +116,7 @@ const SqlResultsPane = ({
                      * results toolbar and took vertical space whether or not
                      * anyone was talking to it.
                      */}
-                    {!assistant.unavailable && (
+                    {!assistant.unavailable && onToggleChat !== undefined && (
                         <button
                             aria-label={t("Ask about your data")}
                             aria-pressed={chatOpen}
@@ -167,6 +174,37 @@ const SqlResultsPane = ({
                     >
                         {t("Format")}
                     </button>
+                    {/*
+                     * Reading a query is the other half of writing one, and the console
+                     * only ever did the writing half. Sits beside Format because it is
+                     * the same kind of action — something done TO the draft — rather
+                     * than beside Run, which changes the database's state.
+                     *
+                     * On the Explain tab it asks about the PLAN instead: the operator
+                     * is looking at a plan, so that is what "explain this" means there.
+                     */}
+                    {!assistant.unavailable && pane === "explain" && onExplainPlan !== undefined && (
+                        <button
+                            className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                            data-testid="sql-explain-plan"
+                            disabled={running || assistant.pending("chat")}
+                            onClick={onExplainPlan}
+                            type="button"
+                        >
+                            {t("Read this plan")}
+                        </button>
+                    )}
+                    {!assistant.unavailable && pane !== "explain" && onExplainSql !== undefined && (
+                        <button
+                            className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                            data-testid="sql-explain-query"
+                            disabled={running || assistant.pending("chat")}
+                            onClick={onExplainSql}
+                            type="button"
+                        >
+                            {t("Explain this query")}
+                        </button>
+                    )}
                     <ShardInput onChange={onShardKeyChange} testId="sql-shard-input" value={shardKey} />
                     <button
                         className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"

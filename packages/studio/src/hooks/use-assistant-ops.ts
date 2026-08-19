@@ -1,7 +1,6 @@
 import { useLunora } from "@lunora/react";
 import { useState } from "react";
 
-import { useAdminQuery } from "../../../hooks/use-admin-query";
 import type {
     AiAvailableResult,
     AssistantChartConfig,
@@ -13,9 +12,10 @@ import type {
     GenerateSqlDegradedReason,
     GenerateSqlResult,
     SchemaFact,
-} from "../../../lib/admin";
-import { ADMIN_FUNCTIONS } from "../../../lib/admin";
-import { adminRef, callOptions } from "../../../lib/internal";
+} from "../lib/admin";
+import { ADMIN_FUNCTIONS } from "../lib/admin";
+import { adminRef, callOptions } from "../lib/internal";
+import { useAdminQuery } from "./use-admin-query";
 
 /** Stable empty args, so the availability query is not re-keyed every render. */
 const NO_ARGS: Record<string, unknown> = {};
@@ -29,7 +29,7 @@ const AI_CHAT = adminRef(ADMIN_FUNCTIONS.aiChat);
 type AssistantTaskKey = "chart" | "chat" | "filter" | "sql";
 
 /** What a surface needs to render one assistant affordance. */
-interface SqlAssistant {
+interface AssistantOps {
     /**
      * One conversational turn. `transcript` is the prior turns, client-held and
      * re-sent; the server caps and fences it, so a long conversation degrades by
@@ -56,13 +56,13 @@ interface SqlAssistant {
     readonly reason: (task: AssistantTaskKey) => GenerateSqlDegradedReason | undefined;
     /** Translate a request into structured filter clauses for `table`. */
     readonly suggestFilter: (prompt: string, table: string) => Promise<FilterClause[] | undefined>;
-    /** True once the app has reported it has no AI binding — hide every affordance. */
+    /** True once the app has reported the assistant cannot run here — hide every affordance. */
     readonly unavailable: boolean;
 }
 
 /**
- * The Studio's natural-language assistant, shared by the SQL editor and the data
- * browser.
+ * The Studio's natural-language assistant RPCs, shared by the SQL editor, the
+ * data browser, the reports builder and the shell-wide assistant panel.
  *
  * The model runs server-side on the app's OWN Workers AI binding (plan 202's
  * Phase 0) — the browser never sees a model or a key, and generated SQL is
@@ -72,11 +72,14 @@ interface SqlAssistant {
  * spin the SQL bar's button and a filter failure print its message under the
  * editor; the three operations are unrelated and now report independently.
  *
- * **`no-ai-binding` is sticky.** An app without an `AI` binding answers that way
- * every time, so the first such reply latches `unavailable` and every affordance
- * disappears rather than staying as a button that always fails.
+ * **`ai-disabled` and `no-ai-binding` are sticky.** An app without an `AI`
+ * binding, or one whose operator set the assistant’s data-sharing level to
+ * `disabled`, answers the same way every time — so the first such reply latches
+ * `unavailable` and every affordance disappears. Two reasons rather than one
+ * because they are different facts about the deployment, even though the studio
+ * does the same thing with both.
  */
-const useSqlAssistant = (shardKey: string): SqlAssistant => {
+const useAssistantOps = (shardKey: string): AssistantOps => {
     const client = useLunora();
 
     const [pendingByTask, setPendingByTask] = useState<Partial<Record<AssistantTaskKey, boolean>>>({});
@@ -109,7 +112,9 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
             });
         }
 
-        if (failure === "no-ai-binding") {
+        // Both terminal reasons latch: neither can change without the operator
+        // redeploying, so retrying either one can only ever fail again.
+        if (failure === "ai-disabled" || failure === "no-ai-binding") {
             setLatched(true);
         }
     };
@@ -132,7 +137,7 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
         }
     };
 
-    const chat: SqlAssistant["chat"] = async (prompt, transcript, schema) => {
+    const chat: AssistantOps["chat"] = async (prompt, transcript, schema) => {
         begin("chat");
 
         try {
@@ -198,5 +203,5 @@ const useSqlAssistant = (shardKey: string): SqlAssistant => {
     return { chat, generate, inferChart, pending, reason, suggestFilter, unavailable };
 };
 
-export { useSqlAssistant };
-export type { AssistantTaskKey, SqlAssistant };
+export { useAssistantOps };
+export type { AssistantOps, AssistantTaskKey };

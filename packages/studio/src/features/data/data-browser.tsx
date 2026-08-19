@@ -4,12 +4,12 @@ import { useCallback } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { useAdminQuery } from "../../hooks/use-admin-query";
+import { useAssistantOps } from "../../hooks/use-assistant-ops";
 import type { ColumnMeta, FilterClause, TableInfo, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
-import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
 import { backRelationKey, backRelationsFor } from "./back-relations";
 import DataBrowserPage from "./data-browser-page";
 import DataFacets from "./data-facets";
@@ -240,7 +240,7 @@ export const DataBrowser = ({
     // Natural-language filtering. The model returns STRUCTURED clauses which
     // land in the visible filter rows for the operator to see and edit — the
     // query never runs off un-reviewed model output.
-    const assistant = useSqlAssistant(shardKey);
+    const assistant = useAssistantOps(shardKey);
 
     const askAiFilter = (prompt: string): void => {
         const apply = async (): Promise<void> => {

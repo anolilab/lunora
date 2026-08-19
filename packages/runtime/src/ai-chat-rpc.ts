@@ -15,7 +15,7 @@
  * a builder, and a `*_NOT_CONFIGURED` 400 — deliberately, so there is one
  * worker-RPC idiom rather than two.
  */
-import type { AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
+import type { AiOptInLevel, AiRunBinding, ChatArgs, ChatResult, ChatToolCall, ChatToolRunner, SchemaFact } from "../../../shared/sql-assistant";
 import { generateChat } from "../../../shared/sql-assistant";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
@@ -45,6 +45,15 @@ interface AiChatRpcDeps {
 
     /** The app's Workers `AI` binding, or undefined when none is wired. */
     getBinding: () => AiRunBinding | undefined;
+
+    /**
+     * How much of the deployment this app lets the assistant read.
+     *
+     * A dep rather than a request field on purpose: a level the browser sends is
+     * a level the browser chose, which is not a gate. The studio is told what the
+     * level is (through a refusal it can render) and can never raise it.
+     */
+    optInLevel: () => AiOptInLevel;
 }
 
 /** The worker-served handler for {@link AI_CHAT_OP}. */
@@ -86,6 +95,29 @@ type ForwardToShard = (
     headers: Record<string, string>,
 ) => Promise<Response>;
 
+/** The admin op behind each tool. A record, so a tool added without an op is a compile error. */
+const TOOL_OPS: Readonly<Record<ChatToolCall["name"], string>> = {
+    describeTables: "__lunora_admin__:describeTables",
+    readLogs: "__lunora_admin__:getLogs",
+    runSql: "__lunora_admin__:runSql",
+};
+
+/** Log lines handed to one turn. The buffer holds far more, and `observation()` would truncate mid-JSON. */
+const MAX_LOG_LINES = 20;
+
+/**
+ * Trim a `getLogs` payload to what a turn can use.
+ *
+ * The op answers the WHOLE in-memory buffer, newest first, which is orders of
+ * magnitude past the observation cap — without this the model reads a JSON
+ * fragment cut off mid-object rather than twenty complete lines.
+ */
+const recentLogs = (decoded: unknown): unknown => {
+    const entries = (decoded as { entries?: unknown } | null | undefined)?.entries;
+
+    return Array.isArray(entries) ? { entries: entries.slice(0, MAX_LOG_LINES) } : decoded;
+};
+
 /**
  * Build a tool runner over the worker's forwarder.
  *
@@ -102,7 +134,7 @@ type ForwardToShard = (
 const chatToolRunner =
     (forward: ForwardToShard, shardKey: string, headers: Record<string, string>, request: Request): ChatToolRunner =>
     async (call: ChatToolCall): Promise<unknown> => {
-        const path = call.name === "runSql" ? "__lunora_admin__:runSql" : "__lunora_admin__:describeTables";
+        const path = TOOL_OPS[call.name];
         const response = await forward(request, path, call.sql === undefined ? {} : { sql: call.sql }, shardKey, headers);
 
         // A non-2xx body is an error envelope, not data. Without this check it was
@@ -116,8 +148,9 @@ const chatToolRunner =
         // hands the model the envelope plus bigint/bytes sentinels rather than the
         // rows. Every other consumer decodes; so must this one.
         const body: { result?: unknown } = await response.json();
+        const decoded = decodeWire(body.result);
 
-        return decodeWire(body.result);
+        return call.name === "readLogs" ? recentLogs(decoded) : decoded;
     };
 
 /**
@@ -192,7 +225,7 @@ const buildAiChat = (deps: AiChatRpcDeps): AiChatRpcHandler => {
                       return chatToolRunner(forward, shardKey, headers, request);
                   })();
 
-        const result: ChatResult = await generateChat(binding, chatArgs, schema, runner);
+        const result: ChatResult = await generateChat(binding, chatArgs, schema, deps.optInLevel(), runner);
 
         // The RPC envelope, not a bare body — `client.query()` reads
         // `decodeWire(body.result)`, and a bare body decodes to `undefined`.

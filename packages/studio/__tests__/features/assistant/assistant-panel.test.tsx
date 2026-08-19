@@ -3,14 +3,37 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { AssistantProvider, useAssistant } from "../../../src/components/assistant-provider";
+import AssistantPanel from "../../../src/features/assistant/assistant-panel";
 import { SqlEditorPanel } from "../../../src/features/sql/sql-editor-panel";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
+/**
+ * The shell, in miniature: the provider above, the console as a page, and the
+ * panel docked beside it — which is exactly how `StudioLayoutShell` composes
+ * them. Rendering the console alone would no longer show an assistant at all,
+ * because it does not own one any more.
+ */
+const Shell = ({ console_ = true }: { readonly console_?: boolean }): ReactElement => {
+    const assistant = useAssistant();
+
+    return (
+        <>
+            {/* `console_` off stands in for navigating to another page: the routed
+                panel unmounts, the provider and the docked assistant do not. */}
+            {console_ && <SqlEditorPanel />}
+            {assistant === undefined ? null : <AssistantPanel assistant={assistant} />}
+        </>
+    );
+};
+
 const renderPanel = (mock: MockClientHooks): ReactElement => (
     <LunoraProvider client={mock.asClient}>
-        <SqlEditorPanel />
+        <AssistantProvider>
+            <Shell />
+        </AssistantProvider>
     </LunoraProvider>
 );
 
@@ -38,15 +61,15 @@ const chatMock = (reply: string, available = true): MockClientHooks =>
 const openChat = async (): Promise<HTMLElement> => {
     fireEvent.click(await screen.findByTestId("sql-chat-toggle"));
 
-    return screen.findByTestId("sql-chat");
+    return screen.findByTestId("assistant-panel");
 };
 
 const ask = (question: string): void => {
-    fireEvent.change(screen.getByTestId("sql-chat-input"), { target: { value: question } });
-    fireEvent.click(screen.getByTestId("sql-chat-send"));
+    fireEvent.change(screen.getByTestId("assistant-input"), { target: { value: question } });
+    fireEvent.click(screen.getByTestId("assistant-send"));
 };
 
-describe("sqlChatPanel", () => {
+describe("assistantPanel", () => {
     afterEach(() => {
         localStorage.clear();
         sessionStorage.clear();
@@ -78,7 +101,7 @@ describe("sqlChatPanel", () => {
 
         ask("how many messages?");
 
-        const insert = await screen.findByTestId("sql-chat-insert");
+        const insert = await screen.findByTestId("assistant-insert");
 
         // Nothing ran on the way here — the reply is prose until the operator acts.
         expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toBe(false);
@@ -104,9 +127,9 @@ describe("sqlChatPanel", () => {
 
         ask("what should I look at?");
 
-        await screen.findByTestId("sql-chat-turn-assistant");
+        await screen.findByTestId("assistant-turn-assistant");
 
-        expect(screen.queryByTestId("sql-chat-insert")).toBeNull();
+        expect(screen.queryByTestId("assistant-insert")).toBeNull();
     });
 
     it("re-sends the prior turns, so the exchange is a conversation", async () => {
@@ -118,7 +141,7 @@ describe("sqlChatPanel", () => {
         await openChat();
 
         ask("first question");
-        await screen.findByTestId("sql-chat-turn-assistant");
+        await screen.findByTestId("assistant-turn-assistant");
 
         ask("second question");
 
@@ -165,16 +188,16 @@ describe("sqlChatPanel", () => {
 
         // Closed by default: an assistant occupying the console before anyone has
         // asked it anything is a cost every operator pays and few want.
-        expect(screen.queryByTestId("sql-chat")).toBeNull();
+        expect(screen.queryByTestId("assistant-panel")).toBeNull();
 
         await openChat();
 
-        expect(screen.getByTestId("sql-chat")).toBeDefined();
+        expect(screen.getByTestId("assistant-panel")).toBeDefined();
 
         fireEvent.click(screen.getByTestId("sql-chat-toggle"));
 
         await waitFor(() => {
-            expect(screen.queryByTestId("sql-chat")).toBeNull();
+            expect(screen.queryByTestId("assistant-panel")).toBeNull();
         });
     });
 
@@ -217,13 +240,61 @@ describe("sqlChatPanel", () => {
         // Asserted through the DOM: the question the operator can SEE is the one
         // that was asked, and it does not depend on how the client happens to shape
         // its arguments.
-        const asked = await screen.findByTestId("sql-chat-turn-user");
+        const asked = await screen.findByTestId("assistant-turn-user");
 
         // Both halves travel, so the answer can explain rather than guess.
         expect(asked.textContent).toContain("SELECT bodyy FROM messages");
         expect(asked.textContent).toContain("no such column: bodyy");
 
         // …and it opened the assistant to show the answer.
-        expect(screen.getByTestId("sql-chat")).toBeDefined();
+        expect(screen.getByTestId("assistant-panel")).toBeDefined();
+    });
+
+    it("keeps the transcript when the page that started it goes away", async () => {
+        expect.hasAssertions();
+
+        // The whole reason the assistant was lifted out of the SQL console. Before
+        // it, the transcript lived in the console's own state, so navigating away
+        // threw the conversation out — and every other page had no assistant at all.
+        const mock = chatMock("Two tables.");
+        const view = render(renderPanel(mock));
+
+        await openChat();
+        ask("what tables do I have?");
+        await screen.findByTestId("assistant-turn-assistant");
+
+        // Unmount the console, keeping the provider and the docked panel — which is
+        // exactly what a route change does in the shell.
+        view.rerender(
+            <LunoraProvider client={mock.asClient}>
+                <AssistantProvider>
+                    <Shell console_={false} />
+                </AssistantProvider>
+            </LunoraProvider>,
+        );
+
+        // The console really is gone, so the assertion below cannot pass just
+        // because nothing unmounted.
+        expect(screen.queryByTestId("lunora-sql-editor")).toBeNull();
+        expect(screen.getByTestId("assistant-turns").textContent).toContain("Two tables.");
+    });
+
+    it("explains the draft rather than rewriting it", async () => {
+        expect.hasAssertions();
+
+        const mock = chatMock("It counts the rows in messages.");
+
+        render(renderPanel(mock));
+        await screen.findByTestId("sql-input");
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT count(*) FROM messages" } });
+        fireEvent.click(await screen.findByTestId("sql-explain-query"));
+
+        // Asserted through the DOM: the question the operator can SEE is the one
+        // that was asked. The draft is untouched — reading a query must not edit it.
+        const asked = await screen.findByTestId("assistant-turn-user");
+
+        expect(asked.textContent).toContain("SELECT count(*) FROM messages");
+        expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT count(*) FROM messages");
     });
 });

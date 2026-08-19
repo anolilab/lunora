@@ -1,9 +1,9 @@
 import type { CSSProperties, ReactElement, RefObject } from "react";
 
+import type { AssistantOps } from "../../hooks/use-assistant-ops";
 import { useT } from "../../i18n/i18n-context";
 import { EDITOR_TEXT_CLASS } from "./editor-spans";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
-import SqlAssistantBar from "./sql-assistant-bar";
+import AssistantOpsBar from "./sql-assistant-bar";
 import type { SqlAutocomplete } from "./sql-autocomplete-ui";
 import { AutocompletePopover } from "./sql-autocomplete-ui";
 import type { SqlDiagnostic } from "./sql-diagnostics";
@@ -36,7 +36,7 @@ const SqlEditorPane = ({
     onRevealDiagnostic,
     overlayRef,
 }: {
-    readonly assistant: SqlAssistant;
+    readonly assistant: AssistantOps;
     /** The completion popover's state, or `null` when closed. */
     readonly autocomplete: SqlAutocomplete["state"];
     readonly diagnostics: ReadonlyArray<SqlDiagnostic>;
@@ -70,7 +70,7 @@ const SqlEditorPane = ({
 
     return (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <SqlAssistantBar assistant={assistant} failed={failed} onGenerated={onGenerated} />
+            <AssistantOpsBar assistant={assistant} failed={failed} onGenerated={onGenerated} />
             <div className="flex min-h-0 min-w-0 flex-1">
                 <div
                     aria-hidden="true"

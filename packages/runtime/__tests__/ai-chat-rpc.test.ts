@@ -13,6 +13,9 @@ const fakeContext: ExecutionContextLike = {
     waitUntil: () => undefined,
 };
 
+/** The one method of {@link AiRunBinding}, named so the six doubles below can be typed rather than `any`. */
+type AiRun = AiRunBinding["run"];
+
 const ADMIN_TOKEN = "chat-admin";
 
 /**
@@ -69,7 +72,7 @@ const shardWithClock = (seen: number[]): ShardNamespaceLike => {
 /** A model double that takes `delayMs` to answer, so concurrency is observable. */
 const slowBinding = (delayMs: number, reply = "Try `SELECT 1`."): AiRunBinding => {
     return {
-        run: vi.fn(async () => {
+        run: vi.fn<AiRun>(async () => {
             await new Promise((resolve) => {
                 setTimeout(resolve, delayMs);
             });
@@ -233,7 +236,7 @@ describe("createWorker — aiChat admin RPC", () => {
         const replies = ['```tool\n{"name":"runSql","sql":"DELETE FROM messages"}\n```', "I cannot read that; it is not a read-only statement."];
         let call = 0;
         const binding: AiRunBinding = {
-            run: vi.fn(async () => {
+            run: vi.fn<AiRun>(async () => {
                 const reply = replies[Math.min(call, replies.length - 1)] ?? "";
 
                 call += 1;
@@ -260,17 +263,23 @@ describe("createWorker — aiChat admin RPC", () => {
             },
         };
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: shard });
+        // At the TOP tier, so what refuses the statement is the read-only gate and
+        // nothing else. Left at the default (`schema`) this test would pass because
+        // `runSql` is above that level — i.e. it would stay green with the gate
+        // deleted, which is the one thing it exists to catch.
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, aiOptInLevel: "schema_and_log_and_data", shardDO: shard });
         const response = await worker.fetch(rpc({ prompt: "delete everything" }), {}, fakeContext);
         const body = await decoded(response);
 
         // The statement never reached a shard.
         expect(forwarded).not.toContain("__lunora_admin__:runSql");
 
-        // …and the turn says it was refused rather than silently answering.
+        // …and the turn says it was refused for NOT BEING READ-ONLY, not for the
+        // data-sharing level.
         const calls = (body["toolCalls"] ?? []) as { refused?: string }[];
 
-        expect(calls[0]?.refused).toBeDefined();
+        expect(calls[0]?.refused).toContain("refused");
+        expect(calls[0]?.refused).not.toContain("data-sharing level");
     });
 
     it("dispatches an allowed tool call and answers with what it read", async () => {
@@ -279,7 +288,7 @@ describe("createWorker — aiChat admin RPC", () => {
         const replies = ['```tool\n{"name":"describeTables"}\n```', "There are two tables."];
         let call = 0;
         const binding: AiRunBinding = {
-            run: vi.fn(async () => {
+            run: vi.fn<AiRun>(async () => {
                 const reply = replies[Math.min(call, replies.length - 1)] ?? "";
 
                 call += 1;
@@ -319,7 +328,7 @@ describe("createWorker — aiChat admin RPC", () => {
         // A model that only ever asks for another tool. Answering partially — and
         // saying so — beats erroring away the work already done.
         const binding: AiRunBinding = {
-            run: vi.fn(async () => {
+            run: vi.fn<AiRun>(async () => {
                 return { response: '```tool\n{"name":"describeTables"}\n```' };
             }),
         };
@@ -372,7 +381,7 @@ describe("createWorker — aiChat admin RPC", () => {
         const replies = ['```tool\n{"name":"describeTables"}\n```', "Done."];
         let call = 0;
         const binding: AiRunBinding = {
-            run: vi.fn(async () => {
+            run: vi.fn<AiRun>(async () => {
                 const reply = replies[Math.min(call, replies.length - 1)] ?? "";
 
                 call += 1;
@@ -401,5 +410,130 @@ describe("createWorker — aiChat admin RPC", () => {
         // the server forwarded `""`, addressing a DO named "" that has no tables —
         // so every tool read came back empty against a real sharded app.
         expect(names).toContain("channel:demo");
+    });
+});
+
+/** A model double replying `replies` in order, sticking on the last one. */
+const scriptedBinding = (replies: ReadonlyArray<string>): AiRunBinding => {
+    let call = 0;
+
+    return {
+        run: vi.fn<AiRun>(async () => {
+            const reply = replies[Math.min(call, replies.length - 1)] ?? "";
+
+            call += 1;
+
+            return { response: reply };
+        }),
+    };
+};
+
+/** A shard double recording every forwarded op. */
+const recordingShard = (forwarded: string[]): ShardNamespaceLike => {
+    return {
+        get: () => {
+            return {
+                fetch: async (request: Request) => {
+                    const body: { functionPath?: string } = await request.json();
+
+                    forwarded.push(body.functionPath ?? "");
+
+                    return Response.json({ result: null }, { status: 200 });
+                },
+            };
+        },
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+};
+
+describe("createWorker — aiChat data-sharing level", () => {
+    it("refuses a tool above the configured level, and never forwards it", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        // The DEFAULT level (nothing configured) is `schema`, so `runSql` — a tool
+        // that returns rows the app's end users wrote — is above it.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT * FROM messages"}\n```', "I am not allowed to read rows here."]),
+            shardDO: recordingShard(forwarded),
+        });
+
+        const body = await decoded(await worker.fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+
+        // The refusal NAMES the level, so the model can tell the operator what to
+        // change rather than just failing.
+        const calls = (body["toolCalls"] ?? []) as { refused?: string }[];
+
+        expect(calls[0]?.refused).toContain("schema_and_log_and_data");
+    });
+
+    it("allows the same tool once the deployment opts in", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT * FROM messages"}\n```', "Two rows."]),
+            aiOptInLevel: "schema_and_log_and_data",
+            shardDO: recordingShard(forwarded),
+        });
+
+        await decoded(await worker.fetch(rpc({ prompt: "show me the messages" }), {}, fakeContext));
+
+        expect(forwarded).toContain("__lunora_admin__:runSql");
+    });
+
+    it("falls back to the safe default when the configured level is not a level", async () => {
+        expect.hasAssertions();
+
+        const forwarded: string[] = [];
+        // A typo in the wrangler var must not read as "everything allowed" — it
+        // fails closed to the default, which is the whole point of `asOptInLevel`.
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            aiChatBinding: scriptedBinding(['```tool\n{"name":"runSql","sql":"SELECT 1"}\n```', "No."]),
+            aiOptInLevel: "schema_and_everything",
+            shardDO: recordingShard(forwarded),
+        });
+
+        await decoded(await worker.fetch(rpc({ prompt: "read it" }), {}, fakeContext));
+
+        expect(forwarded).not.toContain("__lunora_admin__:runSql");
+    });
+
+    it("never reaches the model at all when the assistant is disabled", async () => {
+        expect.hasAssertions();
+
+        const binding = scriptedBinding(["never asked"]);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, aiOptInLevel: "disabled", shardDO: recordingShard([]) });
+
+        const body = await decoded(await worker.fetch(rpc({ prompt: "hello" }), {}, fakeContext));
+
+        // Degraded with a reason the studio latches on, and — the part that matters —
+        // the prompt never left the deployment.
+        expect(body["reason"]).toBe("ai-disabled");
+        expect(binding.run).not.toHaveBeenCalled();
+    });
+
+    it("hands the model only the tools its level allows", async () => {
+        expect.hasAssertions();
+
+        const binding = scriptedBinding(["Nothing to look up."]);
+
+        await createWorker({ adminToken: ADMIN_TOKEN, aiChatBinding: binding, shardDO: recordingShard([]) }).fetch(rpc({ prompt: "hi" }), {}, fakeContext);
+
+        // Advertising a tool the level refuses guarantees the model asks for it and
+        // burns a round of the per-turn budget on a refusal, every turn.
+        // `binding.run(model, { messages })` — the system message is the first.
+        const call = (binding.run as unknown as { mock: { calls: [string, { messages: { content: string; role: string }[] }][] } }).mock.calls[0];
+        const system = call?.[1].messages.find((message) => message.role === "system")?.content ?? "";
+
+        expect(system).toContain("describeTables");
+        expect(system).not.toContain("runSql");
     });
 });

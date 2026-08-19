@@ -2,11 +2,11 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
+import type { AssistantOps } from "../../hooks/use-assistant-ops";
 import { useT } from "../../i18n/i18n-context";
 import type { GenerateSqlDegradedReason } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
 import { cn } from "../../lib/utils";
-import type { SqlAssistant } from "./hooks/use-sql-assistant";
 
 /** Operator-facing copy per failure reason. `no-ai-binding` never reaches here — the bar is hidden. */
 const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof useT>): string => {
@@ -26,12 +26,12 @@ const reasonMessage = (reason: GenerateSqlDegradedReason, t: ReturnType<typeof u
  * anything they typed. It has already passed the same read-only gate the server
  * enforces before it gets here.
  */
-const SqlAssistantBar = ({
+const AssistantOpsBar = ({
     assistant,
     failed,
     onGenerated,
 }: {
-    readonly assistant: SqlAssistant;
+    readonly assistant: AssistantOps;
     /** The last failed run, enabling the repair affordance. */
     readonly failed?: { error: string; sql: string };
     readonly onGenerated: (sql: string) => void;
@@ -125,4 +125,4 @@ const SqlAssistantBar = ({
         </div>
     );
 };
-export default SqlAssistantBar;
+export default AssistantOpsBar;

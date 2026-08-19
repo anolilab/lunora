@@ -1,7 +1,10 @@
 # Plan 364 — A conversational assistant for the Studio, off the DO admin dispatch
 
 **Baseline:** `3a2e83d89` (2026-08-19)
-**Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. The conversational assistant works end to end; only token streaming is outstanding, and it needs a transport that does not exist yet.
+**Status:** W1–W4 SHIPPED; W5 BLOCKED — see §8b. W6–W8 SHIPPED — see §10. The
+conversational assistant works end to end and is now reachable from the whole
+Studio rather than the SQL console; only token streaming is outstanding, and it
+needs a transport that does not exist yet.
 **Spun out of:** [363](363-studio-data-surface-parity.md) W5, which required this
 plan before any code.
 
@@ -293,3 +296,69 @@ against a real DO with a slow model double, not a mock that resolves immediately
    return what it has? A partial answer that says it is partial is probably
    better than an error, but that is a UX call to make with the surface in front
    of you.
+
+## 10. W6–W8 — the shell-wide assistant (shipped after the original plan)
+
+The original plan built the surface where the transport landed: one panel, inside
+the SQL console. That was the right first step and the wrong final shape — a
+transcript that dies on navigation is one nobody keeps using, and no other page
+could reach it at all. Three workstreams closed that.
+
+- **W6 (M) — The seam.** `AssistantProvider` (`packages/studio/src/components/`)
+  holds sessions and open state above the router, modelled directly on
+  `OperationConsoleProvider` — including its `undefined`-outside-a-provider
+  contract, so a bare-composed Studio panel offers no button rather than a dead
+  one. Any surface opens it with `openAssistant({ ask | draft, schema, shardKey,
+title })`. The panel moved to `features/assistant/assistant-panel.tsx` and is
+  docked by `StudioLayoutShell` beside the routed page, **outside its error
+  boundary** — an assistant that vanishes when the page it is discussing throws
+  cannot be asked about the error.
+
+    The one thing the panel cannot know is where a suggested statement should go,
+    so the PAGE registers an insert target (`setInsert`) and withdraws it on
+    unmount. On every page without an editor the Insert button is simply not
+    rendered.
+
+    `useSqlAssistant` moved to `hooks/use-assistant-ops.ts` as `useAssistantOps`:
+    it was already consumed by the data browser and the reports builder, so its
+    home under `features/sql/` was an accident, and the shell-wide panel would
+    have made it a cycle.
+
+- **W7 (M) — Data-sharing levels.** The single `unavailable` latch became an
+  ordered ladder — `disabled` → `schema` → `schema_and_log` →
+  `schema_and_log_and_data` — with a tier per tool (`TOOL_LEVEL` in
+  `shared/sql-assistant.ts`) and `readLogs` added at the log tier over the
+  existing `__lunora_admin__:getLogs` op. Two consequences worth stating:
+
+    - **The prompt is built from the level.** A tool the level refuses is never
+      advertised, because advertising it guarantees the model asks and burns a
+      round of the per-turn budget on a refusal every turn. A model that asks
+      anyway gets a refusal naming the tier, so it can tell the operator what to
+      change.
+    - **The level is server-side and defaults to `schema`.** It reads
+      `env.LUNORA_AI_OPT_IN` through `WorkerOptions.aiOptInLevel`; an unrecognised
+      value falls back to the default rather than the top tier. This is a
+      deliberate behaviour change to W4: the operator already holds an admin
+      bearer and could run any read statement themselves, so the gate is not
+      protecting them from their own database — it decides whether rows their END
+      USERS wrote reach an inference provider, and a disclosure defaults to off.
+
+    No transcript sanitiser was needed, unlike the obvious reference design: our
+    transcript carries prose turns only. Tool results live inside one turn's
+    prompt and never re-enter the client-held history, so a transcript replayed at
+    a lower level cannot leak an earlier level's rows.
+
+- **W8 (S) — Distribution and two readers.** `ErrorAlert` gained "Ask the
+  assistant", which is the highest-leverage entry point in the Studio: every panel
+  that can fail already renders it, so one button reaches all of them. `AdvisorView`
+  gained a per-finding ask (Performance + Security advisors, one edit). The command
+  palette gained a toggle, since the panel has no route. The SQL console gained
+  "Explain this query" and, on the Explain tab, "Read this plan" — the plan rows
+  travel, because a plan the operator can see and the model cannot is the thing
+  they are asking about.
+
+**Deliberately not built.** Session persistence: §4's argument is unchanged, and
+sessions surviving navigation (which is what was actually missing) does not
+require surviving a reload. Inline ⌘K diff-editing in the editor gutter, and RLS
+policy authoring — the latter is a write tool and hits the §8 STOP condition, so
+it stays its own plan.

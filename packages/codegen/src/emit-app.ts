@@ -728,6 +728,10 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // Unconditional and untyped-by-name: an app with no `AI` binding yields
     // `undefined`, which is exactly the not-configured signal the op expects.
     `            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],`,
+    // How much the chat assistant may read, as a wrangler var rather than a code
+    // change. Read off `env` like the binding above; an app that sets nothing gets
+    // `undefined`, and the runtime's `asOptInLevel` falls back to the safe default.
+    `            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],`,
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
     // The declared `defineIdentity(...)` contract — wires the runtime trust

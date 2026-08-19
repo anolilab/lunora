@@ -14,6 +14,7 @@ import {
 import type { ComponentType, ReactElement, ReactNode } from "react";
 import { createContext, lazy, Suspense, use, useEffect } from "react";
 
+import { AssistantProvider, useAssistant } from "../components/assistant-provider";
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
 import { OperationConsoleProvider, useOperationConsole } from "../components/operation-console-provider";
@@ -85,6 +86,7 @@ const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
 const AdvisorHealthPanel = lazy(() => import("../features/advisors/advisor-health-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
 const AgentsPanel = lazy(() => import("../features/agents/agents-panel"));
+const AssistantPanel = lazy(() => import("../features/assistant/assistant-panel"));
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
 const AuthAuditPanel = lazy(() => import("../features/auth/auth-audit-panel"));
@@ -806,6 +808,12 @@ const StudioLayoutShell = (): ReactElement => {
     const operationConsole = useOperationConsole();
     const toggleConsole = operationConsole?.toggle;
 
+    // The shell-wide assistant. Its transcript lives above the router, so opening
+    // it from an advisor lint and following up after navigating to the SQL console
+    // is one conversation rather than two. `StudioLayout` always mounts the
+    // provider above this component; the optional read is for the type.
+    const assistant = useAssistant();
+
     useConsoleShortcut(toggleConsole);
 
     // Which optional package-backed pages this deployment enables. Defaults to
@@ -865,8 +873,13 @@ const StudioLayoutShell = (): ReactElement => {
      * chord binds nothing — an entry that silently did nothing would be worse
      * than no entry.
      */
-    const paletteItems =
-        toggleConsole === undefined ? commandItems : [...commandItems, { group: t("Operations"), label: t("Toggle operation console"), run: toggleConsole }];
+    const paletteItems = [
+        ...commandItems,
+        ...(toggleConsole === undefined ? [] : [{ group: t("Operations"), label: t("Toggle operation console"), run: toggleConsole }]),
+        // The assistant has a docked panel and no route of its own, so without this
+        // it is reachable only from whichever page happens to offer a button.
+        ...(assistant === undefined ? [] : [{ group: t("Operations"), label: t("Ask the assistant"), run: assistant.toggle }]),
+    ];
 
     // The app-owned chrome (theme + admin token + rules banner) renders inside this
     // router-owned layout; absent when `<Studio>` is composed bare.
@@ -888,53 +901,64 @@ const StudioLayoutShell = (): ReactElement => {
                 tabLabel={tabLabel}
             />
 
-            <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
-                {/* Top bar — sidebar toggle + breadcrumb, centred ⌘K search, and the
+            <SidebarInset className="flex flex-row overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
+                <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                    {/* Top bar — sidebar toggle + breadcrumb, centred ⌘K search, and the
                     connection / theme cluster. Mirrors the reference dashboard header. */}
-                <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
+                    <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
 
-                {chrome?.rulesInstalled === false && <RulesBanner />}
+                    {chrome?.rulesInstalled === false && <RulesBanner />}
 
-                <div
-                    aria-labelledby={`dash-tab-${current}`}
-                    className="flex min-w-0 flex-1 flex-col overflow-hidden"
-                    data-testid="dash-panel"
-                    id="dash-panel"
-                    role="tabpanel"
-                >
-                    {/* No per-section title bar — the breadcrumb already names the page and
+                    <div
+                        aria-labelledby={`dash-tab-${current}`}
+                        className="flex min-w-0 flex-1 flex-col overflow-hidden"
+                        data-testid="dash-panel"
+                        id="dash-panel"
+                        role="tabpanel"
+                    >
+                        {/* No per-section title bar — the breadcrumb already names the page and
                         each nav item carries its one-line description as a tooltip, so the
                         panel gets the full content area. Key the boundary by tab so one
                         panel throwing doesn't blank the shell, and switching tabs clears a
                         prior panel's error. Full-height tabs (Table/SQL editor) own the
                         height and scroll internally and fill edge-to-edge; the rest get the
                         default padded, page-scrolled content area. */}
-                    <div className={fullHeight ? "flex min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-auto p-6"}>
-                        <ErrorBoundary
-                            fallbackTitle={t("{title} failed", { title: tabLabel[current] })}
-                            key={current}
-                            label={tabLabel[current]}
-                            retryLabel={t("Try again")}
-                        >
-                            {/* Every routed panel except Home is a `React.lazy` boundary, so its
+                        <div className={fullHeight ? "flex min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-auto p-6"}>
+                            <ErrorBoundary
+                                fallbackTitle={t("{title} failed", { title: tabLabel[current] })}
+                                key={current}
+                                label={tabLabel[current]}
+                                retryLabel={t("Try again")}
+                            >
+                                {/* Every routed panel except Home is a `React.lazy` boundary, so its
                                 chunk streams in behind this Suspense fallback; Home (the index
                                 route) is eager and paints without suspending. */}
-                            <Suspense fallback={<RoutePending />}>
-                                <Outlet />
-                            </Suspense>
-                        </ErrorBoundary>
-                    </div>
-                    {/* The operation console docks under whatever panel is open — it is a
+                                <Suspense fallback={<RoutePending />}>
+                                    <Outlet />
+                                </Suspense>
+                            </ErrorBoundary>
+                        </div>
+                        {/* The operation console docks under whatever panel is open — it is a
                         companion to the current page, not a destination of its own. */}
-                    {operationConsole?.open === true && (
-                        <OperationConsole
-                            focusSeq={operationConsole.focusSeq}
-                            onClose={operationConsole.close}
-                            onShownChange={operationConsole.setShown}
-                            shown={operationConsole.shown}
-                        />
-                    )}
+                        {operationConsole?.open === true && (
+                            <OperationConsole
+                                focusSeq={operationConsole.focusSeq}
+                                onClose={operationConsole.close}
+                                onShownChange={operationConsole.setShown}
+                                shown={operationConsole.shown}
+                            />
+                        )}
+                    </div>
                 </div>
+                {/* Beside the routed panel, outside its error boundary: an assistant
+                    that disappears when the page it is discussing throws is an
+                    assistant you cannot ask about the error. Suspense-wrapped like
+                    every other lazy panel. */}
+                {assistant !== undefined && assistant.open && (
+                    <Suspense fallback={null}>
+                        <AssistantPanel assistant={assistant} />
+                    </Suspense>
+                )}
             </SidebarInset>
         </SidebarProvider>
     );
@@ -950,7 +974,9 @@ const StudioLayoutShell = (): ReactElement => {
  */
 const StudioLayout = (): ReactElement => (
     <OperationConsoleProvider>
-        <StudioLayoutShell />
+        <AssistantProvider>
+            <StudioLayoutShell />
+        </AssistantProvider>
     </OperationConsoleProvider>
 );
 
